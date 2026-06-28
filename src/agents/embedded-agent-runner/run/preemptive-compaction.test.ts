@@ -75,22 +75,6 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
   } as AgentMessage;
 }
 
-function makeToolSchema(descriptionChars: number) {
-  return {
-    name: `tool_${descriptionChars}`,
-    description: "tool schema pressure",
-    parameters: {
-      type: "object",
-      properties: {
-        payload: {
-          type: "string",
-          description: "x".repeat(descriptionChars),
-        },
-      },
-    },
-  };
-}
-
 describe("preemptive-compaction", () => {
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
@@ -368,7 +352,7 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight" as const,
       messages: () => [],
       promptImageCount: 0,
-      tools: () => [],
+      toolCount: 0,
       expectedPromptBudget: 3_584,
       expectedRoute: "fits" as const,
     },
@@ -377,7 +361,16 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight" as const,
       messages: () => [],
       promptImageCount: 1,
-      tools: () => [],
+      toolCount: 0,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+    {
+      name: "keeps tool-enabled lightweight runs on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      promptImageCount: 0,
+      toolCount: 1,
       expectedPromptBudget: 2_048,
       expectedRoute: "compact_only" as const,
     },
@@ -386,7 +379,7 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight" as const,
       messages: () => [makeAssistantHistory("existing shared heartbeat conversation")],
       promptImageCount: 0,
-      tools: () => [],
+      toolCount: 0,
       expectedPromptBudget: 2_048,
       expectedRoute: "compact_only" as const,
     },
@@ -395,20 +388,27 @@ describe("preemptive-compaction", () => {
       contextMode: "full" as const,
       messages: () => [],
       promptImageCount: 0,
-      tools: () => [],
+      toolCount: 0,
       expectedPromptBudget: 2_048,
       expectedRoute: "compact_only" as const,
     },
   ])(
     "$name",
-    ({ contextMode, messages, promptImageCount, tools, expectedPromptBudget, expectedRoute }) => {
+    ({
+      contextMode,
+      messages,
+      promptImageCount,
+      toolCount,
+      expectedPromptBudget,
+      expectedRoute,
+    }) => {
       const result = shouldPreemptivelyCompactBeforePrompt({
         messages: messages(),
         systemPrompt: "",
         prompt: "run scheduled task",
         contextMode,
         promptImageCount,
-        tools: tools(),
+        toolCount,
         contextTokenBudget: 4_096,
         reserveTokens: 20_000,
         llmBoundaryTokenPressure: {
@@ -422,46 +422,6 @@ describe("preemptive-compaction", () => {
       expect(result.route).toBe(expectedRoute);
     },
   );
-
-  it("keeps tool-schema pressure inside the lightweight small-context budget", () => {
-    const smallToolResult = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools: [makeToolSchema(40)],
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_000,
-        source: "reported_lightweight_cron",
-      },
-    });
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools: [makeToolSchema(1_200)],
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_544,
-        source: "reported_lightweight_cron",
-      },
-    });
-
-    expect(smallToolResult.promptBudgetBeforeReserve).toBeGreaterThan(2_048);
-    expect(smallToolResult.promptBudgetBeforeReserve).toBeLessThan(3_584);
-    expect(smallToolResult.shouldCompact).toBe(false);
-    expect(smallToolResult.route).toBe("fits");
-    expect(result.promptBudgetBeforeReserve).toBeGreaterThan(2_048);
-    expect(result.promptBudgetBeforeReserve).toBeLessThan(3_544);
-    expect(result.shouldCompact).toBe(true);
-    expect(result.route).toBe("compact_only");
-  });
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({

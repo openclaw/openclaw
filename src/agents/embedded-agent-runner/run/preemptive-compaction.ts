@@ -32,13 +32,6 @@ const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 const LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO = 0.875;
 
-type ToolSchemaTokenPressureSource = {
-  name?: unknown;
-  description?: unknown;
-  parameters?: unknown;
-  inputSchema?: unknown;
-};
-
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
@@ -156,28 +149,6 @@ function estimateContentTokenPressure(content: unknown): number {
     return estimateJsonPayloadTokenPressure(content);
   }
   return 0;
-}
-
-function estimateToolSchemaTokenPressure(
-  tools: readonly ToolSchemaTokenPressureSource[] | undefined,
-): number {
-  if (!tools?.length) {
-    return 0;
-  }
-  const payload = tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters ?? tool.inputSchema ?? {},
-    },
-  }));
-  return Math.max(
-    0,
-    Math.ceil(
-      estimateJsonPayloadTokenPressure(payload, JSON_PAYLOAD_CHARS_PER_TOKEN) * SAFETY_MARGIN,
-    ),
-  );
 }
 
 function isToolResultMessage(message: AgentMessage): boolean {
@@ -313,7 +284,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   prompt: string;
   contextMode?: "full" | "lightweight";
   promptImageCount?: number;
-  tools?: readonly ToolSchemaTokenPressureSource[];
+  toolCount?: number;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -345,6 +316,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const promptImageCount = Math.max(0, Math.floor(params.promptImageCount ?? 0));
+  const toolCount = Math.max(0, Math.floor(params.toolCount ?? 0));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
   const sharedMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
@@ -353,33 +325,22 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const lightweightPromptBudgetEligible =
     params.contextMode === "lightweight" &&
     promptImageCount === 0 &&
+    toolCount === 0 &&
     params.messages.length === 0 &&
     (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
-  const toolSchemaTokens = lightweightPromptBudgetEligible
-    ? estimateToolSchemaTokenPressure(params.tools)
-    : 0;
   const lightweightMinPromptBudget = lightweightPromptBudgetEligible
     ? Math.max(
         sharedMinPromptBudget,
-        Math.max(
-          1,
-          Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO) - toolSchemaTokens,
-        ),
+        Math.max(1, Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO)),
       )
     : sharedMinPromptBudget;
-  const minPromptBudget = Math.min(
-    lightweightMinPromptBudget,
-    Math.max(1, contextTokenBudget - toolSchemaTokens),
-  );
+  const minPromptBudget = lightweightMinPromptBudget;
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,
-    Math.max(0, contextTokenBudget - toolSchemaTokens - minPromptBudget),
+    Math.max(0, contextTokenBudget - minPromptBudget),
   );
-  const promptBudgetBeforeReserve = Math.max(
-    1,
-    contextTokenBudget - effectiveReserveTokens - toolSchemaTokens,
-  );
+  const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: messagesForPressure,
