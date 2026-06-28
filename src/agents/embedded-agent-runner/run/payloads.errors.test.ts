@@ -804,6 +804,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("prefers raw exec metadata when the literal command contains backticks", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
+      isError: true,
+    });
+  });
+
   it("preserves raw exec context before trailing raw command metadata", () => {
     const payloads = buildPayloads({
       lastToolError: {

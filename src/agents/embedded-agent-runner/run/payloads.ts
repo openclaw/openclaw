@@ -269,14 +269,54 @@ type RawExecContext = {
 };
 
 function extractRawExecCommand(body: string): string | undefined {
-  const match = body.match(/^(?:(.*)(?:,\s*| · ))?`([^`]+)`$/u);
-  const inlineCode = match?.[2];
-  if (!inlineCode) {
+  const codeSpan = extractTrailingMarkdownCodeSpan(body);
+  if (!codeSpan) {
     return undefined;
   }
-  const context = extractRawExecContext(match?.[1], inlineCode);
-  const command = context.trailing.reduce((value, suffix) => `${value} ${suffix}`, inlineCode);
+  const context = extractRawExecContext(codeSpan.prefix, codeSpan.value);
+  const command = context.trailing.reduce((value, suffix) => `${value} ${suffix}`, codeSpan.value);
   return context.leading.length > 0 ? `${context.leading.join(" · ")} · ${command}` : command;
+}
+
+function extractTrailingMarkdownCodeSpan(
+  body: string,
+): { prefix: string | undefined; value: string } | undefined {
+  const trimmed = body.trimEnd();
+  if (!trimmed.endsWith("`")) {
+    return undefined;
+  }
+  let delimiterLength = 0;
+  for (let index = trimmed.length - 1; index >= 0 && trimmed[index] === "`"; index -= 1) {
+    delimiterLength += 1;
+  }
+  const delimiter = "`".repeat(delimiterLength);
+  const valueEnd = trimmed.length - delimiterLength;
+  let searchIndex = 0;
+  while (searchIndex < valueEnd) {
+    const openIndex = trimmed.indexOf(delimiter, searchIndex);
+    if (openIndex < 0 || openIndex >= valueEnd) {
+      return undefined;
+    }
+    const prefixMatch = trimmed.slice(0, openIndex).match(/^(?:(.*)(?:,\s*| · ))?$/u);
+    if (prefixMatch) {
+      return {
+        prefix: prefixMatch[1],
+        value: unwrapMarkdownInlineCodePadding(
+          trimmed.slice(openIndex + delimiterLength, valueEnd),
+        ),
+      };
+    }
+    searchIndex = openIndex + delimiterLength;
+  }
+  return undefined;
+}
+
+function unwrapMarkdownInlineCodePadding(value: string): string {
+  if (value.length < 2 || !value.startsWith(" ") || !value.endsWith(" ")) {
+    return value;
+  }
+  const unwrapped = value.slice(1, -1);
+  return /\S/u.test(unwrapped) ? unwrapped : value;
 }
 
 function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {

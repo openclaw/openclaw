@@ -1433,6 +1433,54 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)");
   });
 
+  it("uses raw exec metadata for payload warnings when commands contain backticks", async () => {
+    const { ctx } = createTestContext();
+    const command = "node -e 'console.log(1, `x`)'";
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run node inline script, ``node -e 'console.log(1, `x`)'``",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)");
+  });
+
   it("preserves node context in raw exec metadata payload warnings", async () => {
     const { ctx } = createTestContext();
     ctx.params.toolProgressDetail = "raw";
