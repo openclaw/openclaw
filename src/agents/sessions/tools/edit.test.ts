@@ -106,6 +106,58 @@ describe("edit tool", () => {
     expect(message).toContain("hint:     backslash escaping differs");
   });
 
+  it("shows closest candidate lines for indexed multi-edit mismatches", async () => {
+    const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\nconst gamma = 3;\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "const alpha = 1;", newText: "const alpha = 10;" },
+            { oldText: "  const beta = 2;", newText: "  const beta = 20;" },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Could not find edits[1]");
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 2:");
+    expect(message).toContain('expected: "  const beta = 2;"');
+    expect(message).toContain('found:    "const beta = 2;"');
+    expect(message).toContain(
+      "hint:     indentation differs (expected 2 leading whitespace chars, found 0)",
+    );
+  });
+
+  it("does not attach candidates from the wrong edit list for mixed no-op mismatches", async () => {
+    const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "const alpha = 1;", newText: "const alpha = 1;" },
+            { oldText: "const beta = 2;", newText: "const beta = 20;" },
+            { oldText: "  const gamma = 3;", newText: "  const gamma = 30;" },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Could not find edits[2]");
+    expect(message).not.toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain('expected: "const alpha = 1;"');
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.

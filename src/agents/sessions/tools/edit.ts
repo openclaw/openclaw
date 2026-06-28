@@ -81,6 +81,7 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
 const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
 const EDIT_MISMATCH_SCAN_LINE_LIMIT = 2000;
 const EDIT_MISMATCH_LINE_DISPLAY_LIMIT = 140;
+const EDIT_INDEXED_MISMATCH_RE = /\bCould not find edits\[\d+\] in /u;
 
 /**
  * Pluggable operations for the edit tool.
@@ -194,6 +195,13 @@ function appendMismatchHint(error: Error, currentContent: string, edits: Edit[])
   );
   enhanced.stack = error.stack;
   return enhanced;
+}
+
+function isEditMismatchError(error: Error, options?: { includeIndexed?: boolean }): boolean {
+  return (
+    error.message.includes(EDIT_MISMATCH_MESSAGE) ||
+    (options?.includeIndexed === true && EDIT_INDEXED_MISMATCH_RE.test(error.message))
+  );
 }
 
 function formatMismatchCandidateHint(error: Error, currentContent: string, edits: Edit[]): string {
@@ -571,6 +579,7 @@ export function createEditToolDefinition(
 
         const buffer = await ops.readFile(absolutePath);
         const rawContent = buffer.toString("utf-8");
+        let hintIndexedMismatch = false;
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -592,11 +601,13 @@ export function createEditToolDefinition(
               terminate: true,
             };
           }
+          hintIndexedMismatch = true;
           const { baseContent, newContent } = applyEditsToNormalizedContent(
             normalizedContent,
             realEdits,
             path,
           );
+          hintIndexedMismatch = false;
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
           await ops.writeFile(absolutePath, finalContent);
           if (signal?.aborted) {
@@ -641,7 +652,7 @@ export function createEditToolDefinition(
               details: { diff: "", patch: "" },
             };
           }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+          if (isEditMismatchError(normalizedError, { includeIndexed: hintIndexedMismatch })) {
             throw appendMismatchHint(normalizedError, currentContent, realEdits);
           }
           // Terminal no-op: the edit matched but produced identical content.
