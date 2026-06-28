@@ -1445,6 +1445,7 @@ export const uk: TranslationMap = {
     jaJP: "日本語 (японська)",
     ko: "한국어 (корейська)",
     fr: "Français (французька)",
+    hi: "हिन्दी (гінді)",
     ar: "العربية (арабська)",
     it: "Italiano (італійська)",
     tr: "Türkçe (турецька)",
@@ -1455,6 +1456,7 @@ export const uk: TranslationMap = {
     vi: "Tiếng Việt (вʼєтнамська)",
     nl: "Nederlands (нідерландська)",
     fa: "فارسی (перська)",
+    ru: "Русский (російська)",
   },
   cron: {
     quickCreate: {

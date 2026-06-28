@@ -385,7 +385,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
-  it("promotes complete under-cap text tool calls for non-stop terminal reasons", async () => {
+  it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
       createEventStream([
@@ -410,14 +410,13 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       events.push(event);
     }
 
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
-      "toolcall_start",
-      "toolcall_delta",
-      "done",
-    ]);
-    const done = events.at(-1) as { reason?: unknown; message?: { stopReason?: unknown } };
-    expect(done.reason).toBe("toolUse");
-    expect(done.message?.stopReason).toBe("toolUse");
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
+    const done = events.at(-1) as {
+      reason?: unknown;
+      message?: { content?: unknown; stopReason?: unknown };
+    };
+    expect(done.reason).toBe("length");
+    expect(done.message).toMatchObject({ content: rawToolText, stopReason: "length" });
   });
 
   it("passes through bracketed text when no configured tool names match", async () => {

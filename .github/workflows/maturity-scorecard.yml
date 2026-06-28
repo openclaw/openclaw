@@ -12,6 +12,40 @@ on:
         required: true
         default: main
         type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      qa_evidence_run_id:
+        description: Optional workflow run id containing qa-evidence.json
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: OpenClaw branch, tag, or SHA containing the maturity score source
+        required: true
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
+      OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
+        description: Optional OpenAI API key used by maturity scorecard agent steps
+        required: false
+      GH_APP_PRIVATE_KEY:
+        description: Optional GitHub App private key for generated docs PR creation
+        required: false
+      GH_APP_PRIVATE_KEY_FALLBACK:
+        description: Optional fallback GitHub App private key for generated docs PR creation
+        required: false
 
 permissions:
   actions: read
@@ -43,13 +77,24 @@ jobs:
       - name: Validate selected ref
         id: validate
         env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
           INPUT_REF: ${{ inputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
+          expected_sha="${EXPECTED_SHA,,}"
           trusted_reason=""
+
+          if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
@@ -87,7 +132,8 @@ jobs:
     if: ${{ inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      ref: ${{ inputs.ref }}
+      expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -218,6 +264,67 @@ jobs:
           }
           NODE
 
+      - name: Ensure maturity scorecard agent key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex maturity scorecard agent
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
+          MATURITY_SCORES_PATH: qa/maturity-scores.yaml
+          MATURITY_TAXONOMY_PATH: taxonomy.yaml
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/maturity-scorecard-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Enforce focused maturity score patch
+        run: |
+          set -euo pipefail
+          git restore --staged :/
+
+          allowed='^qa/maturity-scores\.yaml$'
+          bad_tracked="$(
+            git diff --name-only HEAD -- | while IFS= read -r path; do
+              if [[ ! "$path" =~ $allowed ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_tracked" ]]; then
+            echo "Maturity scorecard agent touched forbidden tracked paths:"
+            printf '%s\n' "$bad_tracked"
+            exit 1
+          fi
+
+          bad_untracked="$(
+            git ls-files --others --exclude-standard | while IFS= read -r path; do
+              if [[ "$path" != "qa/maturity-scores.yaml" ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_untracked" ]]; then
+            echo "Maturity scorecard agent created forbidden untracked paths:"
+            printf '%s\n' "$bad_untracked"
+            exit 1
+          fi
+
+          if [[ ! -f qa/maturity-scores.yaml ]]; then
+            echo "Maturity scorecard agent must produce qa/maturity-scores.yaml." >&2
+            exit 1
+          fi
+
       - name: Validate maturity score sources
         run: |
           node --import tsx --input-type=module <<'NODE'
@@ -260,6 +367,7 @@ jobs:
             --strict-inputs
 
       - name: Create generated docs PR app token
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -270,7 +378,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Create generated docs PR fallback app token
-        if: ${{ steps.app-token.outcome == 'failure' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}
         id: app-token-fallback
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -280,6 +388,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Open generated docs PR
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
@@ -291,7 +400,7 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$(git status --porcelain -- qa/maturity-scores.yaml docs/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
+          if [[ -z "$(git status --porcelain -- qa/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
             {
               echo
               echo "- Pull request: skipped; generated scorecard matches selected ref"
@@ -311,9 +420,6 @@ jobs:
           git fetch --no-tags --depth=1 origin "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
           git switch -C "$branch"
           git add qa/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md
-          if git ls-files --error-unmatch docs/maturity-scores.yaml >/dev/null 2>&1 || [[ -e docs/maturity-scores.yaml ]]; then
-            git add docs/maturity-scores.yaml
-          fi
           git commit -m "docs: update maturity scorecard"
           git push --force-with-lease origin "$branch"
 
@@ -322,14 +428,14 @@ jobs:
           cat > "$body_file" <<BODY
           ## Summary
 
-          - render maturity scorecard docs from \`qa/maturity-scores.yaml\` and release QA evidence
+          - render maturity scorecard docs from \`qa/maturity-scores.yaml\` and full taxonomy QA evidence
           - maturity source ref: ${REF_INPUT}
           - QA evidence run: ${evidence_run_id}
 
           ## Verification
 
           - QA Lab maturity score validation passed
-          - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts with strict inputs
+          - Maturity scorecard workflow rendered docs from all profile qa-evidence.json artifacts with strict inputs
           BODY
 
           pr_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"

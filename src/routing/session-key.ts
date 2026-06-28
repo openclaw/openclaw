@@ -18,8 +18,10 @@ export {
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
+  parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
+  type ParsedSessionDeliveryRoute,
 } from "../sessions/session-key-utils.js";
 export {
   DEFAULT_ACCOUNT_ID,

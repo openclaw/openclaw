@@ -1444,6 +1444,7 @@ export const pt_BR: TranslationMap = {
     jaJP: "日本語 (Japonês)",
     ko: "한국어 (Coreano)",
     fr: "Français (Francês)",
+    hi: "हिन्दी (híndi)",
     ar: "العربية (Árabe)",
     it: "Italiano (Italiano)",
     tr: "Türkçe (Turco)",
@@ -1454,6 +1455,7 @@ export const pt_BR: TranslationMap = {
     vi: "Tiếng Việt (Vietnamita)",
     nl: "Nederlands (Holandês)",
     fa: "فارسی (Persa)",
+    ru: "Русский (russo)",
   },
   cron: {
     quickCreate: {

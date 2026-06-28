@@ -39,6 +39,8 @@ describe("iOS Fastlane release upload gates", () => {
     const script = readFileSync(uploadScriptPath, "utf8");
 
     expect(script).toContain("OPENCLAW_IOS_RELEASE_WRAPPER=1");
+    expect(script).toContain("DELIVER_NUMBER_OF_THREADS=1");
+    expect(script).toContain("FL_MAX_NUMBER_OF_THREADS=1");
     expect(script).toContain("run_ios_fastlane ios release_upload");
   });
 
@@ -70,5 +72,35 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
+  });
+
+  it("preflights and records mobile release refs around TestFlight upload", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+
+    expect(fastfile).toContain("def mobile_release_ref_command");
+    expect(fastfile).toContain("def release_git_sha");
+    expect(fastfile).toContain('"--root"');
+    expect(fastfile).toContain('"--sha"');
+    expect(fastfile).toContain("repo_root");
+    expect(releaseUpload).toContain("release_sha = release_git_sha");
+    expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
+    expect(releaseUpload).toContain("record_mobile_release_ref!");
+    expect(releaseUpload.match(/sha: release_sha/g)).toHaveLength(2);
+    expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
+      releaseUpload.indexOf("\n    metadata\n"),
+    );
+    expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+      releaseUpload.indexOf("upload_to_testflight("),
+    );
+  });
+
+  it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {
+    const fastfile = readFastfile();
+
+    expect(fastfile).toContain("def normalize_watch_screenshot_status_bar(path)");
+    expect(fastfile).toContain("CGImageAlphaInfo.noneSkipLast.rawValue");
+    expect(fastfile).toContain("CGImageDestinationCreateWithURL");
+    expect(fastfile).toContain("operation: .sourceOver");
   });
 });

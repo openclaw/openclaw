@@ -1,0 +1,15 @@
+{
+  "fallbackKeys": [
+    "agents.cronPanel.jobId",
+    "cron.jobList.id",
+    "cron.jobState.notRunning"
+  ],
+  "generatedAt": "2026-06-28T11:11:45.988Z",
+  "locale": "ru",
+  "model": "gpt-5.5",
+  "provider": "openai",
+  "sourceHash": "5343c06f1676b136fed0738bad1a9b895360337eaad99660d27d5d16049950e6",
+  "totalKeys": 1420,
+  "translatedKeys": 1417,
+  "workflow": 1
+}

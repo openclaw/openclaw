@@ -137,6 +137,7 @@ describe("qqbot config", () => {
       groups: {
         G1: {
           requireMention: true,
+          commandLevel: "safety",
           tools: { deny: ["*"] },
           toolsBySender: {
             "id:alice": { allow: ["read"] },
@@ -146,7 +147,7 @@ describe("qqbot config", () => {
       accounts: {
         bot2: {
           groups: {
-            G1: { tools: { allow: [] } },
+            G1: { commandLevel: "strict", tools: { allow: [] } },
           },
         },
       },

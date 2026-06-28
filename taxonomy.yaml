@@ -12,13 +12,11 @@ profiles:
     evidenceMode: slim
     channelDriver: crabline
     categoryIds:
-      - agent-runtime-and-provider-execution.agent-turn-execution
       - agent-runtime-and-provider-execution.model-and-runtime-selection
       - agent-runtime-and-provider-execution.provider-auth
       - agent-runtime-and-provider-execution.streaming-and-progress
       - agent-runtime-and-provider-execution.tool-calls-and-response-handling
       - agent-runtime-and-provider-execution.tool-execution-controls
-      - session-memory-and-context-engine.token-management
       - session-memory-and-context-engine.context-engine
       - session-memory-and-context-engine.cross-client-history-and-session-parity
       - session-memory-and-context-engine.core-prompts-and-context
@@ -36,7 +34,6 @@ profiles:
       - channel-framework.outbound-delivery-and-reply-pipeline
       - channel-framework.group-thread-and-ambient-room-behavior
       - channel-framework.status-health-and-operator-controls
-      - session-memory-and-context-engine.memory
       - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
       - automation-cron-hooks-tasks-polling.cron-jobs
       - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
@@ -45,7 +42,6 @@ profiles:
       - media-understanding-and-media-generation.media-understanding
       - media-understanding-and-media-generation.media-generation
       - browser-control-ui-and-webchat.browser-ui
-      - security-auth-pairing-and-secrets.credential-and-secret-hygiene
   - id: release
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
@@ -251,9 +247,9 @@ levels:
     label: Stable
     meaning: Recommended path for normal users. Failures are treated as regressions.
     promotion_bar: Release gate, doctor/troubleshooting path, broad docs, and repeated real-world proof.
-  - id: lovable
+  - id: clawesome
     code: M5
-    label: Lovable
+    label: Clawesome
     meaning: Polished, delightful, well-instrumented, and competitive with the best comparable workflow.
     promotion_bar: Stable plus user scorecard pass across representative users.
 surfaces:
@@ -1305,13 +1301,13 @@ surfaces:
         id: agent-turn-execution
         features:
           - name: Turn startup and runtime choice
-            coverageIds: [agents.create, agents.instructions, channels.discord-config, config.crestodian-setup, runtime.first-action, runtime.first-hour-20, runtime.long-context]
+            coverageIds: [agents.create, agents.instructions, channels.discord-config, config.crestodian-setup, runtime.first-action, runtime.multi-turn-continuity, runtime.long-context]
             description: Starting an agent turn and choosing gateway versus embedded runtime execution.
           - name: Session and run coordination
             coverageIds: [agents.subagents, channels.dedup, channels.dm, channels.qa-channel, channels.reconnect, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.codex-plugin.lifecycle, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, runtime.turn-ordering]
             description: Establishing session and run ids, queue locks, and related execution coordination.
           - name: Abort and terminal outcomes
-            coverageIds: [channels.streaming, runtime.delivery, runtime.fallback-delivery, runtime.long-context, runtime.soak-100]
+            coverageIds: [channels.streaming, runtime.delivery, runtime.fallback-delivery, runtime.long-context, runtime.long-run-stability]
             description: Honoring aborts, timing provider/model work, and emitting terminal outcomes.
         docs:
           - docs/concepts/agent-loop.md
@@ -1593,7 +1589,7 @@ surfaces:
             coverageIds: [session.pruning]
             description: Covers Pruning across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
           - name: Token Pressure
-            coverageIds: [runtime.codex-app-server, runtime.first-hour-20, runtime.gateway-log-sentinel.codex-progress, runtime.long-context, runtime.soak-100]
+            coverageIds: [runtime.codex-app-server, runtime.multi-turn-continuity, runtime.gateway-log-sentinel.codex-progress, runtime.long-context, runtime.long-run-stability]
             description: Covers Token Pressure across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
         docs:
           - docs/concepts/compaction.md
@@ -2418,7 +2414,7 @@ surfaces:
             coverageIds: [telemetry.trusted-trace-context]
             description: Trusted trace context, W3C traceparent propagation to model calls, file-log correlation, content-capture controls, and redacted/bounded attributes
           - name: Model and runtime telemetry
-            coverageIds: [docker.e2e, harness.qa-lab, harness.tool-trace-visibility, personal.failure-recovery, personal.no-fake-progress, personal.task-followthrough, runtime.qa-bus, telemetry.otel, telemetry.prometheus, tools.evidence, tools.trace]
+            coverageIds: [docker.runtime-validation, harness.qa-lab, harness.tool-trace-visibility, personal.failure-recovery, personal.no-fake-progress, personal.task-followthrough, runtime.qa-bus, telemetry.otel, telemetry.prometheus, tools.evidence, tools.trace]
             description: Model, tool, message, session, queue, Talk, exec, webhook, context assembly, harness, and exporter-health signals
           - name: diagnostics-prometheus plugin install
             coverageIds: [telemetry.diagnostics-prometheus-plugin-install]
@@ -2427,7 +2423,7 @@ surfaces:
             coverageIds: [telemetry.prometheus-authenticated-gateway-export]
             description: Gateway-authenticated GET /api/diagnostics/prometheus behavior, status, and operator-visible verification.
           - name: Prometheus text exposition
-            coverageIds: [docker.e2e, harness.qa-lab, telemetry.prometheus]
+            coverageIds: [docker.runtime-validation, harness.qa-lab, telemetry.prometheus]
             description: Prometheus text exposition, counters, gauges, histograms, label policy, series cap, and overflow metric
           - name: Trusted diagnostic event subscription
             coverageIds: [telemetry.trusted-diagnostic-event-subscription]
@@ -6445,7 +6441,7 @@ surfaces:
             coverageIds: [docker.package-artifact-generation]
             description: Docker E2E package artifact generation and shared build helpers
           - name: Docker E2E plan/scheduler scripts
-            coverageIds: [docker.e2e, harness.qa-lab, telemetry.prometheus]
+            coverageIds: [docker.runtime-validation, harness.qa-lab, telemetry.prometheus]
             description: Docker E2E plan/scheduler scripts, lane metadata, targeted grouping, package artifact generation, and GitHub hydration action
           - name: Release-path install
             coverageIds: [docker.release-path-install]
