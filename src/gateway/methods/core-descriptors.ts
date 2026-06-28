@@ -179,7 +179,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.describe", scope: "operator.read" },
   { name: "node.pluginSurface.refresh", scope: "node" },
   { name: "node.attachRelay", scope: "node" },
-  { name: "node.attachGrant", scope: "node" },
+  { name: "node.attachGrant", scope: "node", controlPlaneWrite: true },
   { name: "node.attachRevoke", scope: "node" },
   { name: "node.attachHydrate", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
