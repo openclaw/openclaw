@@ -64,6 +64,17 @@ type OpenClawReadToolOptions = {
   imageSanitization?: ImageSanitizationLimits;
 };
 
+type WorkspaceAliasConfig = {
+  path: string;
+  target: string;
+};
+
+type WorkspaceAliasTarget = {
+  root: string;
+  relative: string;
+  resolved: string;
+};
+
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
@@ -555,6 +566,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
   containerWorkdir?: string;
+  workspaceAliases?: readonly WorkspaceAliasConfig[];
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
@@ -598,12 +610,21 @@ async function appendMemoryFlushContent(params: {
   root: string;
   relativePath: string;
   content: string;
+  workspaceAliases?: readonly WorkspaceAliasConfig[];
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
 }) {
   if (!params.sandbox) {
-    const root = await fsRoot(params.root);
-    await root.append(params.relativePath, params.content, {
+    const aliasTarget = await resolveWorkspaceAliasTarget({
+      root: params.root,
+      filePath: params.absolutePath,
+      workspaceAliases: params.workspaceAliases,
+      followLeafSymlink: false,
+    });
+    const targetRoot = aliasTarget?.root ?? params.root;
+    const targetRelativePath = aliasTarget?.relative ?? params.relativePath;
+    const root = await fsRoot(targetRoot);
+    await root.append(targetRelativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
     });
@@ -681,6 +702,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         root: options.root,
         relativePath: options.relativePath,
         content,
+        workspaceAliases: options.workspaceAliases,
         sandbox: options.sandbox,
         signal,
       });
@@ -744,6 +766,27 @@ async function assertSandboxPathWithinAnyRoot(params: {
   );
 }
 
+async function assertWorkspaceAliasPath(params: {
+  filePath: string;
+  root: string;
+  workspaceAliases?: readonly WorkspaceAliasConfig[];
+}): Promise<Awaited<ReturnType<typeof assertSandboxPath>> | undefined> {
+  const aliasTarget = await resolveWorkspaceAliasTarget({
+    root: params.root,
+    filePath: params.filePath,
+    workspaceAliases: params.workspaceAliases,
+    followLeafSymlink: true,
+  });
+  if (!aliasTarget) {
+    return undefined;
+  }
+  return assertSandboxPath({
+    filePath: aliasTarget.resolved,
+    cwd: aliasTarget.root,
+    root: aliasTarget.root,
+  });
+}
+
 /** Wrap a file tool with workspace guards and optional container path mapping. */
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
@@ -755,6 +798,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
       hostRoot: string;
     }[];
     containerWorkdir?: string;
+    workspaceAliases?: readonly WorkspaceAliasConfig[];
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
   },
@@ -810,10 +854,20 @@ export function wrapToolWorkspaceRootGuardWithOptions(
             : [];
         let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
         try {
-          sandboxResult = await assertSandboxPathWithinAnyRoot({
-            filePath: sandboxPath,
-            roots: [guardedRoot, ...additionalRoots],
-          });
+          const aliasResult =
+            guardedRoot === root
+              ? await assertWorkspaceAliasPath({
+                  filePath: sandboxPath,
+                  root,
+                  workspaceAliases: options?.workspaceAliases,
+                })
+              : undefined;
+          sandboxResult =
+            aliasResult ??
+            (await assertSandboxPathWithinAnyRoot({
+              filePath: sandboxPath,
+              roots: [guardedRoot, ...additionalRoots],
+            }));
         } catch (error) {
           throw withWorkspaceSafeTempHint(error);
         }
@@ -862,7 +916,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; workspaceAliases?: readonly WorkspaceAliasConfig[] },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -870,7 +927,10 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; workspaceAliases?: readonly WorkspaceAliasConfig[] },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -1002,12 +1062,139 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
+function normalizeWorkspaceAliasRelativePath(root: string, aliasPath: string): string {
+  const trimmedPath = aliasPath.trim();
+  if (!trimmedPath) {
+    throw new Error("tools.fs.workspaceAliases[].path must be a non-empty relative path.");
+  }
+  if (
+    trimmedPath.startsWith("@") ||
+    path.isAbsolute(trimmedPath) ||
+    isWindowsDrivePath(trimmedPath)
+  ) {
+    throw new Error(
+      `tools.fs.workspaceAliases[].path must be relative to the workspace: ${aliasPath}`,
+    );
+  }
+  return toRelativeWorkspacePath(root, path.resolve(root, trimmedPath));
+}
+
+function isRelativePathAtOrUnderRoot(rootRelative: string, candidateRelative: string): boolean {
+  const relative = path.relative(rootRelative, candidateRelative);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function resolveWorkspaceAliasTargetRoot(alias: WorkspaceAliasConfig): Promise<string> {
+  const trimmedTarget = alias.target.trim();
+  if (!trimmedTarget) {
+    throw new Error("tools.fs.workspaceAliases[].target must be a non-empty absolute path.");
+  }
+  const expandedTarget = expandTildeToOsHome(trimmedTarget);
+  if (!path.isAbsolute(expandedTarget)) {
+    throw new Error(`tools.fs.workspaceAliases[].target must be an absolute path: ${alias.target}`);
+  }
+  const targetRoot = await fs.realpath(path.resolve(expandedTarget));
+  const stat = await fs.stat(targetRoot);
+  if (!stat.isDirectory()) {
+    throw new Error(`tools.fs.workspaceAliases[].target must be a directory: ${alias.target}`);
+  }
+  return targetRoot;
+}
+
+async function resolveVerifiedWorkspaceAliasTargetRoot(params: {
+  root: string;
+  alias: WorkspaceAliasConfig;
+  aliasRelative: string;
+}): Promise<string> {
+  const targetRoot = await resolveWorkspaceAliasTargetRoot(params.alias);
+  const aliasRoot = await fs.realpath(path.resolve(params.root, params.aliasRelative));
+  if (path.resolve(aliasRoot) !== path.resolve(targetRoot)) {
+    throw new Error(
+      `Configured workspace alias "${params.alias.path}" resolves to ${aliasRoot}, not ${targetRoot}.`,
+    );
+  }
+  return targetRoot;
+}
+
+async function resolveWorkspaceAliasTarget(params: {
+  root: string;
+  filePath: string;
+  workspaceAliases?: readonly WorkspaceAliasConfig[];
+  followLeafSymlink: boolean;
+}): Promise<WorkspaceAliasTarget | undefined> {
+  const aliases = params.workspaceAliases ?? [];
+  if (aliases.length === 0) {
+    return undefined;
+  }
+
+  let lexicalRelative: string;
+  try {
+    lexicalRelative = toRelativeWorkspacePath(params.root, params.filePath, {
+      allowRoot: true,
+    });
+  } catch {
+    return undefined;
+  }
+  if (!lexicalRelative) {
+    return undefined;
+  }
+
+  for (const alias of aliases) {
+    const aliasRelative = normalizeWorkspaceAliasRelativePath(params.root, alias.path);
+    if (!isRelativePathAtOrUnderRoot(aliasRelative, lexicalRelative)) {
+      continue;
+    }
+
+    const targetRoot = await resolveVerifiedWorkspaceAliasTargetRoot({
+      root: params.root,
+      alias,
+      aliasRelative,
+    });
+    const lexicalPath = path.resolve(params.root, lexicalRelative);
+    const canonicalPath = params.followLeafSymlink
+      ? await canonicalPathFromExistingAncestor(lexicalPath)
+      : path.join(
+          await canonicalPathFromExistingAncestor(path.dirname(lexicalPath)),
+          path.basename(lexicalPath),
+        );
+    let relative: string;
+    try {
+      relative = toRelativeWorkspacePath(targetRoot, canonicalPath, { allowRoot: true });
+    } catch (error) {
+      throw new Error(
+        `Path escapes configured workspace alias "${alias.path}" target: ${params.filePath}`,
+        { cause: error },
+      );
+    }
+
+    return {
+      root: targetRoot,
+      relative,
+      resolved: relative ? path.resolve(targetRoot, relative) : targetRoot,
+    };
+  }
+
+  return undefined;
+}
+
 async function writeWorkspaceFile(
   root: string,
   getRoot: () => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
+  workspaceAliases?: readonly WorkspaceAliasConfig[],
 ) {
+  const aliasTarget = await resolveWorkspaceAliasTarget({
+    root,
+    filePath: absolutePath,
+    workspaceAliases,
+    followLeafSymlink: false,
+  });
+  if (aliasTarget) {
+    await (await fsRoot(aliasTarget.root)).write(aliasTarget.relative, content, { mkdir: true });
+    return;
+  }
+
   // Validate the path before starting the fs-safe root: call getRoot() (which opens the
   // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
   // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
@@ -1016,8 +1203,12 @@ async function writeWorkspaceFile(
   await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; workspaceAliases?: readonly WorkspaceAliasConfig[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const workspaceAliases = options?.workspaceAliases;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
@@ -1042,26 +1233,58 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return {
     mkdir: async (dir: string) => {
+      const aliasTarget = await resolveWorkspaceAliasTarget({
+        root,
+        filePath: dir,
+        workspaceAliases,
+        followLeafSymlink: true,
+      });
+      if (aliasTarget) {
+        await fs.mkdir(aliasTarget.resolved, { recursive: true });
+        return;
+      }
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
       const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
       await assertSandboxPath({ filePath: resolved, cwd: root, root });
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot, absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content, workspaceAliases),
     readFile: async (absolutePath: string) => {
+      const aliasTarget = await resolveWorkspaceAliasTarget({
+        root,
+        filePath: absolutePath,
+        workspaceAliases,
+        followLeafSymlink: false,
+      });
+      if (aliasTarget) {
+        return (await (await fsRoot(aliasTarget.root)).read(aliasTarget.relative)).buffer;
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return (await (await getRoot()).read(relative)).buffer;
     },
     statFile: async (absolutePath: string) => {
+      const aliasTarget = await resolveWorkspaceAliasTarget({
+        root,
+        filePath: absolutePath,
+        workspaceAliases,
+        followLeafSymlink: false,
+      });
+      if (aliasTarget) {
+        return statHostFile(aliasTarget.resolved);
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return statHostFile(path.resolve(root, relative));
     },
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; workspaceAliases?: readonly WorkspaceAliasConfig[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const workspaceAliases = options?.workspaceAliases;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
@@ -1084,14 +1307,44 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return {
     readFile: async (absolutePath: string) => {
+      const aliasTarget = await resolveWorkspaceAliasTarget({
+        root,
+        filePath: absolutePath,
+        workspaceAliases,
+        followLeafSymlink: false,
+      });
+      if (aliasTarget) {
+        return (await (await fsRoot(aliasTarget.root)).read(aliasTarget.relative)).buffer;
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       const safeRead = await (await getRoot()).read(relative);
       return safeRead.buffer;
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot, absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content, workspaceAliases),
     access: async (absolutePath: string) => {
       let relative: string;
+      const aliasTarget = await resolveWorkspaceAliasTarget({
+        root,
+        filePath: absolutePath,
+        workspaceAliases,
+        followLeafSymlink: false,
+      });
+      if (aliasTarget) {
+        try {
+          const opened = await (await fsRoot(aliasTarget.root)).open(aliasTarget.relative);
+          await opened.handle.close().catch(() => {});
+        } catch (error) {
+          if (error instanceof FsSafeError && error.code === "not-found") {
+            throw createFsAccessError("ENOENT", absolutePath);
+          }
+          if (error instanceof FsSafeError && error.code === "outside-workspace") {
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
       try {
         relative = toRelativeWorkspacePath(root, absolutePath);
       } catch {

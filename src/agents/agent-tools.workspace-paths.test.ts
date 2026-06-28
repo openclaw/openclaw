@@ -11,7 +11,11 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import {
+  expectReadWriteEditTools,
+  expectReadWriteTools,
+  getTextContent,
+} from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -256,7 +260,7 @@ describe("workspace path resolution", () => {
 
         const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
         const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
-        const { writeTool } = expectReadWriteEditTools(tools);
+        const { writeTool } = expectReadWriteTools(tools);
 
         await writeTool.execute("ws-write-symlink-parent", {
           path: "memory/2026-05-20.md",
@@ -308,7 +312,7 @@ describe("workspace path resolution", () => {
 
         const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
         const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
-        const { writeTool } = expectReadWriteEditTools(tools);
+        const { writeTool } = expectReadWriteTools(tools);
 
         await expect(
           writeTool.execute("ws-write-symlink-escape", {
@@ -319,6 +323,100 @@ describe("workspace path resolution", () => {
         await expect(fs.stat(path.join(outsideDir, "secret.md"))).rejects.toMatchObject({
           code: "ENOENT",
         });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows configured workspace aliases to resolve outside the workspace",
+    async () => {
+      await withTempDir("openclaw-ws-configured-alias-", async (rootDir) => {
+        const workspaceDir = path.join(rootDir, "workspace");
+        const outsideDir = path.join(rootDir, "memory");
+        const aliasDir = path.join(workspaceDir, "memory");
+        const memoryPath = path.join(outsideDir, "2026-06-06.md");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.symlink(outsideDir, aliasDir);
+
+        const cfg: OpenClawConfig = {
+          tools: {
+            fs: {
+              workspaceOnly: true,
+              workspaceAliases: [{ path: "memory", target: outsideDir }],
+            },
+          },
+        };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        await writeTool.execute("ws-write-configured-alias", {
+          path: "memory/2026-06-06.md",
+          content: "old memory\n",
+        });
+        expect(await fs.readFile(memoryPath, "utf8")).toBe("old memory\n");
+
+        expect(
+          getTextContent(
+            await readTool.execute("ws-read-configured-alias", {
+              path: "memory/2026-06-06.md",
+            }),
+          ),
+        ).toContain("old memory");
+
+        await editTool.execute("ws-edit-configured-alias", {
+          path: "memory/2026-06-06.md",
+          edits: [{ oldText: "old", newText: "new" }],
+        });
+        expect(await fs.readFile(memoryPath, "utf8")).toBe("new memory\n");
+
+        await expect(
+          writeTool.execute("ws-write-configured-alias-direct-target", {
+            path: memoryPath,
+            content: "direct write\n",
+          }),
+        ).rejects.toThrow(/Path escapes workspace root|sandbox/i);
+        expect(await fs.readFile(memoryPath, "utf8")).toBe("new memory\n");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows memory flush append-only writes through configured workspace aliases",
+    async () => {
+      await withTempDir("openclaw-ws-memory-flush-alias-", async (rootDir) => {
+        const workspaceDir = path.join(rootDir, "workspace");
+        const outsideDir = path.join(rootDir, "memory");
+        const aliasDir = path.join(workspaceDir, "memory");
+        const memoryPath = path.join(outsideDir, "2026-06-06.md");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(memoryPath, "seed", "utf8");
+        await fs.symlink(outsideDir, aliasDir);
+
+        const cfg: OpenClawConfig = {
+          tools: {
+            fs: {
+              workspaceOnly: true,
+              workspaceAliases: [{ path: "memory", target: outsideDir }],
+            },
+          },
+        };
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          config: cfg,
+          trigger: "memory",
+          memoryFlushWritePath: "memory/2026-06-06.md",
+        });
+        const { writeTool } = expectReadWriteTools(tools);
+
+        const result = await writeTool.execute("ws-memory-flush-configured-alias", {
+          path: "memory/2026-06-06.md",
+          content: "new note",
+        });
+
+        expect(getTextContent(result)).toContain("Appended content to memory/2026-06-06.md.");
+        expect(await fs.readFile(memoryPath, "utf8")).toBe("seed\nnew note");
       });
     },
   );

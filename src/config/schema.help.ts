@@ -898,6 +898,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.workspaceAliases":
+    "Explicit relative workspace paths that may resolve to configured host directories when tools.fs.workspaceOnly is true. File tools must still use the workspace alias path; direct target paths remain outside scope.",
+  "tools.fs.workspaceAliases[].path":
+    'Relative path inside the workspace, usually a symlinked directory such as "memory".',
+  "tools.fs.workspaceAliases[].target":
+    "Absolute host directory that the alias path must resolve into.",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.allowCrossContextSend":
