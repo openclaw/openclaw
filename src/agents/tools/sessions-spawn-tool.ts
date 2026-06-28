@@ -255,6 +255,8 @@ export function createSessionsSpawnTool(
     agentSessionKey?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
+    /** Current requester agent run id, used only for internal durable lineage. */
+    requesterRunId?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
@@ -449,6 +451,7 @@ export function createSessionsSpawnTool(
               task,
               taskName,
               requesterAgentId: opts?.requesterAgentIdOverride,
+              requesterRunId: opts?.requesterRunId,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds: result.runTimeoutSeconds,
@@ -496,6 +499,7 @@ export function createSessionsSpawnTool(
         {
           agentSessionKey: opts?.agentSessionKey,
           completionOwnerKey: opts?.completionOwnerKey,
+          requesterRunId: opts?.requesterRunId,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,

@@ -1181,6 +1181,173 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 
+CREATE TABLE IF NOT EXISTS durable_workflow_runs (
+  workflow_run_id TEXT NOT NULL PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  workflow_version TEXT NOT NULL DEFAULT '1',
+  idempotency_key TEXT,
+  request_hash TEXT,
+  status TEXT NOT NULL,
+  source_type TEXT,
+  source_ref TEXT,
+  input_ref TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  recovery_state TEXT NOT NULL DEFAULT 'runnable',
+  checkpoint_ref TEXT,
+  parent_workflow_run_id TEXT,
+  parent_step_id TEXT,
+  message_id TEXT,
+  turn_id TEXT,
+  claimed_by TEXT,
+  claim_expires_at INTEGER,
+  heartbeat_at INTEGER,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_workflow_runs_idempotency
+  ON durable_workflow_runs(workflow_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_runs_status
+  ON durable_workflow_runs(status, updated_at, workflow_run_id);
+
+CREATE TABLE IF NOT EXISTS durable_workflow_events (
+  event_id TEXT NOT NULL UNIQUE,
+  workflow_run_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  event_time INTEGER NOT NULL,
+  step_id TEXT,
+  agent_invocation_id TEXT,
+  tool_invocation_id TEXT,
+  idempotency_key TEXT,
+  payload_json TEXT,
+  payload_hash TEXT,
+  checkpoint_ref TEXT,
+  causation_event_id TEXT,
+  correlation_id TEXT,
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (workflow_run_id, event_seq),
+  FOREIGN KEY (workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_events_type
+  ON durable_workflow_events(event_type, event_time, workflow_run_id);
+
+CREATE TABLE IF NOT EXISTS durable_workflow_steps (
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  parent_step_id TEXT,
+  step_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  recovery_state TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  max_attempts INTEGER,
+  idempotency_key TEXT,
+  input_ref TEXT,
+  output_ref TEXT,
+  error_ref TEXT,
+  checkpoint_ref TEXT,
+  claimed_by TEXT,
+  claim_expires_at INTEGER,
+  heartbeat_at INTEGER,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  metadata_json TEXT,
+  PRIMARY KEY (workflow_run_id, step_id),
+  FOREIGN KEY (workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_steps_status
+  ON durable_workflow_steps(status, updated_at, workflow_run_id, step_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_workflow_steps_idempotency
+  ON durable_workflow_steps(workflow_run_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_workflow_refs (
+  ref_id TEXT NOT NULL PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT,
+  ref_kind TEXT NOT NULL,
+  media_type TEXT,
+  hash TEXT,
+  storage_kind TEXT NOT NULL,
+  storage_uri TEXT,
+  created_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY (workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_refs_run
+  ON durable_workflow_refs(workflow_run_id, ref_kind, created_at);
+
+CREATE TABLE IF NOT EXISTS durable_workflow_links (
+  parent_workflow_run_id TEXT NOT NULL,
+  parent_step_id TEXT NOT NULL,
+  child_workflow_run_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  PRIMARY KEY (parent_workflow_run_id, parent_step_id, child_workflow_run_id),
+  FOREIGN KEY (parent_workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (child_workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_links_child
+  ON durable_workflow_links(child_workflow_run_id, status);
+
+CREATE TABLE IF NOT EXISTS durable_workflow_timers (
+  timer_id TEXT NOT NULL PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT,
+  timer_type TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  fired_at INTEGER,
+  cancelled_at INTEGER,
+  metadata_json TEXT,
+  FOREIGN KEY (workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_timers_due
+  ON durable_workflow_timers(status, due_at, timer_id);
+
+CREATE TABLE IF NOT EXISTS durable_workflow_signals (
+  signal_id TEXT NOT NULL PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT,
+  signal_type TEXT NOT NULL,
+  idempotency_key TEXT,
+  payload_ref TEXT,
+  correlation_id TEXT,
+  received_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  metadata_json TEXT,
+  FOREIGN KEY (workflow_run_id) REFERENCES durable_workflow_runs(workflow_run_id)
+    ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_workflow_signals_idempotency
+  ON durable_workflow_signals(workflow_run_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_workflow_signals_pending
+  ON durable_workflow_signals(consumed_at, received_at, signal_id);
+
 CREATE TABLE IF NOT EXISTS migration_runs (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,

@@ -52,7 +52,10 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],
-  "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
+  "shared database stores with direct DatabaseSync access": [
+    "src/durable/sqlite-store.ts",
+    "src/proxy-capture/store.sqlite.ts",
+  ],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",

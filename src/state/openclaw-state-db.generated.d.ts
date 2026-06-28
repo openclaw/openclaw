@@ -455,6 +455,123 @@ export interface DiagnosticStabilityBundles {
   reason: string;
 }
 
+export interface DurableWorkflowEvents {
+  agent_invocation_id: string | null;
+  causation_event_id: string | null;
+  checkpoint_ref: string | null;
+  correlation_id: string | null;
+  event_id: string;
+  event_seq: number;
+  event_time: number;
+  event_type: string;
+  idempotency_key: string | null;
+  payload_hash: string | null;
+  payload_json: string | null;
+  recorded_at: number;
+  step_id: string | null;
+  tool_invocation_id: string | null;
+  workflow_run_id: string;
+}
+
+export interface DurableWorkflowLinks {
+  child_workflow_run_id: string;
+  created_at: number;
+  link_type: string;
+  metadata_json: string | null;
+  parent_step_id: string;
+  parent_workflow_run_id: string;
+  status: string;
+  updated_at: number;
+}
+
+export interface DurableWorkflowRefs {
+  created_at: number;
+  hash: string | null;
+  media_type: string | null;
+  metadata_json: string | null;
+  ref_id: string;
+  ref_kind: string;
+  step_id: string | null;
+  storage_kind: string;
+  storage_uri: string | null;
+  workflow_run_id: string;
+}
+
+export interface DurableWorkflowRuns {
+  checkpoint_ref: string | null;
+  claim_expires_at: number | null;
+  claimed_by: string | null;
+  completed_at: number | null;
+  created_at: number;
+  heartbeat_at: number | null;
+  idempotency_key: string | null;
+  input_ref: string | null;
+  message_id: string | null;
+  metadata_json: string | null;
+  parent_step_id: string | null;
+  parent_workflow_run_id: string | null;
+  recovery_state: Generated<string>;
+  request_hash: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  status: string;
+  turn_id: string | null;
+  updated_at: number;
+  workflow_id: string;
+  workflow_run_id: string;
+  workflow_version: Generated<string>;
+}
+
+export interface DurableWorkflowSignals {
+  consumed_at: number | null;
+  correlation_id: string | null;
+  idempotency_key: string | null;
+  metadata_json: string | null;
+  payload_ref: string | null;
+  received_at: number;
+  signal_id: string;
+  signal_type: string;
+  step_id: string | null;
+  workflow_run_id: string;
+}
+
+export interface DurableWorkflowSteps {
+  attempt: Generated<number>;
+  checkpoint_ref: string | null;
+  claim_expires_at: number | null;
+  claimed_by: string | null;
+  completed_at: number | null;
+  created_at: number;
+  error_ref: string | null;
+  heartbeat_at: number | null;
+  idempotency_key: string | null;
+  input_ref: string | null;
+  max_attempts: number | null;
+  metadata_json: string | null;
+  output_ref: string | null;
+  parent_step_id: string | null;
+  recovery_state: string;
+  started_at: number | null;
+  status: string;
+  step_id: string;
+  step_type: string;
+  updated_at: number;
+  workflow_run_id: string;
+}
+
+export interface DurableWorkflowTimers {
+  cancelled_at: number | null;
+  created_at: number;
+  due_at: number;
+  fired_at: number | null;
+  metadata_json: string | null;
+  status: string;
+  step_id: string | null;
+  timer_id: string;
+  timer_type: string;
+  workflow_run_id: string;
+}
+
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -984,6 +1101,13 @@ export interface DB {
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
+  durable_workflow_events: DurableWorkflowEvents;
+  durable_workflow_links: DurableWorkflowLinks;
+  durable_workflow_refs: DurableWorkflowRefs;
+  durable_workflow_runs: DurableWorkflowRuns;
+  durable_workflow_signals: DurableWorkflowSignals;
+  durable_workflow_steps: DurableWorkflowSteps;
+  durable_workflow_timers: DurableWorkflowTimers;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
   gateway_restart_handoff: GatewayRestartHandoff;

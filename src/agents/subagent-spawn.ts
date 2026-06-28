@@ -187,6 +187,8 @@ export type SpawnSubagentContext = {
   agentSessionKey?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Current requester agent run id, used only for internal durable lineage. */
+  requesterRunId?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -1659,6 +1661,7 @@ export async function spawnSubagentDirect(
       taskName,
       agentId: targetAgentId,
       requesterAgentId,
+      requesterRunId: ctx.requesterRunId,
       cleanup,
       label: label || undefined,
       model: resolvedModel,
