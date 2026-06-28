@@ -463,8 +463,7 @@ describe("native hook relay registry", () => {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
         decision: {
-          behavior: "allow",
-          updatedInput: { command: "browserforce tabs" },
+          behavior: "allow"
         },
       },
     });
@@ -487,8 +486,7 @@ describe("native hook relay registry", () => {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
         decision: {
-          behavior: "allow",
-          updatedInput: { command: "browserforce tabs" },
+          behavior: "allow"
         },
       },
     });
@@ -2480,12 +2478,7 @@ describe("native hook relay registry", () => {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
         decision: {
-          behavior: "allow",
-          updatedInput: {
-            owner: "openclaw",
-            repo: "openclaw",
-            title: "Test issue",
-          },
+          behavior: "allow"
         },
       },
     });
@@ -2647,8 +2640,7 @@ describe("native hook relay registry", () => {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
         decision: {
-          behavior: "allow",
-          updatedInput: { command: "git push" },
+          behavior: "allow"
         },
       },
     });
@@ -2720,8 +2712,7 @@ describe("native hook relay registry", () => {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision: {
-            behavior: "allow",
-            updatedInput: { command: "browserforce tabs" },
+            behavior: "allow"
           },
         },
       },
@@ -2729,8 +2720,7 @@ describe("native hook relay registry", () => {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision: {
-            behavior: "allow",
-            updatedInput: { command: "browserforce tabs" },
+            behavior: "allow"
           },
         },
       },
@@ -2906,8 +2896,7 @@ describe("native hook relay registry", () => {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision: {
-            behavior: "allow",
-            updatedInput: { command: "git push" },
+            behavior: "allow"
           },
         },
       },
@@ -2915,8 +2904,7 @@ describe("native hook relay registry", () => {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision: {
-            behavior: "allow",
-            updatedInput: { command: "git push" },
+            behavior: "allow"
           },
         },
       },
@@ -3044,8 +3032,7 @@ describe("native hook relay registry", () => {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
         decision: {
-          behavior: "allow",
-          updatedInput: { command: "git status" },
+          behavior: "allow"
         },
       },
     });

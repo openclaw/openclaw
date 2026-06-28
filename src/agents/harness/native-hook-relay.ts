@@ -389,7 +389,7 @@ const nativeHookRelayProviderAdapters: Record<
       stderr: "",
       exitCode: 0,
     }),
-    renderPermissionDecisionResponse: (decision, message, toolInput) => ({
+    renderPermissionDecisionResponse: (decision, message, _toolInput) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
@@ -397,7 +397,6 @@ const nativeHookRelayProviderAdapters: Record<
             decision === "allow"
               ? {
                   behavior: "allow",
-                  updatedInput: toolInput ?? {},
                 }
               : {
                   behavior: "deny",
