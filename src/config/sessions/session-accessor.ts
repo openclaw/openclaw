@@ -53,6 +53,7 @@ import {
   replaceSqliteTranscriptEvents,
   replaceSqliteSessionEntry,
   resolveSqliteSessionKeyBySessionId,
+  resolveSqliteSessionParentForkDecision,
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
@@ -1128,6 +1129,14 @@ export async function forkSessionEntryFromParentTarget(
   params: ForkSessionEntryFromParentTargetParams,
 ): Promise<ForkSessionEntryFromParentTargetResult> {
   return await forkSqliteSessionEntryFromParentTarget(params);
+}
+
+/** Resolves whether a parent session is small enough to fork through the active store. */
+export async function resolveSessionParentForkDecision(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<SessionParentForkDecision> {
+  return await resolveSqliteSessionParentForkDecision(params);
 }
 
 /**

@@ -2,18 +2,12 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
+  resolveSessionParentForkDecision,
   type SessionParentForkDecision,
   type ParentForkedSessionTranscript,
 } from "../../config/sessions/session-accessor.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-/**
- * Default max parent token count beyond which thread/session parent forking is skipped.
- * This prevents new thread sessions from inheriting near-full parent context.
- * See #26905.
- */
-const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 
 export type ParentForkDecision = SessionParentForkDecision;
 
@@ -76,16 +70,6 @@ export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams,
   }) => Partial<SessionEntry> | null;
 };
 
-function formatParentForkTooLargeMessage(params: {
-  parentTokens: number;
-  maxTokens: number;
-}): string {
-  return (
-    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
-    "starting with isolated context instead."
-  );
-}
-
 function resolveParentForkStorePath(params: {
   agentId?: string;
   config?: OpenClawConfig;
@@ -99,22 +83,10 @@ function resolveParentForkStorePath(params: {
 export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = resolveFreshSessionTotalTokens(params.parentEntry);
-  if (typeof parentTokens === "number" && parentTokens > maxTokens) {
-    return {
-      status: "skip",
-      reason: "parent-too-large",
-      maxTokens,
-      parentTokens,
-      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
-    };
-  }
-  return {
-    status: "fork",
-    maxTokens,
-    ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-  };
+  return await resolveSessionParentForkDecision({
+    parentEntry: params.parentEntry,
+    storePath: resolveParentForkStorePath(params),
+  });
 }
 
 export async function forkSessionFromParent(

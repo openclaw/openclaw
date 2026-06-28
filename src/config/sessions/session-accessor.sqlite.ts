@@ -2758,6 +2758,29 @@ function resolveSqliteParentForkDecision(
   };
 }
 
+/** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */
+export async function resolveSqliteSessionParentForkDecision(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<SessionParentForkDecision> {
+  const parentSessionId =
+    typeof params.parentEntry.sessionId === "string" ? params.parentEntry.sessionId : "";
+  const needsTranscriptTokenEstimate =
+    typeof resolveFreshSessionTotalTokens(params.parentEntry) !== "number" &&
+    parentSessionId.length > 0;
+  if (!needsTranscriptTokenEstimate) {
+    return resolveSqliteParentForkDecision(params.parentEntry);
+  }
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return resolveSqliteParentForkDecision(
+    params.parentEntry,
+    estimateSqliteTranscriptPromptTokens(
+      loadSqliteTranscriptEventsFromDatabase(database, parentSessionId),
+    ),
+  );
+}
+
 function estimateSqliteTranscriptPromptTokens(
   events: readonly TranscriptEvent[],
 ): number | undefined {
