@@ -42,7 +42,6 @@ describe("Dockerfile", () => {
     expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS workspace-deps/);
     expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS build/);
     expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\} AS base-runtime/);
-    expect(dockerfile).toMatch(/FROM base-runtime/);
     expect(dockerfile).toMatch(/current multi-arch manifest list entries/);
     expect(dockerfile).not.toContain("current amd64 entry");
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
@@ -94,7 +93,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toMatch(
       /node \/app\/node_modules\/playwright-core\/cli\.js install --with-deps chromium/,
     );
-    expect(dockerfile).toMatch(/apt-get install -y --no-install-recommends\s+xvfb/);
+    expect(dockerfile).toMatch(/install_list="\$install_list xvfb"/);
   });
 
   it("uses the Docker target platform for pnpm install and prune", async () => {
@@ -281,7 +280,7 @@ describe("Dockerfile", () => {
 
   it("keeps runtime workspace templates in final images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const runtimeStageIndex = dockerfile.search(/AS base-runtime/);
     const templatesCopyIndex = dockerfile.indexOf(
       "COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates",
       runtimeStageIndex,
@@ -415,7 +414,7 @@ describe("Dockerfile", () => {
 
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const runtimeStageIndex = dockerfile.search(/AS base-runtime/);
     const parentConfigDirIndex = dockerfile.indexOf(
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
