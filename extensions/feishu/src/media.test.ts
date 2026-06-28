@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const clearClientCacheMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
 
 vi.mock("./client.js", () => ({
+  clearClientCache: clearClientCacheMock,
   createFeishuClient: createFeishuClientMock,
 }));
 
@@ -72,6 +74,15 @@ function mockResolvedFeishuAccount() {
     appId: "app_id",
     appSecret: "app_secret",
     domain: "feishu",
+  });
+}
+
+function axiosTokenInvalidError(code = 99991663) {
+  return Object.assign(new Error("Request failed with status code 400"), {
+    response: {
+      status: 400,
+      data: { code, msg: "Invalid access token" },
+    },
   });
 }
 
@@ -418,6 +429,41 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expectMediaTimeoutClientConfigured();
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
+  });
+
+  it("clears the client cache and retries image uploads after token-invalid errors", async () => {
+    imageCreateMock
+      .mockRejectedValueOnce(axiosTokenInvalidError())
+      .mockResolvedValueOnce({ code: 0, data: { image_key: "image_after_refresh" } });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expect(clearClientCacheMock).toHaveBeenCalledWith("main");
+    expect(imageCreateMock).toHaveBeenCalledTimes(2);
+    const sentContent = callData<{ content?: string }>(messageCreateMock).content;
+    expect(sentContent ? JSON.parse(sentContent).image_key : undefined).toBe("image_after_refresh");
+  });
+
+  it("clears the client cache and retries media sends after token-invalid errors", async () => {
+    messageCreateMock
+      .mockRejectedValueOnce(axiosTokenInvalidError(99991664))
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "msg_after_refresh" } });
+
+    const result = await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expect(clearClientCacheMock).toHaveBeenCalledWith("main");
+    expect(messageCreateMock).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("msg_after_refresh");
   });
 
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
