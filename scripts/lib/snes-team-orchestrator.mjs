@@ -1850,9 +1850,9 @@ function callOllamaJson({
   const raw = typeof api?.response === "string" ? api.response : stdout;
   const parsed = extractJsonObject(raw);
   const error = result.error
-    ? String(result.error.message ?? result.error)
+    ? (result.error.message ?? result.error)
     : api?.error
-      ? String(api.error)
+      ? api.error
       : result.status === 0
         ? null
         : stderr || `ollama-curl-exit-${result.status}`;
@@ -1891,7 +1891,7 @@ export function modelHealth({ project, root, spawn = spawnSync, timeoutSeconds =
       ok: false,
       project,
       blocker: listResult.error
-        ? String(listResult.error.message ?? listResult.error)
+        ? (listResult.error.message ?? listResult.error)
         : spawnText(listResult, "stderr") || `ollama-list-exit-${listResult.status}`,
       downloadsAttempted: false,
       hostedGlmUsed: false,
@@ -2211,7 +2211,7 @@ export function dispatchWorker({
         spawn,
         timeoutSeconds,
       });
-      dispatch.modelInvoked = worker.modelInvoked === true;
+      dispatch.modelInvoked = worker.modelInvoked;
       dispatch.modelInvocation = worker;
       if (worker.status !== "pass") {
         dispatch.status = "blocked";
