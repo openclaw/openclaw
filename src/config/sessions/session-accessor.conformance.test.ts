@@ -609,7 +609,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
     it("keeps custom JSON store paths beside their SQLite database", async () => {
       const customStorePath = path.join(paths.tempDir, "custom-sessions.json");
-      const sqlitePath = path.join(paths.tempDir, "custom-sessions.sqlite");
+      const sqlitePath = path.join(paths.tempDir, "custom-sessions.voice.sqlite");
       const scope = {
         env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
         sessionKey: "agent:voice:main",
@@ -634,7 +634,10 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
     it("uses the requested agent for custom sessions.json SQLite targets", async () => {
       const customStorePath = path.join(paths.tempDir, "custom-store", "sessions.json");
-      const customSqlitePath = path.join(path.dirname(customStorePath), "openclaw-agent.sqlite");
+      const customSqlitePath = path.join(
+        path.dirname(customStorePath),
+        "openclaw-agent.support.sqlite",
+      );
       const scope = {
         agentId: "support",
         env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },

@@ -146,7 +146,7 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
-  it("dedupes shared store paths for --all-agents", () => {
+  it("keeps shared store paths distinct by SQLite owner for --all-agents", () => {
     const cfg: OpenClawConfig = {
       session: {
         store: "/tmp/shared-sessions.json",
@@ -158,6 +158,7 @@ describe("resolveSessionStoreTargets", () => {
 
     expect(resolveSessionStoreTargets(cfg, { allAgents: true })).toEqual([
       { agentId: "main", storePath: path.resolve("/tmp/shared-sessions.json") },
+      { agentId: "work", storePath: path.resolve("/tmp/shared-sessions.json") },
     ]);
   });
 

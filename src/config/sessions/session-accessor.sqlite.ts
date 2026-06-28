@@ -17,6 +17,7 @@ import { redactSecrets } from "../../logging/redact.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -1616,14 +1617,19 @@ async function runExclusiveSqliteSessionWrite<T>(
 function resolveSqliteScope(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "sessionKey" | "storePath">,
 ): ResolvedSqliteScope {
+  const scopedAgentId = resolveExplicitSqliteAgentId(scope);
   const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath)
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, {
+        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+      })
     : undefined;
   const agentId = resolveSqliteAgentId({
-    scopedAgentId: scope.agentId,
+    scopedAgentId,
     sessionKey: scope.sessionKey,
     storeAgentId: storeTarget?.agentId,
-    useDefaultAgentForUnownedStore: Boolean(storeTarget?.path && !storeTarget.agentId),
+    useDefaultAgentForUnownedStore: Boolean(
+      storeTarget?.path && !storeTarget.agentId && !scopedAgentId,
+    ),
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
@@ -1639,15 +1645,20 @@ function resolveSqliteScope(
 function resolveSqliteReadScope(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionKey" | "storePath">,
 ): ResolvedSqliteReadScope {
-  const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath)
-    : undefined;
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
+  const scopedAgentId = resolveExplicitSqliteAgentId({ ...scope, sessionKey });
+  const storeTarget = scope.storePath
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, {
+        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+      })
+    : undefined;
   const agentId = resolveSqliteAgentId({
-    scopedAgentId: scope.agentId,
+    scopedAgentId,
     sessionKey,
     storeAgentId: storeTarget?.agentId,
-    useDefaultAgentForUnownedStore: Boolean(storeTarget?.path && !storeTarget.agentId),
+    useDefaultAgentForUnownedStore: Boolean(
+      storeTarget?.path && !storeTarget.agentId && !scopedAgentId,
+    ),
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
@@ -1658,6 +1669,15 @@ function resolveSqliteReadScope(
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+function resolveExplicitSqliteAgentId(params: {
+  agentId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  return params.agentId
+    ? normalizeAgentId(params.agentId)
+    : parseAgentSessionKey(params.sessionKey)?.agentId;
 }
 
 function resolveSqliteStoreScope(storePath: string): ResolvedSqliteScope {

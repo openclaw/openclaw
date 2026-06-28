@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 
 /** SQLite database target resolved from a legacy session store path. */
 export type ResolvedSqliteStoreTarget = {
@@ -7,9 +7,27 @@ export type ResolvedSqliteStoreTarget = {
   path?: string;
 };
 
+function resolveCustomStoreSqlitePath(params: {
+  agentId?: string;
+  sqliteBaseName?: string;
+  storePath: string;
+}): string {
+  const resolved = path.resolve(params.storePath);
+  const sessionsDir = path.dirname(resolved);
+  const sqliteBaseName =
+    params.sqliteBaseName ?? (path.basename(resolved, path.extname(resolved)) || "openclaw-agent");
+  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const sqliteName =
+    agentId && agentId !== DEFAULT_AGENT_ID && normalizeAgentId(sqliteBaseName) !== agentId
+      ? `${sqliteBaseName}.${agentId}`
+      : sqliteBaseName;
+  return path.join(sessionsDir, `${sqliteName}.sqlite`);
+}
+
 /** Resolves the SQLite database target that owns a legacy session store path. */
 export function resolveSqliteTargetFromSessionStorePath(
   storePath: string,
+  options: { agentId?: string } = {},
 ): ResolvedSqliteStoreTarget {
   const resolved = path.resolve(storePath);
   if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
@@ -21,20 +39,30 @@ export function resolveSqliteTargetFromSessionStorePath(
   }
   const sessionsDir = path.dirname(resolved);
   if (path.basename(resolved) !== "sessions.json") {
-    const sqliteBaseName = path.basename(resolved, path.extname(resolved)) || "openclaw-agent";
     return {
-      path: path.join(sessionsDir, `${sqliteBaseName}.sqlite`),
+      path: resolveCustomStoreSqlitePath({
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        storePath: resolved,
+      }),
     };
   }
   if (path.basename(sessionsDir) !== "sessions") {
     return {
-      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
+      path: resolveCustomStoreSqlitePath({
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        sqliteBaseName: "openclaw-agent",
+        storePath: resolved,
+      }),
     };
   }
   const agentDir = path.dirname(sessionsDir);
   if (path.basename(path.dirname(agentDir)) !== "agents") {
     return {
-      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
+      path: resolveCustomStoreSqlitePath({
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        sqliteBaseName: "openclaw-agent",
+        storePath: resolved,
+      }),
     };
   }
   return {
