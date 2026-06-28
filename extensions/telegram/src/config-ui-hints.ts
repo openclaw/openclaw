@@ -66,6 +66,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Rich Messages",
     help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
+  generatedImageAsDocument: {
+    label: "Telegram Generated Image As Document",
+    help: "Deliver agent-generated images as uncompressed documents instead of compressed photos. Default: false (sent as photos).",
+  },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
     help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',

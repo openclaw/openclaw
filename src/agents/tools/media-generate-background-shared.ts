@@ -683,9 +683,7 @@ async function tryDeliverMediaGenerationDirect(params: {
       threadId: origin.threadId,
       content: params.content,
       mediaUrls: params.mediaUrls,
-      ...(params.toolName === "image_generate" && origin.channel === "telegram"
-        ? { forceDocument: true }
-        : {}),
+      ...(params.toolName === "image_generate" ? { generatedImage: true } : {}),
       requesterSessionKey: params.handle.requesterSessionKey,
       agentId,
       idempotencyKey,

@@ -2272,7 +2272,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("directly delivers generated Telegram images as documents when announce-agent returns no visible output", async () => {
+  it("directly delivers generated images with neutral provenance when announce-agent returns no visible output", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
@@ -2312,7 +2312,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         to: "123456789",
         content: "The generated image is ready.",
         mediaUrls: ["/tmp/generated-robot.png"],
-        forceDocument: true,
+        generatedImage: true,
         idempotencyKey: "announce-telegram-dm-fallback:generated-media-direct",
       }),
     );

@@ -19,6 +19,7 @@ import {
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { mergeTelegramAccountConfig } from "./account-config.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
@@ -100,6 +101,30 @@ async function resolveTelegramOutboundSendContext(
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
   const { send, baseOpts } = await resolveTelegramSendContext(params);
   return { outboundTo, send, baseOpts };
+}
+
+/**
+ * Resolve Telegram's document-delivery directive. `forceDocument` is the explicit
+ * generic seam (e.g. the message-tool `asDocument` override) and always wins.
+ * The channel-agnostic `generatedImage` provenance only upgrades to a document
+ * when this Telegram account opts in via `generatedImageAsDocument`; the default
+ * keeps Telegram's compressed photo, preserving existing behavior.
+ */
+function resolveTelegramForceDocument(params: {
+  cfg: Parameters<typeof mergeTelegramAccountConfig>[0];
+  accountId?: string | null;
+  forceDocument?: boolean;
+  generatedImage?: boolean;
+}): boolean {
+  if (params.forceDocument === true) {
+    return true;
+  }
+  if (params.generatedImage !== true) {
+    return false;
+  }
+  return (
+    mergeTelegramAccountConfig(params.cfg, params.accountId ?? "").generatedImageAsDocument === true
+  );
 }
 
 export type CreateTelegramOutboundAdapterOptions = {
@@ -295,7 +320,7 @@ export function createTelegramOutboundAdapter(
           mediaUrl: params.mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
-          forceDocument: params.forceDocument ?? false,
+          forceDocument: resolveTelegramForceDocument(params),
         });
       },
     }),
@@ -314,7 +339,7 @@ export function createTelegramOutboundAdapter(
           ...baseOpts,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
-          forceDocument: params.forceDocument ?? false,
+          forceDocument: resolveTelegramForceDocument(params),
         },
       });
       return attachChannelToResult("telegram", result);

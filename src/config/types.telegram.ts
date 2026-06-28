@@ -174,6 +174,14 @@ export type TelegramAccountConfig = {
    * Default: false.
    */
   richMessages?: boolean;
+  /**
+   * Deliver agent-generated images (image_generate tool output) as uncompressed
+   * documents instead of Telegram's compressed photo. When false (default),
+   * generated images are sent as photos, preserving today's behavior. Set to true
+   * to opt into full-quality document delivery for generated images.
+   * Default: false.
+   */
+  generatedImageAsDocument?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;

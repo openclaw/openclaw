@@ -98,6 +98,93 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("sends generated images as documents when the account opts in", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-doc" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: { channels: { telegram: { generatedImageAsDocument: true } } } as never,
+      to: "12345",
+      text: "art",
+      mediaUrl: "/tmp/art.png",
+      generatedImage: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "art");
+    expect(options.forceDocument).toBe(true);
+  });
+
+  it("sends generated images as photos when the account has not opted in", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-photo" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: { channels: { telegram: {} } } as never,
+      to: "12345",
+      text: "art",
+      mediaUrl: "/tmp/art.png",
+      generatedImage: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "art");
+    expect(options.forceDocument).toBe(false);
+  });
+
+  it("honors an explicit forceDocument override regardless of generated-image config", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-doc" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: { channels: { telegram: { generatedImageAsDocument: false } } } as never,
+      to: "12345",
+      text: "doc",
+      mediaUrl: "/tmp/doc.png",
+      forceDocument: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "doc");
+    expect(options.forceDocument).toBe(true);
+  });
+
+  it("does not force documents for non-generated media even when opted in", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-photo" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: { channels: { telegram: { generatedImageAsDocument: true } } } as never,
+      to: "12345",
+      text: "snap",
+      mediaUrl: "/tmp/snap.png",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "snap");
+    expect(options.forceDocument).toBe(false);
+  });
+
+  it("resolves generatedImageAsDocument from the per-account override", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-doc" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {
+        channels: {
+          telegram: {
+            generatedImageAsDocument: false,
+            accounts: { ops: { generatedImageAsDocument: true } },
+          },
+        },
+      } as never,
+      to: "12345",
+      text: "art",
+      mediaUrl: "/tmp/art.png",
+      generatedImage: true,
+      accountId: "ops",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "art");
+    expect(options.forceDocument).toBe(true);
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })

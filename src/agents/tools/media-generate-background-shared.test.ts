@@ -621,6 +621,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
         to: "channel:123",
         content: "Image generation completed.",
         mediaUrls: ["/tmp/proof.png"],
+        generatedImage: true,
         idempotencyKey: "image_generate:task-image-direct:ok:direct",
       }),
     );

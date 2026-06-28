@@ -62,6 +62,8 @@ export type QueuedDeliveryPayload = {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  /** Channel-agnostic provenance: media produced by an image-generation tool. */
+  generatedImage?: boolean;
   /** Replayable reply payload hook context for recovery and live delivery. */
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
   silent?: boolean;
@@ -114,6 +116,7 @@ export async function enqueueDelivery(
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    generatedImage: params.generatedImage,
     replyPayloadSendingHook: params.replyPayloadSendingHook,
     silent: params.silent,
     mirror: params.mirror,

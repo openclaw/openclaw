@@ -207,6 +207,7 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  generatedImage?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
@@ -585,6 +586,7 @@ function createChannelOutboundContextBase(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    generatedImage: params.generatedImage,
     deps: params.deps,
     silent: params.silent,
     mediaAccess: params.mediaAccess,
@@ -650,6 +652,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  generatedImage?: boolean;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
@@ -1274,6 +1277,7 @@ export async function deliverOutboundPayloadsInternal(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
+        generatedImage: params.generatedImage,
         replyPayloadSendingHook: params.replyPayloadSendingHook,
         silent: params.silent,
         mirror: params.mirror,
@@ -1450,6 +1454,7 @@ async function deliverOutboundPayloadsCore(
       identity: params.identity,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
+      generatedImage: params.generatedImage,
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,

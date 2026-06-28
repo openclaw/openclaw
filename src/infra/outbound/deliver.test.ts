@@ -2265,6 +2265,47 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMediaOptions?.forceDocument).toBe(true);
   });
 
+  it("forwards top-level generatedImage provenance to channel media delivery without forcing a document", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-gen",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      generatedImage: true,
+      payloads: [{ text: "render", mediaUrl: "file:///tmp/render.png" }],
+    });
+
+    const sendMediaOptions = (
+      sendMedia.mock.calls as unknown as Array<
+        [{ generatedImage?: unknown; forceDocument?: unknown; mediaUrl?: unknown }]
+      >
+    )[0]?.[0];
+    expect(sendMediaOptions?.mediaUrl).toBe("file:///tmp/render.png");
+    expect(sendMediaOptions?.generatedImage).toBe(true);
+    expect(sendMediaOptions?.forceDocument).toBeUndefined();
+  });
+
   it("exposes audio-only spokenText to hooks without rendering it as media caption", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     hookMocks.runner.runMessageSending.mockResolvedValue({

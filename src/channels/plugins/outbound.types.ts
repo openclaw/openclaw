@@ -30,6 +30,12 @@ export type ChannelOutboundContext = {
   gifPlayback?: boolean;
   /** Send image, GIF, or video as document to avoid channel compression. */
   forceDocument?: boolean;
+  /**
+   * Channel-agnostic provenance: this media was produced by an image-generation
+   * tool. Channels may apply their own per-channel rendering policy from it (e.g.
+   * Telegram opting into document delivery); core never names a channel for this.
+   */
+  generatedImage?: boolean;
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
   replyToMode?: ReplyToMode;
