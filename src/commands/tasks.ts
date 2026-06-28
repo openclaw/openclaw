@@ -88,10 +88,10 @@ type GatewayTaskCancelResult = {
   task?: GatewayTaskCancelSummary;
 };
 
-async function tryCancelCronTaskViaGateway(
+async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron") {
+  if (task.runtime !== "cron" && task.runtime !== "acp") {
     return null;
   }
   try {
@@ -101,7 +101,16 @@ async function tryCancelCronTaskViaGateway(
       params: { taskId: task.taskId },
       timeoutMs: 5_000,
     });
-  } catch {
+  } catch (error) {
+    if (task.runtime === "acp") {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        found: true,
+        cancelled: false,
+        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+        task,
+      };
+    }
     return null;
   }
 }
@@ -468,7 +477,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const gatewayResult = await tryCancelCronTaskViaGateway(task);
+  const gatewayResult = await tryCancelGatewayOwnedTaskViaGateway(task);
   if (gatewayResult) {
     if (!gatewayResult.found) {
       runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));

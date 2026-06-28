@@ -812,17 +812,27 @@ function findExistingTaskForCreate(params: {
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
   const runScopeMatches = runId
-    ? getTasksByRunId(runId).filter(
-        (task) =>
-          task.runtime === params.runtime &&
-          task.scopeKind === params.scopeKind &&
-          (normalizeOptionalString(task.ownerKey) ?? "") ===
-            (normalizeOptionalString(params.ownerKey) ?? "") &&
-          (normalizeOptionalString(task.childSessionKey) ?? "") ===
-            (normalizeOptionalString(params.childSessionKey) ?? "") &&
+    ? getTasksByRunId(runId).filter((task) => {
+        if (
+          task.runtime !== params.runtime ||
+          task.scopeKind !== params.scopeKind ||
+          (normalizeOptionalString(task.ownerKey) ?? "") !==
+            (normalizeOptionalString(params.ownerKey) ?? "") ||
+          (normalizeOptionalString(task.childSessionKey) ?? "") !==
+            (normalizeOptionalString(params.childSessionKey) ?? "")
+        ) {
+          return false;
+        }
+        if (params.runtime === "acp") {
+          // ACP one-task flow ids can be derived after creation; they must not
+          // split one logical ACP run into duplicate task rows.
+          return true;
+        }
+        return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===
-            (normalizeOptionalString(params.parentFlowId) ?? ""),
-      )
+          (normalizeOptionalString(params.parentFlowId) ?? "")
+        );
+      })
     : [];
   const exact = runId
     ? runScopeMatches.find(
@@ -2138,12 +2148,25 @@ export async function cancelTaskById(params: {
         };
       }
     }
-    const updated = updateTask(task.taskId, {
-      status: "cancelled",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      error: params.reason?.trim() || "Cancelled by operator.",
-    });
+    const endedAt = Date.now();
+    const error = params.reason?.trim() || "Cancelled by operator.";
+    const updated =
+      task.runtime === "acp" && task.runId?.trim()
+        ? (updateTaskStateByRunId({
+            runId: task.runId,
+            runtime: "acp",
+            sessionKey: childSessionKey,
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          }).find((record) => record.taskId === task.taskId) ?? null)
+        : updateTask(task.taskId, {
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          });
     if (!updated) {
       return {
         found: true,
