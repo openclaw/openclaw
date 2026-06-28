@@ -28,6 +28,7 @@ import type {
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -116,6 +117,19 @@ function requireEvent(
     throw new Error(`expected ${label} event`);
   }
   return event;
+}
+
+function requirePayloadToolMetas(
+  toolMetas: ToolHandlerContext["state"]["toolMetas"],
+): PayloadToolMetas {
+  return toolMetas.map((toolMeta) => {
+    if (!toolMeta.toolName) {
+      throw new Error("expected tool metadata to include toolName");
+    }
+    return toolMeta.meta === undefined
+      ? { toolName: toolMeta.toolName }
+      : { toolName: toolMeta.toolName, meta: toolMeta.meta };
+  });
 }
 
 function requireString(value: unknown, label: string): string {
@@ -1408,7 +1422,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: ctx.state.toolMetas,
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
@@ -1455,7 +1469,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: ctx.state.toolMetas,
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
@@ -1504,7 +1518,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: ctx.state.toolMetas,
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
@@ -1553,7 +1567,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: ctx.state.toolMetas,
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
