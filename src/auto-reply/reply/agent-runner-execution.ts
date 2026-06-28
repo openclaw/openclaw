@@ -96,6 +96,7 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -917,7 +918,7 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
   if (!message) {
     return undefined;
   }
-  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
+  return message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
 }
 
 function isPureTransientRateLimitSummary(err: unknown): boolean {

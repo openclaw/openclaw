@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import {
   type OfficialExternalPluginCatalogEntry,
+  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+  createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore,
   getOfficialExternalPluginCatalogEntry,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalPluginCatalogEntries,
+  loadHostedOfficialExternalPluginCatalogEntries,
   parseOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
@@ -23,6 +27,16 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 describe("official external plugin catalog", () => {
+  it("keeps hosted fetch guard loading lazy for bundled catalog import paths", () => {
+    const source = readFileSync(
+      new URL("./official-external-plugin-catalog.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(source).toContain('await import("../infra/net/fetch-guard.js")');
+  });
+
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
     expect(officialExternalPluginCatalog).toMatchObject({
@@ -45,7 +59,7 @@ describe("official external plugin catalog", () => {
     ).toBe(false);
     expect(
       isOfficialExternalPluginCatalogFeed({
-        schemaVersion: 2,
+        schemaVersion: 3,
         id: "openclaw-official-external-plugins",
         generatedAt: "2026-06-22T00:00:00.000Z",
         sequence: 1,
@@ -54,10 +68,135 @@ describe("official external plugin catalog", () => {
     ).toBe(false);
   });
 
+  it("accepts the live ClawHub feed schema version", () => {
+    expect(
+      isOfficialExternalPluginCatalogFeed({
+        schemaVersion: 2,
+        id: "clawhub-official",
+        generatedAt: "2026-06-25T01:19:39.629Z",
+        sequence: 11,
+        entries: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps live ClawHub marketplace entries as metadata-only feed entries", () => {
+    const [entry] = parseOfficialExternalPluginCatalogEntries({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@expediagroup/expedia-openclaw",
+          title: "Expedia Travel",
+          version: "1.0.4",
+          state: "available",
+          publisher: {
+            id: "expediagroup",
+            trust: "official",
+          },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@expediagroup/expedia-openclaw",
+                version: "1.0.4",
+                integrity:
+                  "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    if (entry === undefined) {
+      throw new Error("Expected hosted ClawHub feed entry to parse");
+    }
+
+    expect(entry).toMatchObject({
+      id: "@expediagroup/expedia-openclaw",
+      title: "Expedia Travel",
+      version: "1.0.4",
+    });
+    expect(resolveOfficialExternalPluginId(entry)).toBeUndefined();
+    expect(resolveOfficialExternalPluginInstall(entry)).toBeNull();
+  });
+
+  it("does not synthesize trusted installs for unavailable or untrusted hosted entries", () => {
+    const entries = parseOfficialExternalPluginCatalogEntries({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@example/unavailable",
+          title: "Unavailable",
+          version: "1.0.0",
+          state: "disabled",
+          publisher: { id: "example", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@example/unavailable",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+        {
+          type: "plugin",
+          id: "@example/community",
+          title: "Community",
+          version: "1.0.0",
+          state: "available",
+          publisher: { id: "example", trust: "community" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@example/community",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+        {
+          type: "plugin",
+          id: "@example/private-source",
+          title: "Private Source",
+          version: "1.0.0",
+          state: "available",
+          publisher: { id: "example", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "private-feed",
+                package: "@example/private-source",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) {
+      expect(resolveOfficialExternalPluginId(entry)).toBeUndefined();
+      expect(resolveOfficialExternalPluginInstall(entry)).toBeNull();
+    }
+  });
+
   it("keeps unsupported versioned feed wrappers out of legacy catalog parsing", () => {
     expect(
       parseOfficialExternalPluginCatalogEntries({
-        schemaVersion: 2,
+        schemaVersion: 3,
         id: "future-feed",
         generatedAt: "2026-06-22T00:00:00.000Z",
         sequence: 1,
@@ -69,6 +208,482 @@ describe("official external plugin catalog", () => {
         entries: [{ name: "legacy-catalog-entry" }],
       }),
     ).toEqual([{ name: "legacy-catalog-entry" }]);
+  });
+
+  it("loads a hosted feed with conditional headers and checksum metadata", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 2,
+      entries: [
+        {
+          name: "@openclaw/hosted-proof",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "hosted-proof", label: "Hosted Proof" },
+            install: { npmSpec: "@openclaw/hosted-proof", defaultChoice: "npm" },
+          },
+        },
+      ],
+    });
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("if-none-match")).toBe('"old"');
+      expect(headers.get("if-modified-since")).toBe("Mon, 22 Jun 2026 00:00:00 GMT");
+      return new Response(body, {
+        status: 200,
+        headers: {
+          etag: '"next"',
+          "last-modified": "Mon, 22 Jun 2026 01:00:00 GMT",
+          "content-length": String(new TextEncoder().encode(body).byteLength),
+        },
+      });
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl,
+      ifNoneMatch: '"old"',
+      ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/hosted-proof"]);
+    if (result.source === "hosted") {
+      expect(result.feed.sequence).toBe(2);
+      expect(result.metadata).toMatchObject({
+        status: 200,
+        etag: '"next"',
+        lastModified: "Mon, 22 Jun 2026 01:00:00 GMT",
+      });
+      expect(result.metadata.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
+  });
+
+  it("keeps live ClawHub metadata-only entries after hosted feed loading", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@expediagroup/expedia-openclaw",
+          title: "Expedia Travel",
+          version: "1.0.4",
+          state: "available",
+          publisher: {
+            id: "expediagroup",
+            trust: "official",
+          },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@expediagroup/expedia-openclaw",
+                version: "1.0.4",
+                integrity:
+                  "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: {
+              "content-length": String(new TextEncoder().encode(body).byteLength),
+            },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: "@expediagroup/expedia-openclaw",
+      title: "Expedia Travel",
+      version: "1.0.4",
+    });
+  });
+
+  it("falls back to the bundled catalog when hosted feed validation fails", async () => {
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(JSON.stringify({ schemaVersion: 1, id: " ", entries: [] }), {
+            status: 200,
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries.length).toBe(listOfficialExternalPluginCatalogEntries().length);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("supported schema version");
+      expect(result.metadata?.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
+  });
+
+  it("falls back to the bundled catalog on HTTP 304 until a snapshot cache exists", async () => {
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"same"', "last-modified": "Mon, 22 Jun 2026 01:00:00 GMT" },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("HTTP 304");
+      expect(result.metadata).toMatchObject({
+        status: 304,
+        etag: '"same"',
+        lastModified: "Mon, 22 Jun 2026 01:00:00 GMT",
+      });
+    }
+  });
+
+  it("writes a validated hosted feed snapshot after a successful fetch", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 3,
+      entries: [
+        {
+          name: "@openclaw/snapshot-write-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-write-proof" } },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      now: () => new Date("2026-06-22T01:02:03.000Z"),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"fresh"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const snapshot = await snapshotStore.read(
+      result.source === "hosted" ? result.metadata.url : "",
+    );
+    expect(snapshot).toMatchObject({
+      body,
+      savedAt: "2026-06-22T01:02:03.000Z",
+      metadata: { etag: '"fresh"' },
+    });
+    expect(snapshot?.metadata.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("uses the last known good snapshot when the hosted feed returns HTTP 304", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body,
+        metadata: seeded.metadata,
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v1"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/snapshot-proof"]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("HTTP 304");
+      expect(result.snapshot.savedAt).toBe("2026-06-22T01:02:03.000Z");
+      expect(result.metadata.checksum).toBe(seeded.metadata.checksum);
+    }
+  });
+
+  it("does not use a stale snapshot when HTTP 304 validators do not match", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/stale-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body,
+        metadata: seeded.metadata,
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v2"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
+    }
+  });
+
+  it("uses a valid snapshot before bundled fallback when hosted validation fails", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/snapshot-validation-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-validation-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: vi.fn(async () => new Response("{ nope", { status: 200 })),
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@openclaw/snapshot-validation-proof",
+    ]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("JSON");
+    }
+  });
+
+  it("does not use a stale snapshot when hosted validation fails with unmatched validators", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/stale-validation-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-validation-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () => new Response(body, { status: 200, headers: { etag: '"snapshot-v1"' } }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(async () => new Response("{ nope", { status: 200 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
+    }
+  });
+
+  it("falls back to bundled entries when the snapshot is invalid", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt: "2026-06-22T00:00:00.000Z",
+          sequence: 1,
+          entries: [],
+        }),
+        metadata: {
+          url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+          status: 200,
+          checksum: "sha256:not-current",
+        },
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: vi.fn(async () => new Response(null, { status: 304 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("checksum mismatch");
+    }
+  });
+
+  it("does not use a snapshot that violates the expected checksum", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 6,
+      entries: [
+        {
+          name: "@openclaw/snapshot-pin-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-pin-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      expectedSha256: "sha256:not-current",
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("expected checksum");
+    }
+  });
+
+  it("falls back to the bundled catalog on checksum mismatch and oversized bodies", async () => {
+    const mismatch = await loadHostedOfficialExternalPluginCatalogEntries({
+      expectedSha256: "sha256:not-current",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              schemaVersion: 1,
+              id: "openclaw-official-external-plugins",
+              generatedAt: "2026-06-22T00:00:00.000Z",
+              sequence: 1,
+              entries: [],
+            }),
+            { status: 200 },
+          ),
+      ),
+    });
+    expect(mismatch.source).toBe("bundled-fallback");
+    if (mismatch.source === "bundled-fallback") {
+      expect(mismatch.error).toContain("checksum mismatch");
+      expect(mismatch.metadata?.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    }
+
+    const oversized = await loadHostedOfficialExternalPluginCatalogEntries({
+      maxBytes: 4,
+      fetchImpl: vi.fn(async () => new Response("12345", { status: 200 })),
+    });
+    expect(oversized.source).toBe("bundled-fallback");
+    if (oversized.source === "bundled-fallback") {
+      expect(oversized.error).toContain("exceeds 4 bytes");
+    }
   });
 
   it("lists the externalized provider and capability plugins with install metadata", () => {

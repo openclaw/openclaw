@@ -1051,6 +1051,8 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/config-audit-scrub");
     expect(contributionIds).toContain("core/doctor/session-transcripts");
     expect(contributionIds).toContain("core/doctor/session-snapshots");
+    expect(contributionIds).toContain("core/doctor/plugin-registry");
+    expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 

@@ -619,6 +619,17 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
   });
 
+  it("tells operators how to read delegated Testbox proof status", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("delegated Testbox proof uses the wrapper exitCode");
+    expect(result.stderr).toContain("Actions run can show cancelled during external lease cleanup");
+  });
+
   it("rejects reused Blacksmith Testboxes that were not created by Crabbox", () => {
     const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
     tempDirs.push(home);
