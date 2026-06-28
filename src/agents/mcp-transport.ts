@@ -21,6 +21,10 @@ import { createMcpOAuthClientProvider } from "./mcp-oauth.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
+type ResolveMcpTransportOptions = {
+  inheritedEnv?: Record<string, string>;
+};
+
 type ResolvedMcpTransport = {
   transport: Transport;
   description: string;
@@ -89,8 +93,9 @@ function buildSseEventSourceFetch(
 export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,
+  options?: ResolveMcpTransportOptions,
 ): ResolvedMcpTransport | null {
-  const resolved = resolveMcpTransportConfig(serverName, rawServer);
+  const resolved = resolveMcpTransportConfig(serverName, rawServer, options);
   if (!resolved) {
     return null;
   }

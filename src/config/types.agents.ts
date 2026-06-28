@@ -86,6 +86,7 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
+  env?: Record<string, string>;
   model?: AgentModelConfig;
   /** Optional per-agent model for short internal tasks such as generated session titles. */
   utilityModel?: string;

@@ -823,6 +823,7 @@ function resolveAcpSubagentEnvelopeState(params: {
   requesterSessionKey?: string;
   requesterAgentId: string;
   targetAgentId: string;
+  policyTargetAgentId?: string;
   requestedAgentId?: string;
   subagentStore?: SessionCapabilityStore;
 }): AcpSubagentEnvelopeState {
@@ -875,7 +876,7 @@ function resolveAcpSubagentEnvelopeState(params: {
 
   const targetPolicy = resolveSubagentTargetPolicy({
     requesterAgentId: params.requesterAgentId,
-    targetAgentId: params.targetAgentId,
+    targetAgentId: params.policyTargetAgentId ?? params.targetAgentId,
     requestedAgentId: params.requestedAgentId,
     allowAgents:
       resolveAgentConfig(params.cfg, params.requesterAgentId)?.subagents?.allowAgents ??
@@ -955,7 +956,7 @@ function sessionEntryIsOwnedByRequester(params: {
 
 function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
-  targetAgentId: string;
+  sessionOwnerAgentId: string;
   requesterSessionKey?: string;
   resumeSessionId?: string;
 }): { ok: true } | { ok: false; error: string } {
@@ -971,9 +972,12 @@ function validateAcpResumeSessionOwnership(params: {
     };
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.sessionOwnerAgentId,
+  });
   for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
+
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
     }
@@ -1065,12 +1069,15 @@ async function initializeAcpSpawnRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
+  sessionOwnerAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.sessionOwnerAgentId,
+  });
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
@@ -1083,7 +1090,7 @@ async function initializeAcpSpawnRuntime(params: {
       sessionKey: params.sessionKey,
       storePath,
       sessionEntry,
-      agentId: params.targetAgentId,
+      agentId: params.sessionOwnerAgentId,
       stage: "spawn",
     });
   }
@@ -1115,6 +1122,7 @@ async function bindPreparedAcpThread(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   targetAgentId: string;
+  sessionOwnerAgentId: string;
   label?: string;
   preparedBinding: PreparedAcpThreadBinding;
   initializedRuntime: AcpSpawnInitializedRuntime;
@@ -1180,7 +1188,7 @@ async function bindPreparedAcpThread(params: {
         sessionKey: params.sessionKey,
         storePath: params.initializedRuntime.storePath,
         sessionEntry,
-        agentId: params.targetAgentId,
+        agentId: params.sessionOwnerAgentId,
         threadId: boundThreadId,
         stage: "thread-bind",
       });
@@ -1359,6 +1367,7 @@ export async function spawnAcpDirect(
     });
   }
   const targetAgentId = targetAgentResult.agentId;
+  const sessionOwnerAgentId = targetAgentResult.configAgentId ?? targetAgentId;
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return createAcpSpawnFailure({
@@ -1383,6 +1392,7 @@ export async function spawnAcpDirect(
     requesterSessionKey: requesterInternalKey,
     requesterAgentId,
     targetAgentId,
+    policyTargetAgentId: sessionOwnerAgentId,
     requestedAgentId: params.agentId,
     subagentStore,
   });
@@ -1395,7 +1405,7 @@ export async function spawnAcpDirect(
   }
   const resumeAuthorization = validateAcpResumeSessionOwnership({
     cfg,
-    targetAgentId,
+    sessionOwnerAgentId,
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
   });
@@ -1428,11 +1438,11 @@ export async function spawnAcpDirect(
     requester: requesterState,
   });
 
-  const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+  const sessionKey = `agent:${sessionOwnerAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
-    targetAgentId,
+    targetAgentId: sessionOwnerAgentId,
     requesterSessionKey: ctx.agentSessionKey,
     explicitWorkspaceDir: params.cwd,
   });
@@ -1491,6 +1501,7 @@ export async function spawnAcpDirect(
       cfg,
       sessionKey,
       targetAgentId,
+      sessionOwnerAgentId,
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
       runtimeOptions: runtimeOptionsResult.runtimeOptions,
@@ -1503,6 +1514,7 @@ export async function spawnAcpDirect(
         cfg,
         sessionKey,
         targetAgentId,
+        sessionOwnerAgentId,
         label: params.label,
         preparedBinding,
         initializedRuntime: initializedSession,

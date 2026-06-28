@@ -4,6 +4,7 @@
  * exec host without leaking unsafe overrides.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -164,6 +165,50 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.spawnInputs[0]?.env?.[CHANNEL_CONTEXT_ENV_KEY]).toBe(
       mocks.gatewayParams[0]?.env[CHANNEL_CONTEXT_ENV_KEY],
     );
+  });
+
+  it("merges configured agent env into gateway exec subprocesses", async () => {
+    const tool = createExecTool({
+      host: "auto",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:chat-1",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              env: {
+                AGENT_SAFE: "agent",
+                EXISTING: "agent",
+                NODE_OPTIONS: "--require ./malicious.js",
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    await tool.execute("call-agent-env", {
+      command: "echo ok",
+      env: { EXISTING: "request" },
+      yieldMs: 120_000,
+    });
+
+    expect(mocks.gatewayParams[0]?.requestedEnv).toMatchObject({
+      AGENT_SAFE: "agent",
+      EXISTING: "request",
+    });
+    expect(mocks.gatewayParams[0]?.env).toMatchObject({
+      AGENT_SAFE: "agent",
+      EXISTING: "request",
+    });
+    expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("NODE_OPTIONS");
+    expect(mocks.spawnInputs[0]?.env).toMatchObject({
+      AGENT_SAFE: "agent",
+      EXISTING: "request",
+    });
   });
 
   it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {

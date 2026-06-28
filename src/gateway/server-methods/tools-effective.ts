@@ -132,6 +132,8 @@ function buildMcpConfigSummaryCacheKey(params: {
     config: params.context.runtimeConfigCacheKey,
     pluginRegistry: params.context.pluginRegistryVersion,
     workspaceDir: params.workspaceDir,
+    sessionKey: params.context.sessionKey,
+    agentId: params.context.agentId,
   });
 }
 
@@ -157,6 +159,8 @@ function resolveCachedSessionMcpConfigSummary(params: {
   const summary = resolveSessionMcpConfigSummary({
     workspaceDir: params.workspaceDir,
     cfg: params.context.cfg,
+    sessionKey: params.context.sessionKey,
+    agentId: params.context.agentId,
   });
   mcpConfigSummaryCache.set(key, summary);
   trimMcpConfigSummaryCache();

@@ -286,6 +286,56 @@ describe("tools.effective handler", () => {
     expectInvalidResponse(respond, 'unknown session key "missing-session"');
   });
 
+  it("passes the trusted session agent to MCP config summary", async () => {
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("reviewer");
+    runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-reviewer");
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", env: { OPENCLAW_AGENT_ENV: "wrong-main-env" } },
+            { id: "reviewer", env: { OPENCLAW_AGENT_ENV: "visible-reviewer-env" } },
+          ],
+        },
+      },
+      canonicalKey: "agent:reviewer:telegram:acct:thread",
+      entry: {
+        sessionId: "session-reviewer",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastAccountId: "acct-1",
+        lastThreadId: "thread-2",
+        lastTo: "channel-1",
+        groupId: "group-4",
+        groupChannel: "#ops",
+        space: "workspace-5",
+        chatType: "group",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+        spawnedBy: "agent:reviewer:telegram:group:parent-group",
+        spawnedWorkspaceDir: undefined,
+      },
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace-reviewer",
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", env: { OPENCLAW_AGENT_ENV: "wrong-main-env" } },
+            { id: "reviewer", env: { OPENCLAW_AGENT_ENV: "visible-reviewer-env" } },
+          ],
+        },
+      },
+      sessionKey: "main:abc",
+      agentId: "reviewer",
+    });
+  });
+
   it("returns the read-only effective runtime inventory without MCP startup", async () => {
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
@@ -500,6 +550,31 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith({
       workspaceDir: "/tmp/sandbox-copy",
       cfg: {},
+      sessionKey: "main:abc",
+      agentId: "main",
+    });
+  });
+
+  it("uses the session MCP env fingerprint when projecting warm agent env catalogs", async () => {
+    const mcpTool = makeMcpTool();
+    const catalog = makeMcpCatalog();
+    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementationOnce(
+      ({ sessionKey } = { sessionKey: undefined }) => ({
+        fingerprint: sessionKey === "main:abc" ? "mcp:env:main" : "mcp:env-less",
+        serverNames: ["reproProbe"],
+      }),
+    );
+    mockWarmMcpRuntime(catalog, {
+      configFingerprint: "mcp:env:main",
+    });
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([mcpTool]);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expectPayloadGroupIds(respond, ["core", "mcp"]);
+    expect(firstRespondCall(respond)?.[1]).not.toMatchObject({
+      notices: [expect.objectContaining({ id: "mcp-stale-catalog" })],
     });
   });
 

@@ -90,6 +90,7 @@ export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
     sessionId: string;
     sessionKey?: string;
+    agentId?: string;
     workspaceDir: string;
     cfg?: OpenClawConfig;
   }) => Promise<SessionMcpRuntime>;
