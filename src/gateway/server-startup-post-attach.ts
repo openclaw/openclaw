@@ -857,10 +857,15 @@ export async function startGatewaySidecars(params: {
       if (isStopped()) return;
       await loadGatewayModelCatalog({ readOnly: false });
       while (!isStopped()) {
-        await sleep(30 * 60 * 1000);
+        // unref so the timer does not keep the process alive on clean shutdown.
+        await sleep(30 * 60 * 1000, undefined, { ref: false });
         if (isStopped()) return;
-        markGatewayModelCatalogStaleForReload();
-        await loadGatewayModelCatalog({ readOnly: false });
+        try {
+          markGatewayModelCatalogStaleForReload();
+          await loadGatewayModelCatalog({ readOnly: false });
+        } catch (err) {
+          params.log.warn(`sidecars.model-catalog-warm refresh failed: ${String(err)}`);
+        }
       }
     },
   });
