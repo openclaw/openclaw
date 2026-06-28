@@ -287,6 +287,7 @@ jobs:
         if: steps.npm_package_version.outputs.already_published != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
