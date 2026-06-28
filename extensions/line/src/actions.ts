@@ -3,6 +3,16 @@ import type { messagingApi } from "@line/bot-sdk";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type Action = messagingApi.Action;
+export const LINE_ACTION_LABEL_LIMIT = 20;
+export const LINE_ACTION_DATA_LIMIT = 300;
+
+export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
+  return truncateUtf16Safe(label, limit);
+}
+
+export function truncateLineActionData(data: string): string {
+  return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
+}
 
 /**
  * Create a message action (sends text when tapped)
@@ -10,7 +20,7 @@ export type Action = messagingApi.Action;
 export function messageAction(label: string, text?: string): Action {
   return {
     type: "message",
-    label: truncateUtf16Safe(label, 20),
+    label: truncateLineActionLabel(label),
     text: text ?? label,
   };
 }
@@ -21,7 +31,7 @@ export function messageAction(label: string, text?: string): Action {
 export function uriAction(label: string, uri: string): Action {
   return {
     type: "uri",
-    label: truncateUtf16Safe(label, 20),
+    label: truncateLineActionLabel(label),
     uri,
   };
 }
@@ -32,9 +42,9 @@ export function uriAction(label: string, uri: string): Action {
 export function postbackAction(label: string, data: string, displayText?: string): Action {
   return {
     type: "postback",
-    label: truncateUtf16Safe(label, 20),
-    data: truncateUtf16Safe(data, 300),
-    displayText: displayText === undefined ? undefined : truncateUtf16Safe(displayText, 300),
+    label: truncateLineActionLabel(label),
+    data: truncateLineActionData(data),
+    displayText: displayText === undefined ? undefined : truncateLineActionData(displayText),
   };
 }
 
@@ -53,8 +63,8 @@ export function datetimePickerAction(
 ): Action {
   return {
     type: "datetimepicker",
-    label: truncateUtf16Safe(label, 20),
-    data: truncateUtf16Safe(data, 300),
+    label: truncateLineActionLabel(label),
+    data: truncateLineActionData(data),
     mode,
     initial: options?.initial,
     max: options?.max,

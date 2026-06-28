@@ -1,6 +1,7 @@
 // Line tests cover message cards plugin behavior.
 import { describe, expect, it } from "vitest";
 import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
+import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
   createCarousel,
@@ -9,6 +10,7 @@ import {
   createImageCard,
   createInfoCard,
   createListCard,
+  createMediaPlayerCard,
 } from "./flex-templates.js";
 import {
   createConfirmTemplate,
@@ -338,4 +340,62 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(action.data).toBe("d".repeat(299));
     expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
+
+  it("/card action command uses surrogate-safe labels and postback data", async () => {
+    const registerCommand = (command: unknown) => {
+      const { handler } = command as {
+        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
+      };
+      return handler({
+        channel: "line",
+        args: `action "Menu" "Body" --actions "${labelWithEmoji}|k=${"d".repeat(297)}😀"`,
+      });
+    };
+    const result = (await registerCommandWithHandler(registerCommand)) as {
+      channelData: {
+        line: {
+          flexMessage: {
+            contents: { footer: { contents: Array<{ action: { label: string; data: string } }> } };
+          };
+        };
+      };
+    };
+    const action = result.channelData.line.flexMessage.contents.footer.contents[0].action;
+
+    expect(action.label).toBe("1234567890123456789");
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(action.data).toBe(`k=${"d".repeat(297)}`);
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
+  });
+
+  it("media control postback labels truncate on surrogate boundaries", () => {
+    const card = createMediaPlayerCard({
+      title: "Track",
+      controls: {
+        play: { data: "play" },
+      },
+      extraActions: [{ label: `${"x".repeat(14)}😀`, data: "extra" }],
+    });
+    const footer = card.footer as {
+      contents: Array<{ contents?: Array<{ action?: { data?: string; label: string } }> }>;
+    };
+    const extraAction = footer.contents
+      .flatMap((content) => content.contents ?? [])
+      .find((button) => button.action?.data === "extra")?.action;
+
+    expect(extraAction?.label).toBe("x".repeat(14));
+    expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
+  });
 });
+
+async function registerCommandWithHandler(
+  runHandler: (command: unknown) => Promise<unknown>,
+): Promise<unknown> {
+  let result: unknown;
+  registerLineCardCommand({
+    registerCommand(command: unknown) {
+      result = runHandler(command);
+    },
+  } as never);
+  return result;
+}
