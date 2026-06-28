@@ -21,6 +21,7 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { RouteLocation } from "../router/types.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { createBrowserHistory } from "./browser.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnection,
@@ -410,6 +411,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   const gateway = createApplicationGateway(settings, startup.password ?? "");
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
+  const config = createApplicationConfigCapability({
+    basePath,
+    auth: {
+      settings: { token: settings.token },
+      password: startup.password ?? "",
+    },
+  });
   const sessions = createSessionCapability(gateway);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
@@ -425,6 +433,24 @@ export function bootstrapApplication(): ApplicationRuntime {
         }
       : null;
   let context!: ApplicationContext<RouteId>;
+  let lastConfigRefreshClient: GatewayBrowserClient | null = null;
+  const stopConfigRefresh = gateway.subscribe((snapshot) => {
+    if (!snapshot.connected || !snapshot.client) {
+      lastConfigRefreshClient = null;
+      return;
+    }
+    if (lastConfigRefreshClient === snapshot.client) {
+      return;
+    }
+    lastConfigRefreshClient = snapshot.client;
+    void config.refresh({
+      auth: {
+        hello: snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      },
+    });
+  });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
     if (options?.search !== undefined || options?.hash !== undefined) {
@@ -470,6 +496,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway,
     agentIdentity,
     agentSelection,
+    config,
     sessions,
     overlays,
     navigation,
@@ -487,11 +514,13 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
+      void config.refresh({ skipWithoutAuthCandidate: true });
       const routerStart = startApplicationRouter(router, history, basePath, context);
       gateway.start();
       await routerStart;
     },
     stop: () => {
+      stopConfigRefresh();
       router.stop();
       gateway.stop();
       sessions.dispose();

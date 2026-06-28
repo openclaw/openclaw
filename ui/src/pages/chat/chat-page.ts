@@ -13,6 +13,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
@@ -25,8 +26,8 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
@@ -63,7 +64,6 @@ import {
   applyRemoteSlashCommandsResult,
   refreshSlashCommands,
 } from "../../ui/chat/slash-commands.ts";
-import { resolveControlUiAuthToken } from "../../ui/control-ui-auth.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
@@ -166,6 +166,7 @@ type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
+    chatMessageMaxWidth: string | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -952,6 +953,7 @@ function createPageState(
 ): ChatPageHost {
   const settings = loadSettings();
   const identity = loadLocalUserIdentity();
+  const appConfig = context.config.current;
   const state = {
     sessions: context.sessions,
     settings,
@@ -965,9 +967,10 @@ function createPageState(
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
-    localMediaPreviewRoots: [],
-    embedSandboxMode: "strict" as const,
-    allowExternalEmbedUrls: false,
+    localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
+    embedSandboxMode: appConfig.embedSandboxMode,
+    allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
+    chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
     hello: null,
@@ -1279,6 +1282,7 @@ export class ChatPage extends LitElement {
   private state: ChatPageHost | undefined;
   private stopGatewaySnapshot: (() => void) | undefined;
   private stopGatewayEvents: (() => void) | undefined;
+  private stopConfigSubscription: (() => void) | undefined;
   private stopSessionsSubscription: (() => void) | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
   private composerPersistenceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -1599,6 +1603,10 @@ export class ChatPage extends LitElement {
         handlePageGatewayEvent(state, event);
       }
     });
+    this.applyApplicationConfig(this.context.config.current);
+    this.stopConfigSubscription = this.context.config.subscribe((config) => {
+      this.applyApplicationConfig(config);
+    });
     this.applySessionsState(this.context.sessions.state);
     this.stopSessionsSubscription = this.context.sessions.subscribe((state) => {
       this.applySessionsState(state);
@@ -1640,6 +1648,8 @@ export class ChatPage extends LitElement {
     this.stopGatewaySnapshot = undefined;
     this.stopGatewayEvents?.();
     this.stopGatewayEvents = undefined;
+    this.stopConfigSubscription?.();
+    this.stopConfigSubscription = undefined;
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
     if (this.state) {
@@ -1665,6 +1675,31 @@ export class ChatPage extends LitElement {
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
+    state.requestUpdate?.();
+  }
+
+  private applyApplicationConfig(config: ApplicationContext["config"]["current"]) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const rootsChanged =
+      state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
+      state.localMediaPreviewRoots.some(
+        (value, index) => value !== config.localMediaPreviewRoots[index],
+      );
+    if (
+      !rootsChanged &&
+      state.embedSandboxMode === config.embedSandboxMode &&
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
+      state.chatMessageMaxWidth === config.chatMessageMaxWidth
+    ) {
+      return;
+    }
+    state.localMediaPreviewRoots = config.localMediaPreviewRoots;
+    state.embedSandboxMode = config.embedSandboxMode;
+    state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
+    state.chatMessageMaxWidth = config.chatMessageMaxWidth;
     state.requestUpdate?.();
   }
 
@@ -1842,6 +1877,7 @@ export class ChatPage extends LitElement {
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+      chatMessageMaxWidth: state.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
     };

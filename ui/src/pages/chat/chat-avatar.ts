@@ -2,6 +2,7 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-routes.ts";
+import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -15,7 +16,6 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,

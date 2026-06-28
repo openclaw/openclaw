@@ -5,6 +5,7 @@ import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { RouteLocation } from "../router/types.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
 import type { ThemeMode } from "./theme.ts";
 
@@ -59,6 +60,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly gateway: ApplicationGateway;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
+  readonly config: ApplicationConfigCapability;
   readonly sessions: SessionCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;

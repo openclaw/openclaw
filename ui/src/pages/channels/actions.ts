@@ -1,6 +1,6 @@
 import type { NostrProfile } from "../../api/types.ts";
 // Channels page owns its mutations and profile effects.
-import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
+import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { loadConfig, saveConfig, type ConfigState } from "../config/data.ts";
 import {
   loadChannels,
