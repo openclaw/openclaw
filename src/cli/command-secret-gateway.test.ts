@@ -87,10 +87,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   function expectGatewayUnavailableLocalFallbackDiagnostics(
     result: Awaited<ReturnType<typeof resolveCommandSecretRefsViaGateway>>,
+    opts?: { preemptivelySkipped?: boolean },
   ) {
-    expect(
-      result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-    ).toBe(true);
+    const expectedGatewayDiag = opts?.preemptivelySkipped
+      ? "skipped gateway secrets.resolve"
+      : "gateway secrets.resolve unavailable";
+    expect(result.diagnostics.some((entry) => entry.includes(expectedGatewayDiag))).toBe(true);
     expect(
       result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
     ).toBe(true);
@@ -623,7 +625,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("keeps local exec SecretRef fallback enabled by default", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -635,12 +636,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(await markerExists(markerPath)).toBe(true);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    expectGatewayUnavailableLocalFallbackDiagnostics(result, { preemptivelySkipped: true });
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -663,10 +663,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         ),
       ),
     ).toBe(true);
+    // Gateway RPC is preemptively skipped for non-gateway exec refs (#96653).
     expect(
-      result.diagnostics.some((entry) =>
-        entry.includes("attempted local command-secret resolution"),
-      ),
+      result.diagnostics.some((entry) => entry.includes("skipped gateway secrets.resolve")),
     ).toBe(true);
   });
 

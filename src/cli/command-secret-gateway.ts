@@ -952,6 +952,50 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at ${gatewayExecSecretRefCredentialPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`,
     });
   }
+  // Model-provider / agent-runtime exec SecretRefs (e.g. models.providers.*.apiKey)
+  // cannot be resolved by the gateway in command-path context. The gateway
+  // would always fail and fall back to local resolution — pure overhead + noise.
+  // Skip the RPC preemptively.
+  // See: https://github.com/openclaw/openclaw/issues/96653
+  if (configuredTargetRefPaths.size > 0) {
+    const defaults = params.config.secrets?.defaults;
+    const targets = commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+      params.config,
+      params.targetIds,
+    );
+    let hasNonGatewayExecRefs = false;
+    for (const target of targets) {
+      if (!configuredTargetRefPaths.has(target.path)) {
+        continue;
+      }
+      if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+        continue;
+      }
+      const { ref } = resolveSecretInputRef({
+        value: target.value,
+        refValue: target.refValue,
+        defaults,
+      });
+      if (ref?.source === "exec" && !target.path.startsWith("gateway.")) {
+        hasNonGatewayExecRefs = true;
+        break;
+      }
+    }
+    if (hasNonGatewayExecRefs) {
+      return await resolveCommandSecretRefsWithoutGateway({
+        config: params.config,
+        commandName: params.commandName,
+        targetIds: params.targetIds,
+        preflightDiagnostics: preflight.diagnostics,
+        mode,
+        allowedPaths: params.allowedPaths,
+        forcedActivePaths: params.forcedActivePaths,
+        optionalActivePaths: params.optionalActivePaths,
+        resolutionPolicy,
+        reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve; resolved command secrets locally without gateway RPC.`,
+      });
+    }
+  }
 
   let payload: GatewaySecretsResolveResult;
   try {
