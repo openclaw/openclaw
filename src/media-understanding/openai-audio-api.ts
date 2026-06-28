@@ -1,8 +1,9 @@
-import type { OpenAIAudioEndpointTrust } from "../agents/model-auth.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 // Shared API contract id for OpenAI-compatible /audio/transcriptions requests.
 export const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
+
+type OpenAIAudioEndpointTrust = "native-openai" | "custom-openai-compatible";
 
 export function resolveOpenAiAudioAuthModelApi(params: {
   capability: MediaUnderstandingCapability;
