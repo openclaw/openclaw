@@ -4,7 +4,7 @@
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
-import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { isMcpServerAllowedForAgentIds } from "../bundle-mcp-config.js";
 import { buildCodexMcpServersConfig, normalizeCodexMcpServerConfig } from "../codex-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
@@ -27,34 +27,31 @@ type CodexUserMcpServersProjectionOptions = {
   agentId?: string;
 };
 
-function normalizeAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => isValidAgentId(entry))
-    .map((entry) => normalizeAgentId(entry));
-}
-
 function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
   return isRecord(server.codex) ? server.codex : {};
 }
 
+/**
+ * The generic top-level `agents` allowlist applies to every runtime and takes
+ * precedence; `codex.agents` remains as a Codex-only override for servers that
+ * want different scoping on the app-server path. Both route through the shared
+ * gate so generic-`agents` scoping is enforced here too — without this, a server
+ * scoped only via the generic field would silently widen to all agents on the
+ * Codex app-server runtime.
+ */
 function isCodexMcpServerAllowedForAgent(
   server: BundleMcpServerConfig,
   options: CodexUserMcpServersProjectionOptions | undefined,
 ): boolean {
+  if (Object.hasOwn(server, "agents")) {
+    return isMcpServerAllowedForAgentIds(true, server.agents, options?.agentId);
+  }
   const codex = readCodexProjectionConfig(server);
-  if (!Object.hasOwn(codex, "agents")) {
-    return true;
-  }
-  const agentIds = normalizeAgentIds(codex.agents);
-  if (agentIds.length === 0 || !options?.agentId) {
-    return false;
-  }
-  return agentIds.includes(normalizeAgentId(options.agentId));
+  return isMcpServerAllowedForAgentIds(
+    Object.hasOwn(codex, "agents"),
+    codex.agents,
+    options?.agentId,
+  );
 }
 
 /** Returns Codex CLI args with TOML MCP server overrides injected. */

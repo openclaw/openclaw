@@ -18,11 +18,13 @@ type EmbeddedAgentMcpConfig = {
 export function loadEmbeddedAgentMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): EmbeddedAgentMcpConfig {
   const bundleMcp = loadMergedBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    agentId: params.agentId,
     manifestRegistry: params.manifestRegistry,
   });
 

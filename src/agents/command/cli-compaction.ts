@@ -66,6 +66,9 @@ type CliCompactionDeps = {
     agentDir: string;
     cfg?: OpenClawConfig;
     contextTokenBudget?: number;
+    // Scopes per-agent MCP servers in the settings snapshot; must be the
+    // session-key-resolved agent id, not the raw optional caller agentId.
+    agentId?: string;
   }) => SettingsManagerLike | Promise<SettingsManagerLike>;
   applyAgentAutoCompactionGuard: (params: {
     settingsManager: SettingsManagerLike;
@@ -531,6 +534,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     agentDir: params.agentDir,
     cfg: params.cfg,
     contextTokenBudget,
+    agentId: params.sessionAgentId,
   });
 
   const preemptiveCompaction = cliCompactionDeps.shouldPreemptivelyCompactBeforePrompt({

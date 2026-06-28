@@ -97,6 +97,8 @@ type AttemptSpawnWorkspaceHoisted = {
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
   sessionManager: SessionManagerMocks;
+  getOrCreateSessionMcpRuntimeMock: AsyncUnknownMock;
+  createPreparedEmbeddedAgentSettingsManagerMock: UnknownMock;
 };
 
 function createSubscriptionMock(): SubscriptionMock {
@@ -135,6 +137,33 @@ function createSubscriptionMock(): SubscriptionMock {
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
+  };
+}
+
+// Minimal settings-manager stub shared by the hoisted mock factory and the
+// harness reset. Declared as a function so it is hoisted ahead of the
+// vi.hoisted() block that captures it.
+function createPreparedSettingsManagerStub() {
+  return {
+    reload: async () => {},
+    getCompactionReserveTokens: () => 0,
+    getCompactionKeepRecentTokens: () => 40_000,
+    getDefaultProvider: () => undefined,
+    getDefaultModel: () => undefined,
+    getDefaultThinkingLevel: () => undefined,
+    getBlockImages: () => false,
+    getSteeringMode: () => undefined,
+    getFollowUpMode: () => undefined,
+    getTransport: () => undefined,
+    getThinkingBudgets: () => undefined,
+    getProviderRetrySettings: () => ({ maxRetryDelayMs: undefined }),
+    getImageAutoResize: () => false,
+    getShellCommandPrefix: () => undefined,
+    getShellPath: () => undefined,
+    getGlobalSettings: () => ({}),
+    getProjectSettings: () => ({}),
+    applyOverrides: () => {},
+    setCompactionEnabled: () => {},
   };
 }
 
@@ -211,6 +240,16 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     clearPendingToolResults: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
+  // Spies on the per-agent MCP wiring seams: the runner must forward the
+  // session-key-resolved agent id (not the raw optional params.agentId) into
+  // both of these, or a session-keyed run with no explicit agentId scopes MCP
+  // servers against the wrong agent.
+  const getOrCreateSessionMcpRuntimeMock = vi.fn<(...args: unknown[]) => Promise<unknown>>(
+    async () => undefined,
+  );
+  const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn((..._args: unknown[]) =>
+    createPreparedSettingsManagerStub(),
+  );
   return {
     spawnSubagentDirectMock,
     createAgentSessionMock,
@@ -245,6 +284,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     systemPromptTexts,
     embeddedSystemPromptInputs,
     sessionManager,
+    getOrCreateSessionMcpRuntimeMock,
+    createPreparedEmbeddedAgentSettingsManagerMock,
   };
 });
 
@@ -423,27 +464,8 @@ vi.mock("../../docs-path.js", () => ({
 }));
 
 vi.mock("../../agent-project-settings.js", () => ({
-  createPreparedEmbeddedAgentSettingsManager: () => ({
-    reload: async () => {},
-    getCompactionReserveTokens: () => 0,
-    getCompactionKeepRecentTokens: () => 40_000,
-    getDefaultProvider: () => undefined,
-    getDefaultModel: () => undefined,
-    getDefaultThinkingLevel: () => undefined,
-    getBlockImages: () => false,
-    getSteeringMode: () => undefined,
-    getFollowUpMode: () => undefined,
-    getTransport: () => undefined,
-    getThinkingBudgets: () => undefined,
-    getProviderRetrySettings: () => ({ maxRetryDelayMs: undefined }),
-    getImageAutoResize: () => false,
-    getShellCommandPrefix: () => undefined,
-    getShellPath: () => undefined,
-    getGlobalSettings: () => ({}),
-    getProjectSettings: () => ({}),
-    applyOverrides: () => {},
-    setCompactionEnabled: () => {},
-  }),
+  createPreparedEmbeddedAgentSettingsManager: (...args: unknown[]) =>
+    hoisted.createPreparedEmbeddedAgentSettingsManagerMock(...args),
 }));
 
 vi.mock("../../agent-settings.js", () => ({
@@ -614,7 +636,8 @@ vi.mock("../../agent-tools.js", () => ({
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
-  getOrCreateSessionMcpRuntime: async () => undefined,
+  getOrCreateSessionMcpRuntime: (...args: unknown[]) =>
+    hoisted.getOrCreateSessionMcpRuntimeMock(...args),
   materializeBundleMcpToolsForRun: async () => undefined,
   retireSessionMcpRuntime: async () => true,
 }));
@@ -1033,6 +1056,10 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.getOrCreateSessionMcpRuntimeMock.mockReset().mockResolvedValue(undefined);
+  hoisted.createPreparedEmbeddedAgentSettingsManagerMock
+    .mockReset()
+    .mockImplementation(() => createPreparedSettingsManagerStub());
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }
