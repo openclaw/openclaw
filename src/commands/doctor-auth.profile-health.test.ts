@@ -29,6 +29,7 @@ const authProfileMocks = vi.hoisted(() => ({
 }));
 
 const providerRuntimeMocks = vi.hoisted(() => ({
+  buildProviderAuthDoctorHintWithPlugin: vi.fn(async () => undefined as string | undefined),
   buildProviderStaticAuthProfileDoctorHintWithPlugin: vi.fn(
     async () => undefined as string | undefined,
   ),
@@ -43,6 +44,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: providerRuntimeMocks.buildProviderAuthDoctorHintWithPlugin,
   buildProviderStaticAuthProfileDoctorHintWithPlugin:
     providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin,
 }));
@@ -66,6 +68,8 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
     authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReset();
+    providerRuntimeMocks.buildProviderAuthDoctorHintWithPlugin.mockReset();
+    providerRuntimeMocks.buildProviderAuthDoctorHintWithPlugin.mockResolvedValue(undefined);
     providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin.mockReset();
     providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin.mockResolvedValue(
       undefined,
