@@ -55,6 +55,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 
 export type SessionCleanupAction =
   | "keep"
+  | "repair-session-file"
   | "prune-missing"
   | "prune-model-run"
   | "prune-stale"
@@ -69,6 +70,7 @@ export type SessionCleanupSummary = {
   dryRun: boolean;
   beforeCount: number;
   afterCount: number;
+  repaired: number;
   missing: number;
   dmScopeRetired: number;
   modelRunPruned: number;
@@ -95,6 +97,7 @@ export type SessionsCleanupRunResult = {
   previewResults: Array<{
     summary: SessionCleanupSummary;
     beforeStore: Record<string, SessionEntry>;
+    repairedKeys: Set<string>;
     missingKeys: Set<string>;
     modelRunPrunedKeys: Set<string>;
     staleKeys: Set<string>;
@@ -191,6 +194,7 @@ function isStaleGeneratedBaseTranscript(params: {
 /** Resolves the action label for one session key from cleanup key sets. */
 export function resolveSessionCleanupAction(params: {
   key: string;
+  repairedKeys: Set<string>;
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
@@ -215,6 +219,9 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.budgetEvictedKeys.has(params.key)) {
     return "evict-budget";
+  }
+  if (params.repairedKeys.has(params.key)) {
+    return "repair-session-file";
   }
   return "keep";
 }
@@ -400,6 +407,7 @@ async function previewStoreCleanup(params: {
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
+  const repairedKeys = new Set<string>();
   const modelRunPrunedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missingResult =
@@ -409,6 +417,9 @@ async function previewStoreCleanup(params: {
           storePath: params.target.storePath,
           onPruned: (key) => {
             missingKeys.add(key);
+          },
+          onRepaired: (key) => {
+            repairedKeys.add(key);
           },
         })
       : { removed: 0, repaired: 0 };
@@ -508,11 +519,22 @@ async function previewStoreCleanup(params: {
       budgetEvictedKeys.add(key);
     }
   }
+  for (const removedKey of [
+    ...missingKeys,
+    ...modelRunPrunedKeys,
+    ...staleKeys,
+    ...cappedKeys,
+    ...budgetEvictedKeys,
+    ...dmScopeRetiredKeys,
+  ]) {
+    repairedKeys.delete(removedKey);
+  }
+  const repaired = repairedKeys.size;
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
     missing > 0 ||
-    missingResult.repaired > 0 ||
+    repaired > 0 ||
     dmScopeRetired > 0 ||
     modelRunPruned > 0 ||
     pruned > 0 ||
@@ -528,6 +550,7 @@ async function previewStoreCleanup(params: {
     dryRun: params.dryRun,
     beforeCount,
     afterCount: afterPreviewCount,
+    repaired,
     missing,
     dmScopeRetired,
     modelRunPruned,
@@ -541,6 +564,7 @@ async function previewStoreCleanup(params: {
   return {
     summary,
     beforeStore,
+    repairedKeys,
     missingKeys,
     modelRunPrunedKeys,
     staleKeys,
@@ -587,6 +611,7 @@ export async function runSessionsCleanup(params: {
     for (const target of targets) {
       const applyStore = loadSessionStore(target.storePath, { skipCache: true });
       const missingRemovals: SessionEntryLifecycleRemoval[] = [];
+      const missingRepairPlans: Array<{ sessionKey: string; sessionFile: string }> = [];
       const missingRepairs: SessionEntryLifecycleUpsert[] = [];
       const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
       if (opts.fixMissing) {
@@ -601,6 +626,7 @@ export async function runSessionsCleanup(params: {
           },
           onRepaired: (sessionKey, entry, sessionFile, previousSessionFile) => {
             const expectedSessionId = entry.sessionId;
+            missingRepairPlans.push({ sessionKey, sessionFile });
             missingRepairs.push({
               sessionKey,
               buildEntry: ({ currentEntry }) => {
@@ -655,6 +681,13 @@ export async function runSessionsCleanup(params: {
               },
       });
       const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
+      const postApplyStore: Record<string, SessionEntry> =
+        missingRepairPlans.length > 0
+          ? loadSessionStore(target.storePath, { skipCache: true })
+          : {};
+      const repairedApplied = missingRepairPlans.filter(
+        ({ sessionKey, sessionFile }) => postApplyStore[sessionKey]?.sessionFile === sessionFile,
+      ).length;
       const missingApplied = missingRemovals.filter(({ sessionKey }) =>
         removedSessionKeys.has(sessionKey),
       ).length;
@@ -689,6 +722,7 @@ export async function runSessionsCleanup(params: {
                 dryRun: false,
                 beforeCount: 0,
                 afterCount: 0,
+                repaired: 0,
                 missing: 0,
                 dmScopeRetired: 0,
                 modelRunPruned: 0,
@@ -702,6 +736,7 @@ export async function runSessionsCleanup(params: {
               unreferencedArtifacts,
               wouldMutate:
                 (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
+              repaired: repairedApplied,
               applied: true,
               appliedCount: lifecycleResult.afterCount,
             }
@@ -712,6 +747,7 @@ export async function runSessionsCleanup(params: {
               dryRun: false,
               beforeCount: appliedReport.beforeCount,
               afterCount: appliedReport.afterCount,
+              repaired: repairedApplied,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
               modelRunPruned: appliedReport.modelRunPruned,
@@ -721,7 +757,7 @@ export async function runSessionsCleanup(params: {
               diskBudget: appliedReport.diskBudget,
               wouldMutate:
                 missingApplied > 0 ||
-                missingRepairs.length > 0 ||
+                repairedApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||

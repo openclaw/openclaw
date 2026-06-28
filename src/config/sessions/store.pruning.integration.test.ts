@@ -613,10 +613,12 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const preview = dryRun.previewResults[0];
+    expect(preview?.summary.repaired).toBe(1);
     expect(preview?.summary.missing).toBe(0);
     expect(preview?.summary.beforeCount).toBe(1);
     expect(preview?.summary.afterCount).toBe(1);
     expect(preview?.summary.wouldMutate).toBe(true);
+    expect(preview?.repairedKeys.has("agent:main:cron:job:run:fresh")).toBe(true);
     expect(preview?.missingKeys.size).toBe(0);
     expect(
       loadSessionStore(storePath, { skipCache: true })["agent:main:cron:job:run:fresh"]
@@ -629,6 +631,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
+    expect(applied.appliedSummaries[0]?.repaired).toBe(1);
     expect(applied.appliedSummaries[0]?.missing).toBe(0);
     expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
     expect(applied.appliedSummaries[0]?.wouldMutate).toBe(true);
@@ -680,6 +683,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
+    expect(applied.appliedSummaries[0]?.repaired).toBe(1);
     expect(applied.appliedSummaries[0]?.missing).toBe(0);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted[sessionKey]?.sessionFile).toBe(canonicalTranscript);
@@ -741,6 +745,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
+    expect(applied.appliedSummaries[0]?.repaired).toBe(0);
     expect(applied.appliedSummaries[0]?.missing).toBe(0);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted[sessionKey]?.sessionFile).toBe(concurrentTranscript);
