@@ -2761,6 +2761,37 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history sanitizes assistant reasoning before applying maxChars", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const visibleAnswer = "Visible answer after reasoning. ".repeat(20);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: ["<thinking>", "private reload reasoning", "<final>", visibleAnswer].join(
+                  "\n",
+                ),
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 96 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("Visible answer after reasoning");
+      expect(serialized).toContain("...(truncated)...");
+      expect(serialized).not.toContain("private reload reasoning");
+      expect(serialized).not.toContain("<thinking>");
+      expect(serialized).not.toContain("<final>");
+    });
+  });
+
   test("chat.history keeps visible assistant progress text from mixed tool-use transcript messages", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });

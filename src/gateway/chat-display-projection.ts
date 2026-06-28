@@ -19,6 +19,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
@@ -59,6 +60,15 @@ function truncateChatHistoryText(
   return {
     text: `${text.slice(0, maxChars)}\n...(truncated)...`,
     truncated: true,
+  };
+}
+
+function sanitizeAssistantHistoryDisplayText(text: string): { text: string; changed: boolean } {
+  const stripped = stripInlineDirectiveTagsForDisplay(text);
+  const sanitized = sanitizeAssistantVisibleTextWithProfile(stripped.text, "history");
+  return {
+    text: sanitized,
+    changed: stripped.changed || sanitized !== stripped.text,
   };
 }
 
@@ -252,7 +262,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
 
 function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: { assistantDisplayText?: boolean; preserveExactToolPayload?: boolean; maxChars?: number },
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -262,8 +272,12 @@ function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const sanitizeAssistantDisplayText =
+    opts?.assistantDisplayText === true && !preserveExactToolPayload;
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = sanitizeAssistantDisplayText
+      ? sanitizeAssistantHistoryDisplayText(entry.text)
+      : stripInlineDirectiveTagsForDisplay(entry.text);
     if (preserveExactToolPayload) {
       entry.text = stripped.text;
       changed ||= stripped.changed;
@@ -274,7 +288,9 @@ function sanitizeChatHistoryContentBlock(
     }
   }
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = sanitizeAssistantDisplayText
+      ? sanitizeAssistantHistoryDisplayText(entry.content)
+      : stripInlineDirectiveTagsForDisplay(entry.content);
     if (preserveExactToolPayload) {
       entry.content = stripped.text;
       changed ||= stripped.changed;
@@ -384,7 +400,7 @@ function projectAssistantTextFromMixedToolContent(
     if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
       continue;
     }
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = sanitizeAssistantHistoryDisplayText(entry.text);
     const truncated = truncateChatHistoryText(stripped.text, maxChars);
     if (truncated.text.trim()) {
       textBlocks.push({ type: "text", text: truncated.text });
@@ -505,8 +521,13 @@ function sanitizeChatHistoryMessage(
     }
   }
 
+  const isAssistant = entry.role === "assistant";
+  const sanitizeAssistantDisplayText = isAssistant && !preserveExactToolPayload;
+
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const stripped = sanitizeAssistantDisplayText
+      ? sanitizeAssistantHistoryDisplayText(entry.content)
+      : stripInlineDirectiveTagsForDisplay(entry.content);
     if (preserveExactToolPayload) {
       entry.content = stripped.text;
       changed ||= stripped.changed;
@@ -517,7 +538,11 @@ function sanitizeChatHistoryMessage(
     }
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
+      sanitizeChatHistoryContentBlock(block, {
+        assistantDisplayText: isAssistant,
+        preserveExactToolPayload,
+        maxChars,
+      }),
     );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
@@ -542,7 +567,9 @@ function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const stripped = sanitizeAssistantDisplayText
+      ? sanitizeAssistantHistoryDisplayText(entry.text)
+      : stripInlineDirectiveTagsForDisplay(entry.text);
     if (preserveExactToolPayload) {
       entry.text = stripped.text;
       changed ||= stripped.changed;

@@ -862,6 +862,68 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("sanitizes assistant reasoning tags before truncating history text", () => {
+    const visibleAnswer = "Visible answer ".repeat(12);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          text: ["<thinking>", "private chain of thought", "<final>", visibleAnswer].join("\n"),
+          timestamp: 1,
+        },
+      ],
+      48,
+    ) as Array<{ text?: string }>;
+
+    expect(result[0]?.text).toContain("Visible answer");
+    expect(result[0]?.text).toContain("...(truncated)...");
+    expect(result[0]?.text).not.toContain("private chain of thought");
+    expect(result[0]?.text).not.toContain("<thinking>");
+    expect(result[0]?.text).not.toContain("<final>");
+  });
+
+  it("sanitizes assistant reasoning tags in content blocks before history truncation", () => {
+    const visibleAnswer = "Block visible answer ".repeat(12);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: ["<thinking>", "private block reasoning", "<final>", visibleAnswer].join("\n"),
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      54,
+    ) as Array<{ content?: Array<{ text?: string }> }>;
+
+    const text = result[0]?.content?.[0]?.text;
+    expect(text).toContain("Block visible answer");
+    expect(text).toContain("...(truncated)...");
+    expect(text).not.toContain("private block reasoning");
+    expect(text).not.toContain("<thinking>");
+    expect(text).not.toContain("<final>");
+  });
+
+  it("preserves tool payload text that looks like reasoning markup", () => {
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "tool",
+          toolName: "read",
+          content: "<thinking>payload tag from tool output</thinking>",
+          timestamp: 1,
+        },
+      ],
+      12,
+    ) as Array<{ content?: string }>;
+
+    expect(result[0]?.content).toBe("<thinking>payload tag from tool output</thinking>");
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
