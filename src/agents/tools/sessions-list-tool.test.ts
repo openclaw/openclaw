@@ -50,8 +50,30 @@ type SessionsListDetails = {
     responseUsage?: string;
     thinkingLevel?: string;
     verboseLevel?: string;
+    messages?: unknown[];
   }>;
 };
+
+function extractVisibleText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content
+    .map((block) =>
+      block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text
+        : undefined,
+    )
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+}
 
 function getSessionsListDetails(result: { details?: unknown }): SessionsListDetails {
   return result.details as SessionsListDetails;
@@ -206,6 +228,154 @@ describe("sessions-list-tool", () => {
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
+  });
+
+  it("keeps bounded standalone delivery mirrors in hydrated sessions_list messages", async () => {
+    const deliveredText = "Redacted invoice summary delivered.";
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:whatsapp:group:120363425559039020@g.us",
+              kind: "group",
+              sessionId: "sess-wa",
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Please send the redacted invoice summary." }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: deliveredText }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-list-wa-bounded", { messageLimit: 2 });
+    const details = getSessionsListDetails(result);
+    const messages = details.sessions?.[0]?.messages ?? [];
+
+    expect(messages.map(extractVisibleText)).toEqual([
+      "Please send the redacted invoice summary.",
+      deliveredText,
+    ]);
+    expect(messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  it("keeps repeated identical standalone delivery mirrors in hydrated sessions_list messages", async () => {
+    const repeatedText = "Done.";
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:whatsapp:group:120363425559039020@g.us",
+              kind: "group",
+              sessionId: "sess-wa-repeated",
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Send the first redacted update." }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: repeatedText }],
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "Send the second redacted update." }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: repeatedText }],
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-message-repeated",
+                  name: "message",
+                  arguments: {
+                    action: "send",
+                    message: repeatedText,
+                  },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolName: "message",
+              toolCallId: "call-message-repeated",
+              content: { ok: true, messageId: "wamid.2", chatId: "120363425559039020@g.us" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Sent the update in WhatsApp." }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-list-wa-repeated", { messageLimit: 7 });
+    const details = getSessionsListDetails(result);
+    const messages = details.sessions?.[0]?.messages ?? [];
+
+    expect(messages.map(extractVisibleText)).toEqual([
+      "Send the first redacted update.",
+      repeatedText,
+      "Send the second redacted update.",
+      repeatedText,
+    ]);
+    expect(
+      messages.filter(
+        (message) =>
+          message &&
+          typeof message === "object" &&
+          (message as { provider?: unknown }).provider === "openclaw" &&
+          (message as { model?: unknown }).model === "delivery-mirror",
+      ),
+    ).toHaveLength(1);
+    expect(
+      messages.filter(
+        (message) =>
+          message &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toHaveLength(1);
   });
 
   it.each([

@@ -33,6 +33,7 @@ import {
   extractJsonStringFieldPrefix,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+import { projectVisibleChatTranscriptMessages } from "./visible-chat-transcript.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -1235,8 +1236,11 @@ function extractLastMessagePreviewFromTranscriptLines(lines: string[]): string |
   const selected = selectBoundedActiveTailRecords(records, {
     failClosedOnInvalidLeafControl: true,
   });
-  for (let index = selected.length - 1; index >= 0; index -= 1) {
-    const msg = selected[index]?.record.message as TranscriptMessage | undefined;
+  const projected = projectVisibleChatTranscriptMessages(
+    selected.flatMap((item) => (item.record.message ? [item.record.message] : [])),
+  );
+  for (let index = projected.length - 1; index >= 0; index -= 1) {
+    const msg = projected[index] as TranscriptMessage | undefined;
     if (msg?.role !== "user" && msg?.role !== "assistant") {
       continue;
     }

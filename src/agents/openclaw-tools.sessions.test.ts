@@ -708,7 +708,7 @@ describe("sessions tools", () => {
     );
   });
 
-  it("sessions_history filters tool messages by default", async () => {
+  it("sessions_history filters tool messages while preserving standalone delivery mirrors", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
