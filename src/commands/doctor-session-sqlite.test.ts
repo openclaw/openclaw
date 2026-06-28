@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
+  upsertSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -82,6 +83,36 @@ describe("runDoctorSessionSqlite", () => {
     });
     expect(report.targets[0]?.sqlitePath).toBeTruthy();
     expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
+  });
+
+  it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      await upsertSqliteSessionEntry(
+        { agentId: "main", env, sessionKey: "agent:main:main", storePath },
+        { sessionId: "sqlite-session", updatedAt: Date.now() },
+      );
+
+      const report = await runDoctorSessionSqlite({
+        allAgents: true,
+        cfg: {},
+        env,
+        mode: "inspect",
+      });
+
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(report.totals).toMatchObject({
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 1,
+        targets: 1,
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("imports and validates legacy sessions idempotently", async () => {
