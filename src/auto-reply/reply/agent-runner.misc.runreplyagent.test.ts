@@ -927,6 +927,29 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent Active Memory inline debug", () => {
+  // Seeds the plugin-owned debug rows through the canonical session accessor.
+  async function writeActiveMemoryDebugEntry(params: {
+    sessionEntry: SessionEntry;
+    sessionKey: string;
+    storePath: string;
+  }): Promise<void> {
+    await replaceSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      {
+        ...params.sessionEntry,
+        pluginDebugEntries: [
+          {
+            pluginId: "active-memory",
+            lines: [
+              "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+              "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
+            ],
+          },
+        ],
+      },
+    );
+  }
+
   it("appends inline Active Memory status payload when verbose is enabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -950,21 +973,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          ...sessionEntry,
-          pluginDebugEntries: [
-            {
-              pluginId: "active-memory",
-              lines: [
-                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-              ],
-            },
-          ],
-        },
-      );
+      await writeActiveMemoryDebugEntry({ sessionEntry, sessionKey, storePath });
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -1063,21 +1072,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          ...sessionEntry,
-          pluginDebugEntries: [
-            {
-              pluginId: "active-memory",
-              lines: [
-                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-              ],
-            },
-          ],
-        },
-      );
+      await writeActiveMemoryDebugEntry({ sessionEntry, sessionKey, storePath });
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -1175,21 +1170,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          ...sessionEntry,
-          pluginDebugEntries: [
-            {
-              pluginId: "active-memory",
-              lines: [
-                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-              ],
-            },
-          ],
-        },
-      );
+      await writeActiveMemoryDebugEntry({ sessionEntry, sessionKey, storePath });
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
