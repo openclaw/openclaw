@@ -30,7 +30,6 @@ import {
   resolveChatAttachmentMaxBytes,
 } from "../media/configured-max-bytes.js";
 import {
-  buildMessageWithAttachments,
   type ChatAttachment,
   parseMessageWithAttachments,
   UnsupportedAttachmentError,
