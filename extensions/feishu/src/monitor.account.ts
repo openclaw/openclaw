@@ -19,7 +19,7 @@ import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-
 import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botNames, botOpenIds, readFeishuBotIdentityRevision } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
@@ -485,6 +485,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
+  const botIdentityRevision = readFeishuBotIdentityRevision(accountId);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   if (!botOpenId) {
@@ -493,6 +494,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       accountId,
       runtime,
       abortSignal: abortSignal?.aborted ? undefined : abortSignal,
+      staleRevision: abortSignal?.aborted ? botIdentityRevision : undefined,
     });
   }
 
