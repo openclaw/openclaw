@@ -2380,8 +2380,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
   it("does not expose OPENCLAW_MCP_* placeholder env when tools are disabled even if a user MCP server opts in to caller context", async () => {
     // Disabled-tools runs must keep bundle MCP fully off — including the
-    // OPENCLAW_MCP_* placeholder env that would otherwise carry x-session-key
-    // and caller IDs to a remote MCP server the operator opted in elsewhere.
+    // OPENCLAW_MCP_* placeholder env that would otherwise carry caller IDs
+    // to a remote MCP server the operator opted in elsewhere.
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({

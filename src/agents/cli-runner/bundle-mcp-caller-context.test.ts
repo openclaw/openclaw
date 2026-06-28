@@ -180,13 +180,12 @@ describe("applyBundleMcpCallerContext", () => {
       "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
       "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
       "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-      "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
     });
   });
 
   it("respects existing user headers case-insensitively (HTTP semantics)", () => {
-    // User supplied `X-Session-Key` (capitalized). Since HTTP headers are
-    // case-insensitive, we must NOT also inject the lowercase `x-session-key`
+    // User supplied `X-OpenClaw-Agent-Id` (capitalized). Since HTTP headers are
+    // case-insensitive, we must NOT also inject the lowercase `x-openclaw-agent-id`
     // — otherwise the downstream client would see both, and OpenClaw's
     // placeholder could silently shadow the user's own value.
     const merged = applyBundleMcpCallerContext(
@@ -196,8 +195,8 @@ describe("applyBundleMcpCallerContext", () => {
             type: "sse",
             url: "https://api.example/mcp",
             headers: {
-              "X-Session-Key": "user-set-session",
               "X-OpenClaw-Agent-Id": "user-agent",
+              "X-Custom": "keep-me",
             },
           },
         },
@@ -206,8 +205,8 @@ describe("applyBundleMcpCallerContext", () => {
     );
 
     expect(merged.mcpServers.mixed.headers).toEqual({
-      "X-Session-Key": "user-set-session",
       "X-OpenClaw-Agent-Id": "user-agent",
+      "X-Custom": "keep-me",
       "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
       "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
     });

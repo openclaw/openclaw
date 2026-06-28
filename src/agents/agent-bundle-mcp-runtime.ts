@@ -497,13 +497,12 @@ function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
  */
 function expandEmbeddedMcpCallerContextInConfig(
   config: BundleMcpConfig,
-  callerContext: EmbeddedMcpCallerContext & { sessionKey?: string },
+  callerContext: EmbeddedMcpCallerContext,
 ): BundleMcpConfig {
   const env: Record<string, string> = {
     OPENCLAW_MCP_AGENT_ID: callerContext.agentId ?? "",
     OPENCLAW_MCP_ACCOUNT_ID: callerContext.accountId ?? "",
     OPENCLAW_MCP_MESSAGE_CHANNEL: callerContext.messageChannel ?? "",
-    OPENCLAW_MCP_SESSION_KEY: callerContext.sessionKey ?? "",
   };
   const mcpServers: BundleMcpConfig["mcpServers"] = {};
   for (const [name, server] of Object.entries(config.mcpServers)) {
@@ -551,7 +550,7 @@ export function createSessionMcpRuntime(params: {
             { mcpServers: loaded.mcpServers as BundleMcpConfig["mcpServers"] },
             trustedServers,
           ),
-          { ...params.callerContext, sessionKey: params.sessionKey },
+          params.callerContext,
         ).mcpServers
       : (loaded.mcpServers as BundleMcpConfig["mcpServers"]);
   const createdAt = Date.now();

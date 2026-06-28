@@ -160,7 +160,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
   it("ignores plugin-supplied injectCallerContext: true and never forwards caller headers without an owner opt-in", async () => {
     // Security boundary: an enabled plugin must not be able to grant itself
-    // permission to receive x-session-key + caller IDs by setting
+    // permission to receive caller identity headers by setting
     // injectCallerContext: true in its own .mcp.json. The owner has to list
     // the server in mcp.servers with the flag set.
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(

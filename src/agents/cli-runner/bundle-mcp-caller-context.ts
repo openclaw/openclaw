@@ -11,7 +11,6 @@ export const OPENCLAW_MCP_CALLER_HEADERS: Record<string, string> = {
   "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
   "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
   "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
 };
 
 /**
