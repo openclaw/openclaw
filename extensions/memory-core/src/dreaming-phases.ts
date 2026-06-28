@@ -39,6 +39,7 @@ import {
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
+  filterFreshLightDreamingEntries,
   readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -1689,10 +1690,14 @@ async function runLightDreaming(params: {
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+    entries: await filterFreshLightDreamingEntries({
+      workspaceDir: params.workspaceDir,
       nowMs,
-      lookbackDays: params.config.lookbackDays,
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
     }),
   });
   const rankedEntries = dedupeEntries(
