@@ -745,6 +745,48 @@
       }
     },
     {
+      "name": "@openclaw/pioneer-provider",
+      "description": "OpenClaw Pioneer provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "pioneer",
+          "label": "Pioneer"
+        },
+        "providers": [
+          {
+            "id": "pioneer",
+            "name": "Pioneer",
+            "docs": "/providers/pioneer",
+            "categories": ["cloud", "llm"],
+            "envVars": ["PIONEER_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "pioneer-api-key",
+                "choiceLabel": "Pioneer API key",
+                "groupId": "pioneer",
+                "groupLabel": "Pioneer",
+                "groupHint": "OpenAI-compatible Pioneer endpoint",
+                "optionKey": "pioneerApiKey",
+                "cliFlag": "--pioneer-api-key",
+                "cliOption": "--pioneer-api-key <key>",
+                "cliDescription": "Pioneer API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/pioneer-provider",
+          "npmSpec": "@openclaw/pioneer-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/qianfan-provider",
       "description": "OpenClaw Qianfan provider plugin.",
       "source": "official",

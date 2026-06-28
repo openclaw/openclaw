@@ -1,6 +1,7 @@
 // Provider catalog list tests cover provider catalog integration for model listing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  hasProviderRuntimeCatalogForFilter,
   hasProviderStaticCatalogForFilter,
   loadProviderCatalogModelsForList,
   resolveProviderCatalogPluginIdsForFilter,
@@ -146,6 +147,21 @@ const hybridCatalogProvider = {
       provider: {
         baseUrl: "https://hybrid.example/v1",
         models: [{ id: "static-model", name: "Static Model" }],
+      },
+    })),
+  },
+};
+
+const externalPioneerProvider = {
+  id: "pioneer",
+  pluginId: "pioneer",
+  label: "Pioneer",
+  auth: [],
+  catalog: {
+    run: vi.fn(async () => ({
+      provider: {
+        baseUrl: "https://api.pioneer.ai/v1",
+        models: [{ id: "sakana/fugu-ultra", name: "Fugu Ultra" }],
       },
     })),
   },
@@ -500,6 +516,67 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/live-model"]);
     expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
     expect(hybridCatalogProvider.staticCatalog.run).not.toHaveBeenCalled();
+  });
+
+  it("loads provider-filtered runtime catalogs from installed external plugin owners", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "pioneer" ? ["pioneer"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
+      async ({ onlyPluginIds }: { onlyPluginIds?: string[] }) =>
+        onlyPluginIds?.includes("pioneer") ? [externalPioneerProvider] : [],
+    );
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      cfg: {
+        plugins: {
+          entries: {
+            pioneer: { enabled: true },
+          },
+        },
+      },
+      env: {
+        ...baseParams.env,
+        PIONEER_API_KEY: "sk-pioneer",
+      },
+      providerFilter: "pioneer",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
+      "pioneer/sakana/fugu-ultra",
+    ]);
+    expect(externalPioneerProvider.catalog.run).toHaveBeenCalledOnce();
+    expect(firstDiscoveryRequest().onlyPluginIds).toStrictEqual(["pioneer"]);
+  });
+
+  it("recognizes provider-filtered runtime catalogs from installed external plugin owners", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "pioneer" ? ["pioneer"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
+      async ({ onlyPluginIds }: { onlyPluginIds?: string[] }) =>
+        onlyPluginIds?.includes("pioneer") ? [externalPioneerProvider] : [],
+    );
+
+    await expect(
+      hasProviderRuntimeCatalogForFilter({
+        cfg: {
+          plugins: {
+            entries: {
+              pioneer: { enabled: true },
+            },
+          },
+        },
+        env: {
+          ...baseParams.env,
+          PIONEER_API_KEY: "sk-pioneer",
+        },
+        providerFilter: "pioneer",
+      }),
+    ).resolves.toBe(true);
+
+    expect(firstDiscoveryRequest().onlyPluginIds).toStrictEqual(["pioneer"]);
   });
 
   it("keeps explicit static-only list output on static catalogs", async () => {

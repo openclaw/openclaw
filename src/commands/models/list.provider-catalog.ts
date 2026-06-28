@@ -213,7 +213,9 @@ async function hasProviderCatalogForFilter(
     manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
-  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
+  const scopedPluginIds = options.discoveryEntriesOnly
+    ? pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+    : pluginIds;
   if (scopedPluginIds.length === 0) {
     return false;
   }
@@ -344,8 +346,11 @@ export async function loadProviderCatalogModelsForList(params: {
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
   const scopedPluginIds = onlyPluginIds
-    ? onlyPluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+    ? params.staticOnly === true
+      ? onlyPluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+      : onlyPluginIds
     : bundledPluginIds;
+  const scopedPluginIdSet = new Set(scopedPluginIds);
   if (scopedPluginIds.length === 0) {
     return [];
   }
@@ -389,8 +394,7 @@ export async function loadProviderCatalogModelsForList(params: {
       pluginMetadataSnapshot: params.metadataSnapshot,
     })
   ).filter(
-    (provider) =>
-      typeof provider.pluginId === "string" && bundledPluginIdSet.has(provider.pluginId),
+    (provider) => typeof provider.pluginId === "string" && scopedPluginIdSet.has(provider.pluginId),
   );
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const rows: Model[] = [];
