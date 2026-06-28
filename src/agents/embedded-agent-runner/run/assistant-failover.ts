@@ -202,7 +202,7 @@ export async function handleAssistantFailover(params: {
     const timeoutFailure = params.timedOut || params.idleTimedOut;
     const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
-      if (!failedProfileId || !failureReason) {
+      if (!failureReason) {
         return;
       }
       try {
