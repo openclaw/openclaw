@@ -5,7 +5,6 @@ import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
-  type SessionTranscriptUpdate,
 } from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];

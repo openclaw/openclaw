@@ -230,7 +230,7 @@ function selectRecentSqliteEventEntries(
       break;
     }
   }
-  return selected.reverse();
+  return selected.toReversed();
 }
 
 function readRecentSqliteMessageRecordsSync(
@@ -337,7 +337,7 @@ function readSqliteTitleFields(
       !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown })
     );
   });
-  const lastText = [...messages].reverse().map(extractMessageText).find(Boolean) ?? null;
+  const lastText = messages.toReversed().map(extractMessageText).find(Boolean) ?? null;
   return {
     firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
     lastMessagePreview: lastText,

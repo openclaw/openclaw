@@ -2046,14 +2046,13 @@ async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      return {
-        ...(event as Record<string, unknown>),
+      return Object.assign({}, event as Record<string, unknown>, {
         message: {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
           content: replacement.request.state.persistedContent,
         },
-      };
+      });
     });
     await transcript.replaceEvents(rewrittenEvents);
     return rewriteTargets.map((target) => ({

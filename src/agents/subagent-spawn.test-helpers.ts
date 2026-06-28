@@ -319,10 +319,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       const storePath =
         scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
       await updateSessionStore(storePath, (store: SessionStore) => {
-        updated = {
-          ...(store[scope.sessionKey] ?? {}),
-          ...patch,
-        };
+        updated = Object.assign({}, store[scope.sessionKey], patch);
         store[scope.sessionKey] = updated;
       });
       return updated ?? null;

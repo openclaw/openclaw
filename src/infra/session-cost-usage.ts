@@ -480,7 +480,7 @@ async function resolveUsageCostTranscriptFile(
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (marker) {
     const entry = listSessionEntries({ storePath: marker.storePath }).find(
-      ({ entry }) => entry.sessionId === marker.sessionId,
+      ({ entry: sessionEntry }) => sessionEntry.sessionId === marker.sessionId,
     )?.entry;
     const events = loadTranscriptEventsSync({
       agentId: marker.agentId,

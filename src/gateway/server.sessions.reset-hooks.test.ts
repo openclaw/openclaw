@@ -509,7 +509,7 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   await writeMainTranscriptSession({
     sessionId: "sess-main",
     content: "hello from transcript",

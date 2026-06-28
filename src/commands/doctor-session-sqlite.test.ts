@@ -126,8 +126,8 @@ describe("runDoctorSessionSqlite", () => {
     expect(archivedUnreferencedPath).toBeTruthy();
     expect(archivedUnreferencedPath).not.toContain(`${path.sep}sessions${path.sep}`);
     expect(archivedUnreferencedPath).toContain("archive-tier.orphan.jsonl.imported-");
-    expect(fs.existsSync(archivedUnreferencedPath!)).toBe(true);
-    expect(fs.readFileSync(archivedUnreferencedPath!, "utf-8")).toBe('{"type":"event"}\n');
+    expect(fs.existsSync(archivedUnreferencedPath)).toBe(true);
+    expect(fs.readFileSync(archivedUnreferencedPath, "utf-8")).toBe('{"type":"event"}\n');
     expect(inspect.totals.sqliteEntries).toBe(1);
     expect(inspect.totals.unreferencedJsonlFiles).toBe(0);
     expect(
@@ -278,7 +278,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets[0]?.sqlitePath).toBe(
       path.join(store.sessionDir, "openclaw-agent.sqlite"),
     );
-    expect(fs.existsSync(report.targets[0]!.sqlitePath)).toBe(true);
+    expect(fs.existsSync(report.targets[0]?.sqlitePath)).toBe(true);
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",

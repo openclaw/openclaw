@@ -2188,11 +2188,11 @@ export const agentHandlers: GatewayRequestHandlers = {
                     storeKeys: storeKeys ?? [canonicalSessionKey],
                   },
                 },
-                (_currentEntry, context) => {
+                (_currentEntry, patchContext) => {
                   // The writer lock may outlive this request's lifecycle. Check at
                   // transaction admission; once admitted, let the atomic write finish.
                   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                  const freshEntry = context.existingEntry;
+                  const freshEntry = patchContext.existingEntry;
                   patchBuild = buildSessionPatch(freshEntry);
                   const effectivePatch =
                     recoveredSessionStartedAt !== undefined &&

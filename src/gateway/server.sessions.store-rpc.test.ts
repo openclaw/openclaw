@@ -56,7 +56,7 @@ async function loadTranscriptRows(params: {
 }
 
 test("lists and patches session store via sessions.* RPC", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const now = Date.now();
   const recent = now - 30_000;
   const stale = now - 15 * 60_000;

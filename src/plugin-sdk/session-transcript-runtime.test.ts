@@ -369,7 +369,9 @@ describe("session transcript runtime SDK", () => {
           return message?.idempotencyKey === "mirror-once";
         });
         if (label === "first") {
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+          });
         }
         if (!alreadyAppended) {
           await locked.appendMessage({

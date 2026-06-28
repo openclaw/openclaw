@@ -24,7 +24,6 @@ import {
 import {
   setupGatewaySessionsTestHarness,
   getSessionManagerModule,
-  getGatewayConfigModule,
   sessionStoreEntry,
   createCheckpointFixture,
   directSessionReq,

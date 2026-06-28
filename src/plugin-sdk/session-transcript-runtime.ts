@@ -13,12 +13,12 @@ import {
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
-import {
-  type LatestAssistantTranscriptText,
-  type SessionTranscriptAppendResult,
-  type SessionTranscriptAssistantMessage,
-  type SessionTranscriptDeliveryMirror,
-  type SessionTranscriptUpdateMode,
+import type {
+  LatestAssistantTranscriptText,
+  SessionTranscriptAppendResult,
+  SessionTranscriptAssistantMessage,
+  SessionTranscriptDeliveryMirror,
+  SessionTranscriptUpdateMode,
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";

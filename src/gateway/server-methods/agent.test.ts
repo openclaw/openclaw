@@ -469,9 +469,8 @@ function resetSessionAccessorMocks() {
           if (!base) {
             return null;
           }
-          const patch = await update(structuredClone(base), {
-            ...(existing ? { existingEntry: structuredClone(existing.entry) } : {}),
-          });
+          const patchContext = existing ? { existingEntry: structuredClone(existing.entry) } : {};
+          const patch = await update(structuredClone(base), patchContext);
           if (!patch) {
             return cloneSessionStoreFixtureEntry(base);
           }

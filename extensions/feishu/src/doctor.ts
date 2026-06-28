@@ -577,7 +577,9 @@ export function inspectFeishuDoctorState(params: {
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
     for (const { sessionKey: key, entry } of listSessionEntries({ storePath: target.storePath })
-      .filter(({ sessionKey, entry }) => isFeishuSessionEntry(sessionKey, entry))
+      .filter(({ sessionKey, entry: sessionEntry }) =>
+        isFeishuSessionEntry(sessionKey, sessionEntry),
+      )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
       const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({

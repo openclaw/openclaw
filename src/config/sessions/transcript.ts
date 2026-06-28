@@ -530,10 +530,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storePath =
     params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
   const store = Object.fromEntries(
-    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(
+      ({ sessionKey: entryKey, entry }) => [entryKey, entry],
+    ),
   );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;

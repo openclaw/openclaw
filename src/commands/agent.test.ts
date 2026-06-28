@@ -289,9 +289,10 @@ async function writeSessionStoreSeed(
 ): Promise<void> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(sessions)) {
+    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : sessionKey;
     await replaceSessionEntry({ sessionKey, storePath }, {
       ...entry,
-      sessionId: String(entry.sessionId ?? sessionKey),
+      sessionId,
       updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
     } as SessionEntry);
   }
