@@ -177,7 +177,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // SQLite ACP metadata (persisted by the ACP control plane manager).
     useTempStateDir();
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-red",
     );
@@ -216,7 +216,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // events (catalog notes this as deferrable).
     useTempStateDir();
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-fix-shape",
     );
@@ -241,7 +241,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
 
   it("reads ACP runtime metadata from SQLite for the display overlay", async () => {
     useTempStateDir();
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-sqlite",
     );
@@ -259,7 +259,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     useTempStateDir();
     const rawStoreKey = "acp:binding:discord:default:feedface";
     const canonicalAcpKey = "agent:copilot:acp:binding:discord:default:feedface";
-    const store = writeStore(
+    const store = await writeStore(
       { [rawStoreKey]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-canonical",
     );
@@ -279,7 +279,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     // and must NOT receive the acpx sentinel. This guards against a regression
     // where key-shape-only detection would misreport bridge sessions.
     const ACP_BRIDGE_SESSION_KEY = "agent:copilot:acp:bridge-session-1";
-    const store = writeStore(
+    const store = await writeStore(
       { [ACP_BRIDGE_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-bridge-control",
     );
@@ -312,7 +312,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     //      remains correct for non-ACP keys; the proposed sentinel overlay
     //      must NOT break this case (it should only fire when both
     //      isAcpSessionKey(row.key) is true AND ACP metadata is present).
-    const store = writeStore(
+    const store = await writeStore(
       { [NON_ACP_SESSION_KEY]: buildNonAcpSessionEntry() },
       "sessions-acp-model-display-green-control",
     );
