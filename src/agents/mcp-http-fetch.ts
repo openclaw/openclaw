@@ -11,6 +11,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import { readProviderTextResponse } from "./provider-http-errors.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -66,7 +67,9 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     return new Response(null, init);
   }
   if (typeof response.text === "function") {
-    const text = await response.text();
+    // 16 MiB cap. A hostile or broken MCP server cannot force the runtime
+    // to buffer an unbounded body through the `text()` fallback path.
+    const text = await readProviderTextResponse(response, "MCP HTTP fetch");
     return new Response(text, init);
   }
   return new Response(null, init);

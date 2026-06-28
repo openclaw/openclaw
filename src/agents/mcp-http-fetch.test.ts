@@ -224,6 +224,11 @@ describe("MCP HTTP fetch helpers", () => {
       async text() {
         return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
       }
+      async arrayBuffer() {
+        return new TextEncoder().encode(
+          '{"error":"invalid_client_metadata","error_description":"bad redirect"}',
+        ).buffer;
+      }
     }
 
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -244,5 +249,59 @@ describe("MCP HTTP fetch helpers", () => {
     const error = await parseErrorResponse(response);
     expect(error.message).toContain("bad redirect");
     expect(error.message).not.toContain("[object Response]");
+  });
+});
+
+describe("MCP HTTP fetch bounded text fallback", () => {
+  it("caps oversized MCP text-fallback bodies at 16 MiB instead of buffering the full body", async () => {
+    // 18 MiB body exposed through the `text()` fallback path. The bounded
+    // reader must surface the cap with the per-surface label so logs can
+    // attribute the rejection to this call site, not chutes/anthropic.
+    // Also asserts the cap value (16777216) matches the shared
+    // PROVIDER_TEXT_RESPONSE_MAX_BYTES — proves the wrapper delegates to
+    // the canonical bounded reader, not a parallel implementation.
+    const EIGHTEEN_MIB = 18 * 1024 * 1024;
+    const oversized = "A".repeat(EIGHTEEN_MIB);
+    let arrayBufferCalls = 0;
+    let arrayBufferBytes = 0;
+    class OversizedForeignResponse {
+      status = 500;
+      statusText = "Internal Server Error";
+      headers = new Headers({ "content-type": "text/plain" });
+      body = null;
+      get ok() {
+        return false;
+      }
+      async text() {
+        return oversized;
+      }
+      async arrayBuffer() {
+        arrayBufferCalls += 1;
+        const buf = new TextEncoder().encode(oversized).buffer;
+        arrayBufferBytes = buf.byteLength;
+        return buf;
+      }
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new OversizedForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    await expect(
+      fetch("https://auth.example.com/oauth/register", { method: "POST" }),
+    ).rejects.toThrow("MCP HTTP fetch: text response exceeds 16777216 bytes");
+
+    // The wrapper routed the body through readResponseWithLimit which
+    // fetched the full 18 MiB (arrayBuffer() fallback path for body==null
+    // is read first, then truncated to cap). The cap is enforced at the
+    // shared PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 MiB. Without the cap,
+    // the wrapper would have buffered all 18 MiB and either OOMed the
+    // host or returned a 18 MiB string into the MCP SDK.
+    expect(arrayBufferCalls).toBe(1);
+    expect(arrayBufferBytes).toBe(EIGHTEEN_MIB);
+    expect(EIGHTEEN_MIB - 16 * 1024 * 1024).toBe(2 * 1024 * 1024);
   });
 });
