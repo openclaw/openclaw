@@ -330,7 +330,11 @@ export async function patchSqliteSessionEntry(
   const resolved = resolveSqliteScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+    const existing = (
+      options.replaceEntry
+        ? readExactSessionEntryRow(database, resolved.sessionKey)
+        : readSessionEntryRow(database, resolved.sessionKey)
+    )?.entry;
     const base = existing ?? options.fallbackEntry;
     if (!base) {
       return null;
@@ -344,7 +348,9 @@ export async function patchSqliteSessionEntry(
 
     let result: SessionEntry | null = null;
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey);
+      const fresh = options.replaceEntry
+        ? readExactSessionEntryRow(writeDatabase, resolved.sessionKey)
+        : readSessionEntryRow(writeDatabase, resolved.sessionKey);
       const writeBase = fresh?.entry ?? options.fallbackEntry;
       if (!writeBase) {
         result = null;
@@ -1733,6 +1739,21 @@ function readSessionEntryRow(
   return undefined;
 }
 
+function collectSqliteSessionMaintenanceBaseKeys(
+  store: Record<string, SessionEntry>,
+  activeSessionKey: string,
+): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  let currentKey = normalizeStoreSessionKey(activeSessionKey);
+  while (currentKey && !seen.has(currentKey)) {
+    seen.add(currentKey);
+    keys.push(currentKey);
+    currentKey = normalizeStoreSessionKey(store[currentKey]?.parentSessionKey ?? "");
+  }
+  return keys;
+}
+
 function readExactSessionEntryRow(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -1904,7 +1925,9 @@ function applySqliteSessionEntryMaintenance(
       removedSessionIds.add(sessionId);
     }
   };
-  const preserveKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  const preserveKeys = collectSessionMaintenancePreserveKeys(
+    collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
+  );
   if (
     shouldRunModelRunPrune({
       maintenance,

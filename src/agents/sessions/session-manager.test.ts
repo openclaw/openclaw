@@ -108,7 +108,10 @@ describe("SessionManager.open", () => {
         type: "message",
       }),
       expect.objectContaining({
-        message: expect.objectContaining({ content: "answer", role: "assistant" }),
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer" }],
+          role: "assistant",
+        }),
         type: "message",
       }),
       expect.objectContaining({
