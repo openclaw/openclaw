@@ -11,6 +11,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   deleteSessionEntry,
   listSessionEntries,
+  resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -641,17 +642,15 @@ function movePathToBackup(params: {
 }
 
 function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
-  if (!existsFile(params.storePath)) {
-    return;
+  const targetDir = path.join(params.backupDir, "session-stores", params.agentId);
+  for (const sourcePath of resolveSessionStoreBackupPaths({ storePath: params.storePath })) {
+    if (!existsFile(sourcePath)) {
+      continue;
+    }
+    const targetPath = path.join(targetDir, path.basename(sourcePath));
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(sourcePath, resolveUniquePath(targetPath));
   }
-  const targetPath = path.join(
-    params.backupDir,
-    "session-stores",
-    params.agentId,
-    path.basename(params.storePath),
-  );
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.storePath, resolveUniquePath(targetPath));
 }
 
 function collectSessionArtifactPaths(params: {
