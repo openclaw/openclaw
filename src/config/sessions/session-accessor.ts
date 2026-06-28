@@ -898,7 +898,10 @@ export function resolveSessionEntryCandidateTarget(
     env: scope.env,
   });
   const store = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {
@@ -952,7 +955,7 @@ function resolveSessionEntryStoreTarget(
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findFreshestSessionEntryMatch(
-    listSessionEntries({ storePath: fallback.storePath }),
+    listSessionEntries({ agentId, storePath: fallback.storePath }),
     scanTargets,
   );
   for (let index = 1; index < candidates.length; index += 1) {
@@ -961,7 +964,7 @@ function resolveSessionEntryStoreTarget(
       continue;
     }
     const match = findFreshestSessionEntryMatch(
-      listSessionEntries({ storePath: candidate.storePath }),
+      listSessionEntries({ agentId, storePath: candidate.storePath }),
       scanTargets,
     );
     if (

@@ -21,6 +21,7 @@ import {
   persistSessionTranscriptTurn,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
@@ -209,6 +210,65 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:current",
     });
     expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("resolves non-main candidate entries from custom agent store templates", async () => {
+    const storeTemplate = path.join(tempDir, "{agentId}.json");
+    const supportStorePath = path.join(tempDir, "support.json");
+    await upsertSessionEntry(
+      {
+        agentId: "support",
+        sessionKey: "agent:support:main",
+        storePath: supportStorePath,
+      },
+      {
+        sessionId: "support-session",
+        updatedAt: 30,
+      },
+    );
+
+    const resolved = resolveSessionEntryCandidateTarget({
+      agentId: "support",
+      candidateKeys: ["agent:support:main"],
+      cfg: { session: { store: storeTemplate } },
+    });
+
+    expect(resolved).toMatchObject({
+      agentId: "support",
+      candidateKey: "agent:support:main",
+      entry: { sessionId: "support-session" },
+      persisted: true,
+      sessionKey: "agent:support:main",
+    });
+  });
+
+  it("resolves non-main logical entries from custom agent store templates", async () => {
+    const storeTemplate = path.join(tempDir, "{agentId}.json");
+    const supportStorePath = path.join(tempDir, "support.json");
+    await upsertSessionEntry(
+      {
+        agentId: "support",
+        sessionKey: "agent:support:main",
+        storePath: supportStorePath,
+      },
+      {
+        sessionId: "support-session",
+        updatedAt: 30,
+      },
+    );
+
+    const resolved = resolveSessionEntryAccessTarget({
+      cfg: { session: { store: storeTemplate } },
+      sessionKey: "agent:support:main",
+    });
+
+    expect(resolved).toMatchObject({
+      agentId: "support",
+      canonicalKey: "agent:support:main",
+      entry: { sessionId: "support-session" },
+      requestedKey: "agent:support:main",
+      storeKey: "agent:support:main",
+    });
   });
 
   it("creates durable session ids for metadata-only inserts", async () => {
