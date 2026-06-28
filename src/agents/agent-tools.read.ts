@@ -1004,12 +1004,16 @@ async function statHostFile(absolutePath: string) {
 
 async function writeWorkspaceFile(
   root: string,
-  rootPromise: ReturnType<typeof fsRoot>,
+  getRoot: () => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
 ) {
+  // Validate the path before starting the fs-safe root: call getRoot() (which opens the
+  // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
+  // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
+  // rejection when validation fails first — the readFile/access paths already defer the same way.
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-  await (await rootPromise).write(relative, content, { mkdir: true });
+  await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
@@ -1030,8 +1034,12 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
+  // root lazily on first use: constructing the tool (e.g. doctor projecting tool
+  // schemas) must not open an fs handle, and a missing workspace dir must not
+  // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  const getRoot = () => (rootPromise ??= fsRoot(root));
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -1040,10 +1048,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, rootPromise, absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      return (await (await rootPromise).read(relative)).buffer;
+      return (await (await getRoot()).read(relative)).buffer;
     },
     statFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
@@ -1068,16 +1076,20 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // When workspaceOnly is true, enforce workspace boundary. Resolve the fs-safe
+  // root lazily on first use: constructing the tool (e.g. doctor projecting tool
+  // schemas) must not open an fs handle, and a missing workspace dir must not
+  // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  const getRoot = () => (rootPromise ??= fsRoot(root));
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await (await rootPromise).read(relative);
+      const safeRead = await (await getRoot()).read(relative);
       return safeRead.buffer;
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, rootPromise, absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
     access: async (absolutePath: string) => {
       let relative: string;
       try {
@@ -1091,7 +1103,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         return;
       }
       try {
-        const opened = await (await rootPromise).open(relative);
+        const opened = await (await getRoot()).open(relative);
         await opened.handle.close().catch(() => {});
       } catch (error) {
         if (error instanceof FsSafeError && error.code === "not-found") {
