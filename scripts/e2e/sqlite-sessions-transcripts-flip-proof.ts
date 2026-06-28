@@ -32,7 +32,7 @@ import {
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
-type DoctorMode = "inspect" | "validate";
+type DoctorMode = "import" | "inspect" | "validate";
 
 type DoctorCommandEvidence = {
   code: number | null;
@@ -109,6 +109,7 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
   checkpoints: ProofCheckpoint[];
+  cleanupPruneSessionKey: string;
   concurrentDeleteSessionKey: string;
   concurrentResetSessionKey: string;
   concurrentSendSessionKey: string;
@@ -134,6 +135,7 @@ type ProofContext = {
   agentDbPath: string;
   agentId: string;
   archiveRoots: string[];
+  cleanupPruneSessionKey: string;
   concurrentDeleteSessionKey: string;
   concurrentResetSessionKey: string;
   concurrentSendSessionKey: string;
@@ -167,6 +169,9 @@ const CONCURRENT_RESET_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-res
 const CONCURRENT_DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-delete";
 const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
 const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
+const CLEANUP_PRUNE_SESSION_ID = "sqlite-cleanup-prune";
+const CLEANUP_PRUNE_SESSION_KEY = "agent:main:dashboard:sqlite-cleanup-prune";
+const CLEANUP_PRUNE_TEXT = "sqlite cleanup prune me";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
 const FULL_TURN_SESSION_KEY = "agent:main:sqlite-full-turn";
 const MANUAL_COMPACTION_SESSION_KEY = "agent:main:dashboard:sqlite-manual-compact";
@@ -342,6 +347,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       );
       await record("after-plugin-sdk-consumer");
 
+      await runGatewayCleanupPruningProof(restartedClient, context);
+      await record("after-cleanup-pruning");
+
+      const idempotentImportDoctor = await runDoctorIdempotenceProof(inst, context);
+      await record("after-doctor-import-idempotence", idempotentImportDoctor);
+
       await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
       await record("after-concurrent-multi-client");
 
@@ -385,6 +396,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     ok: failures.length === 0,
     agentId: context.agentId,
     checkpoints,
+    cleanupPruneSessionKey: context.cleanupPruneSessionKey,
     concurrentDeleteSessionKey: context.concurrentDeleteSessionKey,
     concurrentResetSessionKey: context.concurrentResetSessionKey,
     concurrentSendSessionKey: context.concurrentSendSessionKey,
@@ -424,6 +436,7 @@ function buildProofContext(stateDir: string): ProofContext {
     agentDbPath: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
+    cleanupPruneSessionKey: CLEANUP_PRUNE_SESSION_KEY,
     concurrentDeleteSessionKey: CONCURRENT_DELETE_SESSION_KEY,
     concurrentResetSessionKey: CONCURRENT_RESET_SESSION_KEY,
     concurrentSendSessionKey: CONCURRENT_SEND_SESSION_KEY,
@@ -444,6 +457,7 @@ function buildProofContext(stateDir: string): ProofContext {
     trackedSessionKeys: [
       RESET_SESSION_KEY,
       DELETE_SESSION_KEY,
+      CLEANUP_PRUNE_SESSION_KEY,
       CONCURRENT_SEND_SESSION_KEY,
       CONCURRENT_RESET_SESSION_KEY,
       CONCURRENT_DELETE_SESSION_KEY,
@@ -958,6 +972,83 @@ async function runPluginSdkConsumerProbe(
   };
 }
 
+async function runGatewayCleanupPruningProof(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  context: ProofContext,
+): Promise<void> {
+  const updatedAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
+  await importSqliteSessionRows({
+    agentId: context.agentId,
+    entry: {
+      channel: "cli",
+      chatType: "direct",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: context.agentId,
+        sessionId: CLEANUP_PRUNE_SESSION_ID,
+        storePath: context.storePath,
+      }),
+      sessionId: CLEANUP_PRUNE_SESSION_ID,
+      sessionStartedAt: updatedAt - 500,
+      updatedAt,
+    },
+    readTranscriptEvents(append) {
+      append(legacySessionEvent(CLEANUP_PRUNE_SESSION_ID));
+      append({
+        type: "message",
+        id: "sqlite-cleanup-prune-1",
+        message: { role: "user", content: CLEANUP_PRUNE_TEXT },
+      });
+    },
+    sessionKey: context.cleanupPruneSessionKey,
+    storePath: context.storePath,
+  });
+  await waitForSqliteMessageContains(
+    context.agentDbPath,
+    CLEANUP_PRUNE_SESSION_ID,
+    "user",
+    CLEANUP_PRUNE_TEXT,
+  );
+
+  const result: { afterCount?: number; applied?: boolean; pruned?: number } = await client.request(
+    "sessions.cleanup",
+    { enforce: true },
+    { timeoutMs: 20_000 },
+  );
+  if (result?.applied !== true || (result.pruned ?? 0) < 1) {
+    throw new Error(`sessions.cleanup did not prune stale SQLite rows: ${JSON.stringify(result)}`);
+  }
+  await waitForSessionEntryAbsent(context.agentDbPath, context.cleanupPruneSessionKey);
+  await waitForSqliteEventsAbsent(context.agentDbPath, CLEANUP_PRUNE_SESSION_ID);
+}
+
+async function runDoctorIdempotenceProof(
+  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  context: ProofContext,
+): Promise<DoctorCommandEvidence> {
+  const before = readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys);
+  const doctor = await runDoctor(inst, "import", context.storePath);
+  if (doctor.code !== 0) {
+    throw new Error(`doctor import idempotence check exited non-zero: ${doctor.stderrTail}`);
+  }
+  const totals = doctor.totals ?? {};
+  if (totals.importedEntries !== 0 || totals.importedTranscriptEvents !== 0) {
+    throw new Error(`doctor import was not idempotent: ${JSON.stringify(totals)}`);
+  }
+  const after = readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys);
+  if (
+    after.sessionEntries !== before.sessionEntries ||
+    after.sessions !== before.sessions ||
+    after.transcriptEvents !== before.transcriptEvents
+  ) {
+    throw new Error(
+      `doctor import changed SQLite counts: before=${JSON.stringify(before)} after=${JSON.stringify(
+        after,
+      )}`,
+    );
+  }
+  return doctor;
+}
+
 async function runConcurrentMultiClientLifecycle(
   inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
   context: ProofContext,
@@ -1291,6 +1382,25 @@ async function waitForSessionEntryAbsent(dbPath: string, sessionKey: string): Pr
     await sleep(50);
   }
   throw new Error(`timed out waiting for SQLite session entry deletion for ${sessionKey}`);
+}
+
+async function waitForSqliteEventsAbsent(dbPath: string, sessionId: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  let absentSince: number | undefined;
+  while (Date.now() < deadline) {
+    const count = countSqliteTranscriptEvents(dbPath, sessionId);
+    if (count === 0) {
+      absentSince ??= Date.now();
+      if (Date.now() - absentSince >= 1_500) {
+        return;
+      }
+      await sleep(50);
+      continue;
+    }
+    absentSince = undefined;
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for SQLite transcript row deletion for ${sessionId}`);
 }
 
 async function waitForSqliteMessageContains(
@@ -1673,6 +1783,27 @@ function validateCheckpointInvariants(
       sessionId: "sqlite-delete-session",
     });
   }
+  if (checkpoint.label === "after-cleanup-pruning") {
+    requireArchiveText(checkpoint, failures, {
+      description: "cleanup-pruned transcript archive",
+      includes: [CLEANUP_PRUNE_TEXT],
+      reason: "deleted",
+      sessionId: CLEANUP_PRUNE_SESSION_ID,
+    });
+    if (
+      checkpoint.sqlite.trackedEntries.some(
+        (entry) => entry.sessionKey === context.cleanupPruneSessionKey,
+      )
+    ) {
+      failures.push(`${checkpoint.label}: cleanup-pruned entry still exists in SQLite`);
+    }
+  }
+  if (checkpoint.label === "after-doctor-import-idempotence") {
+    const totals = checkpoint.doctor?.totals ?? {};
+    if (totals.importedEntries !== 0 || totals.importedTranscriptEvents !== 0) {
+      failures.push(`${checkpoint.label}: doctor import changed migrated SQLite state`);
+    }
+  }
   if (checkpoint.label === "after-shared-first-delete") {
     const archivedShared = findArchiveArtifact(checkpoint, {
       reason: "deleted",
@@ -1710,8 +1841,14 @@ function requireArchiveText(
     failures.push(`${checkpoint.label}: missing ${params.description}`);
     return;
   }
-  const text = artifact.textTail ?? "";
-  const missing = params.includes.filter((expected) => !text.includes(expected));
+  const searchableText = [
+    artifact.textTail,
+    ...(artifact.messageTexts ?? []),
+    ...(artifact.jsonlTypes ?? []),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+  const missing = params.includes.filter((expected) => !searchableText.includes(expected));
   if (missing.length > 0) {
     failures.push(
       `${checkpoint.label}: ${params.description} missing archive content ${missing
