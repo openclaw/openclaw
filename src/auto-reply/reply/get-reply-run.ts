@@ -940,8 +940,7 @@ export async function runPreparedReply(
       resolvedThinkLevel = fallbackThinkLevel;
     }
   }
-  const internalOpts = opts as InternalGetReplyOptions | undefined;
-  const providedReplyOperation = internalOpts?.replyOperation;
+  const providedReplyOperation = opts?.replyOperation;
   if (
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
