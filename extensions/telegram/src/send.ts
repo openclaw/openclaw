@@ -1992,3 +1992,187 @@ export async function createForumTopicTelegram(
     chatId: normalizedChatId,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Location and venue
+// ---------------------------------------------------------------------------
+
+type TelegramLocationOpts = {
+  cfg: OpenClawConfig;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
+  /** Message ID to reply to (for threading). */
+  replyToMessageId?: number;
+  /** Forum topic thread ID. */
+  messageThreadId?: number;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
+};
+
+/**
+ * Send a location pin to a Telegram chat.
+ */
+export async function sendLocationTelegram(
+  to: string,
+  location: { latitude: number; longitude: number; horizontalAccuracy?: number },
+  opts: TelegramLocationOpts,
+): Promise<{ messageId: string; chatId: string }> {
+  if (location.latitude < -90 || location.latitude > 90) {
+    throw new Error("latitude must be between -90 and 90");
+  }
+  if (location.longitude < -180 || location.longitude > 180) {
+    throw new Error("longitude must be between -180 and 180");
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+
+  const threadParams = buildTelegramThreadReplyParams({
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
+    replyToMessageId: opts.replyToMessageId,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const extra: Record<string, unknown> = {
+    ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
+    ...(location.horizontalAccuracy != null
+      ? { horizontal_accuracy: location.horizontalAccuracy }
+      : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+
+  const result = await requestWithChatNotFound(
+    () => api.sendLocation(chatId, location.latitude, location.longitude, extra as never),
+    "location",
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "location send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId, opts.cfg);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
+
+/**
+ * Send a venue (location with name and address) to a Telegram chat.
+ */
+export async function sendVenueTelegram(
+  to: string,
+  venue: {
+    latitude: number;
+    longitude: number;
+    title: string;
+    address: string;
+    foursquareId?: string;
+    googlePlaceId?: string;
+  },
+  opts: TelegramLocationOpts,
+): Promise<{ messageId: string; chatId: string }> {
+  if (!venue.title?.trim()) {
+    throw new Error("venue title is required");
+  }
+  if (!venue.address?.trim()) {
+    throw new Error("venue address is required");
+  }
+  if (venue.latitude < -90 || venue.latitude > 90) {
+    throw new Error("latitude must be between -90 and 90");
+  }
+  if (venue.longitude < -180 || venue.longitude > 180) {
+    throw new Error("longitude must be between -180 and 180");
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+
+  const threadParams = buildTelegramThreadReplyParams({
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
+    replyToMessageId: opts.replyToMessageId,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const extra: Record<string, unknown> = {
+    ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
+    ...(venue.foursquareId ? { foursquare_id: venue.foursquareId } : {}),
+    ...(venue.googlePlaceId ? { google_place_id: venue.googlePlaceId } : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+
+  const result = await requestWithChatNotFound(
+    () =>
+      api.sendVenue(
+        chatId,
+        venue.latitude,
+        venue.longitude,
+        venue.title.trim(),
+        venue.address.trim(),
+        extra as never,
+      ),
+    "venue",
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "venue send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId, opts.cfg);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
