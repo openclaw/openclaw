@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { isSensitiveHeaderName } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -18,28 +19,6 @@ import type {
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
 const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
 
 // Runtime capture records HTTP/fetch and websocket events into the SQLite store,
 // redacting sensitive headers and persisting bodies in capture_blobs.
@@ -112,14 +91,7 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
 }
 
 function isSensitiveCaptureHeaderName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+  return isSensitiveHeaderName(name);
 }
 
 function redactedCaptureHeaders(

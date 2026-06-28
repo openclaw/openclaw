@@ -7,6 +7,7 @@ import net from "node:net";
 import { URL } from "node:url";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
+import { redactHeaders } from "./header-redaction.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
@@ -235,7 +236,9 @@ export async function startDebugProxyServer(params: {
               direction: "inbound",
               kind: "response",
               status: upstreamRes.statusCode ?? undefined,
-              headersJson: JSON.stringify(upstreamRes.headers),
+              headersJson: JSON.stringify(
+                redactHeaders(upstreamRes.headers as Record<string, string | string[] | undefined>),
+              ),
               ...finishBodyPreviewCapture(responseCapture),
             });
             res.end();
@@ -250,7 +253,7 @@ export async function startDebugProxyServer(params: {
         recordTargetEvent({
           direction: "outbound",
           kind: "request",
-          headersJson: JSON.stringify(req.headers),
+          headersJson: JSON.stringify(redactHeaders(req.headers)),
           ...finishBodyPreviewCapture(requestCapture),
         });
       });
@@ -303,7 +306,7 @@ export async function startDebugProxyServer(params: {
       flowId,
       host: hostname,
       path: req.url ?? "",
-      headersJson: JSON.stringify(req.headers),
+      headersJson: JSON.stringify(redactHeaders(req.headers)),
     });
     try {
       assertDebugProxyDirectUpstreamAllowed();
