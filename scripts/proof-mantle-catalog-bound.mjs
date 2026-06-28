@@ -47,7 +47,9 @@ async function withCatalogServer(routes, fn) {
   try {
     await fn(port, () => serverBytesSent);
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
   }
 }
 
@@ -94,7 +96,9 @@ await withCatalogServer(
       bearerToken: "proof-token",
       fetchFn: makeLocalFetchFn(port, "/huge"),
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     const sent = getBytesSent();
     check("fail-soft fallback returns empty catalog when body exceeds cap", models.length === 0);
     check(
