@@ -178,9 +178,56 @@ export async function requestFeishuApi<T>(
     onTokenInvalid?: () => void;
   } = {},
 ): Promise<T> {
+  return requestFeishuApiWithTokenRefresh(request, errorPrefix, options, true);
+}
+
+async function requestFeishuApiWithTokenRefresh<T>(
+  request: () => Promise<T>,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+    retryDelayMs?: number;
+    onTokenInvalid?: () => void;
+  },
+  allowTokenRefresh: boolean,
+): Promise<T> {
+  try {
+    return await runFeishuRateLimitLoop(request, errorPrefix, options);
+  } catch (error) {
+    // Token-invalid errors surface raw so callers can inspect response.data.code
+    // (the wrapped message does not carry the Feishu business code). The rate-limit
+    // loop already wraps non-token errors before they reach here.
+    if (getFeishuTokenInvalidCode(error) === undefined) {
+      throw error;
+    }
+    if (!allowTokenRefresh || typeof options.onTokenInvalid !== "function") {
+      throw error;
+    }
+    try {
+      options.onTokenInvalid();
+    } catch {
+      // Best-effort invalidation: a buggy hook must not swallow the original
+      // token-invalid error. The retry still runs because the caller cleared
+      // its cache intending a refresh.
+    }
+    // Single recursive refresh — the next attempt surfaces persistent
+    // token-invalid errors instead of looping forever.
+    return requestFeishuApiWithTokenRefresh(request, errorPrefix, options, false);
+  }
+}
+
+async function runFeishuRateLimitLoop<T>(
+  request: () => Promise<T>,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+    retryDelayMs?: number;
+  },
+): Promise<T> {
   const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
   let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
-  let didInvalidateToken = false;
   for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
@@ -205,26 +252,12 @@ export async function requestFeishuApi<T>(
       }
       return result;
     } catch (error) {
-      // Token-invalid path: when the caller supplied an `onTokenInvalid`
-      // hook, invoke it once and retry. Without a hook there is nothing to
-      // refresh between attempts, so the error falls through to the normal
-      // (non-retryable) path. Limiting to one invalidation per call means a
-      // permanently revoked app credential still surfaces its error.
-      const tokenInvalidCode = getFeishuTokenInvalidCode(error);
-      if (
-        tokenInvalidCode !== undefined &&
-        !didInvalidateToken &&
-        typeof options.onTokenInvalid === "function"
-      ) {
-        didInvalidateToken = true;
-        try {
-          options.onTokenInvalid();
-        } catch {
-          // Best-effort invalidation: a buggy hook must not swallow the
-          // original token-invalid error. We still retry once because the
-          // caller intended to refresh its cache.
-        }
-        continue;
+      // Token-invalid errors propagate raw so requestFeishuApi's outer
+      // handler can refresh the cached token and re-run the loop. Wrapping
+      // here would discard the response shape that getFeishuTokenInvalidCode
+      // inspects.
+      if (getFeishuTokenInvalidCode(error) !== undefined) {
+        throw error;
       }
       const isRetryable =
         attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
