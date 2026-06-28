@@ -1,23 +1,25 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
 import { upsertSessionEntry } from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("resolveSessionEntryResetFreshness", () => {
+  let tempDirs: string[] = [];
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-entry-freshness-"));
+    tempDirs = [];
+    tempDir = makeTempDir(tempDirs, "openclaw-session-entry-freshness-");
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    cleanupTempDirs(tempDirs);
   });
 
   it("returns missing state with a resolved reset policy for absent entries", () => {
