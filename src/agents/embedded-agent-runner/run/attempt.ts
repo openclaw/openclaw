@@ -652,6 +652,15 @@ function repairAttemptToolUseResultPairing(
   });
 }
 
+function usesOpenAIResponsesToolPayload(api: unknown): boolean {
+  return (
+    api === "openai-responses" ||
+    api === "azure-openai-responses" ||
+    api === "openai-chatgpt-responses" ||
+    api === "openclaw-openai-responses-transport"
+  );
+}
+
 function shouldPreservePromptErrorAfterCleanupError(params: {
   promptError: unknown;
   cleanupError: unknown;
@@ -4628,6 +4637,9 @@ export async function runEmbeddedAttempt(
               contextTokenBudget,
               reserveTokens,
               tools: [...effectiveTools, ...clientToolDefs],
+              ...(usesOpenAIResponsesToolPayload(params.model.api)
+                ? { toolSchemaPayload: "openai-responses" }
+                : {}),
               toolResultMaxChars: promptToolResultMaxChars,
               llmBoundaryTokenPressure: {
                 estimatedPromptTokens: llmBoundaryTokenPressure,

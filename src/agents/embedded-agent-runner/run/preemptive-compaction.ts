@@ -9,6 +9,8 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
+import { projectOpenAITools } from "../../openai-tool-projection.js";
+import { normalizeOpenAIStrictToolParameters } from "../../openai-tool-schema.js";
 import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
@@ -37,6 +39,7 @@ type ToolSchemaTokenPressureSource = {
   description?: unknown;
   parameters?: unknown;
 };
+type ToolSchemaTokenPressurePayload = "raw" | "openai-responses";
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -160,20 +163,67 @@ function estimateContentTokenPressure(content: unknown): number {
 
 function estimateToolSchemaTokenPressure(
   tools: readonly ToolSchemaTokenPressureSource[] | undefined,
+  payloadShape: ToolSchemaTokenPressurePayload = "raw",
 ): number {
   if (!tools?.length) {
     return 0;
   }
-  const payload = tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
+  const payload =
+    payloadShape === "openai-responses"
+      ? buildOpenAIResponsesToolPressurePayload(tools)
+      : tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        }));
   return Math.max(
     0,
     Math.ceil(
       estimateJsonPayloadTokenPressure(payload, JSON_PAYLOAD_CHARS_PER_TOKEN) * SAFETY_MARGIN,
     ),
+  );
+}
+
+function buildOpenAIResponsesToolPressurePayload(
+  tools: readonly ToolSchemaTokenPressureSource[],
+): unknown[] {
+  const projection = projectOpenAITools(
+    tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters ?? {},
+    })),
+  );
+  return sortToolPressurePayloadByName(projection.tools).map((tool) => ({
+    type: "function",
+    name: tool.name,
+    description: tool.description,
+    // Native Responses paths can strict-normalize schemas; use that upper-bound
+    // payload so small-window fits leave room for provider tool wrappers.
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, true),
+    strict: true,
+  }));
+}
+
+function compareToolText(left: string | undefined, right: string | undefined): number {
+  const leftText = left ?? "";
+  const rightText = right ?? "";
+  if (leftText < rightText) {
+    return -1;
+  }
+  if (leftText > rightText) {
+    return 1;
+  }
+  return 0;
+}
+
+function sortToolPressurePayloadByName<T extends { name?: string; description?: string }>(
+  tools: readonly T[],
+): T[] {
+  return tools.toSorted(
+    (left, right) =>
+      compareToolText(left.name, right.name) ||
+      compareToolText(left.description, right.description),
   );
 }
 
@@ -312,6 +362,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   tools?: readonly ToolSchemaTokenPressureSource[];
+  toolSchemaPayload?: ToolSchemaTokenPressurePayload;
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
 }): PreemptiveCompactionDecision {
@@ -350,7 +401,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     params.messages.length === 0 &&
     (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
   const toolSchemaTokens = lightweightPromptBudgetEligible
-    ? estimateToolSchemaTokenPressure(params.tools)
+    ? estimateToolSchemaTokenPressure(params.tools, params.toolSchemaPayload)
     : 0;
   const lightweightMinPromptBudget = lightweightPromptBudgetEligible
     ? Math.max(

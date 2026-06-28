@@ -91,6 +91,17 @@ function makeToolSchema(descriptionChars: number) {
   };
 }
 
+function makeSmallClientTool(index: number) {
+  return {
+    name: `client_lookup_${index.toString().padStart(2, "0")}`,
+    description: "lookup",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  };
+}
+
 describe("preemptive-compaction", () => {
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
@@ -403,6 +414,43 @@ describe("preemptive-compaction", () => {
     expect(result.promptBudgetBeforeReserve).toBeLessThan(3_544);
     expect(result.shouldCompact).toBe(true);
     expect(result.route).toBe("compact_only");
+  });
+
+  it("budgets Responses-shaped tool payloads before accepting lightweight small-context fits", () => {
+    const tools = Array.from({ length: 8 }, (_, index) => makeSmallClientTool(index));
+    const rawResult = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      tools,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_250,
+        source: "reported_lightweight_cron",
+      },
+    });
+    const responsesResult = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      tools,
+      toolSchemaPayload: "openai-responses",
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_250,
+        source: "reported_lightweight_cron",
+      },
+    });
+
+    expect(rawResult.route).toBe("fits");
+    expect(responsesResult.toolSchemaTokens).toBeGreaterThan(rawResult.toolSchemaTokens ?? 0);
+    expect(responsesResult.promptBudgetBeforeReserve).toBeLessThan(3_250);
+    expect(responsesResult.shouldCompact).toBe(true);
+    expect(responsesResult.route).toBe("compact_only");
   });
 
   it("keeps lightweight shared-history prompts on the shared prompt floor", () => {
