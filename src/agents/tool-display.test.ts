@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
+import { resolveExecDetail, stripLeadingExecDisplayVerb } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
@@ -663,5 +663,46 @@ describe("coerceDisplayValue middle truncation", () => {
 
     expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
     expect(detail).toContain("AKIDAB…7890");
+  });
+});
+
+describe("stripLeadingExecDisplayVerb", () => {
+  it("strips run prefix from run+binary+args meta", () => {
+    expect(stripLeadingExecDisplayVerb("run python3 /path/to/script.py")).toBe(
+      "python3 /path/to/script.py",
+    );
+  });
+
+  it("strips run prefix from run+node+args meta", () => {
+    expect(stripLeadingExecDisplayVerb("run node server.js")).toBe("node server.js");
+  });
+
+  it("strips run prefix from run+git+args meta", () => {
+    expect(stripLeadingExecDisplayVerb("run git push")).toBe("git push");
+  });
+
+  it("preserves single-token run labels from package-script map", () => {
+    expect(stripLeadingExecDisplayVerb("run tests")).toBe("run tests");
+  });
+
+  it("preserves action-bearing labels with other verbs", () => {
+    expect(stripLeadingExecDisplayVerb("install dependencies")).toBe("install dependencies");
+    expect(stripLeadingExecDisplayVerb("start app")).toBe("start app");
+    expect(stripLeadingExecDisplayVerb("show last 20 lines")).toBe("show last 20 lines");
+    expect(stripLeadingExecDisplayVerb("check git status")).toBe("check git status");
+  });
+
+  it("passes through raw shell commands unchanged", () => {
+    expect(stripLeadingExecDisplayVerb("cd ~/dir && ls")).toBe("cd ~/dir && ls");
+    expect(stripLeadingExecDisplayVerb("git status")).toBe("git status");
+    expect(stripLeadingExecDisplayVerb("npm install")).toBe("npm install");
+  });
+
+  it("returns undefined for undefined input", () => {
+    expect(stripLeadingExecDisplayVerb(undefined)).toBeUndefined();
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(stripLeadingExecDisplayVerb("")).toBe("");
   });
 });

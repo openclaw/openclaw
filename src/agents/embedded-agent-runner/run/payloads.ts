@@ -42,6 +42,7 @@ import {
   extractAssistantVisibleText,
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
+import { stripLeadingExecDisplayVerb } from "../../tool-display-exec.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
@@ -550,9 +551,12 @@ export function buildEmbeddedRunPayloads(params: {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
+      const displayMeta = isExecLikeToolName(params.lastToolError.toolName)
+        ? stripLeadingExecDisplayVerb(params.lastToolError.meta)
+        : params.lastToolError.meta;
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
-        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+        displayMeta ? [displayMeta] : undefined,
         { markdown: useMarkdown },
       );
       const errorSuffix =

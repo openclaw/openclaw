@@ -289,6 +289,27 @@ function summarizeKnownExec(words: string[]): string {
   return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
 }
 
+/**
+ * Strips a leading "run" framework display verb from exec metadata
+ * when the remainder is a multi-token binary+args invocation.
+ *
+ * Preserves single-token labels (e.g. "run tests", "run build") that
+ * come from the npm/pnpm/yarn subcommand map.
+ *
+ * Returns the original meta unchanged for non-exec tools or when no
+ * strip is needed.
+ */
+export function stripLeadingExecDisplayVerb(meta: string | undefined): string | undefined {
+  if (!meta) {
+    return meta;
+  }
+  const match = meta.match(/^run\s+(\S+)\s+(\S.*)$/);
+  if (!match) {
+    return meta;
+  }
+  return `${match[1]} ${match[2]}`;
+}
+
 function summarizePipeline(stage: string): string {
   const pipeline = splitTopLevelPipes(stage);
   if (pipeline.length > 1) {
