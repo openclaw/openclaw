@@ -54,8 +54,9 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
-openclaw plugins init <id>
-openclaw plugins init <id> --directory ./my-plugin --name "My Plugin"
+openclaw plugins init my-tool --name "My Tool"
+openclaw plugins init my-provider --name "My Provider" --type provider
+openclaw plugins init my-provider --name "My Provider" --type provider --directory ./my-provider
 openclaw plugins build --entry ./dist/index.js
 openclaw plugins build --entry ./dist/index.js --check
 openclaw plugins validate --entry ./dist/index.js
@@ -86,18 +87,44 @@ npm run plugin:build
 npm run plugin:validate
 ```
 
-`plugins init` creates a minimal TypeScript tool plugin that uses
-`defineToolPlugin`. `plugins build` imports that entry, reads its static tool
-metadata, writes `openclaw.plugin.json`, and keeps `package.json`
-`openclaw.extensions` aligned. `plugins validate` checks that the generated
-manifest, package metadata, and current entry export still agree. See
-[Tool Plugins](/plugins/tool-plugins) for the full authoring workflow.
+`plugins init` creates a minimal TypeScript tool plugin by default. The first
+argument is the plugin id; pass `--name` for the display name. OpenClaw uses the
+id for the default output directory and package naming. Tool scaffolds use
+`defineToolPlugin`.
+`plugins build` imports the built entry, reads its static tool metadata, writes
+`openclaw.plugin.json`, and keeps `package.json` `openclaw.extensions` aligned.
+`plugins validate` checks that the generated manifest, package metadata, and
+current entry export still agree. See [Tool Plugins](/plugins/tool-plugins) for
+the full tool-authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry so the workflow also works with the published CLI. Use
 `--entry <path>` when the entry is not the default package entry. Use
 `plugins build --check` in CI to fail when generated metadata is stale without
 rewriting files.
+
+### Provider Scaffold
+
+```bash
+openclaw plugins init acme-models --name "Acme Models" --type provider
+cd acme-models
+npm install
+npm run build
+npm test
+npm run validate
+```
+
+Provider scaffolds create a generic text/model provider plugin with OpenAI-compatible
+API-key plumbing, a built-in `npm run validate` script for `clawhub package
+validate`, ClawHub package metadata, and a manually dispatched GitHub workflow
+for future trusted publishing through GitHub Actions OIDC. Provider scaffolds do
+not generate skills and do not use `openclaw plugins build` or
+`openclaw plugins validate`; those commands are for the tool scaffold's
+generated metadata path.
+
+Before publishing, replace the placeholder API base URL, model catalog, docs
+route, credential text, and README copy with real provider details. Use the
+generated README for first-time ClawHub publishing and trusted publisher setup.
 
 ### Install
 
@@ -111,6 +138,7 @@ openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
@@ -162,6 +190,12 @@ is available, then fall back to `latest`.
     Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
+
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk">
+    Community ClawHub installs check the selected release trust record before downloading the package. If ClawHub disables download for the release, reports malicious scan findings, or puts the release in a blocking moderation state such as quarantine, OpenClaw refuses the release. For non-blocking risky scan statuses, risky moderation states, or registry reasons, OpenClaw shows the trust details and asks for confirmation before continuing.
+
+    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale clean trust records warn but do not require acknowledgement. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -390,6 +424,7 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
+openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
@@ -420,6 +455,9 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
     `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk on update">
+    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
   </Accordion>
 </AccordionGroup>
 

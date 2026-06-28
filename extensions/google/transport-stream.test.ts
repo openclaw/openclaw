@@ -476,6 +476,45 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+              },
+              finishReason: "MAX_TOKENS",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object" },
+            },
+          ],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("length");
+    expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
+  });
+
   it("strips redundant google provider prefixes from Gemini API model paths", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
 

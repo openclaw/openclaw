@@ -367,6 +367,62 @@ describe("exec foreground failures", () => {
     }
   });
 
+  it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    const finalizeToken = { session: "remote-session" };
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async (params) => ({
+        argv: ["remote-shell", params.command],
+        env: {},
+        stdinMode: "pipe-open" as const,
+        finalizeToken,
+      }),
+    );
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
+    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
+      async (workdir) => workdir,
+    );
+    supervisorMock.spawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+        buildExecSpec,
+        finalizeExec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-remote-sandbox-spawn-failure", {
+          command: "echo ok",
+          workdir: "/remote/workspace/generated",
+        }),
+      ).rejects.toThrow("spawn failed");
+
+      expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
+      expect(buildExecSpec).toHaveBeenCalledOnce();
+      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+      expect(finalizeExec).toHaveBeenCalledOnce();
+      expect(finalizeExec).toHaveBeenCalledWith({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+        token: finalizeToken,
+      });
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unsafe commands before backend workdir validation", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(

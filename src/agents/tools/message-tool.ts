@@ -57,11 +57,7 @@ import {
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
-import {
-  normalizeAccountId,
-  parseAgentSessionKey,
-  parseThreadSessionSuffix,
-} from "../../routing/session-key.js";
+import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -863,7 +859,6 @@ type InferredSessionDelivery = {
   to: string;
 };
 
-const SESSION_DELIVERY_PEER_KINDS = new Set(["channel", "direct", "dm", "group"]);
 const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
 
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
@@ -876,44 +871,21 @@ function formatSessionDeliveryTarget(channel: string, peerKind: string, to: stri
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
 ): InferredSessionDelivery | null {
-  const parsedThread = parseThreadSessionSuffix(sessionKey);
-  const baseSessionKey = parsedThread.baseSessionKey ?? sessionKey;
-  const parsed = parseAgentSessionKey(baseSessionKey);
-  if (!parsed) {
+  const route = parseSessionDeliveryRoute(sessionKey);
+  if (!route) {
     return null;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return null;
-  }
-  const channel = normalizeMessageChannel(parts[0]);
+  const channel = normalizeMessageChannel(route.channel);
   if (!channel) {
     return null;
   }
-  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
-    const accountId = resolveAgentAccountId(parts[1]);
-    const to = parts.slice(3).join(":").trim();
-    return to
-      ? {
-          accountId,
-          channel,
-          threadId: parsedThread.threadId,
-          to: formatSessionDeliveryTarget(channel, parts[2], to),
-        }
-      : null;
-  }
-  const peerKind = parts[1] ?? "";
-  if (SESSION_DELIVERY_PEER_KINDS.has(peerKind)) {
-    const to = parts.slice(2).join(":").trim();
-    return to
-      ? {
-          channel,
-          threadId: parsedThread.threadId,
-          to: formatSessionDeliveryTarget(channel, peerKind, to),
-        }
-      : null;
-  }
-  return null;
+  const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
+  return {
+    accountId,
+    channel,
+    threadId: route.threadId,
+    to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
+  };
 }
 
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {

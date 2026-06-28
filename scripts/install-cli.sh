@@ -1168,7 +1168,7 @@ refresh_gateway_service_if_loaded() {
 
   if ! "$claw" gateway restart >/dev/null 2>&1; then
     emit_json '{"event":"step","name":"gateway-service","status":"warn","reason":"restart-failed"}'
-    log "Warning: gateway service restart failed; continuing."
+    log "Warning: gateway service restart failed; continuing. Run: openclaw gateway restart"
     return 0
   fi
 

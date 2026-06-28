@@ -68,4 +68,30 @@ describe("qa live timeout policy", () => {
       ),
     ).toBe(240_000);
   });
+
+  it("uses the anthropic floor for claude-cli sonnet turns", () => {
+    expect(
+      resolveQaLiveTurnTimeoutMs(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-sonnet-4-6",
+          alternateModel: "claude-cli/claude-opus-4-8",
+        },
+        30_000,
+      ),
+    ).toBe(180_000);
+  });
+
+  it("uses the opus floor for claude-cli opus turns", () => {
+    expect(
+      resolveQaLiveTurnTimeoutMs(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-opus-4-8",
+          alternateModel: "claude-cli/claude-opus-4-8",
+        },
+        30_000,
+      ),
+    ).toBe(240_000);
+  });
 });
