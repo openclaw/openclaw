@@ -54,6 +54,9 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile clawhub-public --json
+openclaw plugins marketplace refresh --feed-url https://clawhub.ai/v1/feeds/plugins --expected-sha256 <sha256>
 openclaw plugins init my-tool --name "My Tool"
 openclaw plugins init my-provider --name "My Provider" --type provider
 openclaw plugins init my-provider --name "My Provider" --type provider --directory ./my-provider
@@ -521,9 +524,25 @@ Use `plugins registry` to inspect whether the persisted registry is present, cur
 ```bash
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile <name>
+openclaw plugins marketplace refresh --feed-url <url>
+openclaw plugins marketplace refresh --expected-sha256 <sha256> --json
 ```
 
 Marketplace list accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
+
+Marketplace refresh loads a hosted OpenClaw marketplace feed and persists the
+validated response as the local hosted-feed snapshot. Without options, it uses
+the configured default feed profile. Use `--feed-profile <name>` to refresh a
+specific configured profile, `--feed-url <url>` to refresh an explicit hosted
+feed URL, `--expected-sha256 <sha256>` to require a matching payload checksum
+(`sha256:<hex>` or a bare 64-character hex digest), and `--json` for
+machine-readable output. Explicit hosted feed URLs must not include
+credentials, query strings, or fragments. Unpinned refreshes can report a
+hosted snapshot or bundled fallback result without failing the command. Pinned
+refreshes fail unless they accept a fresh hosted payload, and successful hosted
+refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 ## Related
 
