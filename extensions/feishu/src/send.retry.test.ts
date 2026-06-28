@@ -411,12 +411,9 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     const onTokenInvalid = vi.fn();
     const request = vi.fn().mockRejectedValue(axiosError(99991663));
 
-    // The raw Axios error surfaces so callers can inspect response.data.code;
-    // its message ("Request failed with status code 400") does not carry the
-    // Feishu business code, so assert on the response shape instead.
     await expect(
       requestFeishuApi(request, "Feishu send failed", { ...NO_DELAY, onTokenInvalid }),
-    ).rejects.toMatchObject({ response: { data: { code: 99991663 } } });
+    ).rejects.toThrow(/Feishu send failed: .*99991663/);
 
     expect(onTokenInvalid).toHaveBeenCalledTimes(1);
     // 1 initial attempt + 1 retry after invalidation, then surface.
@@ -468,11 +465,9 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     // surface immediately rather than retry with the same stale token.
     const request = vi.fn().mockRejectedValue(axiosError(99991663));
 
-    // Raw Axios error surfaces immediately; assert on response shape since
-    // the message does not carry the Feishu business code.
-    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toMatchObject({
-      response: { data: { code: 99991663 } },
-    });
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(
+      /prefix: .*99991663/,
+    );
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -496,9 +491,9 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
   it("rejects fulfilled token-invalid bodies when no onTokenInvalid hook is supplied", async () => {
     const request = vi.fn().mockResolvedValue({ code: 99991664, msg: "Access token missing" });
 
-    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toMatchObject({
-      response: { data: { code: 99991664 } },
-    });
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(
+      /prefix: .*99991664/,
+    );
     expect(request).toHaveBeenCalledTimes(1);
   });
 });

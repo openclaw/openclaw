@@ -210,7 +210,7 @@ async function requestFeishuApiWithTokenRefresh<T>(
       throw error;
     }
     if (!allowTokenRefresh || typeof options.onTokenInvalid !== "function") {
-      throw error;
+      throw createFeishuApiError(error, errorPrefix, options);
     }
     try {
       options.onTokenInvalid();
