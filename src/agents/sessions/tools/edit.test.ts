@@ -160,6 +160,29 @@ describe("edit tool", () => {
     expect(message).not.toContain('found:    "const nearbyNeedle = 1;"');
   });
 
+  it("bounds no-newline mismatch candidates before scoring", async () => {
+    const longLine = `const nearbyNeedle = ${"x".repeat(5000)};tail-marker`;
+    const cappedPrefix = longLine.slice(0, 141);
+    const filePath = await createTempFile(longLine);
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: `  ${cappedPrefix}`, newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 1:");
+    expect(message).toContain("hint:     indentation differs");
+    expect(message).not.toContain("tail-marker");
+  });
+
   it("does not attach candidates from the wrong edit list for mixed no-op mismatches", async () => {
     const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\n");
     const tool = createEditTool(tmpDir);

@@ -81,6 +81,8 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
 const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
 const EDIT_MISMATCH_SCAN_LINE_LIMIT = 2000;
 const EDIT_MISMATCH_LINE_DISPLAY_LIMIT = 140;
+// Keep one extra char so formatting can still show that the source line was truncated.
+const EDIT_MISMATCH_LINE_STORAGE_LIMIT = EDIT_MISMATCH_LINE_DISPLAY_LIMIT + 1;
 const EDIT_INDEXED_MISMATCH_RE = /\bCould not find edits\[\d+\] in /u;
 
 /**
@@ -258,7 +260,11 @@ function findClosestMismatchLines(
   currentContent: string,
   expectedLine: string,
 ): Array<{ lineNumber: number; text: string; score: number }> {
-  return collectNormalizedLines(currentContent, EDIT_MISMATCH_SCAN_LINE_LIMIT)
+  return collectNormalizedLines(
+    currentContent,
+    EDIT_MISMATCH_SCAN_LINE_LIMIT,
+    EDIT_MISMATCH_LINE_STORAGE_LIMIT,
+  )
     .map((line, index) => ({
       lineNumber: index + 1,
       text: line,
@@ -269,7 +275,11 @@ function findClosestMismatchLines(
     .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
 }
 
-function collectNormalizedLines(content: string, lineLimit: number): string[] {
+function collectNormalizedLines(
+  content: string,
+  lineLimit: number,
+  lineLengthLimit: number,
+): string[] {
   const lines: string[] = [];
   let lineStart = 0;
 
@@ -279,7 +289,7 @@ function collectNormalizedLines(content: string, lineLimit: number): string[] {
       continue;
     }
 
-    lines.push(content.slice(lineStart, index));
+    lines.push(content.slice(lineStart, Math.min(index, lineStart + lineLengthLimit)));
     if (char === "\r" && content[index + 1] === "\n") {
       index += 1;
     }
@@ -287,7 +297,7 @@ function collectNormalizedLines(content: string, lineLimit: number): string[] {
   }
 
   if (lines.length < lineLimit) {
-    lines.push(content.slice(lineStart));
+    lines.push(content.slice(lineStart, lineStart + lineLengthLimit));
   }
 
   return lines;
