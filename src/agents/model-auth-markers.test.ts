@@ -89,6 +89,7 @@ describe("model auth markers", () => {
       expect(markers.has("gcp-vertex-credentials")).toBe(true);
       expect(markers.has("lmstudio-local")).toBe(true);
       expect(markers.has("minimax-oauth")).toBe(true);
+      expect(markers.has("openclaw:claude-cli-api-key-helper")).toBe(true);
       expect(markers.has("ollama-local")).toBe(true);
     });
   });

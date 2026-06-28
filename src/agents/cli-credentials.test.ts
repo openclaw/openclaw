@@ -187,6 +187,80 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  it("recognizes Claude Code apiKeyHelper settings as CLI-managed auth", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "printf '%s' \"$ANTHROPIC_API_KEY\"" }),
+    );
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(credential).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects apiKeyHelper pointing at a nonexistent file path", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "/nonexistent/helper.sh" }),
+    );
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    // Auth gate falls through to missing-provider-auth when helper path
+    // does not exist — clearer error than a spawn-time failure.
+    expect(credential).toBeNull();
+  });
+
+  it("accepts apiKeyHelper pointing at an existing file path", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    const binDir = path.join(tempDir, "bin");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    const helperPath = path.join(binDir, "get-key.sh");
+    fs.writeFileSync(helperPath, "#!/usr/bin/env bash\necho 'sk-...'\n", "utf8");
+    fs.chmodSync(helperPath, 0o755);
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: helperPath }),
+    );
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(credential).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+  });
+
   it("reads Codex credentials from keychain when available", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;

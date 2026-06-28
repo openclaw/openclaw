@@ -189,17 +189,21 @@ function buildClaudeCliAuthProfiles(
       },
     ];
   }
-  return [
-    {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      credential: {
-        type: "token",
-        provider: CLAUDE_CLI_BACKEND_ID,
-        token: credential.token,
-        expires: credential.expires,
+  if (credential.type === "token") {
+    return [
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: {
+          type: "token",
+          provider: CLAUDE_CLI_BACKEND_ID,
+          token: credential.token,
+          expires: credential.expires,
+        },
       },
-    },
-  ];
+    ];
+  }
+  // apiKeyHelper is CLI-managed auth; no OpenClaw auth profile to store.
+  return [];
 }
 
 /** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
