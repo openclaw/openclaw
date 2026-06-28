@@ -5,6 +5,11 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+export const NO_OP_SENTINEL_REPLY_TOKENS = [
+  SILENT_REPLY_TOKEN,
+  "NO_NEW_AUDIO",
+  "SESSION_WATCHDOG_OK",
+] as const;
 
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
@@ -215,6 +220,33 @@ export function isSilentReplyPayloadText(
     isSilentReplyEnvelopeText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
+}
+
+function normalizeSentinelReplyText(text: string): string {
+  return text
+    .trim()
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "")
+    .trim();
+}
+
+export function isNoOpSentinelReplyText(
+  text: string | undefined,
+  opts: { includeHeartbeat?: boolean } = {},
+): boolean {
+  if (!text) {
+    return false;
+  }
+  if (isSilentReplyPayloadText(text)) {
+    return true;
+  }
+  const normalized = normalizeSentinelReplyText(text);
+  if (opts.includeHeartbeat && isSilentReplyText(normalized, HEARTBEAT_TOKEN)) {
+    return true;
+  }
+  return NO_OP_SENTINEL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
 }
 
 /**

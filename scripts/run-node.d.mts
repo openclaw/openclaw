@@ -46,6 +46,7 @@ export function runNodeMain(params?: {
   spawnSync?: unknown;
   fs?: unknown;
   stderr?: { write: (value: string) => void };
+  stdout?: { write: (value: string) => void };
   process?: NodeJS.Process;
   signalProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean | void;
   execPath?: string;
