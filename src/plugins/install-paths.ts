@@ -1,4 +1,5 @@
 // Resolves plugin install paths for local and package sources.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   resolveSafeInstallDir,
@@ -121,10 +122,17 @@ export function resolvePluginNpmProjectDir(params: {
 }
 
 const PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR = "__openclaw-generation__";
+const PLUGIN_NPM_GENERATION_KEY_HASH_CHARS = 16;
 
 /** Resolves the managed npm artifact-generation project directory prefix for a package. */
 export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
+}
+
+/** Encodes a package generation fingerprint into a compact project directory suffix. */
+export function encodePluginNpmGenerationKeyDirName(generationKey: string): string {
+  const digest = createHash("sha256").update(generationKey).digest("hex");
+  return `g-${digest.slice(0, PLUGIN_NPM_GENERATION_KEY_HASH_CHARS)}`;
 }
 
 /** Resolves an artifact-generation-specific managed npm project directory. */
@@ -135,7 +143,7 @@ export function resolvePluginNpmGenerationProjectDir(params: {
 }): string {
   return path.join(
     resolvePluginNpmProjectsDir(params.npmDir),
-    `${resolvePluginNpmGenerationProjectDirPrefix(params.packageName)}${safePathSegmentHashed(
+    `${resolvePluginNpmGenerationProjectDirPrefix(params.packageName)}${encodePluginNpmGenerationKeyDirName(
       params.generationKey,
     )}`,
   );

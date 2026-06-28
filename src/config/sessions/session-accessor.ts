@@ -1355,9 +1355,16 @@ function findSessionCompactionCheckpoint(params: {
   if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
     return undefined;
   }
-  return [...params.entry.compactionCheckpoints]
-    .toSorted((a, b) => b.createdAt - a.createdAt)
-    .find((checkpoint) => checkpoint.checkpointId === checkpointId);
+  let newest: SessionCompactionCheckpoint | undefined;
+  for (const checkpoint of params.entry.compactionCheckpoints) {
+    if (checkpoint.checkpointId !== checkpointId) {
+      continue;
+    }
+    if (!newest || checkpoint.createdAt > newest.createdAt) {
+      newest = checkpoint;
+    }
+  }
+  return newest;
 }
 
 type ApplySessionCompactionCheckpointMutationParams = {
@@ -1625,10 +1632,12 @@ export async function persistSessionResetLifecycle(params: {
   });
 
   if (params.cleanupPreviousTranscript && params.previousSessionId) {
-    cleanupPreviousResetTranscripts({
+    await archivePreviousSessionTranscript({
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-      previousEntry: params.previousEntry,
-      previousSessionId: params.previousSessionId,
+      previousEntry:
+        params.previousEntry.sessionId === params.previousSessionId
+          ? params.previousEntry
+          : { ...params.previousEntry, sessionId: params.previousSessionId },
       storePath: params.storePath,
     });
   }
@@ -2699,34 +2708,6 @@ async function restoreTemporarySessionMapping(
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);
-  }
-}
-
-function cleanupPreviousResetTranscripts(params: {
-  agentId: string;
-  previousEntry: SessionEntry;
-  previousSessionId: string;
-  storePath: string;
-}): void {
-  const transcriptCandidates = new Set<string>();
-  const resolved = resolveSessionFilePath(
-    params.previousSessionId,
-    params.previousEntry,
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-      storePath: params.storePath,
-    }),
-  );
-  if (resolved) {
-    transcriptCandidates.add(resolved);
-  }
-  transcriptCandidates.add(resolveSessionTranscriptPath(params.previousSessionId, params.agentId));
-  for (const candidate of transcriptCandidates) {
-    try {
-      fs.unlinkSync(candidate);
-    } catch {
-      // Best-effort cleanup.
-    }
   }
 }
 

@@ -79,6 +79,13 @@ export interface Edit {
   newText: string;
 }
 
+export class EditNoChangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditNoChangeError";
+  }
+}
+
 interface MatchedEdit {
   editIndex: number;
   matchIndex: number;
@@ -179,13 +186,15 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
-function getNoChangeError(path: string, totalEdits: number): Error {
+function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
   if (totalEdits === 1) {
-    return new Error(
+    return new EditNoChangeError(
       `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
     );
   }
-  return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+  return new EditNoChangeError(
+    `No changes made to ${path}. The replacements produced identical content.`,
+  );
 }
 
 /**
@@ -418,6 +427,57 @@ export interface EditDiffError {
   error: string;
 }
 
+export function validateNoOpEditTargets(
+  normalizedContent: string,
+  noOpEdits: Edit[],
+  realEdits: Edit[],
+  path: string,
+): void {
+  if (noOpEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
+      path,
+    );
+  }
+  const exactNoOpEdits = noOpEdits.filter((edit) =>
+    normalizedContent.includes(normalizeToLF(edit.oldText)),
+  );
+  if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      [...exactNoOpEdits, ...realEdits].map((edit) => ({
+        oldText: edit.oldText,
+        newText: "",
+      })),
+      path,
+    );
+  }
+}
+
+export function splitNoOpEdits(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): { noOpEdits: Edit[]; realEdits: Edit[] } {
+  const noOpEdits: Edit[] = [];
+  const realEdits: Edit[] = [];
+  for (const edit of edits) {
+    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
+    if (edit.oldText === edit.newText || fuzzyNoOp) {
+      applyEditsToNormalizedContent(
+        normalizedContent,
+        [{ oldText: edit.oldText, newText: "" }],
+        path,
+      );
+      noOpEdits.push(edit);
+    } else {
+      realEdits.push(edit);
+    }
+  }
+  return { noOpEdits, realEdits };
+}
+
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -459,15 +519,23 @@ export async function computeEditsDiff(
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);
     const normalizedContent = normalizeToLF(content);
+    const { noOpEdits, realEdits } = splitNoOpEdits(normalizedContent, edits, path);
+    validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+    if (realEdits.length === 0) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     const { baseContent, newContent } = applyEditsToNormalizedContent(
       normalizedContent,
-      edits,
+      realEdits,
       path,
     );
 
     // Generate the diff
     return generateDiffString(baseContent, newContent);
   } catch (err) {
+    if (err instanceof EditNoChangeError) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }

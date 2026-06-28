@@ -16,7 +16,12 @@ import {
   moveHeartbeatMainSessionEntry,
   resolveHeartbeatMainSessionRepairCandidate,
 } from "./doctor-heartbeat-main-session-repair.js";
-import { noteStateIntegrity } from "./doctor-state-integrity.js";
+import {
+  detectStateIntegrityHealthIssues,
+  noteStateIntegrity,
+  stateIntegrityIssueToHealthFinding,
+  stateIntegrityIssueToRepairEffect,
+} from "./doctor-state-integrity.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
@@ -102,6 +107,123 @@ async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
   await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
   return stateIntegrityText();
 }
+
+describe("structured state integrity findings", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempHome = "";
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("maps a missing state directory to a structured finding and dry-run effect", () => {
+    const issue = detectStateIntegrityHealthIssues({}).find(
+      (candidate) => candidate.kind === "missing-state-dir",
+    );
+    if (!issue) {
+      throw new Error("expected missing state directory issue");
+    }
+
+    expect(issue).toEqual({
+      kind: "missing-state-dir",
+      path: path.join(tempHome, ".openclaw"),
+    });
+    expect(stateIntegrityIssueToHealthFinding(issue)).toMatchObject({
+      checkId: "core/doctor/state-integrity",
+      severity: "error",
+      path: path.join(tempHome, ".openclaw"),
+      fixHint: "Run `openclaw doctor --fix` to create the state directory.",
+    });
+    expect(stateIntegrityIssueToRepairEffect(issue)).toEqual({
+      kind: "state",
+      action: "would-create-state-dir",
+      target: path.join(tempHome, ".openclaw"),
+      dryRunSafe: false,
+    });
+  });
+
+  it("reports permissive state and config file permissions as structured findings", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = path.join(tempHome, ".openclaw");
+    const configPath = path.join(tempHome, "openclaw.json");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o755 });
+    fs.chmodSync(stateDir, 0o755);
+    fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+
+    const findings = detectStateIntegrityHealthIssues({}, { configPath }).map(
+      stateIntegrityIssueToHealthFinding,
+    );
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "warning",
+          path: stateDir,
+          message: "State directory permissions are too open. Recommend chmod 700.",
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "warning",
+          path: configPath,
+          message: "Config file is group/world readable. Recommend chmod 600.",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps checking config permissions when the state directory is missing", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = path.join(tempHome, ".openclaw");
+    const configPath = path.join(tempHome, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+
+    const findings = detectStateIntegrityHealthIssues({}, { configPath }).map(
+      stateIntegrityIssueToHealthFinding,
+    );
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "error",
+          path: stateDir,
+          message:
+            "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          severity: "warning",
+          path: configPath,
+          message: "Config file is group/world readable. Recommend chmod 600.",
+        }),
+      ]),
+    );
+    expect(findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/state-integrity",
+          message: expect.stringContaining("runtime directory is missing"),
+        }),
+      ]),
+    );
+  });
+});
 
 async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
   const cfg: OpenClawConfig = {

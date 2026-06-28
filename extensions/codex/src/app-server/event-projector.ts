@@ -53,6 +53,7 @@ import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transc
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -411,6 +412,8 @@ export class CodexAppServerEventProjector {
       currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
+      didDeliverSourceReplyViaMessageTool:
+        toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,

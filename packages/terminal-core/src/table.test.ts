@@ -383,4 +383,16 @@ describe("wrapNoteMessage", () => {
     expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
     expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
   });
+
+  it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
+    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // so splitting by code-point count would emit lines up to 2x the budget.
+    const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
+    const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");
+
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+    }
+    expect(lines.join("")).toBe(input);
+  });
 });
