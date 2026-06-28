@@ -83,6 +83,8 @@ const mocks = vi.hoisted(() => ({
   formatCliCommand: vi.fn((cmd: string) => cmd),
   isSystemdUserServiceAvailable: vi.fn(async () => true),
   readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
+  gatewayServiceIsLoaded: vi.fn(async () => true),
+  resolveGatewayService: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -132,6 +134,14 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
+
+vi.mock("../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+  return {
+    ...actual,
+    resolveGatewayService: mocks.resolveGatewayService,
+  };
+});
 
 vi.mock("../daemon/systemd.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
@@ -438,6 +448,10 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.resolveGatewayService.mockReset();
+    mocks.resolveGatewayService.mockReturnValue({ isLoaded: mocks.gatewayServiceIsLoaded });
+    mocks.gatewayServiceIsLoaded.mockReset();
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(true);
     mocks.isSystemdUserServiceAvailable.mockReset();
     mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus.mockReset();
@@ -1104,6 +1118,33 @@ describe("doctor health contributions", () => {
         }),
       ],
     });
+  });
+
+  it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [systemdLingerCheck!],
+        onlyIds: ["core/doctor/systemd-linger"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {

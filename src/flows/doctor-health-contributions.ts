@@ -896,6 +896,17 @@ async function detectSystemdLingerFindings(
   if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
     return [];
   }
+  const { resolveGatewayService } = await import("../daemon/service.js");
+  const service = resolveGatewayService();
+  let loaded;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
+  if (!loaded) {
+    return [];
+  }
   const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
     await import("../daemon/systemd.js");
   if (!(await isSystemdUserServiceAvailable(process.env))) {
