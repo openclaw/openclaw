@@ -12,6 +12,7 @@ type EmbeddedLoadSessionEntryResult = {
   entry: {
     sessionId: string;
     sessionFile?: string;
+    sessionStartedAt?: number;
     usageFamilySessionIds?: string[];
   };
 };
@@ -339,13 +340,12 @@ describe("embedded gateway stub", () => {
       (messages: unknown[], sessionStartedAt?: number) =>
         sessionStartedAt === undefined
           ? messages
-          : messages.filter(
-              (message) =>
-                typeof (message as { __openclaw?: { timestamp?: unknown } }).__openclaw
-                  ?.timestamp !== "number" ||
-                ((message as { __openclaw?: { timestamp?: number } }).__openclaw?.timestamp ?? 0) >=
-                  sessionStartedAt,
-            ),
+          : messages.filter((message) => {
+              const timestamp = (message as { ["__openclaw"]?: { timestamp?: unknown } })[
+                "__openclaw"
+              ]?.timestamp;
+              return typeof timestamp !== "number" || timestamp >= sessionStartedAt;
+            }),
     );
 
     const callGateway = createEmbeddedCallGateway();
