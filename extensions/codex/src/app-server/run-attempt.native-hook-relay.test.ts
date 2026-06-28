@@ -716,7 +716,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
   });
 
-  it("sends clearing Codex native hook config when memory guard denies relay admission", async () => {
+  it("suppresses only OpenClaw relay hook state when memory guard denies relay admission", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -739,11 +739,17 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.hooks"]).toBe(false);
-    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
-    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
-    expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
-    expect(startConfig?.["hooks.Stop"]).toEqual([]);
+    expect(startConfig?.["features.hooks"]).not.toBe(false);
+    expect(startConfig).not.toHaveProperty("hooks.PreToolUse");
+    expect(startConfig).not.toHaveProperty("hooks.PostToolUse");
+    expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
+    expect(startConfig).not.toHaveProperty("hooks.Stop");
+    expect(startConfig?.["hooks.state"]).toMatchObject({
+      "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+    });
   });
 
   it("cleans up native hook relay state when turn/start fails", async () => {

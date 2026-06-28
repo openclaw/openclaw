@@ -200,6 +200,7 @@ import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayId,
+  buildCodexNativeHookRelaySuppressedConfig,
   clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
@@ -1488,9 +1489,11 @@ export async function runCodexAppServerAttempt(
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           })
-        : options.nativeHookRelay?.enabled === false || nativeHookRelayDisabledByMemoryGuard
-          ? buildCodexNativeHookRelayDisabledConfig()
-          : undefined,
+        : nativeHookRelayDisabledByMemoryGuard
+          ? buildCodexNativeHookRelaySuppressedConfig()
+          : options.nativeHookRelay?.enabled === false
+            ? buildCodexNativeHookRelayDisabledConfig()
+            : undefined,
       nativeHookRelayGeneration: nativeHookRelay?.generation,
     };
   };

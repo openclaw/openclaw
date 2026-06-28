@@ -1135,6 +1135,44 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(config).not.toHaveProperty("hooks.state");
   });
 
+  it("suppresses only OpenClaw relay hook state when side-thread memory guard denies relay admission", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        nativeHookRelay: {
+          enabled: true,
+          memoryGuard: {
+            enabled: true,
+            minAvailableMemoryMb: 1024,
+            getAvailableMemoryBytesForTests: () => 512 * 1024 * 1024,
+            memoryUsageForTests: () => ({ rss: 128 * 1024 * 1024 }),
+          },
+        },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config).toMatchObject({
+      "features.code_mode": true,
+      "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+    });
+    expect(config?.["features.hooks"]).not.toBe(false);
+    expect(config).not.toHaveProperty("hooks.PreToolUse");
+    expect(config).not.toHaveProperty("hooks.PostToolUse");
+    expect(config).not.toHaveProperty("hooks.PermissionRequest");
+    expect(config).not.toHaveProperty("hooks.Stop");
+    expect(config?.["hooks.state"]).toMatchObject({
+      "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+    });
+  });
+
   it("passes Codex code-mode-only opt-in to side-thread forks", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

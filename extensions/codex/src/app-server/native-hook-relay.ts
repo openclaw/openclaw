@@ -445,6 +445,21 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
   };
 }
 
+/** Builds a scoped overlay for automatic relay suppression without disabling other hooks. */
+export function buildCodexNativeHookRelaySuppressedConfig(): JsonObject {
+  const hookState: JsonObject = {};
+  for (const event of CODEX_NATIVE_HOOK_RELAY_EVENTS) {
+    for (const sourcePath of CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS) {
+      hookState[`${sourcePath}:${CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event]}:0:0`] = {
+        enabled: false,
+      } satisfies JsonValue;
+    }
+  }
+  return {
+    "hooks.state": hookState,
+  };
+}
+
 function normalizeHookTimeoutSec(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
 }

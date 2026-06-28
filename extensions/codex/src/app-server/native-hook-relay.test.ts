@@ -7,10 +7,12 @@ import {
   attachCodexNativeHookRelayAdmissionRelease,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelaySuppressedConfig,
   resetCodexNativeHookRelayAdmissionsForTests,
   resolveCodexNativeHookRelayCommandTimeoutMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
@@ -297,6 +299,59 @@ describe("Codex native hook relay config", () => {
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
+    });
+  });
+
+  it("builds scoped suppression config without disabling unrelated hooks", () => {
+    expect(buildCodexNativeHookRelaySuppressedConfig()).toEqual({
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+        "<session-flags>/config.toml:stop:0:0": { enabled: false },
+      },
+    });
+  });
+
+  it("preserves existing Codex hooks when suppression config is merged last", () => {
+    expect(
+      mergeCodexThreadConfigs(
+        {
+          "features.hooks": true,
+          "hooks.PreToolUse": [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "echo user-pre-tool-use",
+                  timeout: 5,
+                },
+              ],
+            },
+          ],
+        },
+        buildCodexNativeHookRelaySuppressedConfig(),
+      ),
+    ).toMatchObject({
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: "echo user-pre-tool-use",
+              timeout: 5,
+            },
+          ],
+        },
+      ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      },
     });
   });
 

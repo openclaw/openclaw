@@ -51,6 +51,7 @@ import {
   attachCodexNativeHookRelayAdmissionRelease,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelaySuppressedConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
   type CodexNativeHookRelayAdmission,
   type CodexNativeHookRelayMemoryGuardConfig,
@@ -443,9 +444,11 @@ export async function runCodexAppServerSideQuestion(
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
         })
-      : options.nativeHookRelay?.enabled === false || nativeHookRelayDisabledByMemoryGuard
-        ? buildCodexNativeHookRelayDisabledConfig()
-        : undefined;
+      : nativeHookRelayDisabledByMemoryGuard
+        ? buildCodexNativeHookRelaySuppressedConfig()
+        : options.nativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayDisabledConfig()
+          : undefined;
     const runtimeThreadConfig = buildCodexRuntimeThreadConfig(webSearchPlan.threadConfig, {
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
