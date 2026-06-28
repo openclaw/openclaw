@@ -587,16 +587,30 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("stripLeadingExecDisplayVerb", () => {
-  it("strips a known exec display verb so it stays outside backtick-wrapped command text", () => {
+  it("strips `run` when followed by a known interpreter/binary so the framework verb stays outside the backticks", () => {
     expect(stripLeadingExecDisplayVerb("run python3 /path/to/script.py")).toBe(
       "python3 /path/to/script.py",
     );
-    expect(stripLeadingExecDisplayVerb("check git status")).toBe("git status");
+    expect(stripLeadingExecDisplayVerb("run node server.js")).toBe("node server.js");
+    expect(stripLeadingExecDisplayVerb("run git push")).toBe("git push");
+    expect(stripLeadingExecDisplayVerb("run npm install")).toBe("npm install");
+    expect(stripLeadingExecDisplayVerb("run openclaw configure")).toBe("openclaw configure");
+  });
+
+  it("preserves action-bearing exec summaries that `summarizeKnownExec` emits with semantic verbs", () => {
+    // `install dependencies`, `start app`, `run tests`, `show last 20 lines`,
+    // `check git status`, `find files named …` all carry diagnostic meaning
+    // beyond the bare command — strip must not drop those verbs.
+    expect(stripLeadingExecDisplayVerb("install dependencies")).toBe("install dependencies");
+    expect(stripLeadingExecDisplayVerb("start app")).toBe("start app");
+    expect(stripLeadingExecDisplayVerb("run tests")).toBe("run tests");
+    expect(stripLeadingExecDisplayVerb("run build")).toBe("run build");
     expect(stripLeadingExecDisplayVerb("show some-file.txt (workspace)")).toBe(
-      "some-file.txt (workspace)",
+      "show some-file.txt (workspace)",
     );
+    expect(stripLeadingExecDisplayVerb("check git status")).toBe("check git status");
     expect(stripLeadingExecDisplayVerb('find files named "x" in /path')).toBe(
-      'files named "x" in /path',
+      'find files named "x" in /path',
     );
   });
 

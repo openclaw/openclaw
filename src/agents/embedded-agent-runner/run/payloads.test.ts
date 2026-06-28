@@ -473,9 +473,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "off",
     });
 
-    // Framework verb "show" stays outside the backtick-wrapped failure subject (issue #97319).
+    // Action verb "show" is preserved by stripLeadingExecDisplayVerb (only
+    // `run <binary>` collapses), so the failure subject stays semantically
+    // labeled (issue #97319).
     expectSingleToolErrorPayload(payloads, {
-      title: "last 20 lines",
+      title: "show last 20 lines",
       detail: "No such file or directory",
     });
   });

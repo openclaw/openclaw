@@ -287,53 +287,52 @@ function summarizeKnownExec(words: string[]): string {
   return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
 }
 
-// Known display verbs that summarizeKnownExec emits as the first token of an exec label.
-// Used to split the framework action from the literal command subject so progress and
-// failure surfaces do not backtick-wrap the verb together with the command (issue #97319).
-const EXEC_DISPLAY_VERBS: ReadonlySet<string> = new Set([
-  "run",
-  "check",
-  "view",
-  "show",
-  "list",
-  "switch",
-  "create",
-  "pull",
-  "push",
-  "fetch",
-  "merge",
-  "rebase",
-  "stage",
-  "restore",
-  "reset",
-  "stash",
-  "find",
-  "search",
-  "print",
-  "copy",
-  "move",
-  "remove",
-  "install",
-  "start",
+// `run` is the only framework-injected verb in `summarizeKnownExec` output; every
+// other leading word (`check git status`, `install dependencies`, `start app`,
+// `show last 20 lines`, `run tests`) carries diagnostic meaning and must survive
+// stripping. `run` is only stripped when followed by a known interpreter/binary,
+// so semantically labeled `run` outputs from the npm/yarn map (`run tests`,
+// `run build`, `run script`) stay intact while the reported `run python3 /path`
+// case (issue #97319) collapses to `python3 /path`.
+const RUN_PREFIX_BINARIES: ReadonlySet<string> = new Set([
+  "node",
+  "python",
+  "python3",
+  "ruby",
+  "php",
+  "git",
+  "openclaw",
+  "sed",
+  "npm",
+  "pnpm",
+  "yarn",
+  "bun",
 ]);
 
 /**
- * Strips a leading exec display verb (e.g. "run" in "run python3 /path") so the
- * framework action label is not backtick-wrapped together with the literal command.
+ * Strips a leading framework-injected `run` verb when it precedes a known binary
+ * (e.g. `run python3 /path` -> `python3 /path`) so the action label is not
+ * backtick-wrapped together with the literal command (issue #97319).
  *
- * Returns the original meta when no known exec display verb prefix is present, so
- * raw shell command text passes through unchanged.
+ * Returns the original meta unchanged for any other shape — including action-
+ * bearing summaries like `install dependencies`, `start app`, `run tests`, or
+ * `show last 20 lines` — so diagnostic verbs stay visible in failure warnings.
  */
 export function stripLeadingExecDisplayVerb(meta: string): string {
-  const match = meta.match(/^(\S+)\s+(\S.*)$/);
+  const match = meta.match(/^run\s+(\S.*)$/);
   if (!match) {
     return meta;
   }
-  const verb = match[1];
-  if (!EXEC_DISPLAY_VERBS.has(verb)) {
+  const rest = match[1];
+  const binary = rest.match(/^([A-Za-z0-9._/-]+)/)?.[1];
+  if (!binary) {
     return meta;
   }
-  return match[2];
+  const binaryName = binary.split("/").pop() ?? binary;
+  if (!RUN_PREFIX_BINARIES.has(binaryName)) {
+    return meta;
+  }
+  return rest;
 }
 
 function summarizePipeline(stage: string): string {
