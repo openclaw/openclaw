@@ -1,6 +1,7 @@
 // Google tests cover embedding batch bounded JSON response reads.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
+import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
@@ -27,8 +28,12 @@ afterEach(() => {
 });
 
 function fetchInputUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
   return input.url;
 }
 
@@ -39,11 +44,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function makeGeminiClient() {
+function makeGeminiClient(): GeminiEmbeddingClient {
   return {
     baseUrl: "https://gemini-compatible.example/v1beta",
+    model: "text-embedding-004",
     modelPath: "models/text-embedding-004",
     headers: { "x-goog-api-key": "test-key" },
+    apiKeys: ["test-key"],
     ssrfPolicy: undefined,
   };
 }
@@ -57,6 +64,7 @@ function singleRequest(): GeminiBatchRequest[] {
       request: {
         model: "models/text-embedding-004",
         content: { parts: [{ text: "hello" }] },
+        taskType: "RETRIEVAL_DOCUMENT",
       },
     },
   ];
@@ -99,7 +107,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (fetchInputUrl(input).includes("/upload/")) return streamed.response;
+        if (fetchInputUrl(input).includes("/upload/")) {
+          return streamed.response;
+        }
         return new Response("unexpected", { status: 500 });
       }),
     );
@@ -126,8 +136,12 @@ describe("Google embedding-batch bounded JSON reads", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = fetchInputUrl(input);
-        if (url.includes("/upload/")) return jsonResponse({ name: "files/f-ok" });
-        if (url.includes(":asyncBatchEmbedContent")) return streamed.response;
+        if (url.includes("/upload/")) {
+          return jsonResponse({ name: "files/f-ok" });
+        }
+        if (url.includes(":asyncBatchEmbedContent")) {
+          return streamed.response;
+        }
         return new Response("unexpected", { status: 500 });
       }),
     );
@@ -155,7 +169,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = fetchInputUrl(input);
-        if (url.includes("/upload/")) return jsonResponse({ name: "files/f-ok" });
+        if (url.includes("/upload/")) {
+          return jsonResponse({ name: "files/f-ok" });
+        }
         if (url.includes(":asyncBatchEmbedContent")) {
           return jsonResponse({ name: "batches/b-0", state: "PENDING" });
         }
@@ -194,7 +210,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = fetchInputUrl(input);
-        if (url.includes("/upload/")) return jsonResponse({ name: "files/f-ok" });
+        if (url.includes("/upload/")) {
+          return jsonResponse({ name: "files/f-ok" });
+        }
         if (url.includes(":asyncBatchEmbedContent")) {
           return jsonResponse({ name: "batches/b-0", state: "PENDING" });
         }
