@@ -245,9 +245,9 @@ const LITERAL_RUN_SUMMARY_PREFIXES = new Set([
 ]);
 
 function extractLiteralExecCommand(body: string): string | undefined {
-  const inlineCode = body.match(/(?:^|,\s*| · )`([^`]+)`$/u)?.[1];
-  if (inlineCode) {
-    return inlineCode;
+  const rawCommand = extractRawExecCommand(body);
+  if (rawCommand) {
+    return rawCommand;
   }
 
   const nodeScript = body.match(/^run node script (.+)$/u);
@@ -261,6 +261,23 @@ function extractLiteralExecCommand(body: string): string | undefined {
   }
 
   return undefined;
+}
+
+function extractRawExecCommand(body: string): string | undefined {
+  const match = body.match(/^(?:(.*)(?:,\s*| · ))?`([^`]+)`$/u);
+  const inlineCode = match?.[2];
+  if (!inlineCode) {
+    return undefined;
+  }
+  const context = extractRawExecContext(match?.[1]);
+  return context ? `${context} · ${inlineCode}` : inlineCode;
+}
+
+function extractRawExecContext(prefix: string | undefined): string {
+  const contexts = [...(prefix ?? "").matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
+    .map((match) => match[1]?.trim())
+    .filter((part): part is string => Boolean(part));
+  return contexts.join(" · ");
 }
 
 function isKnownLiteralRunSummary(subject: string): boolean {

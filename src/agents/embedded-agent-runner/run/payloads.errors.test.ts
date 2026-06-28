@@ -804,6 +804,40 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("preserves raw exec context before trailing raw command metadata", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+      isError: true,
+    });
+  });
+
+  it("does not promote display-summary commas into raw exec context", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
+      isError: true,
+    });
+  });
+
   it("strips literal synthetic run prefixes without stripping semantic run summaries", () => {
     const genericPayloads = buildPayloads({
       lastToolError: {
