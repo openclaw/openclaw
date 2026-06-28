@@ -104,6 +104,7 @@ export async function runDoctorSessionSqlite(
     agent: options.agent,
     cfg,
     env,
+    mode: options.mode,
     store: options.store,
   });
   const reports: DoctorSessionSqliteTargetReport[] = [];
@@ -127,6 +128,7 @@ function resolveDoctorSessionSqliteTargets(params: {
   agent?: string;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  mode: DoctorSessionSqliteMode;
   store?: string;
 }): SessionStoreTarget[] {
   if (params.store) {
@@ -137,14 +139,30 @@ function resolveDoctorSessionSqliteTargets(params: {
     ).filter((target) => fs.existsSync(target.storePath));
   }
   if (params.agent) {
-    return resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env });
+    return filterLegacySessionStoreTargets(
+      resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env }),
+      params.mode,
+    );
   }
   if (params.allAgents) {
-    return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
+    return filterLegacySessionStoreTargets(
+      resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
+      params.mode,
+    );
   }
   return resolveSessionStoreTargets(params.cfg, {}, { env: params.env }).filter((target) =>
     fs.existsSync(target.storePath),
   );
+}
+
+function filterLegacySessionStoreTargets(
+  targets: SessionStoreTarget[],
+  mode: DoctorSessionSqliteMode,
+): SessionStoreTarget[] {
+  if (mode === "inspect") {
+    return targets;
+  }
+  return targets.filter((target) => fs.existsSync(target.storePath));
 }
 
 async function inspectOrMigrateTarget(params: {

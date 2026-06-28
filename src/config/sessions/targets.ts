@@ -60,6 +60,27 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   );
 }
 
+function resolveValidatedManagedFilePathSync(params: {
+  agentsRoot: string;
+  filePath: string;
+  realAgentsRoot?: string;
+}): string | undefined {
+  try {
+    const stat = fsSync.lstatSync(params.filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return undefined;
+    }
+    const realFilePath = fsSync.realpathSync.native(params.filePath);
+    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
+    return isWithinRoot(realFilePath, realAgentsRoot) ? params.filePath : undefined;
+  } catch (err) {
+    if (shouldSkipDiscoveryError(err)) {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
 /** Lists agent ids whose session stores should be considered configured. */
 export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
@@ -92,26 +113,25 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   realAgentsRoot?: string;
 }): string | undefined {
   const storePath = path.join(params.sessionsDir, "sessions.json");
+  const validatedStorePath = resolveValidatedManagedFilePathSync({
+    agentsRoot: params.agentsRoot,
+    filePath: storePath,
+    realAgentsRoot: params.realAgentsRoot,
+  });
+  if (validatedStorePath) {
+    return validatedStorePath;
+  }
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
   if (!sqlitePath) {
     return undefined;
   }
-  try {
-    const stat = fsSync.lstatSync(sqlitePath);
-    // Discovered stores must be real SQLite files under the agents root; symlinked stores could
-    // escape the managed agent tree.
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      return undefined;
-    }
-    const realStorePath = fsSync.realpathSync.native(sqlitePath);
-    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
-    return isWithinRoot(realStorePath, realAgentsRoot) ? storePath : undefined;
-  } catch (err) {
-    if (shouldSkipDiscoveryError(err)) {
-      return undefined;
-    }
-    throw err;
-  }
+  return resolveValidatedManagedFilePathSync({
+    agentsRoot: params.agentsRoot,
+    filePath: sqlitePath,
+    realAgentsRoot: params.realAgentsRoot,
+  })
+    ? storePath
+    : undefined;
 }
 
 function resolveSessionStoreDiscoveryState(

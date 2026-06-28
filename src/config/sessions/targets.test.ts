@@ -264,6 +264,27 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
     });
   });
 
+  it("includes legacy JSON stores before an agent SQLite database exists", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const sessionsDir = path.join(stateDir, "agents", "legacy", "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({ main: { sessionId: "legacy-session", updatedAt: Date.now() } }),
+        "utf8",
+      );
+
+      const targets = resolveAllAgentSessionStoreTargetsSync(
+        { agents: { list: [{ id: "legacy", default: true }] } },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+      );
+
+      expect(targets).toContainEqual({ agentId: "legacy", storePath });
+    });
+  });
+
   it("discovers retired agent stores under a configured custom session root", async () => {
     await withTempHome(async (home) => {
       const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
