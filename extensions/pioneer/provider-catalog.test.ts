@@ -25,7 +25,7 @@ function buildCatalogContext(params: {
 }): ProviderCatalogContext {
   return {
     config: params.baseUrl
-      ? {
+      ? ({
           models: {
             providers: {
               pioneer: {
@@ -33,8 +33,8 @@ function buildCatalogContext(params: {
               },
             },
           },
-        }
-      : {},
+        } as ProviderCatalogContext["config"])
+      : ({} as ProviderCatalogContext["config"]),
     env: {},
     resolveProviderApiKey: () => ({
       apiKey: params.envApiKey ?? params.apiKey,
@@ -59,8 +59,8 @@ describe("Pioneer provider catalog", () => {
 
     expect(provider.baseUrl).toBe("https://api.pioneer.ai/v1");
     expect(provider.api).toBe("openai-completions");
-    // Static catalog includes claude-sonnet-4-6 and pioneer/auto
-    expect(provider.models.map((model) => model.id)).toEqual(["claude-sonnet-4-6", "pioneer/auto"]);
+    // Static catalog preserves manifest order: claude-sonnet-4-6, auto
+    expect(provider.models.map((model) => model.id)).toEqual(["claude-sonnet-4-6", "auto"]);
   });
 
   it("includes live-only model ids from Pioneer /models", async () => {
@@ -81,8 +81,9 @@ describe("Pioneer provider catalog", () => {
         auditContext: "pioneer-model-discovery",
       }),
     );
-    // anthropic/pioneer/claude-sonnet-4-6 strips to claude-sonnet-4-6, deduped
+    // auto is always prepended; anthropic/pioneer/claude-sonnet-4-6 strips to claude-sonnet-4-6, deduped
     expect(provider.models.map((model) => model.id)).toEqual([
+      "auto",
       "claude-sonnet-4-6",
       "sakana/fugu-ultra",
     ]);
@@ -108,7 +109,7 @@ describe("Pioneer provider catalog", () => {
     ]);
 
     const provider = await buildLivePioneerProvider({ apiKey: "sk-pioneer" });
-    const model = provider.models[0];
+    const model = provider.models.find((m) => m.id === "new/vision-model");
 
     expect(model).toMatchObject({
       id: "new/vision-model",
@@ -129,11 +130,7 @@ describe("Pioneer provider catalog", () => {
 
     expect(result).toMatchObject({
       provider: {
-        models: [
-          {
-            id: "sakana/fugu-ultra",
-          },
-        ],
+        models: expect.arrayContaining([expect.objectContaining({ id: "sakana/fugu-ultra" })]),
       },
     });
   });
@@ -143,7 +140,7 @@ describe("Pioneer provider catalog", () => {
 
     const provider = await buildLivePioneerProvider({ apiKey: "sk-pioneer" });
 
-    expect(provider.models.map((model) => model.id)).toEqual(["claude-sonnet-4-6", "pioneer/auto"]);
+    expect(provider.models.map((model) => model.id)).toEqual(["claude-sonnet-4-6", "auto"]);
   });
 
   it("reads context window from max_input_tokens field", async () => {
@@ -157,7 +154,7 @@ describe("Pioneer provider catalog", () => {
     ]);
 
     const provider = await buildLivePioneerProvider({ apiKey: "sk-pioneer" });
-    const model = provider.models[0];
+    const model = provider.models.find((m) => m.id === "some/model");
 
     expect(model?.contextWindow).toBe(200_000);
     expect(model?.maxTokens).toBe(4096);
@@ -183,7 +180,7 @@ describe("Pioneer provider catalog", () => {
       2,
       expect.objectContaining({ discoveryApiKey: "valid-env-key" }),
     );
-    expect(provider.models.map((m) => m.id)).toEqual(["sakana/fugu-ultra"]);
+    expect(provider.models.map((m) => m.id)).toEqual(["auto", "sakana/fugu-ultra"]);
   });
 
   it("passes env fallback key from catalog context when profile key differs", async () => {
@@ -201,7 +198,9 @@ describe("Pioneer provider catalog", () => {
 
     expect(mocks.getCachedLiveProviderModelRows).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
-      provider: { models: [{ id: "sakana/fugu-ultra" }] },
+      provider: {
+        models: expect.arrayContaining([expect.objectContaining({ id: "sakana/fugu-ultra" })]),
+      },
     });
   });
 
