@@ -87,6 +87,9 @@ function formatCredentialLabel(credential: ClaudeCliReadableCredential): string 
   if (credential.type === "oauth" || credential.type === "token") {
     return credential.type;
   }
+  if (credential.type === "api_key_helper") {
+    return "apiKeyHelper";
+  }
   return "unknown";
 }
 

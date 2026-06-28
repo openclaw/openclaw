@@ -19,6 +19,7 @@ import type { OAuthProvider } from "./auth-profiles/types.js";
 const log = createSubsystemLogger("agents/auth-profiles");
 
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
+const CLAUDE_CLI_SETTINGS_RELATIVE_PATH = ".claude/settings.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
@@ -59,6 +60,10 @@ export type ClaudeCliCredential =
       provider: "anthropic";
       token: string;
       expires: number;
+    }
+  | {
+      type: "api_key_helper";
+      provider: "anthropic";
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -97,6 +102,11 @@ type ExecSyncFn = typeof execSync;
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function resolveClaudeCliSettingsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, CLAUDE_CLI_SETTINGS_RELATIVE_PATH);
 }
 
 function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
@@ -432,6 +442,24 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+function readClaudeCliApiKeyHelperCredential(homeDir?: string): ClaudeCliCredential | null {
+  const settingsPath = resolveClaudeCliSettingsPath(homeDir);
+  const raw = loadJsonFile(settingsPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const apiKeyHelper = (raw as Record<string, unknown>).apiKeyHelper;
+  if (typeof apiKeyHelper !== "string" || !apiKeyHelper.trim()) {
+    return null;
+  }
+
+  return {
+    type: "api_key_helper",
+    provider: "anthropic",
+  };
+}
+
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
@@ -453,11 +481,14 @@ export function readClaudeCliCredentials(options?: {
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") {
-    return null;
+    return readClaudeCliApiKeyHelperCredential(options?.homeDir);
   }
 
   const data = raw as Record<string, unknown>;
-  return parseClaudeCliOauthCredential(data.claudeAiOauth);
+  return (
+    parseClaudeCliOauthCredential(data.claudeAiOauth) ??
+    readClaudeCliApiKeyHelperCredential(options?.homeDir)
+  );
 }
 
 /** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
@@ -471,6 +502,7 @@ export function readClaudeCliCredentialsCached(options?: {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const settingsPath = resolveClaudeCliSettingsPath(options?.homeDir);
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
@@ -487,6 +519,8 @@ export function readClaudeCliCredentialsCached(options?: {
     setCache: (next) => {
       claudeCliCache = next;
     },
+    readSourceFingerprint: () =>
+      `${readFileMtimeMs(credentialsPath) ?? "missing"}:${readFileMtimeMs(settingsPath) ?? "missing"}`,
   });
 }
 

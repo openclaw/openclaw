@@ -187,6 +187,30 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  it("recognizes Claude Code apiKeyHelper settings as CLI-managed auth", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "printf '%s' \"$ANTHROPIC_API_KEY\"" }),
+    );
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(credential).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
   it("reads Codex credentials from keychain when available", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;

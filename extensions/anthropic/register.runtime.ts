@@ -44,6 +44,7 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
+  CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER,
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -639,19 +640,28 @@ function resolveClaudeCliSyntheticAuth() {
   if (!credential) {
     return undefined;
   }
-  return credential.type === "oauth"
-    ? {
+  switch (credential.type) {
+    case "oauth":
+      return {
         apiKey: credential.access,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
         expiresAt: credential.expires,
-      }
-    : {
+      };
+    case "token":
+      return {
         apiKey: credential.token,
         source: "Claude CLI native auth",
         mode: "token" as const,
         expiresAt: credential.expires,
       };
+    case "api_key_helper":
+      return {
+        apiKey: CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER,
+        source: "Claude CLI apiKeyHelper",
+        mode: "api-key" as const,
+      };
+  }
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
