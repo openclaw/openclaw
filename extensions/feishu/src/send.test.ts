@@ -8,6 +8,7 @@ const {
   mockClientGet,
   mockClientList,
   mockClientPatch,
+  mockClearClientCache,
   mockCreateFeishuClient,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
@@ -18,6 +19,7 @@ const {
   mockClientGet: vi.fn(),
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
+  mockClearClientCache: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
 });
 
 vi.mock("./client.js", () => ({
+  clearClientCache: mockClearClientCache,
   createFeishuClient: mockCreateFeishuClient,
 }));
 
