@@ -4627,7 +4627,6 @@ export async function runEmbeddedAttempt(
               contextMode: params.bootstrapContextMode,
               promptImageCount: imageResult.images.length,
               tools: [...effectiveTools, ...clientToolDefs],
-              toolBudgetModel: params.model,
               contextTokenBudget,
               reserveTokens,
               toolResultMaxChars: promptToolResultMaxChars,

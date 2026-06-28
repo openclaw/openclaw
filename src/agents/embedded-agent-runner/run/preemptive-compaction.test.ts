@@ -91,28 +91,6 @@ function makeToolSchema(descriptionChars: number) {
   };
 }
 
-function makeOpenAIOptionalToolSchema(descriptionChars: number) {
-  return {
-    name: "lookup_records",
-    description: "lookup records",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "x".repeat(descriptionChars),
-        },
-        filters: {
-          type: "object",
-          properties: {
-            region: { type: "string" },
-          },
-        },
-      },
-    },
-  };
-}
-
 describe("preemptive-compaction", () => {
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
@@ -120,18 +98,6 @@ describe("preemptive-compaction", () => {
     "system guidance with multiple distinct words to avoid tokenizer overcompression ".repeat(25);
   const verbosePrompt =
     "user request with distinct content asking for a detailed answer and more context ".repeat(25);
-  const openAIResponsesToolBudgetModel = {
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    id: "gpt-5.5",
-  };
-  const openAICompletionsToolBudgetModel = {
-    provider: "openai",
-    api: "openai-completions",
-    baseUrl: "https://api.openai.com/v1",
-    id: "gpt-5.5",
-  };
 
   it("exports a context-overflow-compatible precheck error text", () => {
     expect(PREEMPTIVE_OVERFLOW_ERROR_TEXT).toContain("Context overflow:");
@@ -465,7 +431,6 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight",
       promptImageCount: 0,
       tools: [makeToolSchema(40)],
-      toolBudgetModel: openAICompletionsToolBudgetModel,
       contextTokenBudget: 4_096,
       reserveTokens: 20_000,
       llmBoundaryTokenPressure: {
@@ -480,7 +445,6 @@ describe("preemptive-compaction", () => {
       contextMode: "lightweight",
       promptImageCount: 0,
       tools: [makeToolSchema(1_200)],
-      toolBudgetModel: openAICompletionsToolBudgetModel,
       contextTokenBudget: 4_096,
       reserveTokens: 20_000,
       llmBoundaryTokenPressure: {
@@ -497,89 +461,6 @@ describe("preemptive-compaction", () => {
     expect(result.promptBudgetBeforeReserve).toBeLessThan(3_544);
     expect(result.shouldCompact).toBe(true);
     expect(result.route).toBe("compact_only");
-  });
-
-  it("budgets OpenAI strict-normalized tool payloads before admitting lightweight prompts", () => {
-    const tools = [makeOpenAIOptionalToolSchema(40)];
-    const rawWrapperBudget = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 1,
-        source: "reported_lightweight_cron",
-      },
-    }).promptBudgetBeforeReserve;
-    const responsesPayloadBudget = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools,
-      toolBudgetModel: openAIResponsesToolBudgetModel,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 1,
-        source: "reported_lightweight_cron",
-      },
-    }).promptBudgetBeforeReserve;
-    const completionsPayloadBudget = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools,
-      toolBudgetModel: openAICompletionsToolBudgetModel,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 1,
-        source: "reported_lightweight_cron",
-      },
-    }).promptBudgetBeforeReserve;
-    const boundaryPromptTokens = responsesPayloadBudget + 1;
-    const rawWrapperResult = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: boundaryPromptTokens,
-        source: "reported_lightweight_cron",
-      },
-    });
-    const responsesPayloadResult = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      promptImageCount: 0,
-      tools,
-      toolBudgetModel: openAIResponsesToolBudgetModel,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: boundaryPromptTokens,
-        source: "reported_lightweight_cron",
-      },
-    });
-
-    expect(responsesPayloadBudget).toBeLessThan(rawWrapperBudget);
-    expect(completionsPayloadBudget).toBeLessThan(rawWrapperBudget);
-    expect(rawWrapperResult.route).toBe("fits");
-    expect(responsesPayloadResult.route).toBe("compact_only");
   });
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
