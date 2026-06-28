@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
+import { MEMORY_CHUNKER_ALGORITHM_VERSION } from "./internal.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
   HEARTBEAT_PROMPT,
@@ -881,7 +882,9 @@ export async function buildSessionEntry(
       absPath,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
-      hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
+      hash: hashText(
+        `${MEMORY_CHUNKER_ALGORITHM_VERSION}\n${content}\n${lineMap.join(",")}\n${messageTimestampsMs.join(",")}`,
+      ),
       content,
       lineMap,
       messageTimestampsMs,

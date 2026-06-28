@@ -11,6 +11,7 @@ import {
   ensureDir,
   isMemoryPath,
   listMemoryFiles,
+  MEMORY_CHUNKER_ALGORITHM_VERSION,
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
@@ -263,5 +264,14 @@ describe("memory host SDK package internals", () => {
 
     expect(chunks[0].startLine).toBe(4);
     expect(chunks[chunks.length - 1].endLine).toBe(13);
+  });
+
+  it("exposes a non-empty chunker algorithm version so source hashes invalidate on upgrade", () => {
+    // The version is mixed into the source hash (see buildFileEntry / buildSessionEntry)
+    // so persisted chunks from an older chunker algorithm are detected as stale and
+    // rebuilt on the next sync. Pin the shape; bump the literal whenever chunkMarkdown
+    // output for the same input changes.
+    expect(typeof MEMORY_CHUNKER_ALGORITHM_VERSION).toBe("string");
+    expect(MEMORY_CHUNKER_ALGORITHM_VERSION.length).toBeGreaterThan(0);
   });
 });
