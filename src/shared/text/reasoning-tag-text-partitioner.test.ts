@@ -183,7 +183,7 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
-  it("recovers unclosed trailing tags as visible prose in visible mode", () => {
+  it("keeps unclosed trailing tags as visible prose in visible mode", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
     expect(partitioner.pushVisible("Use <think> only in this mode")).toEqual([

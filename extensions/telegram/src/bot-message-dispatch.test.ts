@@ -3608,10 +3608,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await run;
   });
 
-  it("suppresses reasoning-only finals without raw text fallback", async () => {
+  it("suppresses typed reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "<think>hidden</think>" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
 
@@ -3619,6 +3622,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
+    const { answerDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Before <think>literal tag text after" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not add silent fallback when source delivery is message-tool-only", async () => {
