@@ -238,7 +238,18 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  let apiKey = requireApiKey(apiKeyInfo, model.provider);
+  // aws-sdk auth resolves credentials lazily through the AWS SDK credential
+  // chain (env vars / shared ~/.aws files / EC2 instance-role IMDS / ECS
+  // container role), so the resolved apiKey is legitimately empty. The
+  // bedrock-converse provider stream signs requests with those SDK credentials
+  // and never consumes this apiKey — mirroring the main chat path, which never
+  // calls requireApiKey for aws-sdk. Requiring a key here wrongly failed image
+  // analysis for amazon-bedrock models with "No API key resolved ... (auth
+  // mode: aws-sdk ...)". Other auth modes still require a usable key.
+  let apiKey =
+    apiKeyInfo.mode === "aws-sdk"
+      ? (apiKeyInfo.apiKey ?? "")
+      : requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
   // matches what runtime chat requests send.

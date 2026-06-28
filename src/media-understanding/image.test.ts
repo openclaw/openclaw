@@ -248,6 +248,60 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("lets amazon-bedrock image models use aws-sdk credentials without an API key", async () => {
+    // Regression: bedrock uses aws-sdk auth, so the resolved apiKey is
+    // legitimately empty (credentials come from the AWS SDK chain / instance
+    // role). The image path must not require an API key for aws-sdk mode, or
+    // image analysis fails with "No API key resolved ... (auth mode: aws-sdk)".
+    const bedrockModel = {
+      provider: "amazon-bedrock",
+      id: "global.anthropic.claude-opus-4-8",
+      input: ["text", "image"],
+      api: "bedrock-converse-stream",
+      maxTokens: 4096,
+    };
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => bedrockModel),
+    });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: undefined,
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      model: "global.anthropic.claude-opus-4-8",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "bedrock ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "global.anthropic.claude-opus-4-8",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "bedrock ok",
+      model: "global.anthropic.claude-opus-4-8",
+    });
+    // aws-sdk mode must bypass the API-key requirement entirely.
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("amazon-bedrock", "");
+    expect(completeMock).toHaveBeenCalledOnce();
+    const [, , completeOptions] = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeOptions, "complete options").apiKey).toBe("");
+  });
+
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
