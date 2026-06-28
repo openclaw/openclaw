@@ -37,7 +37,7 @@ describe("Config I/O Async Race-Guard", () => {
     };
 
     await expect(
-      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs()),
+      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs() as any as any),
     ).resolves.not.toThrow();
 
     fs.unlinkSync(testConfigPath);
@@ -61,7 +61,7 @@ describe("Config I/O Async Race-Guard", () => {
     fs.writeFileSync(testConfigPath, '{\n  gateway: { mode: "debug" }\n}');
 
     await expect(
-      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs()),
+      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs() as any as any),
     ).rejects.toThrow(ConfigMutationConflictError);
 
     fs.unlinkSync(testConfigPath);
@@ -81,7 +81,7 @@ describe("Config I/O Async Race-Guard", () => {
     fs.unlinkSync(testConfigPath);
 
     await expect(
-      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs()),
+      assertBaseSnapshotStillCurrent(snapshot as any, testConfigPath, createMockFs() as any as any),
     ).rejects.toThrow(ConfigMutationConflictError);
   });
 });
