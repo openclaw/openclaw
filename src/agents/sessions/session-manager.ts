@@ -165,7 +165,7 @@ type PromptReleasedSessionEntry =
   | PromptReleasedOpaqueEntry;
 
 type PromptReleasedSessionMergeResult = {
-  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  sessionFileSnapshot?: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
 };
@@ -2372,6 +2372,21 @@ export class SessionManager {
     const hasAssistant = this.fileEntries.some(
       (entry) => entry.type === "message" && entry.message.role === "assistant",
     );
+    if (this.sqlitePersistence) {
+      const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
+      appendTranscriptEventSync(
+        {
+          agentId: this.sqlitePersistence.agentId,
+          sessionId: this.sqlitePersistence.sessionId,
+          sessionKey: this.sqlitePersistence.sessionKey,
+          storePath: this.sqlitePersistence.storePath,
+        },
+        leafEntry,
+      );
+      this.rememberLeafControl(leafEntry);
+      this.flushed = true;
+      return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
+    }
     if (!this.flushed || !hasAssistant) {
       this.rewriteFile({
         publishSnapshot: false,

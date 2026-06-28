@@ -256,7 +256,7 @@ type PromptReleasedSessionEntry =
   | PromptReleasedOpaqueEntry;
 
 type PromptReleasedSessionMergeResult = {
-  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  sessionFileSnapshot?: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
 };
