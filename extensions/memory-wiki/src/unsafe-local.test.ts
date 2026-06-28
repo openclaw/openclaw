@@ -152,6 +152,44 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("MY PERSONAL NOTE");
   });
 
+  it("does not prune when a nested subdirectory is transiently unreadable", async () => {
+    // Root bypasses permission bits, so the unreadable-directory simulation
+    // below would not actually fail; skip rather than assert a false pass.
+    if (process.getuid?.() === 0) {
+      return;
+    }
+
+    const privateDir = await createPrivateDir("private-nested");
+    const nestedDir = path.join(privateDir, "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(nestedDir, "deep.md"), "# deep\n", "utf8");
+    await fs.writeFile(path.join(privateDir, "top.md"), "# top\n", "utf8");
+
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("nested-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(first.importedCount).toBe(2);
+
+    // Make the nested directory unreadable (mount not ready / permissions) while
+    // it still appears in the parent listing, then restore it afterward.
+    await fs.chmod(nestedDir, 0o000);
+    try {
+      const duringOutage = await syncMemoryWikiUnsafeLocalSources(config);
+      expect(duringOutage.removedCount).toBe(0);
+    } finally {
+      await fs.chmod(nestedDir, 0o755);
+    }
+  });
+
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
     const privateDir = await createPrivateDir(`${"漢".repeat(50)}-private`);
     const nestedDir = path.join(privateDir, `${"語".repeat(50)}-nested`);

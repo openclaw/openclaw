@@ -45,10 +45,10 @@ function detectFenceLanguage(filePath: string): string {
   return "markdown";
 }
 
-// `readable` is false only when this directory itself could not be read (an
-// unmounted/undocked volume), which is distinct from a readable-but-empty
-// directory. Callers use it to avoid treating a transient outage as deletion
-// (#97523). Nested read failures stay best-effort and contribute no files.
+// `readable` is false when this directory or any descendant could not be read
+// (an unmounted/undocked volume), which is distinct from a readable-but-empty
+// directory. It propagates up so a transiently-gone nested mount is not mistaken
+// for deletion; callers use it to skip pruning during an outage (#97523).
 async function listAllowedFilesRecursive(
   rootDir: string,
 ): Promise<{ files: string[]; readable: boolean }> {
@@ -57,10 +57,15 @@ async function listAllowedFilesRecursive(
     return { files: [], readable: false };
   }
   const files: string[] = [];
+  let readable = true;
   for (const entry of entries) {
     const fullPath = path.join(rootDir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await listAllowedFilesRecursive(fullPath)).files);
+      const nested = await listAllowedFilesRecursive(fullPath);
+      files.push(...nested.files);
+      if (!nested.readable) {
+        readable = false;
+      }
       continue;
     }
     if (
@@ -70,7 +75,7 @@ async function listAllowedFilesRecursive(
       files.push(fullPath);
     }
   }
-  return { files: files.toSorted((left, right) => left.localeCompare(right)), readable: true };
+  return { files: files.toSorted((left, right) => left.localeCompare(right)), readable };
 }
 
 async function collectUnsafeLocalArtifacts(
@@ -90,9 +95,10 @@ async function collectUnsafeLocalArtifacts(
     }
     if (stat.isDirectory()) {
       const listing = await listAllowedFilesRecursive(absoluteConfiguredPath);
+      // A nested mount that is gone still imports the files we can read, but the
+      // outage must trip the prune guard so missing entries are not deleted.
       if (!listing.readable) {
         hadUnreadableSource = true;
-        continue;
       }
       for (const absolutePath of listing.files) {
         artifacts.push({
