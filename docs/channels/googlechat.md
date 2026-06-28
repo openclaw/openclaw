@@ -212,6 +212,7 @@ Notes:
 
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
 - `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
+- Set `serviceAccountAdc: true` (and provide no explicit `serviceAccount` / `serviceAccountRef` / `serviceAccountFile`) to authenticate outbound calls via Application Default Credentials instead of a downloaded key — useful on GCP, where the attached service account / workload identity (with the `chat.bot` scope) signs requests and no key material lives on disk. An explicit credential, if also present, takes precedence.
 - Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.

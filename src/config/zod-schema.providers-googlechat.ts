@@ -71,6 +71,7 @@ export const GoogleChatAccountSchema = z
       .register(sensitive),
     serviceAccountRef: SecretRefSchema.optional().register(sensitive),
     serviceAccountFile: z.string().optional(),
+    serviceAccountAdc: z.boolean().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),
     appPrincipal: z.string().optional(),
