@@ -7,6 +7,7 @@ import {
   maybeApplyApiKeyFromOption,
   normalizeApiKeyInput,
   normalizeTokenProviderInput,
+  validateApiKeyInput,
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
@@ -237,6 +238,14 @@ describe("normalizeApiKeyInput", () => {
 
   it("preserves ordinary interior spaces in bearer-style values", () => {
     expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
+  });
+});
+
+describe("validateApiKeyInput", () => {
+  it("rejects pasted OpenClaw onboarding commands", () => {
+    expect(validateApiKeyInput("openclaw onboard --auth-choice zai-coding-global")).toBe(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
   });
 });
 

@@ -84,6 +84,18 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
+  it("marks pasted OpenClaw onboarding commands as malformed api keys", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "zai",
+        key: "openclaw onboard --auth-choice zai-coding-global",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: false, reasonCode: "malformed_api_key" });
+  });
+
   it("marks tokenRef with missing expires as eligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {

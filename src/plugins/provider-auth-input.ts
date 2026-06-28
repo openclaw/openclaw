@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -55,8 +56,16 @@ export function normalizeApiKeyInput(raw: string): string {
 }
 
 /** Validates required API-key input for setup prompts. */
-export const validateApiKeyInput = (value: string) =>
-  normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
+export const validateApiKeyInput = (value: string) => {
+  const normalized = normalizeApiKeyInput(value);
+  if (!normalized) {
+    return "Required";
+  }
+  if (isMalformedApiKeyInput(normalized)) {
+    return "Paste the API key value, not an OpenClaw onboarding command.";
+  }
+  return undefined;
+};
 
 /** Formats a redacted API-key preview for setup confirmation prompts. */
 export function formatApiKeyPreview(
