@@ -1,6 +1,6 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -144,6 +144,8 @@ export type AgentConfig = {
   };
   /** Optional outer run loop retry boundaries. */
   runRetries?: AgentDefaultsConfig["runRetries"];
+  /** Optional per-agent iteration budget overrides. */
+  iterationBudget?: AgentDefaultsConfig["iterationBudget"];
   /** Optional per-agent embedded OpenClaw overrides. */
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */
