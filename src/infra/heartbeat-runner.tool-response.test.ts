@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
@@ -336,6 +337,46 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         cfg,
       });
       expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-runner-failure",
+        preview: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("rewrites stream-error placeholder leak replies before heartbeat delivery (#97357)", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      // A fallback model can echo the internal stream-error placeholder from
+      // prior transcript entries as a "successful" final reply (stopReason=stop).
+      // Reproduce 43 placeholder repetitions, matching the field report in #97357.
+      const placeholderReply = Array.from({ length: 43 }, () => STREAM_ERROR_FALLBACK_TEXT).join(
+        "   ",
+      );
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: placeholderReply,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        cfg,
+      });
       expect(getLastHeartbeatEvent()).toMatchObject({
         status: "failed",
         reason: "agent-runner-failure",
