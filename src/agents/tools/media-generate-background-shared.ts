@@ -668,7 +668,7 @@ async function wakeMediaGenerationTaskCompletionDetailed(params: {
       reason: forcedProofDelivery.reason,
       error: forcedProofDelivery.error,
     });
-    return false;
+    return { delivered: false, delivery: forcedProofDelivery };
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const mediaUrls = collectMediaGenerationUrls(params);
