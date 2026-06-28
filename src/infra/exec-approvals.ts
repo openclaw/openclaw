@@ -221,6 +221,7 @@ export type ExecApprovalRequestPayload = {
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -1626,6 +1627,10 @@ export type AllowAlwaysPersistenceDecision =
   | { kind: "exact-command"; commandText: string }
   | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
 
+export type ExecApprovalAllowAlwaysUnavailableReason =
+  | "approval-policy-always"
+  | AllowAlwaysPersistenceReason;
+
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
   const inlineCommand = extractBindableShellWrapperInlineCommand([...argv]);
   return Boolean(
@@ -1833,6 +1838,53 @@ export function resolveExecApprovalUnavailableDecisions(params?: {
 }): readonly ExecApprovalUnavailableDecision[] {
   const allowed = new Set(resolveExecApprovalAllowedDecisions(params));
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
+}
+
+const EXEC_APPROVAL_ALLOW_ALWAYS_REASON_PRIORITY = [
+  "runtime-payload",
+  "prompt-only",
+  "unplanned",
+  "no-reusable-pattern",
+] as const satisfies readonly AllowAlwaysPersistenceReason[];
+
+export function resolveExecApprovalAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): ExecApprovalAllowAlwaysUnavailableReason | undefined {
+  const ask = normalizeExecAsk(params?.ask);
+  if (ask === "always") {
+    return "approval-policy-always";
+  }
+  const reasons =
+    params?.allowAlwaysPersistence?.kind === "one-shot"
+      ? params.allowAlwaysPersistence.reasons
+      : undefined;
+  if (!reasons?.length) {
+    return undefined;
+  }
+  const reasonSet = new Set(reasons);
+  return (
+    EXEC_APPROVAL_ALLOW_ALWAYS_REASON_PRIORITY.find((reason) => reasonSet.has(reason)) ?? reasons[0]
+  );
+}
+
+export function formatExecApprovalAllowAlwaysUnavailableReason(
+  reason?: ExecApprovalAllowAlwaysUnavailableReason | null,
+): string {
+  switch (reason) {
+    case "approval-policy-always":
+      return "The effective approval policy requires approval every time, so Allow Always is unavailable.";
+    case "runtime-payload":
+      return "Allow Always is unavailable because this command includes runtime-evaluated shell payload that cannot be safely persisted.";
+    case "prompt-only":
+      return "Allow Always is unavailable because this command depends on prompt-only authorization context that cannot be safely persisted.";
+    case "unplanned":
+      return "Allow Always is unavailable because OpenClaw could not derive a complete reusable approval plan for this command.";
+    case "no-reusable-pattern":
+      return "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.";
+    default:
+      return "Allow Always is unavailable.";
+  }
 }
 
 export function resolveExecApprovalRequestAllowedDecisions(params?: {

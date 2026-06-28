@@ -164,6 +164,19 @@ const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
         : [],
   ),
 );
+const resolveExecApprovalAllowAlwaysUnavailableReasonMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string; reasons?: string[] | null } | null;
+    }): string | null =>
+      params?.ask === "always"
+        ? "approval-policy-always"
+        : params?.allowAlwaysPersistence?.kind === "one-shot"
+          ? (params.allowAlwaysPersistence.reasons?.[0] ?? "unplanned")
+          : null,
+  ),
+);
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
@@ -221,6 +234,8 @@ vi.mock("../infra/exec-approvals.js", () => ({
   requiresExecApproval: requiresExecApprovalMock,
   resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
   resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
+  resolveExecApprovalAllowAlwaysUnavailableReason:
+    resolveExecApprovalAllowAlwaysUnavailableReasonMock,
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
   resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
@@ -533,6 +548,7 @@ describe("executeNodeHostCommand", () => {
       kind: "patterns",
       patterns: [{ pattern: "/trusted/bin/tool" }],
     });
+    resolveExecApprovalAllowAlwaysUnavailableReasonMock.mockClear();
     resolveExecApprovalAllowedDecisionsMock.mockClear();
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     resolveExecHostApprovalContextMock.mockReset();
@@ -1791,6 +1807,9 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "approval-policy-always",
+    );
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
@@ -1840,6 +1859,9 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "approval-policy-always",
+    );
   });
 
   it("offers allow-always for prepared node commands with complete node coverage", async () => {
@@ -2247,6 +2269,7 @@ describe("executeNodeHostCommand", () => {
       allowAlwaysPersistence: { kind: "one-shot", reasons: ["unplanned"] },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe("unplanned");
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],

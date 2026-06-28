@@ -12,6 +12,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { formatExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -208,12 +209,11 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 function buildManualInstructionSection(params: {
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  allowAlwaysUnavailableText?: string | null;
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    lines.push(params.allowAlwaysUnavailableText ?? "Allow Always is unavailable.");
   }
   if (params.allowedDecisions.length > 0) {
     lines.push(
@@ -307,6 +307,12 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
+    allowAlwaysUnavailableText:
+      view.approvalKind === "exec"
+        ? formatExecApprovalAllowAlwaysUnavailableReason(view.allowAlwaysUnavailableReason)
+        : allowedDecisions.includes("allow-always")
+          ? null
+          : "Allow Always is unavailable.",
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));
@@ -410,6 +416,7 @@ export function buildApprovalReactionPendingContent(params: {
             approvalCommandId: params.request.id,
             warningText: params.view.warningText ?? undefined,
             ask: params.view.ask ?? null,
+            allowAlwaysUnavailableReason: params.view.allowAlwaysUnavailableReason ?? null,
             agentId: params.view.agentId ?? null,
             allowedDecisions: reactionPayload.allowedDecisions,
             command: params.view.commandText,

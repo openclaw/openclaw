@@ -3345,7 +3345,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     });
 
     const denyRespond = vi.fn();
@@ -3387,8 +3387,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond)).toBe(false);
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
-      message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+      message: "Allow Always is unavailable.",
     });
 
     const allowOnceRespond = vi.fn();
@@ -3402,6 +3401,48 @@ describe("exec approval handlers", () => {
 
     await requestPromise;
     expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("uses the request reason when rejecting unavailable allow-always", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "no-reusable-pattern",
+      },
+    });
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.",
+    });
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("keeps baseline decisions available when allow-always is unavailable", async () => {

@@ -12,6 +12,7 @@ import {
   normalizeOptionalString as parseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type {
+  ExecApprovalAllowAlwaysUnavailableReason,
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
   ExecAsk,
@@ -57,6 +58,7 @@ type RequestExecApprovalDecisionParams = {
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -92,6 +94,9 @@ function buildExecApprovalRequestToolParams(
     commandSpans: params.commandSpans,
     ...(params.unavailableDecisions?.length
       ? { unavailableDecisions: params.unavailableDecisions }
+      : {}),
+    ...(params.allowAlwaysUnavailableReason
+      ? { allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason }
       : {}),
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
@@ -199,6 +204,7 @@ type HostExecApprovalParams = {
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
@@ -309,6 +315,7 @@ async function buildHostApprovalDecisionParams(
     warningText: params.warningText,
     commandSpans,
     unavailableDecisions: params.unavailableDecisions,
+    allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,

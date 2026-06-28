@@ -1,6 +1,10 @@
 // Control UI view renders exec approval screen content.
 import { html, nothing } from "lit";
 import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
+import {
+  formatExecApprovalAllowAlwaysUnavailableReason,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
+} from "../../../../src/infra/exec-approvals.ts";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import "../components/modal-dialog.ts";
@@ -155,7 +159,15 @@ function renderUnavailableDecisionWarning(
 ) {
   return active.kind !== "exec" || decisions.includes("allow-always")
     ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+    : html`<div class="exec-approval-warning">
+        ${active.request.allowAlwaysUnavailableReason
+          ? formatExecApprovalAllowAlwaysUnavailableReason(
+              active.request.allowAlwaysUnavailableReason,
+            )
+          : formatExecApprovalAllowAlwaysUnavailableReason(
+              resolveExecApprovalAllowAlwaysUnavailableReason({ ask: active.request.ask ?? null }),
+            )}
+      </div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {
