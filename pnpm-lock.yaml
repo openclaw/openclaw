@@ -1615,6 +1615,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/tokenomics:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
   extensions/twitch:
     dependencies:
       '@twurple/api':

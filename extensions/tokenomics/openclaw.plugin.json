@@ -1,0 +1,13 @@
+{
+  "id": "tokenomics",
+  "name": "Tokenomics",
+  "description": "Local-first LLM spend ledger and report (free-vs-paid, avoided/counterfactual) built on OpenClaw's per-call cost data.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

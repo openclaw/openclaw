@@ -139,6 +139,7 @@
     "!dist/extensions/tavily/**",
     "!dist/extensions/tencent/**",
     "!dist/extensions/tokenjuice/**",
+    "!dist/extensions/tokenomics/**",
     "!dist/extensions/tlon/**",
     "!dist/extensions/twitch/**",
     "!dist/extensions/venice/**",

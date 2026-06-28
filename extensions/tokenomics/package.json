@@ -1,0 +1,38 @@
+{
+  "name": "@openclaw/tokenomics",
+  "version": "2026.6.10",
+  "description": "Local-first LLM spend ledger and report (free-vs-paid, avoided/counterfactual) built on OpenClaw's per-call cost data.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./api.js": "./dist/api.js"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/tokenomics",
+      "npmSpec": "@openclaw/tokenomics",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.25"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.10"
+    },
+    "build": {
+      "openclawVersion": "2026.6.10"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
