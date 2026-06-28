@@ -1,11 +1,11 @@
 // Session target tests cover persisted channel targets for sessions.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
+import { replaceSessionEntry } from "./session-accessor.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -13,8 +13,7 @@ import {
 } from "./targets.js";
 
 async function resolveRealStorePath(sessionsDir: string): Promise<string> {
-  // Match the native realpath behavior used by both discovery paths.
-  return fsSync.realpathSync.native(path.join(sessionsDir, "sessions.json"));
+  return path.resolve(path.join(sessionsDir, "sessions.json"));
 }
 
 async function createAgentSessionStores(
@@ -24,8 +23,12 @@ async function createAgentSessionStores(
   const storePaths: Record<string, string> = {};
   for (const agentId of agentIds) {
     const sessionsDir = path.join(root, "agents", agentId, "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
     await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(path.join(sessionsDir, "sessions.json"), "{}", "utf8");
+    await replaceSessionEntry(
+      { storePath, sessionKey: "main" },
+      { sessionId: "sid", updatedAt: Date.now() },
+    );
     storePaths[agentId] = await resolveRealStorePath(sessionsDir);
   }
   return storePaths;
@@ -178,8 +181,6 @@ describe("resolveSessionStoreTargets", () => {
   it("keeps arbitrary explicit store paths on the default agent", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "backups", "sessions", "sessions.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, "{}", "utf8");
 
       expect(resolveSessionStoreTargets({}, { store: storePath })).toEqual([
         {
@@ -295,8 +296,14 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       const retiredSessionsDir = path.join(envStateDir, "agents", "retired", "sessions");
       await fs.mkdir(mainSessionsDir, { recursive: true });
       await fs.mkdir(retiredSessionsDir, { recursive: true });
-      await fs.writeFile(path.join(mainSessionsDir, "sessions.json"), "{}", "utf8");
-      await fs.writeFile(path.join(retiredSessionsDir, "sessions.json"), "{}", "utf8");
+      await replaceSessionEntry(
+        { storePath: path.join(mainSessionsDir, "sessions.json"), sessionKey: "main" },
+        { sessionId: "sid-main", updatedAt: Date.now() },
+      );
+      await replaceSessionEntry(
+        { storePath: path.join(retiredSessionsDir, "sessions.json"), sessionKey: "main" },
+        { sessionId: "sid-retired", updatedAt: Date.now() },
+      );
 
       const env = {
         ...process.env,
@@ -349,10 +356,12 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       }
       const customRoot = path.join(home, "custom-state");
       const opsSessionsDir = path.join(customRoot, "agents", "ops", "sessions");
-      const leakedFile = path.join(home, "outside.json");
+      const opsAgentDbDir = path.join(customRoot, "agents", "ops", "agent");
+      const leakedFile = path.join(home, "outside.sqlite");
       await fs.mkdir(opsSessionsDir, { recursive: true });
+      await fs.mkdir(opsAgentDbDir, { recursive: true });
       await fs.writeFile(leakedFile, JSON.stringify({ leak: { secret: "x" } }), "utf8");
-      await fs.symlink(leakedFile, path.join(opsSessionsDir, "sessions.json"));
+      await fs.symlink(leakedFile, path.join(opsAgentDbDir, "openclaw-agent.sqlite"));
 
       const targets = resolveAllAgentSessionStoreTargetsSync(createCustomRootCfg(customRoot), {
         env: process.env,
@@ -373,8 +382,18 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       const junkSessionsDir = path.join(stateDir, "agents", "###", "sessions");
       await fs.mkdir(mainSessionsDir, { recursive: true });
       await fs.mkdir(junkSessionsDir, { recursive: true });
-      await fs.writeFile(path.join(mainSessionsDir, "sessions.json"), "{}", "utf8");
-      await fs.writeFile(path.join(junkSessionsDir, "sessions.json"), "{}", "utf8");
+      await replaceSessionEntry(
+        { storePath: path.join(mainSessionsDir, "sessions.json"), sessionKey: "main" },
+        { sessionId: "sid-main", updatedAt: Date.now() },
+      );
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          storePath: path.join(junkSessionsDir, "sessions.json"),
+          sessionKey: "main",
+        },
+        { sessionId: "sid-junk", updatedAt: Date.now() },
+      );
 
       const cfg: OpenClawConfig = {};
       const mainStorePath = await resolveRealStorePath(mainSessionsDir);

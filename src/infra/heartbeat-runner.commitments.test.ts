@@ -19,7 +19,11 @@ import {
   startHeartbeatRunner,
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  readSessionStoreForTest,
+  seedSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
@@ -560,9 +564,10 @@ describe("runHeartbeatOnce commitments", () => {
         lastAttemptAtMs: nowMs,
       });
       expect(store.commitments[0]?.sentAtMs).toBeUndefined();
-      const sessionStoreAfterSuppressed = JSON.parse(
-        await fs.readFile(storePath, "utf-8"),
-      ) as Record<string, { lastHeartbeatText?: string; lastHeartbeatSentAt?: number }>;
+      const sessionStoreAfterSuppressed = readSessionStoreForTest<{
+        lastHeartbeatText?: string;
+        lastHeartbeatSentAt?: number;
+      }>(storePath);
       expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatText).toBeUndefined();
       expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatSentAt).toBeUndefined();
       expect(getLastHeartbeatEvent()).toMatchObject({
@@ -689,20 +694,15 @@ tasks:
 `,
           "utf-8",
         );
-        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval — not due).
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "155462274",
-              heartbeatTaskState: { "check-deployment": nowMs },
-            },
-          }),
-        );
+        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval, not due).
+        await seedSessionStore(storePath, sessionKey, {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+          heartbeatTaskState: { "check-deployment": nowMs },
+        });
         await saveCommitmentStore(undefined, {
           version: 1,
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
