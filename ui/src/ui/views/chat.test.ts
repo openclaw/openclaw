@@ -102,23 +102,28 @@ const buildChatItemsMock = vi.hoisted(() =>
   }),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
+  vi.fn(
+    (
+      group: { messages: Array<{ message: unknown }> },
+      _opts?: { onAssistantAttachmentLoaded?: () => void },
+    ) => {
+      const element = document.createElement("div");
+      element.className = "chat-group";
+      element.textContent = group.messages
+        .map(({ message }) => {
+          if (typeof message === "object" && message !== null && "content" in message) {
+            const content = (message as { content?: unknown }).content;
+            if (typeof content === "string") {
+              return content;
+            }
+            return content == null ? "" : JSON.stringify(content);
           }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  }),
+          return String(message);
+        })
+        .join("\n");
+      return element;
+    },
+  ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
