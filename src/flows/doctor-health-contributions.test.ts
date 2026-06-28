@@ -1260,6 +1260,56 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("reports agent findings for inherited default tool result caps", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toBeDefined();
+
+    mocks.resolveAgentContextLimits.mockImplementation(
+      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+        cfg.agents?.defaults?.contextLimits ?? {},
+    );
+    mocks.resolveDefaultModelForAgent.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { agentId?: string };
+      return params.agentId === "writer"
+        ? { provider: "openai", model: "gpt-5.5" }
+        : { provider: "local", model: "tiny" };
+    });
+    mocks.findModelCatalogEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[1] as { modelId?: string };
+      return params.modelId === "gpt-5.5" ? { contextTokens: 200_000 } : { contextTokens: 8_000 };
+    });
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
+          list: [{ id: "writer" }],
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [toolResultCapCheck!],
+        onlyIds: ["core/doctor/tool-result-cap"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      findings: expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.contextLimits.toolResultMaxChars",
+          target: "agents.writer",
+        }),
+      ]),
+    });
+  });
+
   it("keeps state integrity opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const stateIntegrityCheck = contributionChecks.find(

@@ -797,6 +797,7 @@ type ToolResultCapTarget = {
 async function collectToolResultCapFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  const { resolveAgentContextLimits } = await loadAgentScopeModule();
   const { normalizeAgentId } = await import("../routing/session-key.js");
   const targets: ToolResultCapTarget[] = [];
   const defaultsConfiguredCap = cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
@@ -810,13 +811,19 @@ async function collectToolResultCapFindings(
   }
   for (const entry of cfg.agents?.list ?? []) {
     const normalizedAgentId = normalizeAgentId(entry.id);
-    if (!normalizedAgentId || entry.contextLimits?.toolResultMaxChars === undefined) {
+    if (
+      !normalizedAgentId ||
+      (defaultsConfiguredCap === undefined && entry.contextLimits?.toolResultMaxChars === undefined)
+    ) {
       continue;
     }
     targets.push({
       agentId: normalizedAgentId,
-      configuredCap: entry.contextLimits.toolResultMaxChars,
-      path: `agents.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
+      configuredCap: resolveAgentContextLimits(cfg, normalizedAgentId)?.toolResultMaxChars,
+      path:
+        entry.contextLimits?.toolResultMaxChars === undefined
+          ? "agents.defaults.contextLimits.toolResultMaxChars"
+          : `agents.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
       scopeLabel: `agent "${normalizedAgentId}"`,
       target: `agents.${normalizedAgentId}`,
     });
