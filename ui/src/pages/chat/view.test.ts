@@ -25,7 +25,6 @@ import {
 import { renderChatQueue } from "./chat-queue.ts";
 import { buildRawSidebarContent } from "./chat-sidebar-raw.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
-import { switchChatSession } from "./session-switch.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
