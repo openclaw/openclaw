@@ -93,12 +93,16 @@ type MatrixPluginApprovalSeverity = Extract<
   PendingApprovalView,
   { approvalKind: "plugin" }
 >["severity"];
+type MatrixPluginApprovalExternalResolution = NonNullable<
+  Extract<PendingApprovalView, { approvalKind: "plugin" }>["externalResolution"]
+>;
 type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
   kind: "plugin";
   agentId?: string;
   pluginId?: string;
   toolName?: string;
   severity: MatrixPluginApprovalSeverity;
+  externalResolution?: MatrixPluginApprovalExternalResolution;
 };
 type MatrixApprovalMetadata = MatrixExecApprovalMetadata | MatrixPluginApprovalMetadata;
 type MatrixApprovalExtraContent = {
@@ -273,6 +277,9 @@ function buildMatrixApprovalMetadata(params: {
       ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
       ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
       ...(params.view.toolName != null ? { toolName: params.view.toolName } : {}),
+      ...(params.view.externalResolution != null
+        ? { externalResolution: params.view.externalResolution }
+        : {}),
     };
   }
 
@@ -308,6 +315,8 @@ function buildPendingApprovalContent(params: {
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
               agentId: params.view.agentId ?? undefined,
+              allowedDecisions,
+              externalResolution: params.view.externalResolution ?? undefined,
             },
             createdAtMs: 0,
             expiresAtMs: params.view.expiresAtMs,

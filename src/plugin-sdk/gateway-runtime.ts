@@ -36,7 +36,9 @@ export { GatewayClient } from "../gateway/client.js";
 export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 export {
   createOperatorApprovalsGatewayClient,
+  resolveVerifiedPluginApprovalOverGateway,
   withOperatorApprovalsGatewayClient,
+  type ResolveVerifiedPluginApprovalOverGatewayParams,
 } from "../gateway/operator-approvals-client.js";
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 export type { EventFrame } from "../../packages/gateway-protocol/src/index.js";

@@ -71,6 +71,8 @@ function createHarness(params?: {
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runGoalCommand?: ReturnType<typeof vi.fn>;
+  runPluginSessionAction?: ReturnType<typeof vi.fn>;
+  resolveApproval?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   setEmptySession?: SetEmptySessionMock;
@@ -91,6 +93,7 @@ function createHarness(params?: {
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
+  getPluginApprovalSnapshot?: ReturnType<typeof vi.fn>;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
   const sendChat =
@@ -102,6 +105,10 @@ function createHarness(params?: {
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
+  const runPluginSessionAction =
+    params?.runPluginSessionAction ??
+    vi.fn().mockResolvedValue({ ok: true, reply: "Verify with World\nQR" });
+  const resolveApproval = params?.resolveApproval ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const setEmptySession =
     params?.setEmptySession ?? (vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock);
@@ -110,6 +117,7 @@ function createHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
+  const addPluginApprovalSystem = vi.fn();
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -155,6 +163,8 @@ function createHarness(params?: {
       patchSession,
       resetSession,
       runGoalCommand,
+      runPluginSessionAction,
+      resolveApproval,
     } as never,
     chatLog: {
       addUser,
@@ -162,6 +172,7 @@ function createHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
+      addPluginApprovalSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -187,6 +198,9 @@ function createHarness(params?: {
     forgetLocalBtwRunId,
     consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
     isRunObserved: params?.isRunObserved,
+    getPluginApprovalSnapshot: params?.getPluginApprovalSnapshot as
+      | Parameters<typeof createCommandHandlers>[0]["getPluginApprovalSnapshot"]
+      | undefined,
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
@@ -204,6 +218,8 @@ function createHarness(params?: {
     patchSession,
     resetSession,
     runGoalCommand,
+    runPluginSessionAction,
+    resolveApproval,
     setSession,
     setEmptySession,
     addUser,
@@ -211,6 +227,7 @@ function createHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
+    addPluginApprovalSystem,
     clearTools,
     reserveAssistantSlot,
     requestRender,
@@ -296,6 +313,100 @@ describe("tui command handlers", () => {
       message: "/unregistered-command",
     });
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("runs plugin approval session actions out-of-band while the agent is busy", async () => {
+    const runPluginSessionAction = vi.fn().mockResolvedValue({
+      ok: true,
+      reply: "Verify with World\nScan with World App",
+    });
+    const { handleCommand, sendChat, addPendingUser, addPluginApprovalSystem, setActivityStatus } =
+      createHarness({
+        activeChatRunId: "run-waiting-for-approval",
+        activityStatus: "streaming",
+        runPluginSessionAction,
+      });
+
+    await handleCommand("/agentkit approve plugin:approval-1 allow-once");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(runPluginSessionAction).toHaveBeenCalledWith({
+      pluginId: "agentkit",
+      actionId: "approve",
+      sessionKey: "agent:main:main",
+      payload: {
+        approvalId: "plugin:approval-1",
+        decision: "allow-once",
+      },
+    });
+    expect(addPluginApprovalSystem).toHaveBeenCalledWith(
+      "plugin:approval-1",
+      "Verify with World\nScan with World App",
+    );
+    expect(setActivityStatus).toHaveBeenCalledWith("approval");
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+  });
+
+  it("includes the rendered approval snapshot when starting an external approval action", async () => {
+    const runPluginSessionAction = vi.fn().mockResolvedValue({
+      ok: true,
+      reply: "Verify with World\nScan with World App",
+    });
+    const approvalSnapshot = {
+      id: "plugin:approval-1",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify before exec",
+        severity: "warning",
+        toolName: "exec",
+        toolCallId: "tool-call-1",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["deny"],
+      },
+    };
+    const { handleCommand } = createHarness({
+      activeChatRunId: "run-waiting-for-approval",
+      activityStatus: "streaming",
+      runPluginSessionAction,
+      getPluginApprovalSnapshot: vi.fn(() => approvalSnapshot),
+    });
+
+    await handleCommand("/agentkit approve plugin:approval-1 allow-always");
+
+    expect(runPluginSessionAction).toHaveBeenCalledWith({
+      pluginId: "agentkit",
+      actionId: "approve",
+      sessionKey: "agent:main:main",
+      payload: {
+        approvalId: "plugin:approval-1",
+        decision: "allow-always",
+        approval: approvalSnapshot,
+      },
+    });
+  });
+
+  it("resolves denied plugin approvals without sending a chat turn", async () => {
+    const resolveApproval = vi.fn().mockResolvedValue({ ok: true });
+    const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
+      activeChatRunId: "run-waiting-for-approval",
+      activityStatus: "streaming",
+      resolveApproval,
+    });
+
+    await handleCommand("/approve plugin:approval-1 deny");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(resolveApproval).toHaveBeenCalledWith({
+      id: "plugin:approval-1",
+      decision: "deny",
+    });
+    expect(addSystem).toHaveBeenCalledWith("approval deny. ID: plugin:approval-1");
   });
 
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
@@ -1465,9 +1576,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage reset");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: null }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: null }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: reset to default");
     // Both stale local values must be cleared so the toggle/display is not stale
     // until refreshSessionInfo() repopulates the inherited default.
@@ -1492,9 +1601,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: "full" }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: "full" }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: full");
   });
 });

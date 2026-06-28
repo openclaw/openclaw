@@ -12,6 +12,8 @@ import {
   type CommandEntry,
   type CommandsListParams,
   type CommandsListResult,
+  type PluginsSessionActionParams,
+  type PluginsSessionActionResult,
   type SessionsListParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
@@ -281,6 +283,19 @@ export class GatewayChatClient implements TuiBackend {
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
     const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
     return Array.isArray(res?.commands) ? res.commands : [];
+  }
+
+  async runPluginSessionAction(
+    opts: PluginsSessionActionParams,
+  ): Promise<PluginsSessionActionResult> {
+    return await this.client.request<PluginsSessionActionResult>("plugins.sessionAction", opts);
+  }
+
+  async resolveApproval(opts: { id: string; decision: "allow-once" | "allow-always" | "deny" }) {
+    const method = opts.id.startsWith("plugin:")
+      ? "plugin.approval.resolve"
+      : "exec.approval.resolve";
+    return await this.client.request<{ ok?: boolean }>(method, opts);
   }
 }
 

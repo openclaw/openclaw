@@ -115,6 +115,58 @@ higher-priority hook requested approval.
 `allowedDecisions` limits the buttons and commands shown to the user. The
 Gateway rejects a resolve attempt for any decision the request did not offer.
 
+## External verification
+
+Use `externalResolution` when a plugin needs an out-of-band proof before an
+approval can continue, such as a World ID check, hardware key ceremony, or
+plugin-owned risk workflow. OpenClaw still owns the pending approval and normal
+deny path. The plugin provides one semantic verification route, and OpenClaw
+renders that route as text commands rather than generic custom approval buttons.
+External verification requires `pluginId` so the verified resolver has a concrete
+owner to check.
+
+```typescript
+return {
+  requireApproval: {
+    pluginId: "agentkit",
+    title: "World proof required for exec",
+    description: "Verify with World before `exec` runs in this session.",
+    severity: "warning",
+    allowedDecisions: ["deny"],
+    externalResolution: {
+      label: "Verify with World",
+      commandTemplate: "/agentkit approve {id} {decision}",
+      decisions: ["allow-once", "allow-always"],
+    },
+  },
+};
+```
+
+`externalResolution.label` is the human-facing verification name. The
+`commandTemplate` must include `{id}` and `{decision}`; OpenClaw expands those
+placeholders with the server-generated `plugin:` approval ID and each requested
+decision. `decisions` may contain only `allow-once` and `allow-always`; it
+defaults to `["allow-once"]`.
+
+For the example above, approval surfaces keep the normal `Deny` control and
+show text commands for:
+
+```text
+/agentkit approve plugin:<approval-id> allow-once
+/agentkit approve plugin:<approval-id> allow-always
+```
+
+After the external proof succeeds, a trusted plugin-side helper can resolve the
+pending approval through `plugin.approval.resolveVerified`. That method uses
+operator approval authority: it requires `operator.approvals` (or
+`operator.admin` as the usual operator-scope superset), treats `pluginId` as the
+pending approval owner selector rather than an authenticated plugin principal,
+checks that the pending approval's `pluginId` matches the requested plugin, and
+accepts only decisions exposed by `externalResolution`.
+When `externalResolution` is configured, OpenClaw rejects normal allow decisions
+on `allowedDecisions`; the normal `Deny` path remains owned by OpenClaw's
+approval controls.
+
 ## Route approval prompts
 
 Approval prompts can resolve in local UI surfaces or in chat channels that

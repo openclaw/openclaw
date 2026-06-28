@@ -348,6 +348,81 @@ describe("slackApprovalNativeRuntime", () => {
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
   });
 
+  it("renders external verification commands for plugin pending approvals", async () => {
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "World proof required",
+          description: "Verify with World before exec runs.",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        phase: "pending",
+        approvalId: "plugin:req-1",
+        title: "World proof required",
+        description: "Verify with World before exec runs.",
+        severity: "warning",
+        pluginId: "agentkit",
+        toolName: "exec",
+        metadata: [],
+        externalResolution: {
+          label: "Verify with World",
+          commands: [
+            {
+              decision: "allow-once",
+              label: "Verify once",
+              description: "Approve this blocked action only",
+              command: "/agentkit approve plugin:req-1 allow-once",
+            },
+            {
+              decision: "allow-always",
+              label: "Verify and trust for session",
+              description: "Trust approvals for this session",
+              command: "/agentkit approve plugin:req-1 allow-always",
+            },
+          ],
+        },
+        actions: [
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+        expiresAtMs: 60_000,
+      },
+    })) as SlackPayload;
+
+    expect(payload.text).toContain("*External verification:* Verify with World");
+    expect(payload.text).toContain("/agentkit approve plugin:req-1 allow-once");
+    const actionsBlock = findSlackActionsBlock(
+      payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
+    );
+    const labels = (actionsBlock?.elements ?? []).map((element) =>
+      typeof element === "object" &&
+      element &&
+      typeof (element as { text?: { text?: unknown } }).text?.text === "string"
+        ? (element as { text: { text: string } }).text.text
+        : "",
+    );
+
+    expect(labels).toEqual(["Deny"]);
+    expect(JSON.stringify(payload.blocks)).toContain("/agentkit approve plugin:req-1 allow-always");
+  });
+
   it("renders resolved updates without interactive blocks", async () => {
     const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
       cfg: {} as never,

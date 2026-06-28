@@ -1,6 +1,12 @@
 // Handles TUI keyboard, paste, backend, and command events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
+import {
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "../infra/plugin-approvals.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -21,6 +27,11 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addPluginApprovalSystem?: (
+    approvalId: string,
+    text: string,
+    options?: { toolCallId?: string | null },
+  ) => void;
   addPendingSystem: (runId: string, text: string) => void;
   dismissPendingSystem: (runId: string) => void;
   updateAssistant: (text: string, runId: string) => void;
@@ -46,6 +57,7 @@ type EventHandlerContext = {
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
   noteLocalRunId?: (runId: string) => void;
+  openPluginApprovalSelector?: (request: PluginApprovalRequest) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
@@ -72,6 +84,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     refreshSessionInfo,
     loadHistory,
     noteLocalRunId,
+    openPluginApprovalSelector,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -89,6 +102,8 @@ export function createEventHandlers(context: EventHandlerContext) {
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
+  const renderedPluginApprovalIds = new Set<string>();
+  const resolvedPluginApprovalIds = new Set<string>();
   const pendingTerminalLifecycleErrors = new Map<
     string,
     { errorMessage: string; timer: ReturnType<typeof setTimeout> }
@@ -149,6 +164,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRunsWithDisplay.clear();
     completedRuns.clear();
     sessionRuns.clear();
+    renderedPluginApprovalIds.clear();
+    resolvedPluginApprovalIds.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
@@ -950,6 +967,87 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const handlePluginApprovalRequested = (payload: unknown) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return;
+    }
+    const request = payload as PluginApprovalRequest;
+    if (
+      typeof request.id !== "string" ||
+      !request.request ||
+      typeof request.request !== "object" ||
+      Array.isArray(request.request) ||
+      typeof request.createdAtMs !== "number" ||
+      typeof request.expiresAtMs !== "number"
+    ) {
+      return;
+    }
+    syncSessionKey();
+    if (!isSameSessionKey(request.request.sessionKey ?? undefined, state.currentSessionKey)) {
+      return;
+    }
+    if (
+      !isMatchingGlobalAgentEvent(
+        request.request.sessionKey ?? undefined,
+        request.request.agentId ?? undefined,
+      )
+    ) {
+      return;
+    }
+    if (renderedPluginApprovalIds.has(request.id)) {
+      return;
+    }
+    renderedPluginApprovalIds.add(request.id);
+    const renderedMessage = buildPluginApprovalRequestMessage(request, Date.now());
+    if (chatLog.addPluginApprovalSystem) {
+      chatLog.addPluginApprovalSystem(request.id, renderedMessage, {
+        toolCallId: request.request.toolCallId,
+      });
+    } else {
+      chatLog.addSystem(renderedMessage);
+    }
+    setActivityStatus("approval required");
+    openPluginApprovalSelector?.(request);
+    tui.requestRender(true);
+  };
+
+  const handlePluginApprovalResolved = (payload: unknown) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return;
+    }
+    const resolved = payload as PluginApprovalResolved;
+    if (typeof resolved.id !== "string" || typeof resolved.decision !== "string") {
+      return;
+    }
+    const requestSessionKey = resolved.request?.sessionKey ?? undefined;
+    const requestAgentId = resolved.request?.agentId ?? undefined;
+    syncSessionKey();
+    if (requestSessionKey && !isSameSessionKey(requestSessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (requestSessionKey && !isMatchingGlobalAgentEvent(requestSessionKey, requestAgentId)) {
+      return;
+    }
+    if (!requestSessionKey && !renderedPluginApprovalIds.has(resolved.id)) {
+      return;
+    }
+    if (resolvedPluginApprovalIds.has(resolved.id)) {
+      return;
+    }
+    resolvedPluginApprovalIds.add(resolved.id);
+    renderedPluginApprovalIds.delete(resolved.id);
+    const renderedMessage = buildPluginApprovalResolvedMessage(resolved);
+    if (chatLog.addPluginApprovalSystem) {
+      chatLog.addPluginApprovalSystem(resolved.id, renderedMessage, {
+        toolCallId: resolved.request?.toolCallId,
+      });
+    } else {
+      chatLog.addSystem(renderedMessage);
+    }
+    setActivityStatus(state.activeChatRunId ? "streaming" : "idle");
+    tui.requestRender(true);
+  };
+
   const dispose = () => {
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
@@ -973,6 +1071,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     handleAgentEvent,
     handleBtwEvent,
     handleSessionsChangedEvent,
+    handlePluginApprovalRequested,
+    handlePluginApprovalResolved,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,

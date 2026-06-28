@@ -99,6 +99,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     pluginId: request.request.pluginId ?? null,
     toolName: request.request.toolName ?? null,
     severity: request.request.severity ?? "warning",
+    externalResolution: request.request.externalResolution ?? null,
   };
 }
 

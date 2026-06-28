@@ -187,43 +187,48 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
-  it("keeps plugin command actions visible for custom prompt views", () => {
-    const payload = buildApprovalPendingPromptPayload({
+  it("includes external verification commands in plugin reaction prompts", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
       request: {
         ...pluginRequest,
-        id: "plugin:agentkit",
         request: {
           ...pluginRequest.request,
-          title: "World proof required for exec",
-        },
-      },
-      view: {
-        approvalKind: "plugin",
-        approvalId: "plugin:agentkit",
-        phase: "pending",
-        title: "World proof required for exec",
-        description: null,
-        metadata: [],
-        severity: "warning",
-        expiresAtMs: 61_000,
-        actions: [
-          {
-            decision: "deny",
-            label: "Deny",
-            command: "/approve plugin:agentkit deny",
-            style: "danger",
+          title: "World proof required",
+          description: "Verify before exec runs.",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commands: [
+              {
+                decision: "allow-once",
+                label: "Verify once",
+                description: "Approve this blocked action only",
+                command: "/agentkit approve plugin:approval-123 allow-once",
+              },
+              {
+                decision: "allow-always",
+                label: "Verify and trust for session",
+                description: "Trust approvals for this session",
+                command: "/agentkit approve plugin:approval-123 allow-always",
+              },
+            ],
           },
-        ],
+        },
       },
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Deny: /approve plugin:agentkit deny");
-    expect(payload.text).toContain("/approve plugin:agentkit deny");
-    expect(payload.text).toContain("👎 Deny");
-    expect(payload.text).not.toContain("👍 Allow Once");
-    expect(payload.allowedDecisions).toEqual(["deny"]);
-    expect(payload.reactionBindings).toEqual([{ decision: "deny", emoji: "👎", label: "Deny" }]);
+    expect(payload.text).toContain("External verification: Verify with World");
+    expect(payload.text).toContain("Verify once: Approve this blocked action only");
+    expect(payload.text).toContain("/agentkit approve plugin:approval-123 allow-once");
+    expect(payload.text).toContain(
+      "Verify and trust for session: Trust approvals for this session",
+    );
+    expect(payload.text).toContain("/agentkit approve plugin:approval-123 allow-always");
+    expect(payload.text).not.toContain("Allow Always is unavailable");
+    expect(payload.text?.trim().endsWith("Reply with: /approve plugin:approval-123 deny")).toBe(
+      true,
+    );
   });
 
   it("renders the same request-only and view-taking prompt payloads", () => {

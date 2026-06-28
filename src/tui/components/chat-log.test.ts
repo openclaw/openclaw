@@ -174,6 +174,23 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
+  it("keeps plugin approval status grouped before an already-rendered assistant answer", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addUser("run a protected command");
+    chatLog.finalizeAssistant("command finished", "run-1");
+    chatLog.addPluginApprovalSystem("plugin:approval-1", "approval required");
+    chatLog.addPluginApprovalSystem("plugin:approval-1", "scan with world");
+    chatLog.addPluginApprovalSystem("plugin:approval-1", "approval resolved");
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered.indexOf("approval required")).toBeLessThan(rendered.indexOf("scan with world"));
+    expect(rendered.indexOf("scan with world")).toBeLessThan(rendered.indexOf("approval resolved"));
+    expect(rendered.indexOf("approval resolved")).toBeLessThan(
+      rendered.indexOf("command finished"),
+    );
+  });
+
   it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 

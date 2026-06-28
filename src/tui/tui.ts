@@ -18,6 +18,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -36,6 +37,7 @@ import {
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { createSearchableSelectList } from "./components/selectors.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -54,6 +56,7 @@ import {
 } from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
+import { buildPluginApprovalSelectorItems } from "./tui-plugin-approval-selector.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
@@ -1260,6 +1263,45 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const pluginApprovalSnapshots = new Map<string, PluginApprovalRequest>();
+  const rememberPluginApprovalSnapshot = (request: PluginApprovalRequest) => {
+    pluginApprovalSnapshots.set(request.id, request);
+    if (pluginApprovalSnapshots.size <= 200) {
+      return;
+    }
+    const oldestKey = pluginApprovalSnapshots.keys().next().value;
+    if (oldestKey) {
+      pluginApprovalSnapshots.delete(oldestKey);
+    }
+  };
+  let handlePluginApprovalSelectorCommand: ((command: string) => Promise<void> | void) | null =
+    null;
+  const openPluginApprovalSelector = (request: PluginApprovalRequest) => {
+    rememberPluginApprovalSnapshot(request);
+    const items = buildPluginApprovalSelectorItems(request);
+    if (items.length === 0) {
+      return;
+    }
+    const selector = createSearchableSelectList(items, 5);
+    selector.onSelect = (item) => {
+      closeOverlay();
+      tui.requestRender();
+      void (async () => {
+        if (!handlePluginApprovalSelectorCommand) {
+          chatLog.addSystem(`approval command unavailable: ${item.value}`);
+          tui.requestRender();
+          return;
+        }
+        await handlePluginApprovalSelectorCommand(item.value);
+      })();
+    };
+    selector.onCancel = () => {
+      closeOverlay();
+      tui.requestRender();
+    };
+    openOverlay(selector);
+    tui.requestRender();
+  };
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1312,6 +1354,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleAgentEvent,
     handleBtwEvent,
     handleSessionsChangedEvent,
+    handlePluginApprovalRequested,
+    handlePluginApprovalResolved,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
@@ -1333,6 +1377,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    openPluginApprovalSelector,
   });
 
   const deferredFinish = createDeferredTuiFinish();
@@ -1410,10 +1455,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       forgetLocalBtwRunId,
       consumeCompletedRunForPendingSend,
       isRunObserved,
+      getPluginApprovalSnapshot: (approvalId) => pluginApprovalSnapshots.get(approvalId),
       flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,
     });
+  handlePluginApprovalSelectorCommand = handleCommand;
 
   const { runLocalShellLine } = createLocalShellRunner({
     chatLog,
@@ -1542,6 +1589,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     if (evt.event === "sessions.changed") {
       handleSessionsChangedEvent(evt.payload);
+    }
+    if (evt.event === "plugin.approval.requested") {
+      handlePluginApprovalRequested(evt.payload);
+    }
+    if (evt.event === "plugin.approval.resolved") {
+      handlePluginApprovalResolved(evt.payload);
     }
   };
 
