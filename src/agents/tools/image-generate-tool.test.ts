@@ -88,7 +88,11 @@ function stubImageGenerationProviders() {
     {
       id: "google",
       defaultModel: "gemini-3.1-flash-image-preview",
-      models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+      models: [
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-2.5-flash-image",
+      ],
       isConfigured: () => hasStubbedImageProviderAuth("google"),
       capabilities: {
         generate: {
@@ -99,6 +103,9 @@ function stubImageGenerationProviders() {
         edit: {
           enabled: true,
           maxInputImages: 5,
+          maxInputImagesByModel: {
+            "gemini-2.5-flash-image": 3,
+          },
           supportsAspectRatio: true,
           supportsResolution: true,
         },
@@ -252,7 +259,9 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
 
 function createFalEditProvider(params?: {
   defaultModel?: string;
+  maxCountByModel?: Record<string, number>;
   maxInputImages?: number;
+  maxInputImagesByModel?: Record<string, number>;
   models?: string[];
   supportsAspectRatio?: boolean;
   aspectRatios?: string[];
@@ -264,6 +273,7 @@ function createFalEditProvider(params?: {
     capabilities: {
       generate: {
         maxCount: 4,
+        ...(params?.maxCountByModel ? { maxCountByModel: params.maxCountByModel } : {}),
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -271,6 +281,10 @@ function createFalEditProvider(params?: {
       edit: {
         enabled: true,
         maxInputImages: params?.maxInputImages ?? 1,
+        ...(params?.maxCountByModel ? { maxCountByModel: params.maxCountByModel } : {}),
+        ...(params?.maxInputImagesByModel
+          ? { maxInputImagesByModel: params.maxInputImagesByModel }
+          : {}),
         supportsSize: true,
         supportsAspectRatio: params?.supportsAspectRatio ?? false,
         supportsResolution: true,
@@ -2250,7 +2264,7 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain(
       "auth: set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2",
     );
-    expect(text).toContain("editing up to 5 refs");
+    expect(text).toContain("editing up to 5 refs (model-specific refs gemini-2.5-flash-image=3)");
     expect(text).toContain("aspect ratios 1:1, 16:9");
     const details = resultDetails(result);
     const providers = details.providers as Array<Record<string, unknown>>;
@@ -2264,11 +2278,15 @@ describe("createImageGenerateTool", () => {
     expect(googleProvider.models).toEqual([
       "gemini-3.1-flash-image-preview",
       "gemini-3-pro-image-preview",
+      "gemini-2.5-flash-image",
     ]);
     const googleCapabilities = requireRecord(googleProvider.capabilities, "google capabilities");
     expect(googleCapabilities.edit).toEqual({
       enabled: true,
       maxInputImages: 5,
+      maxInputImagesByModel: {
+        "gemini-2.5-flash-image": 3,
+      },
       supportsAspectRatio: true,
       supportsResolution: true,
     });
@@ -2345,6 +2363,149 @@ describe("createImageGenerateTool", () => {
     ).rejects.toThrow("fal edit supports at most 1 reference image");
     expect(loadWebMedia).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects model-specific edit limits before loading references", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        maxInputImages: 10,
+        maxInputImagesByModel: {
+          "fal-ai/flux/dev": 1,
+        },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-fal-model-edit-limit", {
+        prompt: "combine",
+        images: ["https://example.test/a.png", "https://example.test/b.png"],
+      }),
+    ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects model-specific output counts before runtime", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        maxInputImages: 10,
+        maxCountByModel: {
+          "fal-ai/flux/dev": 1,
+        },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev");
+
+    await expect(
+      tool.execute("call-fal-model-count-limit", {
+        prompt: "draw several options",
+        count: 2,
+      }),
+    ).rejects.toThrow("fal generate supports at most 1 output image");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("allows configured fallbacks to satisfy model-specific output counts", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        models: ["fal-ai/flux/dev", "fal-ai/flux/pro"],
+        maxInputImages: 10,
+        maxCountByModel: {
+          "fal-ai/flux/dev": 1,
+          "fal-ai/flux/pro": 4,
+        },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "fal-ai/flux/pro",
+      attempts: [{ provider: "fal", model: "fal-ai/flux/dev", error: "too many images" }],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "fallback.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/fallback.png",
+      id: "fallback.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "fal/fal-ai/flux/dev",
+                fallbacks: ["fal/fal-ai/flux/pro"],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("call-fal-count-fallback", {
+      prompt: "draw several options",
+      count: 2,
+    });
+
+    expect(generateImage).toHaveBeenCalled();
+    expect(mockCallArg(generateImage, 0, "generateImage").count).toBe(2);
+  });
+
+  it("allows configured fallbacks to satisfy model-specific edit limits", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        models: ["fal-ai/flux/dev", "fal-ai/flux/pro"],
+        maxInputImages: 10,
+        maxInputImagesByModel: {
+          "fal-ai/flux/dev": 1,
+          "fal-ai/flux/pro": 10,
+        },
+      }),
+    ]);
+    const generateImage = stubEditedImageFlow();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "fal/fal-ai/flux/dev",
+                fallbacks: ["fal/fal-ai/flux/pro"],
+              },
+            },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-fal-edit-fallback", {
+      prompt: "combine",
+      images: ["https://example.test/a.png", "https://example.test/b.png"],
+    });
+
+    expect(generateImage).toHaveBeenCalled();
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(2);
   });
 
   it("uses registered provider metadata for slash-containing model overrides", async () => {

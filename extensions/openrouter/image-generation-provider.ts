@@ -111,6 +111,19 @@ const OPENROUTER_IMAGES_API_MODEL_CAPABILITIES: Record<
 const DEDICATED_IMAGE_API_MODELS = new Set<string>(
   Object.keys(OPENROUTER_IMAGES_API_MODEL_CAPABILITIES),
 );
+const OPENROUTER_MAX_COUNTS_BY_MODEL = Object.fromEntries(
+  SUPPORTED_MODELS.map((model) => [
+    model,
+    OPENROUTER_IMAGES_API_MODEL_CAPABILITIES[model]?.maxCount ?? MAX_IMAGE_RESULTS,
+  ]),
+);
+const OPENROUTER_MAX_INPUT_IMAGES_BY_MODEL = Object.fromEntries(
+  SUPPORTED_MODELS.map((model) => [
+    model,
+    OPENROUTER_IMAGES_API_MODEL_CAPABILITIES[model]?.maxInputImages ??
+      MAX_CHAT_COMPLETIONS_INPUT_IMAGES,
+  ]),
+);
 const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
 function throwMalformedOpenRouterImageResponse(message: string | undefined): never | undefined {
@@ -485,6 +498,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
     capabilities: {
       generate: {
         maxCount: MAX_IMAGE_RESULTS,
+        maxCountByModel: OPENROUTER_MAX_COUNTS_BY_MODEL,
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -492,7 +506,9 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       edit: {
         enabled: true,
         maxCount: MAX_IMAGE_RESULTS,
+        maxCountByModel: OPENROUTER_MAX_COUNTS_BY_MODEL,
         maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+        maxInputImagesByModel: OPENROUTER_MAX_INPUT_IMAGES_BY_MODEL,
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: true,

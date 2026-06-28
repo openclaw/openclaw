@@ -109,11 +109,17 @@ describe("openrouter image generation provider", () => {
     expect(provider.models).toContain("openai/gpt-5.4-image-2");
     expect(provider.models).toContain("microsoft/mai-image-2.5");
     expect(provider.capabilities.generate.maxCount).toBe(4);
+    expect(provider.capabilities.generate.maxCountByModel?.["microsoft/mai-image-2.5"]).toBe(1);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.geometry?.aspectRatios).toContain("1:4");
     expect(provider.capabilities.geometry?.aspectRatios).toContain("8:1");
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(10);
+    expect(provider.capabilities.edit.maxInputImagesByModel?.[provider.defaultModel ?? ""]).toBe(5);
+    expect(
+      provider.capabilities.edit.maxInputImagesByModel?.["google/gemini-2.5-flash-image"],
+    ).toBe(3);
+    expect(provider.capabilities.edit.maxInputImagesByModel?.["microsoft/mai-image-2.5"]).toBe(1);
     expect(provider.capabilities.edit.supportsResolution).toBe(true);
   });
 

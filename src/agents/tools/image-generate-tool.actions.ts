@@ -44,13 +44,31 @@ function listSupportedImageGenerationModes(provider: ImageGenerationProvider): s
   return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
 }
 
+function summarizeModelSpecificImageEditLimits(
+  provider: ImageGenerationProvider,
+): string | undefined {
+  const entries = Object.entries(provider.capabilities.edit.maxInputImagesByModel ?? {})
+    .filter(([, maxRefs]) => Number.isFinite(maxRefs))
+    .filter(([, maxRefs]) => maxRefs !== provider.capabilities.edit.maxInputImages)
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return `model-specific refs ${entries
+    .map(([model, maxRefs]) => `${model}=${maxRefs}`)
+    .join(", ")}`;
+}
+
 /** Formats provider capability details for the image generation `list` action. */
 function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
     const maxRefs = provider.capabilities.edit.maxInputImages;
+    const modelSpecificRefs = summarizeModelSpecificImageEditLimits(provider);
     caps.push(
-      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+      `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}${
+        modelSpecificRefs ? ` (${modelSpecificRefs})` : ""
+      }`,
     );
   }
   if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {

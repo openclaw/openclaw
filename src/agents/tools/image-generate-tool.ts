@@ -6,6 +6,7 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveImageGenerationModeCapabilities } from "../../image-generation/capabilities.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
@@ -26,6 +27,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
@@ -116,6 +118,10 @@ const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
 type FalCreativity = (typeof SUPPORTED_FAL_CREATIVITY)[number];
+type ImageGenerationCapabilityValidationTarget = {
+  provider: ImageGenerationProvider;
+  model?: string;
+};
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
@@ -436,6 +442,32 @@ function resolveSelectedImageGenerationProvider(params: {
   });
 }
 
+function resolveImageGenerationCapabilityValidationTargets(params: {
+  config: OpenClawConfig;
+  imageGenerationModelConfig: ToolModelConfig;
+  modelOverride?: string;
+  agentDir?: string;
+  autoProviderFallback?: boolean;
+}): ImageGenerationCapabilityValidationTarget[] {
+  const providers = listRuntimeImageGenerationProviders({ config: params.config });
+  const findProvider = (providerId: string): ImageGenerationProvider | undefined =>
+    providers.find(
+      (provider) => provider.id === providerId || provider.aliases?.includes(providerId),
+    );
+  return resolveCapabilityModelCandidates({
+    cfg: params.config,
+    modelConfig: params.imageGenerationModelConfig,
+    modelOverride: params.modelOverride,
+    parseModelRef: parseImageGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: () => providers,
+    autoProviderFallback: params.autoProviderFallback,
+  }).flatMap((candidate) => {
+    const provider = findProvider(candidate.provider);
+    return provider ? [{ provider, model: candidate.model }] : [];
+  });
+}
+
 function resolveSelectedImageGenerationModelId(params: {
   selectedProvider: ImageGenerationProvider | undefined;
   imageGenerationModelConfig: ToolModelConfig;
@@ -503,6 +535,8 @@ function isInlineDirectiveControlCharacter(char: string): boolean {
 
 function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
+  model?: string;
+  validationTargets?: ImageGenerationCapabilityValidationTarget[];
   count: number;
   inputImageCount: number;
   size?: string;
@@ -510,30 +544,66 @@ function validateImageGenerationCapabilities(params: {
   resolution?: ImageGenerationResolution;
   explicitResolution?: boolean;
 }) {
-  const provider = params.provider;
-  if (!provider) {
+  const validationTargets =
+    params.validationTargets && params.validationTargets.length > 0
+      ? params.validationTargets
+      : params.provider
+        ? [{ provider: params.provider, model: params.model }]
+        : [];
+  if (validationTargets.length === 0) {
     return;
   }
-  const isEdit = params.inputImageCount > 0;
-  const modeCaps = isEdit ? provider.capabilities.edit : provider.capabilities.generate;
-  const maxCount = modeCaps.maxCount ?? MAX_COUNT;
+  const errors: ToolInputError[] = [];
+  for (const target of validationTargets) {
+    const error = validateSingleImageGenerationCapabilityTarget({
+      provider: target.provider,
+      model: target.model,
+      count: params.count,
+      inputImageCount: params.inputImageCount,
+    });
+    if (!error) {
+      return;
+    }
+    errors.push(error);
+  }
+  throw errors[0];
+}
+
+function validateSingleImageGenerationCapabilityTarget(params: {
+  provider: ImageGenerationProvider;
+  model?: string;
+  count: number;
+  inputImageCount: number;
+}): ToolInputError | undefined {
+  const provider = params.provider;
+  const { mode, capabilities: modeCaps } = resolveImageGenerationModeCapabilities({
+    provider,
+    model: params.model,
+    inputImageCount: params.inputImageCount,
+  });
+  const isEdit = mode === "edit";
+  const maxCount = modeCaps?.maxCount ?? MAX_COUNT;
   if (params.count > maxCount) {
-    throw new ToolInputError(
+    return new ToolInputError(
       `${provider.id} ${isEdit ? "edit" : "generate"} supports at most ${maxCount} output image${maxCount === 1 ? "" : "s"}.`,
     );
   }
 
   if (isEdit) {
     if (!provider.capabilities.edit.enabled) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
+      return new ToolInputError(`${provider.id} does not support reference-image edits.`);
     }
-    const maxInputImages = provider.capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
+    const maxInputImages =
+      modeCaps && "maxInputImages" in modeCaps && typeof modeCaps.maxInputImages === "number"
+        ? modeCaps.maxInputImages
+        : MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
-      throw new ToolInputError(
+      return new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
       );
     }
   }
+  return undefined;
 }
 
 type ImageGenerateSandboxConfig = {
@@ -955,6 +1025,14 @@ export function createImageGenerateTool(options?: {
         explicitModelRef,
         primaryModelRef,
       });
+      const autoProviderFallback = explicitModelConfig ? false : undefined;
+      const capabilityValidationTargets = resolveImageGenerationCapabilityValidationTargets({
+        config: effectiveCfg,
+        imageGenerationModelConfig,
+        modelOverride: model,
+        agentDir: options?.agentDir,
+        autoProviderFallback,
+      });
       const count = resolveRequestedCount(params);
       const requestKey = buildMediaGenerationRequestKey({
         tool: "image_generate",
@@ -986,6 +1064,8 @@ export function createImageGenerateTool(options?: {
       }
       validateImageGenerationCapabilities({
         provider: selectedProvider,
+        model: selectedModelId,
+        validationTargets: capabilityValidationTargets,
         count,
         inputImageCount: imageInputs.length,
         size,
@@ -1019,6 +1099,8 @@ export function createImageGenerateTool(options?: {
             : undefined);
       validateImageGenerationCapabilities({
         provider: selectedProvider,
+        model: selectedModelId,
+        validationTargets: capabilityValidationTargets,
         count,
         inputImageCount: inputImages.length,
         size,
@@ -1077,7 +1159,7 @@ export function createImageGenerateTool(options?: {
               filename,
               loadedReferenceImages,
               taskHandle,
-              autoProviderFallback: explicitModelConfig ? false : undefined,
+              autoProviderFallback,
             }),
         });
 
@@ -1135,7 +1217,7 @@ export function createImageGenerateTool(options?: {
           filename,
           loadedReferenceImages,
           taskHandle,
-          autoProviderFallback: explicitModelConfig ? false : undefined,
+          autoProviderFallback,
         });
         completeImageGenerationTaskRun({
           handle: taskHandle,
