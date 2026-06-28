@@ -375,6 +375,21 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     expect(onTokenInvalid).not.toHaveBeenCalled();
   });
 
+  it("does not double-wrap non-token errors when token invalidation is configured", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi.fn().mockRejectedValue(axiosError(230020));
+
+    const err = await requestFeishuApi(request, "Feishu send failed", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message.match(/Feishu send failed/g)).toHaveLength(1);
+    expect((err as Error).message).toMatch(/230020/);
+    expect(onTokenInvalid).not.toHaveBeenCalled();
+  });
+
   it("only invalidates the token once even if 99991663 persists", async () => {
     // Permanently revoked credentials would otherwise spin the invalidation
     // hook on every retry. Pin behavior: invalidate at most once, then
@@ -382,9 +397,12 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     const onTokenInvalid = vi.fn();
     const request = vi.fn().mockRejectedValue(axiosError(99991663));
 
+    // The raw Axios error surfaces so callers can inspect response.data.code;
+    // its message ("Request failed with status code 400") does not carry the
+    // Feishu business code, so assert on the response shape instead.
     await expect(
       requestFeishuApi(request, "Feishu send failed", { ...NO_DELAY, onTokenInvalid }),
-    ).rejects.toThrow(/99991663/);
+    ).rejects.toMatchObject({ response: { data: { code: 99991663 } } });
 
     expect(onTokenInvalid).toHaveBeenCalledTimes(1);
     // 1 initial attempt + 1 retry after invalidation, then surface.
@@ -436,7 +454,11 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     // surface immediately rather than retry with the same stale token.
     const request = vi.fn().mockRejectedValue(axiosError(99991663));
 
-    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(/99991663/);
+    // Raw Axios error surfaces immediately; assert on response shape since
+    // the message does not carry the Feishu business code.
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toMatchObject({
+      response: { data: { code: 99991663 } },
+    });
     expect(request).toHaveBeenCalledTimes(1);
   });
 });
