@@ -6,17 +6,17 @@ on:
   workflow_dispatch:
     inputs:
       run_session_steward_live:
-        description: Run a self-contained live Session Steward eval after the static catalog gate
+        description: Run self-contained live Steward evals after the static catalog gate
         required: false
         default: false
         type: boolean
       live_model:
-        description: Model ref for the opt-in Session Steward live eval
+        description: Model ref for the opt-in Steward live evals
         required: false
         default: "ollama/qwen3.5:4b"
         type: string
       timeout_seconds:
-        description: Session Steward live eval timeout in seconds
+        description: Steward live eval timeout in seconds
         required: false
         default: "180"
         type: string
@@ -48,7 +48,7 @@ jobs:
         run: pnpm agents:eval:contracts
 
   session-steward-live:
-    name: Session Steward live eval
+    name: Steward live evals
     needs: contract-catalog
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_session_steward_live }}
     runs-on: ubuntu-24.04
@@ -61,7 +61,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
-      - name: Validate Session Steward live eval inputs
+      - name: Validate Steward live eval inputs
         env:
           INPUT_LIVE_MODEL: ${{ inputs.live_model }}
           INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -86,13 +86,13 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$INPUT_TIMEOUT_SECONDS" -lt 1 ] || [ "$INPUT_TIMEOUT_SECONDS" -gt 1800 ]; then
-            echo "::error::timeout_seconds must be between 1 and 1800"
+          if [ "$INPUT_TIMEOUT_SECONDS" -lt 1 ] || [ "$INPUT_TIMEOUT_SECONDS" -gt 480 ]; then
+            echo "::error::timeout_seconds must be between 1 and 480"
             exit 1
           fi
-          echo "SESSION_STEWARD_LIVE_MODEL=$INPUT_LIVE_MODEL" >> "$GITHUB_ENV"
-          echo "SESSION_STEWARD_TIMEOUT_SECONDS=$INPUT_TIMEOUT_SECONDS" >> "$GITHUB_ENV"
-      - name: Start local Ollama for Session Steward live eval
+          echo "STEWARD_LIVE_MODEL=$INPUT_LIVE_MODEL" >> "$GITHUB_ENV"
+          echo "STEWARD_TIMEOUT_SECONDS=$INPUT_TIMEOUT_SECONDS" >> "$GITHUB_ENV"
+      - name: Start local Ollama for Steward live evals
         run: |
           docker run --rm -d --name openclaw-agent-role-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
           for attempt in $(seq 1 60); do
@@ -106,10 +106,14 @@ jobs:
             fi
             sleep 2
           done
-          model_id="${SESSION_STEWARD_LIVE_MODEL#ollama/}"
+          model_id="${STEWARD_LIVE_MODEL#ollama/}"
           docker exec openclaw-agent-role-ollama ollama pull "$model_id"
-      - name: Run Session Steward live eval
-        run: node scripts/agent-role-eval.mjs --live --self-contained --agent session-steward --model "$SESSION_STEWARD_LIVE_MODEL" --timeout "$SESSION_STEWARD_TIMEOUT_SECONDS" --json
+      - name: Run Steward live evals
+        run: |
+          node scripts/agent-role-eval.mjs --live --self-contained --agent session-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json
+          node scripts/agent-role-eval.mjs --live --self-contained --agent credential-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json
+          node scripts/agent-role-eval.mjs --live --self-contained --agent browser-session-credential-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json
+          node scripts/agent-role-eval.mjs --live --self-contained --agent browser-session-credential-steward-safety-boundary --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json
       - name: Stop local Ollama
         if: always()
         run: docker rm -f openclaw-agent-role-ollama || true

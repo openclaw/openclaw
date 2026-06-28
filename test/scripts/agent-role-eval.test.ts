@@ -208,14 +208,20 @@ describe("agent role eval harness", () => {
     const dispatchInputs = workflow.on?.workflow_dispatch?.inputs;
     const validateLiveInputsStep = requireWorkflowStep(
       liveJob,
-      "Validate Session Steward live eval inputs",
+      "Validate Steward live eval inputs",
     );
     const startOllamaStep = requireWorkflowStep(
       liveJob,
-      "Start local Ollama for Session Steward live eval",
+      "Start local Ollama for Steward live evals",
     );
-    const runLiveEvalStep = requireWorkflowStep(liveJob, "Run Session Steward live eval");
+    const runLiveEvalStep = requireWorkflowStep(liveJob, "Run Steward live evals");
     const stopOllamaStep = requireWorkflowStep(liveJob, "Stop local Ollama");
+    const stewardLiveCommands = [
+      'node scripts/agent-role-eval.mjs --live --self-contained --agent session-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json',
+      'node scripts/agent-role-eval.mjs --live --self-contained --agent credential-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json',
+      'node scripts/agent-role-eval.mjs --live --self-contained --agent browser-session-credential-steward --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json',
+      'node scripts/agent-role-eval.mjs --live --self-contained --agent browser-session-credential-steward-safety-boundary --model "$STEWARD_LIVE_MODEL" --timeout "$STEWARD_TIMEOUT_SECONDS" --json',
+    ];
 
     expect(dispatchInputs?.run_session_steward_live).toMatchObject({
       default: false,
@@ -251,12 +257,20 @@ describe("agent role eval harness", () => {
       INPUT_TIMEOUT_SECONDS: "${{ inputs.timeout_seconds }}",
     });
     expect(validateLiveInputsStep.run).toContain("live_model must be an ollama/<model> ref");
-    expect(validateLiveInputsStep.run).toContain("SESSION_STEWARD_LIVE_MODEL=");
+    expect(validateLiveInputsStep.run).toContain("timeout_seconds must be between 1 and 480");
+    expect(validateLiveInputsStep.run).toContain("STEWARD_LIVE_MODEL=");
+    expect(validateLiveInputsStep.run).toContain("STEWARD_TIMEOUT_SECONDS=");
     expect(startOllamaStep.run).toContain("docker run --rm -d --name openclaw-agent-role-ollama");
     expect(startOllamaStep.run).toContain("ollama pull");
-    expect(runLiveEvalStep.run).toBe(
-      'node scripts/agent-role-eval.mjs --live --self-contained --agent session-steward --model "$SESSION_STEWARD_LIVE_MODEL" --timeout "$SESSION_STEWARD_TIMEOUT_SECONDS" --json',
-    );
+    expect(startOllamaStep.run).toContain('model_id="${STEWARD_LIVE_MODEL#ollama/}"');
+    expect(
+      runLiveEvalStep.run?.match(
+        /node scripts\/agent-role-eval\.mjs --live --self-contained --agent/g,
+      ),
+    ).toHaveLength(4);
+    for (const command of stewardLiveCommands) {
+      expect(runLiveEvalStep.run).toContain(command);
+    }
     expect(stopOllamaStep).toMatchObject({
       if: "always()",
       run: "docker rm -f openclaw-agent-role-ollama || true",
