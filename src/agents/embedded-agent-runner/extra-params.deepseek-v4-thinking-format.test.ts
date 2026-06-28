@@ -119,4 +119,28 @@ describe("extra-params: DeepSeek V4 OpenAI-compatible thinking fallback", () => 
     expect(payload.thinking).toEqual({ type: "enabled" });
     expect(payload.reasoning_effort).toBe("high");
   });
+
+  it("does not inject thinking for OpenRouter-routed DeepSeek V4 without explicit thinkingFormat (#97196)", () => {
+    // When the model is routed through OpenRouter without an explicit
+    // compat.thinkingFormat, auto-detection (getCompat) resolves
+    // thinkingFormat to "openrouter". The native DeepSeek V4 wrapper must
+    // not fire, otherwise it emits reasoning_effort alongside the
+    // chat-completions builder's reasoning.effort — causing DeepSeek to
+    // reject with 400.
+    const payload = runDeepSeekV4Case({
+      provider: "openrouter",
+      thinkingLevel: "high",
+    });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not inject thinking for OpenRouter-routed DeepSeek V4 even with off thinking level (#97196)", () => {
+    const payload = runDeepSeekV4Case({
+      provider: "openrouter",
+      thinkingLevel: "off",
+    });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
 });

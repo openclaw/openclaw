@@ -961,13 +961,36 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
  * override that selects a different reasoning format: some OpenAI-compatible
  * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
  * parameter outright, even `thinking: { type: "disabled" }`. When the format is
- * unset we keep id-based auto-detection so genuine DeepSeek V4 endpoints still
- * receive the native thinking payload; an explicit `"deepseek"` also keeps it.
+ * unset we auto-detect from provider / base URL so that non-DeepSeek routes
+ * (OpenRouter, Together, Z.AI, etc.) are treated the same as the merged compat
+ * used by the chat-completions builder. An explicit `"deepseek"` also keeps the
+ * native wrapper.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
   const compat = (model as ProviderRuntimeModel).compat;
   const thinkingFormat = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
-  return thinkingFormat === undefined || thinkingFormat === "deepseek";
+  if (thinkingFormat !== undefined) {
+    return thinkingFormat === "deepseek";
+  }
+  // thinkingFormat not explicitly configured — auto-detect from provider / URL
+  // so the gate matches the merged compat used by the chat-completions builder.
+  // The native DeepSeek V4 thinking payload only makes sense when the endpoint
+  // expects the DeepSeek wire format. Other providers route to DeepSeek V4 but
+  // consume their own reasoning wire format (e.g. OpenRouter → reasoning.effort).
+  // See: https://github.com/openclaw/openclaw/issues/97196
+  const providerModel = model as ProviderRuntimeModel;
+  const provider = providerModel.provider;
+  const baseUrl = providerModel.baseUrl ?? "";
+  if (provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
+    return false;
+  }
+  if (provider === "together" || baseUrl.includes("api.together.")) {
+    return false;
+  }
+  if (provider === "zai" || baseUrl.includes("api.z.ai")) {
+    return false;
+  }
+  return true;
 }
 
 function createDeepSeekV4NonNativeCompatSanitizerWrapper(
