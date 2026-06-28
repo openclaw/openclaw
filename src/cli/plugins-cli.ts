@@ -58,7 +58,7 @@ export type PluginAuthoringValidateOptions = {
 export type PluginAuthoringInitOptions = {
   directory?: string;
   force?: boolean;
-  name?: string;
+  type?: string;
 };
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
@@ -261,10 +261,11 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("init")
-    .description("Create a simple tool plugin project")
+    .description("Create a plugin project")
     .argument("<id>", "Plugin id")
     .option("--directory <path>", "Output directory")
     .option("--name <name>", "Display name")
+    .option("--type <type>", "Scaffold type (tool or provider)", "tool")
     .option("--force", "Overwrite an existing output directory", false)
     .action(async (id: string, opts: PluginAuthoringInitOptions) => {
       const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();

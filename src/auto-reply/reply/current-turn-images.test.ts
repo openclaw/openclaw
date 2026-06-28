@@ -60,4 +60,74 @@ describe("resolveCurrentTurnImages", () => {
       });
     });
   });
+
+  it("appends extracted PDF page images without dropping current image attachments", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
+      const imagePath = path.join(base, "photo.png");
+      const imageBytes = Buffer.from("current-photo");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const pdfPage = {
+        type: "image" as const,
+        data: Buffer.from("pdf-page").toString("base64"),
+        mimeType: "image/png",
+        attachmentIndex: 1,
+      };
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          MediaPaths: [imagePath, path.join(base, "scan.pdf")],
+          MediaTypes: ["image/png", "application/pdf"],
+          MediaWorkspaceDir: base,
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+        extractedFileImages: [pdfPage],
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/png",
+        },
+        {
+          type: "image",
+          data: pdfPage.data,
+          mimeType: "image/png",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
+
+  it("orders extracted PDF page images before later current image attachments", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
+      const imagePath = path.join(base, "photo.png");
+      await fs.writeFile(imagePath, "current-photo");
+      const pdfPage = {
+        type: "image" as const,
+        data: Buffer.from("pdf-page").toString("base64"),
+        mimeType: "image/png",
+        attachmentIndex: 0,
+      };
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          MediaPaths: [path.join(base, "scan.pdf"), imagePath],
+          MediaTypes: ["application/pdf", "image/png"],
+          MediaWorkspaceDir: base,
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+        extractedFileImages: [pdfPage],
+      });
+
+      expect(result.images?.map((image) => Buffer.from(image.data, "base64").toString())).toEqual([
+        "pdf-page",
+        "current-photo",
+      ]);
+      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
 });

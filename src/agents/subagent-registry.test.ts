@@ -3373,6 +3373,61 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("wakes a sessions_yield-paused parent when pending descendants settle", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:parent": {
+        sessionId: "sess-parent",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-yielded-parent",
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "yielded parent waiting on descendants",
+      cleanup: "keep",
+      createdAt: Date.parse("2026-06-26T02:17:00Z"),
+      startedAt: Date.parse("2026-06-26T02:18:00Z"),
+      endedAt: Date.parse("2026-06-26T02:19:00Z"),
+      pauseReason: "sessions_yield",
+      wakeOnDescendantSettle: true,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-yielded-child-finished",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "parent",
+      task: "descendant settles after yield",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    });
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "child finished announce"),
+      { childRunId: "run-yielded-child-finished" },
+      "child finished announce params",
+    );
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 1, 0, "yielded parent wake announce"),
+      {
+        childRunId: "run-yielded-parent",
+        wakeOnDescendantSettle: true,
+      },
+      "yielded parent wake announce params",
+    );
+  });
+
   it("loads runtime plugins before emitting killed subagent ended hooks", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",

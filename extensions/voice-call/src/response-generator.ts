@@ -234,6 +234,7 @@ export async function generateVoiceResponse(
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
+    coreSession: coreConfig.session,
   });
   const agentId = voiceConfig.agentId ?? "main";
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);

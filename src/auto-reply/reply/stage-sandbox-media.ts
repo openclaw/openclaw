@@ -41,6 +41,7 @@ export async function stageSandboxMedia(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   workspaceDir: string;
+  remoteMediaMode?: "sandbox-or-cache" | "cache";
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
@@ -49,11 +50,14 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  const sandbox = await ensureSandboxWorkspaceForSession({
-    config: cfg,
-    sessionKey,
-    workspaceDir,
-  });
+  const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
+  const sandbox = forceRemoteCache
+    ? null
+    : await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey,
+        workspaceDir,
+      });
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy)
   const remoteMediaCacheDir = ctx.MediaRemoteHost
