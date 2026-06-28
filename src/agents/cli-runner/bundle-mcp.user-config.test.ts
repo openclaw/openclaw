@@ -43,7 +43,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; url?: string }>;
+      mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
     };
     expect(raw.mcpServers?.omi?.type).toBe("sse");
     expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
