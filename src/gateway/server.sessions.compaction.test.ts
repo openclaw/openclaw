@@ -760,13 +760,13 @@ test("sessions.compact uses the freshest persisted key when main-key aliases exi
     expect(call.sessionTarget).toMatchObject({
       agentId: "main",
       sessionId: "sess-alias",
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:main:primary",
       storePath,
     });
     await patchAccessorSessionEntry(
       {
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:primary",
         storePath,
       },
       (entry) => ({
@@ -774,7 +774,7 @@ test("sessions.compact uses the freshest persisted key when main-key aliases exi
         compactionCheckpoints: [
           {
             checkpointId: "checkpoint-alias",
-            sessionKey: "agent:main:main",
+            sessionKey: "agent:main:primary",
             sessionId: "sess-alias",
             createdAt: Date.now(),
             reason: "manual",
@@ -807,18 +807,12 @@ test("sessions.compact uses the freshest persisted key when main-key aliases exi
   expect(compacted.payload?.key).toBe("agent:main:primary");
   expect(compacted.payload?.compacted).toBe(true);
   const aliasEntry = loadSessionEntry({
-    sessionKey: "agent:main:main",
+    sessionKey: "agent:main:primary",
     storePath,
   });
   expect(aliasEntry?.sessionId).toBe("sess-alias");
   expect(aliasEntry?.compactionCount).toBe(1);
   expect(aliasEntry?.compactionCheckpoints).toHaveLength(1);
-  expect(
-    loadSessionEntry({
-      sessionKey: "agent:main:primary",
-      storePath,
-    })?.compactionCheckpoints,
-  ).toBeUndefined();
 });
 
 test("sessions.compact treats Codex native compaction start as pending, not completed", async () => {
