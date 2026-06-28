@@ -96,6 +96,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.contextLimits.toolResultMaxChars": "Default Tool Result Max Chars",
   "agents.defaults.contextLimits.postCompactionMaxChars": "Default Post-compaction Max Chars",
   "agents.list": "Agent List",
+  "agents.list[].env": "Agent Environment Variables",
   "agents.list[].skillsLimits": "Agent Skills Limits",
   "agents.list[].skillsLimits.maxSkillsPromptChars": "Agent Skills Prompt Max Chars",
   "agents.list[].contextLimits": "Agent Context Limits",

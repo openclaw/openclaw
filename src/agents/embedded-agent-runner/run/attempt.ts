@@ -1540,6 +1540,7 @@ export async function runEmbeddedAttempt(
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
         })

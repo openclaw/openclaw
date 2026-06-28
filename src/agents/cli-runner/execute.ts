@@ -22,11 +22,12 @@ import {
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import { sanitizeHostEnvOverrides, sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -694,8 +695,16 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
+          const agentEnv = context.params.agentId
+            ? sanitizeHostEnvOverrides({
+                overrides: resolveAgentConfig(context.params.config ?? {}, context.params.agentId)
+                  ?.env,
+                blockPathOverrides: true,
+              })
+            : undefined;
           const backendEnv = {
             ...backend.env,
+            ...agentEnv,
             ...context.preparedBackend.env,
           };
           if (Object.keys(backendEnv).length > 0) {

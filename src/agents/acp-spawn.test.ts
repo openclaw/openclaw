@@ -1105,6 +1105,93 @@ describe("spawnAcpDirect", () => {
     });
   });
 
+  it("rejects configured runtime=acp aliases that are not allowed as configured owners", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-to-owner",
+            },
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("agentId is not allowed for sessions_spawn");
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("uses configured runtime=acp agent id as the ACP session owner", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-to-owner",
+            },
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex-acp"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.childSessionKey).toMatch(/^agent:codex-acp:acp:/);
+    const initInput = expectInitializeSessionFields({
+      agent: "codex",
+      sessionKey: accepted.childSessionKey,
+    });
+    expect(initInput.sessionKey).toMatch(/^agent:codex-acp:acp:/);
+    expect(findAgentGatewayCall()?.params?.sessionKey).toBe(accepted.childSessionKey);
+  });
+
   it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
@@ -1346,7 +1433,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params).not.toHaveProperty("attachments");
   });
 
-  it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {
+  it("maps OpenClaw ACP runtime agent aliases to their configured harness id and session owner", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1382,7 +1469,7 @@ describe("spawnAcpDirect", () => {
 
     expectAcceptedSpawn(result);
     const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(initInput.sessionKey).toMatch(/^agent:reviewer:acp:/);
   });
 
   it("inherits subagent envelope fields onto ACP children", async () => {

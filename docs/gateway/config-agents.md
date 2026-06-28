@@ -1055,6 +1055,7 @@ for provider examples and precedence.
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
+        env: { OPENCLAW_AGENT_ENV: "enabled" }, // child-process env overrides for this agent
         tts: {
           providers: {
             elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
@@ -1095,6 +1096,7 @@ for provider examples and precedence.
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `env`: optional per-agent environment variables injected only into child processes spawned for that agent: CLI backends, `exec`, ACP/ACPX sessions, and stdio MCP servers. Accepted keys override inherited Gateway process env at those child-process boundaries. The host env security policy filters `PATH`, loader/search-path/shell-hook keys, and credential-control variables; stdio MCP server `env` values are merged after `agents.list[].env`, so a server-local value can override the inherited per-agent value for that MCP process. Values are literal strings, so do not commit long-lived secrets here; keep them in the Gateway service environment or use the MCP server SecretInput flow when the secret is specific to a stdio MCP server (see [MCP server environment variables](/gateway/secrets#mcp-server-environment-variables)).
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).

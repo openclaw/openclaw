@@ -63,6 +63,27 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts per-agent env string maps", () => {
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        env: {
+          GIT_AUTHOR_EMAIL: "ops@example.com",
+          OPENCLAW_AGENT_ENV: "enabled",
+        },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        env: {
+          PORT: 3000,
+        },
+      }),
+      "env.PORT",
+    );
+  });
+
   it("accepts videoGenerationModel", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

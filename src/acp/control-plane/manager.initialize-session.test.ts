@@ -100,6 +100,95 @@ describe("AcpSessionManager initializeSession", () => {
     });
   });
 
+  it("passes configured agent env into ACP runtime initialization", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-agent-env",
+      storeSessionKey: "agent:codex:acp:session-agent-env",
+      acp: readySessionMeta(),
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "codex",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-to-acp",
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg,
+      sessionKey: "agent:codex:acp:session-agent-env",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:codex:acp:session-agent-env",
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-to-acp",
+      },
+    });
+  });
+
+  it("uses the configured agent owner env when ACP initialization targets a harness agent", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:reviewer:acp:binding:discord:default:agent-env",
+      storeSessionKey: "agent:reviewer:acp:binding:discord:default:agent-env",
+      acp: readySessionMeta({ agent: "codex" }),
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-to-owner",
+            },
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex",
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg,
+      sessionKey: "agent:reviewer:acp:binding:discord:default:agent-env",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:reviewer:acp:binding:discord:default:agent-env",
+      agent: "codex",
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-to-owner",
+      },
+    });
+  });
+
   it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

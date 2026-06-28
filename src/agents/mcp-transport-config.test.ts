@@ -126,6 +126,50 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("merges inherited agent env into stdio config before server env", () => {
+    const resolveWithInheritedEnv = resolveMcpTransportConfig as (
+      serverName: string,
+      rawServer: unknown,
+      options?: { inheritedEnv?: Record<string, string> },
+    ) => ReturnType<typeof resolveMcpTransportConfig>;
+
+    const resolved = resolveWithInheritedEnv(
+      "probe",
+      {
+        command: "node",
+        env: {
+          OPENCLAW_AGENT_ENV: "server-wins",
+          SERVER_ONLY: "server",
+        },
+      },
+      {
+        inheritedEnv: {
+          OPENCLAW_AGENT_ENV: "agent",
+          AGENT_ONLY: "agent",
+          NODE_OPTIONS: "--require=./evil.js",
+          PATH: "/tmp/agent-bin",
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      kind: "stdio",
+      transportType: "stdio",
+      command: "node",
+      args: undefined,
+      env: {
+        OPENCLAW_AGENT_ENV: "server-wins",
+        AGENT_ONLY: "agent",
+        SERVER_ONLY: "server",
+      },
+      cwd: undefined,
+      description: "node",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
+    });
+  });
+
   it("sanitizes config-controlled names in stdio env warnings", () => {
     resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
       command: "node",

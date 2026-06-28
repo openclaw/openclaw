@@ -268,6 +268,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].env":
+    "Optional per-agent environment variables injected into that agent's spawned CLI, exec, ACP, and stdio MCP subprocesses. Accepted keys override inherited process env only at child-process boundaries; blocked loader, shell-hook, credential-control, and PATH-style keys are filtered by the host env security policy. Values must be literal strings, so keep long-lived secrets in your external secret/env manager and reference them through that managed runtime environment instead of committing plaintext credentials.",
   "agents.list[].skillsLimits":
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
   "agents.list[].skillsLimits.maxSkillsPromptChars":

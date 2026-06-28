@@ -575,6 +575,36 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("passes configured per-agent env to the spawned CLI process", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        runId: "run-agent-env",
+        agentId: "main",
+        config: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                env: {
+                  OPENCLAW_AGENT_ENV: "visible-to-cli",
+                  NODE_OPTIONS: "--require ./malicious.js",
+                },
+              },
+            ],
+          },
+        } as unknown as PreparedCliRunContext["params"]["config"],
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env?.OPENCLAW_AGENT_ENV).toBe("visible-to-cli");
+    expect(input.env?.NODE_OPTIONS).toBeUndefined();
+  });
+
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const skillDir = path.join(workspaceDir, "skills", "weather");

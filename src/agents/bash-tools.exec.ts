@@ -33,6 +33,7 @@ import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeHostOverrideEnvVarKey,
+  sanitizeHostEnvOverrides,
   sanitizeHostExecEnvWithDiagnostics,
 } from "../infra/host-env-security.js";
 import { OPENCLAW_CLI_ENV_VAR } from "../infra/openclaw-exec-env.js";
@@ -52,6 +53,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -1772,11 +1774,24 @@ export function createExecTool(
         const inheritedBaseEnv = coerceEnv(process.env);
         const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
         const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+        const agentEnv =
+          defaults?.config && agentId
+            ? sanitizeHostEnvOverrides({
+                overrides: resolveAgentConfig(defaults.config, agentId)?.env,
+                blockPathOverrides: true,
+              })
+            : undefined;
         const requestedEnv: Record<string, string> | undefined =
+          agentEnv !== undefined ||
           params.env !== undefined ||
           resolvedExecEnvState?.pluginEnv !== undefined ||
           channelContextEnv !== undefined
-            ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+            ? {
+                ...agentEnv,
+                ...params.env,
+                ...resolvedExecEnvState?.pluginEnv,
+                ...channelContextEnv,
+              }
             : undefined;
         const hostEnvResult =
           host === "sandbox"
