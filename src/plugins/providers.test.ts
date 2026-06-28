@@ -201,21 +201,23 @@ function createMetadataSnapshotFixture(
       channelConfigs: ownerMap([]),
       providers: ownerMap(
         plugins.flatMap((plugin) =>
-          plugin.providers.map((providerId) => [providerId, [plugin.id]] as const),
+          plugin.providers.map((providerId) => [providerId, [plugin.id]]),
         ),
       ),
       modelCatalogProviders: ownerMap(
         plugins.flatMap((plugin) =>
-          Object.keys(plugin.modelCatalog?.aliases ?? {}).map(
-            (providerId) => [providerId, [plugin.id]] as const,
-          ),
+          Object.keys(plugin.modelCatalog?.aliases ?? {}).map((providerId) => [
+            providerId,
+            [plugin.id],
+          ]),
         ),
       ),
       cliBackends: ownerMap(
         plugins.flatMap((plugin) =>
-          [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
-            (backendId) => [backendId, [plugin.id]] as const,
-          ),
+          [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map((backendId) => [
+            backendId,
+            [plugin.id],
+          ]),
         ),
       ),
       setupProviders: ownerMap([]),
