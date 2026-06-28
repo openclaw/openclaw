@@ -368,6 +368,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("uses one-shot wording when ask is on-miss with restricted decisions (#97069)", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      ask: "on-miss",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+    expect(payload.text).toContain("cannot be saved and reused");
+    expect(payload.text).not.toContain("effective approval policy requires approval every time");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

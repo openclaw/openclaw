@@ -456,6 +456,7 @@ export async function executeNodeHostCommand(
           sentApproverDms,
           unavailableReason,
           allowedDecisions,
+          allowAlwaysPersistenceKind: allowAlwaysPersistence?.kind,
           nodeId: target.nodeId,
         });
       }

@@ -135,6 +135,7 @@ export type ExecToolDetails =
       approvalSlug: string;
       expiresAtMs: number;
       allowedDecisions?: readonly ExecApprovalDecision[];
+      allowAlwaysPersistenceKind?: string | null;
       host: ExecHost;
       command: string;
       cwd?: string;

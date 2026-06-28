@@ -286,16 +286,26 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   }
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
+  const hasExplicitNonPolicyReason =
+    typeof request.request.ask === "string" && request.request.ask !== "always";
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
-      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
+      : hasExplicitNonPolicyReason
+        ? "Background mode note: non-interactive runs cannot wait for chat approvals; this command cannot be pre-approved unless ask=off."
+        : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    if (hasExplicitNonPolicyReason) {
+      lines.push(
+        "Allow Always is unavailable because this command cannot be saved and reused (shell redirection or operators make it one-shot).",
+      );
+    } else {
+      lines.push(
+        "Allow Always is unavailable because the effective policy requires approval every time.",
+      );
+    }
   }
   return lines.join("\n");
 }

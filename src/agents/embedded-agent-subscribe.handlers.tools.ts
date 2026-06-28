@@ -603,6 +603,13 @@ function readExecApprovalPendingDetails(result: unknown): {
   if (!approvalId || !approvalSlug || !command || !host) {
     return null;
   }
+  let allowAlwaysPersistenceKind: string | null | undefined;
+  if (
+    typeof details.allowAlwaysPersistenceKind === "string" ||
+    details.allowAlwaysPersistenceKind === null
+  ) {
+    allowAlwaysPersistenceKind = details.allowAlwaysPersistenceKind;
+  }
   return {
     approvalId,
     approvalSlug,
@@ -613,6 +620,7 @@ function readExecApprovalPendingDetails(result: unknown): {
             decision === "allow-once" || decision === "allow-always" || decision === "deny",
         )
       : undefined,
+    allowAlwaysPersistenceKind,
     host,
     command,
     cwd: readStringValue(details.cwd),
@@ -692,6 +700,7 @@ async function emitToolResultOutput(params: {
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
+          ask: approvalPending.allowAlwaysPersistenceKind === "one-shot" ? "on-miss" : undefined,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,

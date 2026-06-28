@@ -87,6 +87,7 @@ function buildPendingPayload(params: {
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
           allowedDecisions: params.view.actions.map((action) => action.decision),
+          ask: params.view.approvalKind === "exec" ? (params.view.ask ?? null) : null,
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
