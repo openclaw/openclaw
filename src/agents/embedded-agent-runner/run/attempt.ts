@@ -1945,9 +1945,10 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    // Runtime tool allowlists, including [], intentionally narrow the model surface.
+    const hasRuntimeToolAllowlist = params.toolsAllow !== undefined;
+    const effectivePromptMode = hasRuntimeToolAllowlist ? ("minimal" as const) : promptMode;
+    const effectiveSkillsPrompt = hasRuntimeToolAllowlist ? undefined : skillsPrompt;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
