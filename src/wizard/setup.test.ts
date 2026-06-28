@@ -509,6 +509,35 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
+
+  it("shows setup duration expectations before the security acknowledgement", async () => {
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ note, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runSetupWizard(
+      {
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const calls = getWizardNoteCalls(note);
+    expect(calls[0]?.[1]).toBe("Setup timeline");
+    expect(calls[0]?.[0]).toContain("model/auth, workspace, Gateway, channels");
+    expect(calls[0]?.[0]).toContain("openclaw configure");
+    expect(calls[1]?.[1]).toBe("Security disclaimer");
+  });
+
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
