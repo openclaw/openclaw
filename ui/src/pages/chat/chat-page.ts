@@ -213,7 +213,6 @@ type ChatPageHost = ChatHost &
     chatProgrammaticScrollTarget: number;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
-    sidebarError: string | null;
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     updateComplete: Promise<unknown>;
@@ -1046,7 +1045,6 @@ function createPageState(
     chatSessionPickerResult: null,
     sidebarOpen: false,
     sidebarContent: null,
-    sidebarError: null,
     splitRatio: settings.splitRatio,
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
@@ -1230,7 +1228,6 @@ function createPageState(
   };
   state.handleOpenSidebar = (content) => {
     state.sidebarContent = content;
-    state.sidebarError = null;
     state.sidebarOpen = true;
     requestUpdate();
   };
@@ -1862,9 +1859,9 @@ export class ChatPage extends LitElement {
           search: searchForSession(next),
         });
       },
+      client: state.client,
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
-      sidebarError: state.sidebarError,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,
