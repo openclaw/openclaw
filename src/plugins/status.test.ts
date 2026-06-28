@@ -83,7 +83,8 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
+  isPluginMetadataSnapshotCompatible: (...args: unknown[]) =>
+    isPluginMetadataSnapshotCompatibleMock(...args),
   loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
   resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
     params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
