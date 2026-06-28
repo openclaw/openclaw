@@ -1,5 +1,6 @@
 // Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
@@ -17,6 +18,9 @@ import type {
 
 const options = workerData as TelegramIngressWorkerOptions;
 const pollLimit = 100;
+// getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
+// Telegram Bot API response will reach, guarding against misbehaving/hostile endpoints.
+const TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const retryInitialMs = 1000;
 const retryMaxMs = 30_000;
 let stopped = false;
@@ -140,7 +144,11 @@ async function fetchJson(params: {
       body: JSON.stringify(params.body),
       signal: controller.signal,
     });
-    const json = (await response.json()) as {
+    const json = JSON.parse(
+      (await readResponseWithLimit(response, TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES)).toString(
+        "utf8",
+      ),
+    ) as {
       ok?: unknown;
       error_code?: unknown;
       result?: unknown;

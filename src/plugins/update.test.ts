@@ -2460,6 +2460,62 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it.each(["@acme/demo@1.2.3", "@acme/demo@v1.2.3"])(
+    "reports newer registry default releases for exact pinned npm dry-runs from %s",
+    async (spec) => {
+      const installPath = createInstalledPackageDir({
+        name: "@acme/demo",
+        version: "1.2.3",
+      });
+      mockNpmViewMetadata({
+        name: "@acme/demo",
+        version: "1.2.4",
+      });
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: true,
+        pluginId: "demo",
+        targetDir: installPath,
+        version: "1.2.3",
+        extensions: ["index.ts"],
+        npmResolution: {
+          name: "@acme/demo",
+          version: "1.2.3",
+          resolvedSpec: spec,
+        },
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config: createNpmInstallConfig({
+          pluginId: "demo",
+          spec,
+          installPath,
+        }),
+        pluginIds: ["demo"],
+        dryRun: true,
+      });
+
+      expect(npmInstallCall()?.spec).toBe(spec);
+      expect(npmViewCall()?.[0]).toEqual([
+        "npm",
+        "view",
+        "@acme/demo",
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "openclaw",
+        "--json",
+      ]);
+      expectRecordFields(result.outcomes[0], {
+        pluginId: "demo",
+        status: "unchanged",
+        currentVersion: "1.2.3",
+        nextVersion: "1.2.3",
+        message: `demo is pinned to ${spec} (installed 1.2.3); registry default resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow the registry default line.`,
+      });
+    },
+  );
+
   it("updates disabled trusted official ClawHub installs through the catalog spec", async () => {
     installPluginFromClawHubMock.mockResolvedValue(
       createSuccessfulClawHubUpdateResult({

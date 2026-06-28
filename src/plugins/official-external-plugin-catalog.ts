@@ -302,6 +302,12 @@ function resolveHostedCatalogFeedUrl(raw: string): URL {
   if (parsed.protocol !== "https:") {
     throw new Error("hosted catalog feed URL must use HTTPS");
   }
+  if (parsed.username || parsed.password) {
+    throw new Error("hosted catalog feed URL must not include credentials");
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error("hosted catalog feed URL must not include query strings or fragments");
+  }
   return parsed;
 }
 
@@ -385,9 +391,21 @@ function getFeedEntryInstallCandidates(
 }
 
 function shouldRequireManifestInstallSourceRef(params: {
+  feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
 }): boolean {
+  const feedUrl = normalizeOptionalString(params.feedUrl);
+  if (feedUrl) {
+    try {
+      return (
+        resolveHostedCatalogFeedUrl(feedUrl).href !==
+        resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
+      );
+    } catch {
+      return true;
+    }
+  }
   const profileName =
     normalizeOptionalString(params.feedProfile) ??
     DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
@@ -794,6 +812,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   });
   const expectedSha256 = normalizeOptionalString(params?.expectedSha256);
   const requireManifestInstallSourceRef = shouldRequireManifestInstallSourceRef({
+    feedUrl: params?.feedUrl,
     feedProfile: params?.feedProfile,
     catalogConfig: params?.catalogConfig,
   });
