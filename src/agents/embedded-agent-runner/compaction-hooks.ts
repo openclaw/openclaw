@@ -116,6 +116,7 @@ export async function runPostCompactionSideEffects(params: {
   emitSessionTranscriptUpdate({
     sessionFile,
     sessionKey: params.sessionKey,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   await syncPostCompactionSessionMemory({

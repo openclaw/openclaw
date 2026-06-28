@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveSessionStoreAgentId,
@@ -15,7 +14,6 @@ import { resolveAgentMainSessionKey } from "./main-session.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
   resolveStorePath,
 } from "./paths.js";
 import {
@@ -293,8 +291,8 @@ export type TranscriptMessageAppendResult<TMessage> = {
   messageId: string;
 };
 
-/** Transcript update fields supplied by callers; sessionFile is resolved here. */
-export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
+/** Transcript update fields supplied by callers; the target is resolved here. */
+export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate>;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
