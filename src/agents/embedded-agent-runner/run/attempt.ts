@@ -4626,6 +4626,7 @@ export async function runEmbeddedAttempt(
               prompt: llmBoundaryPromptForPrecheck,
               contextMode: params.bootstrapContextMode,
               promptImageCount: imageResult.images.length,
+              toolCount: effectiveTools.length + clientToolDefs.length,
               contextTokenBudget,
               reserveTokens,
               toolResultMaxChars: promptToolResultMaxChars,

@@ -284,6 +284,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   prompt: string;
   contextMode?: "full" | "lightweight";
   promptImageCount?: number;
+  toolCount?: number;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -315,6 +316,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const promptImageCount = Math.max(0, Math.floor(params.promptImageCount ?? 0));
+  const toolCount = Math.max(0, Math.floor(params.toolCount ?? 0));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
   const sharedMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
@@ -323,6 +325,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const lightweightPromptBudgetEligible =
     params.contextMode === "lightweight" &&
     promptImageCount === 0 &&
+    toolCount === 0 &&
     params.messages.length === 0 &&
     (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
   const lightweightMinPromptBudget = lightweightPromptBudgetEligible
