@@ -13,7 +13,7 @@ import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -309,10 +309,9 @@ describe("runReplyAgent auto-compaction token update", () => {
     entry: Record<string, unknown>;
   }) {
     await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await fs.writeFile(
-      params.storePath,
-      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
-      "utf-8",
+    await replaceSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      params.entry as SessionEntry,
     );
   }
 
@@ -426,7 +425,8 @@ describe("runReplyAgent auto-compaction token update", () => {
       unsubscribe?.();
     }
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    const stored = persisted ? { [sessionKey]: persisted } : {};
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
@@ -689,11 +689,10 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("reads opted-in post-compaction context from the queued workspace instead of process cwd", async () => {
+  it("does not treat diagnostic compaction metadata as a context-refresh trigger", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
     );
-    const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compaction-cwd-"));
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
       [
@@ -706,32 +705,25 @@ describe("runReplyAgent auto-compaction token update", () => {
       "utf-8",
     );
 
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-    try {
-      const { sessionKey } = await runBaseReplyWithAgentMeta({
-        tmpPrefix: "openclaw-post-compaction-workspace-root-",
-        workspaceDir,
-        config: {
-          agents: {
-            defaults: {
-              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-            },
+    const { sessionKey } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-post-compaction-workspace-root-",
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
           },
         },
-        agentMeta: {
-          compactionCount: 1,
-          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-        },
-      });
+      },
+      agentMeta: {
+        compactionCount: 1,
+        lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+      },
+    });
 
-      await vi.waitFor(() => {
-        const events = peekSystemEvents(sessionKey);
-        expect(events[0]).toContain("Post-compaction context refresh");
-        expect(events[0]).toContain("Read the queued workspace startup file.");
-      });
-    } finally {
-      cwdSpy.mockRestore();
-    }
+    // agentMeta.compactionCount is diagnostic metadata from the harness result;
+    // post-compaction context refresh belongs to runner-owned compaction paths.
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 });
 
@@ -958,20 +950,21 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
-      latest[sessionKey] = {
-        ...latest[sessionKey],
-        pluginDebugEntries: [
-          {
-            pluginId: "active-memory",
-            lines: [
-              "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-              "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-            ],
-          },
-        ],
-      };
-      await saveSessionStore(storePath, latest);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          ...sessionEntry,
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: [
+                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
+              ],
+            },
+          ],
+        },
+      );
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -1070,20 +1063,21 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
-      latest[sessionKey] = {
-        ...latest[sessionKey],
-        pluginDebugEntries: [
-          {
-            pluginId: "active-memory",
-            lines: [
-              "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-              "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-            ],
-          },
-        ],
-      };
-      await saveSessionStore(storePath, latest);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          ...sessionEntry,
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: [
+                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
+              ],
+            },
+          ],
+        },
+      );
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -1181,20 +1175,21 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
-      latest[sessionKey] = {
-        ...latest[sessionKey],
-        pluginDebugEntries: [
-          {
-            pluginId: "active-memory",
-            lines: [
-              "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
-              "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-            ],
-          },
-        ],
-      };
-      await saveSessionStore(storePath, latest);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          ...sessionEntry,
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: [
+                "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+                "🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
+              ],
+            },
+          ],
+        },
+      );
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
