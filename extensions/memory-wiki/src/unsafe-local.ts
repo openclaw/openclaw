@@ -80,25 +80,26 @@ async function listAllowedFilesRecursive(
 
 async function collectUnsafeLocalArtifacts(
   configuredPaths: string[],
-): Promise<{ artifacts: UnsafeLocalArtifact[]; hadUnreadableSource: boolean }> {
+): Promise<{ artifacts: UnsafeLocalArtifact[]; unreadableRoots: string[] }> {
   const artifacts: UnsafeLocalArtifact[] = [];
-  // A configured path that cannot be read (undocked drive, unmounted NAS,
-  // not-yet-mounted cloud folder) is transiently absent, not deleted. Track it
-  // so the caller skips pruning instead of destroying imported pages (#97523).
-  let hadUnreadableSource = false;
+  // Configured roots that could not be fully read (undocked drive, unmounted
+  // NAS, not-yet-mounted nested mount, or a missing explicit file) are
+  // transiently absent, not deleted. The caller preserves imported entries under
+  // these roots from pruning while still cleaning up readable roots (#97523).
+  const unreadableRoots: string[] = [];
   for (const configuredPath of configuredPaths) {
     const absoluteConfiguredPath = path.resolve(configuredPath);
     const stat = await fs.stat(absoluteConfiguredPath).catch(() => null);
     if (!stat) {
-      hadUnreadableSource = true;
+      unreadableRoots.push(absoluteConfiguredPath);
       continue;
     }
     if (stat.isDirectory()) {
       const listing = await listAllowedFilesRecursive(absoluteConfiguredPath);
       // A nested mount that is gone still imports the files we can read, but the
-      // outage must trip the prune guard so missing entries are not deleted.
+      // root is marked unreadable so its entries are not pruned during the outage.
       if (!listing.readable) {
-        hadUnreadableSource = true;
+        unreadableRoots.push(absoluteConfiguredPath);
       }
       for (const absolutePath of listing.files) {
         artifacts.push({
@@ -124,7 +125,36 @@ async function collectUnsafeLocalArtifacts(
   for (const artifact of artifacts) {
     deduped.set(artifact.syncKey, artifact);
   }
-  return { artifacts: [...deduped.values()], hadUnreadableSource };
+  return { artifacts: [...deduped.values()], unreadableRoots };
+}
+
+function isPathAtOrWithin(target: string, root: string): boolean {
+  if (target === root) {
+    return true;
+  }
+  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return target.startsWith(rootWithSep);
+}
+
+// Keep imported entries whose source lives under a transiently unreadable root
+// out of the prune by marking their keys active, so a temporary outage cannot
+// delete their pages or human-notes while readable roots still clean up (#97523).
+function preserveEntriesUnderUnreadableRoots(params: {
+  state: Awaited<ReturnType<typeof readMemoryWikiSourceSyncState>>;
+  unreadableRoots: string[];
+  activeKeys: Set<string>;
+}): void {
+  if (params.unreadableRoots.length === 0) {
+    return;
+  }
+  for (const [syncKey, entry] of Object.entries(params.state.entries)) {
+    if (entry.group !== "unsafe-local") {
+      continue;
+    }
+    if (params.unreadableRoots.some((root) => isPathAtOrWithin(entry.sourcePath, root))) {
+      params.activeKeys.add(syncKey);
+    }
+  }
 }
 
 function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePath: string }): {
@@ -238,7 +268,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     };
   }
 
-  const { artifacts, hadUnreadableSource } = await collectUnsafeLocalArtifacts(
+  const { artifacts, unreadableRoots } = await collectUnsafeLocalArtifacts(
     config.unsafeLocal.paths,
   );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
@@ -262,20 +292,18 @@ export async function syncMemoryWikiUnsafeLocalSources(
     }),
   );
 
-  // When a configured source was transiently unreadable it collects zero
-  // artifacts the same way a real deletion does. Pruning here would hard-delete
-  // imported pages and the user's human-notes blocks for sources that are only
-  // temporarily gone, with no content left to restore on the next sync. Skip the
-  // prune until every configured source is readable again. Mirrors the
-  // capability-gated bridge-sync guard in bridge.ts (#68373). See #97523.
-  const removedCount = hadUnreadableSource
-    ? 0
-    : await pruneImportedSourceEntries({
-        vaultRoot: config.vault.path,
-        group: "unsafe-local",
-        activeKeys,
-        state,
-      });
+  // A transiently unreadable root collects zero artifacts the same way a real
+  // deletion does, so its entries would otherwise be pruned, hard-deleting their
+  // pages and human-notes blocks with nothing left to restore. Preserve those
+  // entries per-root, then prune normally so readable roots still clean up their
+  // genuinely deleted files. See #97523.
+  preserveEntriesUnderUnreadableRoots({ state, unreadableRoots, activeKeys });
+  const removedCount = await pruneImportedSourceEntries({
+    vaultRoot: config.vault.path,
+    group: "unsafe-local",
+    activeKeys,
+    state,
+  });
   await writeMemoryWikiSourceSyncState(config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;
   const updatedCount = results.filter((result) => result.changed && !result.created).length;

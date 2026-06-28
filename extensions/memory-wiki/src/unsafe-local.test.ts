@@ -190,6 +190,71 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     }
   });
 
+  it("keeps the imported page when an explicit configured file is transiently unavailable", async () => {
+    const privateDir = await createPrivateDir("private-explicit");
+    const secretPath = path.join(privateDir, "secret.md");
+    await fs.writeFile(secretPath, "# private\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("explicit-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [secretPath],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const pagePath = first.pagePaths[0] ?? "";
+    expect(first.importedCount).toBe(1);
+
+    // An explicit configured file that vanishes is indistinguishable from an
+    // unmounted one, so the conservative behavior keeps its page rather than
+    // destroying it.
+    await fs.rm(secretPath);
+    const second = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(second.removedCount).toBe(0);
+    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
+      "# private",
+    );
+  });
+
+  it("prunes a readable source even when another configured source is unreadable", async () => {
+    const readableDir = await createPrivateDir("multi-readable");
+    const keptPath = path.join(readableDir, "kept.md");
+    const removedPath = path.join(readableDir, "removed.md");
+    await fs.writeFile(keptPath, "# kept\n", "utf8");
+    await fs.writeFile(removedPath, "# removed\n", "utf8");
+
+    const offlineDir = await createPrivateDir("multi-offline");
+    await fs.writeFile(path.join(offlineDir, "notes.md"), "# notes\n", "utf8");
+
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("multi-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [readableDir, offlineDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(first.importedCount).toBe(3);
+
+    // One source goes offline while the other deletes a file. The healthy source
+    // must still prune its deletion; the offline source's page is preserved.
+    await fs.rm(removedPath);
+    await fs.rename(offlineDir, `${offlineDir}-gone`);
+    const second = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(second.removedCount).toBe(1);
+  });
+
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
     const privateDir = await createPrivateDir(`${"漢".repeat(50)}-private`);
     const nestedDir = path.join(privateDir, `${"語".repeat(50)}-nested`);
