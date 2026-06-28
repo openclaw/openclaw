@@ -162,7 +162,7 @@ describe("runStartupSessionMigration", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("blocks startup when hot legacy session SQLite import reports issues", async () => {
+  it("blocks startup when hot legacy session SQLite import reports blocking issues", async () => {
     const log = makeLog();
     const runDoctorSessionSqlite = makeSessionSqliteImport({
       targets: [
@@ -174,8 +174,8 @@ describe("runStartupSessionMigration", () => {
           importedTranscriptEvents: 0,
           issues: [
             {
-              code: "transcript_missing",
-              message: "Transcript file is missing: /tmp/missing.jsonl",
+              code: "transcript_malformed",
+              message: "/tmp/bad.jsonl: SyntaxError",
               sessionKey: "agent:main:main",
             },
           ],
@@ -214,6 +214,62 @@ describe("runStartupSessionMigration", () => {
         },
       }),
     ).rejects.toThrow("session SQLite migration failed during startup");
+  });
+
+  it("warns without blocking when a legacy transcript sidecar is missing", async () => {
+    const log = makeLog();
+    const runDoctorSessionSqlite = makeSessionSqliteImport({
+      targets: [
+        {
+          agentId: "main",
+          archivedTranscriptFiles: [],
+          archivedUnreferencedJsonlFiles: [],
+          importedEntries: 1,
+          importedTranscriptEvents: 0,
+          issues: [
+            {
+              code: "transcript_missing",
+              message: "Transcript file is missing: /tmp/missing.jsonl",
+              sessionKey: "agent:main:main",
+            },
+          ],
+          legacyEntries: 1,
+          referencedTranscriptFiles: 1,
+          sqliteEntries: 1,
+          sqlitePath: "/tmp/openclaw-agent.sqlite",
+          storePath: "/tmp/sessions.json",
+          unreferencedJsonlFiles: [],
+          validatedEntries: 0,
+          validatedTranscriptEvents: 0,
+        },
+      ],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 1,
+        importedTranscriptEvents: 0,
+        issues: 1,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        targets: 1,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+
+    await runStartupSessionMigration({
+      cfg: makeCfg(),
+      log,
+      deps: {
+        migrateOrphanedSessionKeys: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+        runDoctorSessionSqlite,
+      },
+    });
+
+    expect(firstLogMessage(log.warn, "missing transcript warning")).toContain(
+      "session SQLite migration warnings",
+    );
   });
 
   it("warns without blocking when only stale archive-tier JSONL archival fails", async () => {

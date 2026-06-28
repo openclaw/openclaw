@@ -42,6 +42,19 @@ function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTa
   return [...deduped.values()];
 }
 
+function dedupeTargetsBySqliteTarget(targets: SessionStoreTarget[]): SessionStoreTarget[] {
+  const deduped = new Map<string, SessionStoreTarget>();
+  for (const target of targets) {
+    const sqlitePath =
+      resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
+      target.storePath;
+    if (!deduped.has(sqlitePath)) {
+      deduped.set(sqlitePath, target);
+    }
+  }
+  return [...deduped.values()];
+}
+
 function shouldSkipDiscoveryError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return typeof code === "string" && NON_FATAL_DISCOVERY_ERROR_CODES.has(code);
@@ -256,7 +269,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
       throw err;
     }
   });
-  return dedupeTargetsByStorePath([...validatedConfiguredTargets, ...discoveredTargets]);
+  return dedupeTargetsBySqliteTarget([...validatedConfiguredTargets, ...discoveredTargets]);
 }
 
 /** Resolves session store targets for one agent, including retired/manual stores. */
@@ -371,7 +384,7 @@ export function resolveSessionStoreTargets(
       agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId, env }),
     }));
-    return dedupeTargetsByStorePath(targets);
+    return dedupeTargetsBySqliteTarget(targets);
   }
 
   if (hasAgent) {

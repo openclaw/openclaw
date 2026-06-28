@@ -264,6 +264,123 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("imports legacy entries even when their transcript sidecar is missing", async () => {
+    const store = createLegacyStore();
+    fs.rmSync(store.transcriptPath);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 1,
+      importedTranscriptEvents: 0,
+      issues: 1,
+      sqliteEntries: 1,
+    });
+    expect(report.targets[0]?.issues[0]).toMatchObject({
+      code: "transcript_missing",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry.sessionId,
+    ).toBe("session-1");
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toEqual([]);
+  });
+
+  it("imports shared custom stores into per-agent SQLite targets", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const sessionDir = path.join(tempDir, "shared-session-store");
+      const storePath = path.join(sessionDir, "sessions.json");
+      const mainTranscriptPath = path.join(sessionDir, "main-session.jsonl");
+      const workTranscriptPath = path.join(sessionDir, "work-session.jsonl");
+      const orphanTranscriptPath = path.join(sessionDir, "orphan.jsonl");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionFile: "main-session.jsonl",
+              sessionId: "main-session",
+              updatedAt: 20,
+            },
+            "agent:work:main": {
+              sessionFile: "work-session.jsonl",
+              sessionId: "work-session",
+              updatedAt: 30,
+            },
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+      fs.writeFileSync(mainTranscriptPath, '{"type":"session","sessionId":"main-session"}\n', {
+        mode: 0o600,
+      });
+      fs.writeFileSync(workTranscriptPath, '{"type":"session","sessionId":"work-session"}\n', {
+        mode: 0o600,
+      });
+      fs.writeFileSync(orphanTranscriptPath, '{"type":"event","id":"orphan"}\n', { mode: 0o600 });
+
+      const report = await runDoctorSessionSqlite({
+        allAgents: true,
+        cfg: {
+          agents: { list: [{ default: true, id: "main" }, { id: "work" }] },
+          session: { store: storePath },
+        },
+        env,
+        mode: "import",
+      });
+
+      expect(report.targets.map((target) => target.agentId)).toEqual(["main", "work"]);
+      expect(report.totals).toMatchObject({
+        archivedTranscriptFiles: 2,
+        archivedUnreferencedJsonlFiles: 1,
+        importedEntries: 2,
+        importedTranscriptEvents: 2,
+        issues: 0,
+        sqliteEntries: 2,
+      });
+      expect(
+        loadExactSqliteSessionEntry({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          storePath,
+        })?.entry.sessionId,
+      ).toBe("main-session");
+      expect(
+        loadExactSqliteSessionEntry({
+          agentId: "work",
+          sessionKey: "agent:work:main",
+          storePath,
+        })?.entry.sessionId,
+      ).toBe("work-session");
+      expect(fs.existsSync(mainTranscriptPath)).toBe(false);
+      expect(fs.existsSync(workTranscriptPath)).toBe(false);
+      expect(fs.existsSync(orphanTranscriptPath)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports active JSONL files left beside SQLite-backed sessions", async () => {
     const store = createLegacyStore();
 
@@ -275,6 +392,19 @@ describe("runDoctorSessionSqlite", () => {
     fs.writeFileSync(store.transcriptPath, '{"type":"event","id":"heartbeat"}\n', {
       mode: 0o600,
     });
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      {
+        sessionFile: "session-1.jsonl",
+        sessionId: "session-1",
+        updatedAt: 3000,
+      },
+    );
 
     const report = await runDoctorSessionSqlite({
       env: store.env,

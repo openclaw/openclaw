@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -22,6 +23,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
@@ -109,7 +111,7 @@ export async function runDoctorSessionSqlite(
   });
   const reports: DoctorSessionSqliteTargetReport[] = [];
   for (const target of targets) {
-    reports.push(await inspectOrMigrateTarget({ env, mode: options.mode, target }));
+    reports.push(await inspectOrMigrateTarget({ cfg, env, mode: options.mode, target }));
   }
   return summarizeDoctorSessionSqliteReport(options.mode, reports);
 }
@@ -166,16 +168,22 @@ function filterLegacySessionStoreTargets(
 }
 
 async function inspectOrMigrateTarget(params: {
+  cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
   target: SessionStoreTarget;
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
-  const records = readLegacySessionRecords(params.target, issues, {
+  const allRecords = readLegacySessionRecords(params.target, issues, {
     allowMissingStore: params.mode === "inspect",
   });
+  const records = shouldFilterLegacySessionRecordsByTarget(params.target)
+    ? allRecords.filter((record) =>
+        isLegacySessionRecordOwnedByTarget(params.cfg, params.target, record.sessionKey),
+      )
+    : allRecords;
   const referencedTranscriptFiles = new Set(
-    records.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
+    allRecords.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
   );
   const report: DoctorSessionSqliteTargetReport = {
     agentId: params.target.agentId,
@@ -270,6 +278,25 @@ function readLegacySessionRecords(
   return records;
 }
 
+function isLegacySessionRecordOwnedByTarget(
+  cfg: OpenClawConfig,
+  target: SessionStoreTarget,
+  sessionKey: string,
+): boolean {
+  const ownerAgentId = resolveStoredSessionOwnerAgentId({
+    cfg,
+    agentId: target.agentId,
+    sessionKey,
+  });
+  return ownerAgentId
+    ? ownerAgentId === target.agentId
+    : target.agentId === resolveDefaultAgentId(cfg);
+}
+
+function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {
+  return !resolveSqliteTargetFromSessionStorePath(target.storePath).agentId;
+}
+
 function resolveLegacyTranscriptPath(
   target: SessionStoreTarget,
   entry: SessionEntry,
@@ -319,6 +346,14 @@ async function importLegacySessionRecord(
     if (markAlreadyMigratedTranscript(target, record, report)) {
       return;
     }
+    const imported = await importSqliteSessionRows({
+      agentId: target.agentId,
+      entry: normalizeImportedSqliteSessionEntry(target, record),
+      sessionKey: record.sessionKey,
+      storePath: target.storePath,
+    });
+    report.importedEntries += 1;
+    report.importedTranscriptEvents += imported.transcriptEvents;
     report.issues.push({
       code: "transcript_missing",
       message: `Transcript file is missing: ${record.transcriptPath}`,
@@ -793,7 +828,9 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
 }
 
 function resolveTargetSqlitePath(target: SessionStoreTarget): string {
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath);
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+    agentId: target.agentId,
+  });
   return resolveOpenClawAgentSqlitePath({
     agentId: sqliteTarget.agentId ?? target.agentId,
     ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),

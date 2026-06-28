@@ -103,7 +103,7 @@ export type SessionsCleanupRunResult = {
 
 function resolveCleanupSqlitePath(target: SessionStoreTarget): string {
   return (
-    resolveSqliteTargetFromSessionStorePath(target.storePath).path ??
+    resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
     resolveOpenClawAgentSqlitePath({ agentId: target.agentId })
   );
 }

@@ -19,6 +19,11 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
 };
 
+const STARTUP_WARNING_ISSUE_CODES = new Set([
+  "transcript_missing",
+  "unreferenced_jsonl_archive_failed",
+]);
+
 /**
  * Run session migrations at gateway startup before runtime session access.
  *
@@ -80,7 +85,7 @@ function collectStartupBlockingIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => issue.code !== "unreferenced_jsonl_archive_failed"),
+    target.issues.filter((issue) => !STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
   );
 }
 
@@ -88,7 +93,7 @@ function collectStartupWarningIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => issue.code === "unreferenced_jsonl_archive_failed"),
+    target.issues.filter((issue) => STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
   );
 }
 
