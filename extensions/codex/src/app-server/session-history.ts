@@ -40,7 +40,7 @@ export async function readCodexMirroredSessionHistoryMessages(
     if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
       return undefined;
     }
-    migrateSessionEntries(entries as SessionEntry[]);
+    migrateSessionEntries(entries);
     const sessionEntries = entries.filter((entry): entry is SessionEntry => {
       return (
         entry !== null &&

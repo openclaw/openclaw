@@ -22,7 +22,6 @@ import {
   getSessionsHandlers,
   createDeferred,
   loadSeededTranscriptEvents,
-  seedLinearSessionTranscript,
   seedSessionTranscript,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";

@@ -96,10 +96,7 @@ test("sessions.preview returns transcript previews", async () => {
       .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
       .map((record) => record.message)
       .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) => ({
-        role: String(message.role),
-        ...message,
-      })),
+      .map((message) => Object.assign({ role: String(message.role) }, message)),
   });
 
   const preview = await directSessionReq<{

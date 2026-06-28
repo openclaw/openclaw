@@ -168,15 +168,15 @@ export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  const path = resolveCodexAppServerBindingPath(sessionFile);
+  const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
   let raw: string;
   try {
-    raw = await fs.readFile(path, "utf8");
+    raw = await fs.readFile(bindingPath, "utf8");
   } catch (error) {
     if (isNotFound(error)) {
       return undefined;
     }
-    embeddedAgentLog.warn("failed to read codex app-server binding", { path, error });
+    embeddedAgentLog.warn("failed to read codex app-server binding", { path: bindingPath, error });
     return undefined;
   }
   try {
@@ -258,7 +258,10 @@ export async function readCodexAppServerBinding(
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
   } catch (error) {
-    embeddedAgentLog.warn("failed to parse codex app-server binding", { path, error });
+    embeddedAgentLog.warn("failed to parse codex app-server binding", {
+      path: bindingPath,
+      error,
+    });
     return undefined;
   }
 }

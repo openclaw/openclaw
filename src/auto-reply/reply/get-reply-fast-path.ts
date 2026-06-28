@@ -218,7 +218,7 @@ export function initFastReplySessionState(params: {
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";

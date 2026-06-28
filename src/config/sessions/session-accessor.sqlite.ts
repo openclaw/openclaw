@@ -676,16 +676,16 @@ export async function resetSqliteSessionEntryLifecycle(
       ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
     };
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-    runOpenClawAgentWriteTransaction((database) => {
-      deleteSqliteLifecycleTargetRows(database, params.target);
-      writeSessionEntry(database, params.target.canonicalKey, nextEntry);
+    runOpenClawAgentWriteTransaction((transactionDb) => {
+      deleteSqliteLifecycleTargetRows(transactionDb, params.target);
+      writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry);
     }, toDatabaseOptions(resolved));
     await params.afterEntryMutation?.(mutation);
-    runOpenClawAgentWriteTransaction((database) => {
+    runOpenClawAgentWriteTransaction((transactionDb) => {
       archivedTranscripts = current?.entry.sessionId
         ? archiveSqliteSessionStateAfterEntryRemoval({
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-            database,
+            database: transactionDb,
             entry: current.entry,
             reason: "reset",
           })
@@ -784,12 +784,12 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       store[sessionKey] = cloned;
       upsertedEntries.push({ sessionKey, entry: cloned });
     }
-    runOpenClawAgentWriteTransaction((database) => {
+    runOpenClawAgentWriteTransaction((transactionDb) => {
       for (const sessionKey of removedSessionKeys) {
-        deleteSqliteSessionEntryRows(database, sessionKey);
+        deleteSqliteSessionEntryRows(transactionDb, sessionKey);
       }
       for (const { sessionKey, entry } of upsertedEntries) {
-        writeSessionEntry(database, sessionKey, entry);
+        writeSessionEntry(transactionDb, sessionKey, entry);
       }
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: params.activeSessionKey ?? "",
@@ -1237,8 +1237,8 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
     );
 
     let result = initialResult;
-    runOpenClawAgentWriteTransaction((database) => {
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    runOpenClawAgentWriteTransaction((transactionDb) => {
+      const fresh = readSessionEntryRow(transactionDb, resolved.sessionKey);
       if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
         result = {
           appendedMessages: [],

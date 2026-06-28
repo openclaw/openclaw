@@ -282,12 +282,11 @@ async function resolveCliContextCompactionSuccess(params: {
     config: params.cfg,
     sessionId: resultSessionId,
     sessionKey: resultSessionTarget?.sessionKey ?? params.sessionKey,
-    sessionTarget: {
-      ...(resultSessionTarget ?? {}),
-      ...(params.storePath && !resultSessionTarget?.storePath
-        ? { storePath: params.storePath }
-        : {}),
-    },
+    sessionTarget: Object.assign(
+      {},
+      resultSessionTarget,
+      params.storePath && !resultSessionTarget?.storePath ? { storePath: params.storePath } : {},
+    ),
   });
   return {
     maintenanceSessionFile: resolvedTarget.sessionFile,

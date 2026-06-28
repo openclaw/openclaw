@@ -529,7 +529,7 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
       yield { lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
-    throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`);
+    throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
   } finally {
     fs.closeSync(fd);
   }

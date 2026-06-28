@@ -134,7 +134,7 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(2);
 
     const updated = readSessionEntries(storePath);
-    expect(Object.keys(updated).sort()).toEqual([
+    expect(Object.keys(updated).toSorted()).toEqual([
       "agent:main:cron:job1",
       "agent:main:cron:job1:run:recent-run",
       "agent:main:cron:job1:run:recent-run:thread:reply",

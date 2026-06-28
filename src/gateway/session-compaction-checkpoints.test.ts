@@ -110,21 +110,6 @@ function checkpointConfig(storePath: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-async function writeSessionStore(
-  storePath: string,
-  sessionKey: string,
-  entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] } & Record<
-    string,
-    unknown
-  >,
-): Promise<void> {
-  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf-8");
-}
-
-async function readSessionStore<T extends object>(storePath: string): Promise<Record<string, T>> {
-  return JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, T>;
-}
-
 async function writeAccessorSessionEntry(
   storePath: string,
   sessionKey: string,

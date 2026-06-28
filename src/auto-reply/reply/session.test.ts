@@ -2166,7 +2166,7 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
 
-    const persisted = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBe("done");
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
@@ -2261,7 +2261,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(scenario.expectNewSession);
-    const persisted = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreFast(storePath);
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
       expect(result.sessionId).not.toBe(existingSessionId);
@@ -3470,7 +3470,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         sessionId: existingSessionId,
         overrides: { ...runtimeModelCache, ...explicitUserOverride },
       });
-      const seeded = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+      const seeded = readSessionStoreFast(storePath);
       expect(seeded[sessionKey]?.modelProvider, testCase.name).toBe(
         runtimeModelCache.modelProvider,
       );
@@ -3519,7 +3519,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       // Unrelated behavior overrides still carry across the reset.
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(runtimeModelCache.verboseLevel);
 
-      const stored = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+      const stored = readSessionStoreFast(storePath);
       expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
       expect(stored[sessionKey].model, testCase.name).toBeUndefined();
       expect(stored[sessionKey].cacheRead, testCase.name).toBeUndefined();
@@ -5181,7 +5181,7 @@ describe("initSessionState dmScope delivery migration", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
     expect(persisted["agent:main:main"]?.route).toBeUndefined();
     expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
@@ -5224,7 +5224,7 @@ describe("initSessionState dmScope delivery migration", () => {
       commandAuthorized: true,
     });
 
-    const persisted = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "1111",
@@ -5299,7 +5299,7 @@ describe("initSessionState internal channel routing preservation", () => {
       accountId: "default",
     });
 
-    const persisted = readSessionStoreFast(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
     expect(persisted[sessionKey]?.deliveryContext).toEqual({
       channel: "mattermost",

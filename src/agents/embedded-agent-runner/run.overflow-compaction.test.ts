@@ -2254,7 +2254,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect(result.meta.error).toBeUndefined();
       expect(result.meta.agentMeta?.compactionTokensAfter).toBeUndefined();
       expect(result.meta.agentMeta?.contextBudgetStatus).toBeUndefined();
-      const stored = await loadSessionEntry({ sessionKey: "test-key", storePath });
+      const stored = loadSessionEntry({ sessionKey: "test-key", storePath });
       expect(stored?.totalTokens).toBe(0);
       expect(stored?.totalTokensFresh).toBe(true);
       expect(stored?.inputTokens).toBeUndefined();

@@ -152,13 +152,6 @@ function requireValue<T>(value: T | undefined, label: string): T {
   return value;
 }
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));

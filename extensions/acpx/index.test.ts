@@ -168,9 +168,9 @@ describe("acpx plugin", () => {
           throw new Error("expected ACPX hook abort signal");
         }
         observedAbortStates.push(abortSignal.aborted);
-        await new Promise<void>((resolve) =>
-          abortSignal.addEventListener("abort", () => resolve(), { once: true }),
-        );
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
         observedAbortStates.push(abortSignal.aborted);
         return {
           handled: true,
