@@ -1,0 +1,28 @@
+{
+  "schema": "superclaw.policy_decision_response.v0",
+  "decision_id": "pd_01J",
+  "effect": "allow",
+  "reason_code": "allowed_by_org_policy",
+  "policy_bundle_id": "policy_build_20260627",
+  "policy_epoch": 12,
+  "routine_or_invariant": "invariant",
+  "cache": {
+    "cacheable": true,
+    "ttl_ms": 30000,
+    "invalidation_epochs": {
+      "policy_epoch": 12,
+      "alias_binding_epoch": 7,
+      "revocation_epoch": 1,
+      "classification_epoch": 3,
+      "erasure_epoch": 1
+    }
+  },
+  "obligations": {
+    "receipt_required": true,
+    "redaction_profile": "receipt-user-v1",
+    "action_receipt_visibility": "user",
+    "required_attestation_profile": "tdx-v1",
+    "memory_write_mode": "outbox"
+  },
+  "signature": "sig:placeholder"
+}

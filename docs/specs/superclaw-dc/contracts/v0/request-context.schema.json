@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "superclaw.request_context.v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "request", "identity", "runtime", "agent", "data", "capability"],
+  "properties": {
+    "schema": { "const": "superclaw.request_context.v0" },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "trace_id", "created_at"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "trace_id": { "type": "string" },
+        "parent_request_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "org_id",
+        "customer_tenant_id",
+        "isolation_cell_id",
+        "namespace_id",
+        "runtime_pool_id",
+        "data_residency_region",
+        "canonical_principal_id",
+        "principal_type",
+        "alias_binding_event_id",
+        "alias_binding_epoch"
+      ],
+      "properties": {
+        "org_id": { "type": "string" },
+        "customer_tenant_id": { "type": "string" },
+        "isolation_cell_id": { "type": "string" },
+        "namespace_id": { "type": "string" },
+        "runtime_pool_id": { "type": "string" },
+        "data_residency_region": { "type": "string" },
+        "canonical_principal_id": { "type": "string" },
+        "principal_type": { "enum": ["user", "service", "agent"] },
+        "channel_alias_id": { "type": "string" },
+        "channel_id": { "type": "string" },
+        "engagement_id": { "type": "string" },
+        "alias_binding_event_id": { "type": "string" },
+        "alias_binding_epoch": { "type": "integer" },
+        "alias_assertion_hash": { "type": "string" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_id", "runtime_kind", "runtime_class", "spiffe_trust_domain"],
+      "properties": {
+        "workload_svid_hash": { "type": "string" },
+        "spiffe_trust_domain": { "type": "string" },
+        "runtime_id": { "type": "string" },
+        "runtime_kind": { "type": "string" },
+        "runtime_class": { "type": "string" },
+        "sandbox_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "run_id": { "type": "string" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "agent_version"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "agent_version": { "type": "string" },
+        "skill_manifest_id": { "type": "string" }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared_data_classes", "effective_data_classes", "classification_epoch"],
+      "properties": {
+        "declared_data_classes": { "type": "array", "items": { "type": "string" } },
+        "inferred_data_classes": { "type": "array", "items": { "type": "string" } },
+        "effective_data_classes": { "type": "array", "items": { "type": "string" } },
+        "classification_epoch": { "type": "integer" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_hash", "issuer", "expires_at"],
+      "properties": {
+        "capability_id": { "type": "string" },
+        "capability_hash": { "type": "string" },
+        "parent_capability_hash": { "type": "string" },
+        "issuer": { "type": "string" },
+        "expires_at": { "type": "string" },
+        "max_hops": { "type": "integer" }
+      }
+    }
+  }
+}

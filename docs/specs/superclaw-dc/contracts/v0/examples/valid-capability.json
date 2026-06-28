@@ -1,0 +1,22 @@
+{
+  "schema": "superclaw.capability.v0",
+  "capability_id": "cap_root",
+  "capability_hash": "sha256:cap",
+  "issuer": "superclaw-capability-issuer",
+  "subject_principal_id": "principal_nikolay",
+  "audience": "l4-dispatch",
+  "org_id": "org_build",
+  "customer_tenant_id": "cust_acme",
+  "isolation_cell_id": "cell-usw2-a",
+  "namespace_id": "ns-build-prod-a",
+  "runtime_pool_id": "pool-buildbot-prod",
+  "allowed_actions": ["tool.invoke", "memory.read", "message.send"],
+  "allowed_tools": ["buildbot.github"],
+  "allowed_data_classes": ["public", "internal"],
+  "memory_scopes": ["org_build:project"],
+  "channel_scopes": ["telegram:-1003759657220"],
+  "expires_at": "2026-06-27T18:00:00Z",
+  "max_hops": 3,
+  "revocation_epoch": 1,
+  "signature": "sig:placeholder"
+}

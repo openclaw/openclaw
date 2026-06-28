@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "superclaw.policy_decision_response.v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "decision_id", "effect", "policy_epoch", "cache", "obligations", "signature"],
+  "properties": {
+    "schema": { "const": "superclaw.policy_decision_response.v0" },
+    "decision_id": { "type": "string" },
+    "effect": { "enum": ["allow", "deny"] },
+    "reason_code": { "type": "string" },
+    "policy_bundle_id": { "type": "string" },
+    "policy_epoch": { "type": "integer" },
+    "routine_or_invariant": { "enum": ["routine", "invariant"] },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cacheable", "ttl_ms", "invalidation_epochs"],
+      "properties": {
+        "cacheable": { "type": "boolean" },
+        "ttl_ms": { "type": "integer" },
+        "invalidation_epochs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy_epoch", "alias_binding_epoch", "revocation_epoch", "classification_epoch", "erasure_epoch"],
+          "properties": {
+            "policy_epoch": { "type": "integer" },
+            "alias_binding_epoch": { "type": "integer" },
+            "revocation_epoch": { "type": "integer" },
+            "classification_epoch": { "type": "integer" },
+            "erasure_epoch": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "obligations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_required", "redaction_profile"],
+      "properties": {
+        "receipt_required": { "type": "boolean" },
+        "redaction_profile": { "type": "string" },
+        "action_receipt_visibility": { "enum": ["user", "org-admin", "security-only"] },
+        "required_attestation_profile": { "type": "string" },
+        "memory_write_mode": { "enum": ["none", "outbox", "synchronous"] }
+      }
+    },
+    "signature": { "type": "string" }
+  }
+}

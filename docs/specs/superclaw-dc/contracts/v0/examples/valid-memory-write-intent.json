@@ -1,0 +1,18 @@
+{
+  "schema": "superclaw.memory_write_intent.v0",
+  "write_intent_id": "mwi_01J",
+  "memory_record_id": "mem_01J",
+  "external_memory_id": "mem0_01J",
+  "state": "committed",
+  "org_id": "org_build",
+  "customer_tenant_id": "cust_acme",
+  "isolation_cell_id": "cell-usw2-a",
+  "memory_scope": "org_build:project",
+  "data_class": "internal",
+  "created_by_principal_id": "principal_nikolay",
+  "created_by_capability_hash": "sha256:cap",
+  "policy_decision_id": "pd_01J",
+  "action_receipt_id": "ar_01J",
+  "classification_epoch": 3,
+  "erasure_epoch": 1
+}

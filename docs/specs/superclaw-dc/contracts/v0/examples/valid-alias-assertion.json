@@ -1,0 +1,22 @@
+{
+  "schema": "superclaw.alias_assertion.v0",
+  "iss": "l5-adapter:telegram:prod",
+  "aud": "gw-usw2-a-01",
+  "exp": 1782600000,
+  "iat": 1782599700,
+  "jti": "aa_01J",
+  "channel": "telegram",
+  "channel_account_id": "bot-prod-1",
+  "channel_conversation_id": "-1003759657220",
+  "channel_sender_id": "293894843",
+  "channel_message_id": "11896",
+  "engagement_id": "eng_01J",
+  "alias_binding_event_id": "abe_live",
+  "binding_epoch": 7,
+  "canonical_principal_id": "principal_nikolay",
+  "org_id": "org_build",
+  "customer_tenant_id": "cust_acme",
+  "isolation_cell_id": "cell-usw2-a",
+  "nonce": "nonce_01J",
+  "signature": "sig:placeholder"
+}

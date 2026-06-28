@@ -1,0 +1,48 @@
+{
+  "schema": "superclaw.request_context.v0",
+  "request": {
+    "request_id": "req_01J",
+    "trace_id": "trace_01J",
+    "created_at": "2026-06-27T17:30:00Z"
+  },
+  "identity": {
+    "org_id": "org_build",
+    "customer_tenant_id": "cust_acme",
+    "isolation_cell_id": "cell-usw2-a",
+    "namespace_id": "ns-build-prod-a",
+    "runtime_pool_id": "pool-buildbot-prod",
+    "data_residency_region": "us-west",
+    "canonical_principal_id": "principal_nikolay",
+    "principal_type": "user",
+    "channel_alias_id": "alias_telegram_293894843",
+    "channel_id": "telegram",
+    "engagement_id": "eng_01J",
+    "alias_binding_event_id": "abe_live",
+    "alias_binding_epoch": 7,
+    "alias_assertion_hash": "sha256:alias"
+  },
+  "runtime": {
+    "workload_svid_hash": "sha256:svid",
+    "spiffe_trust_domain": "spiffe://superclaw/cell-usw2-a",
+    "runtime_id": "rt_01J",
+    "runtime_kind": "agent-sandbox",
+    "runtime_class": "cc-tdx"
+  },
+  "agent": {
+    "agent_id": "build-bot",
+    "agent_version": "2026.06.27"
+  },
+  "data": {
+    "declared_data_classes": ["internal"],
+    "inferred_data_classes": ["internal"],
+    "effective_data_classes": ["internal"],
+    "classification_epoch": 3
+  },
+  "capability": {
+    "capability_id": "cap_root",
+    "capability_hash": "sha256:cap",
+    "issuer": "superclaw-capability-issuer",
+    "expires_at": "2026-06-27T18:00:00Z",
+    "max_hops": 3
+  }
+}

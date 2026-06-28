@@ -1,0 +1,36 @@
+{
+  "schema": "superclaw.request_context.v0",
+  "request": {
+    "request_id": "req_bad",
+    "trace_id": "trace_bad",
+    "created_at": "2026-06-27T17:30:00Z"
+  },
+  "identity": {
+    "org_id": "org_build",
+    "tenant_id": "tenant_overloaded",
+    "canonical_principal_id": "principal_nikolay",
+    "principal_type": "user",
+    "alias_binding_event_id": "abe_live",
+    "alias_binding_epoch": 7
+  },
+  "runtime": {
+    "spiffe_trust_domain": "spiffe://superclaw/cell-usw2-a",
+    "runtime_id": "rt_01J",
+    "runtime_kind": "agent-sandbox",
+    "runtime_class": "cc-tdx"
+  },
+  "agent": {
+    "agent_id": "build-bot",
+    "agent_version": "2026.06.27"
+  },
+  "data": {
+    "declared_data_classes": ["internal"],
+    "effective_data_classes": ["internal"],
+    "classification_epoch": 3
+  },
+  "capability": {
+    "capability_hash": "sha256:cap",
+    "issuer": "superclaw-capability-issuer",
+    "expires_at": "2026-06-27T18:00:00Z"
+  }
+}

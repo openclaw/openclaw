@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "superclaw.memory_write_intent.v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "write_intent_id",
+    "state",
+    "org_id",
+    "customer_tenant_id",
+    "isolation_cell_id",
+    "memory_scope",
+    "data_class",
+    "created_by_principal_id",
+    "created_by_capability_hash",
+    "policy_decision_id",
+    "classification_epoch",
+    "erasure_epoch"
+  ],
+  "properties": {
+    "schema": { "const": "superclaw.memory_write_intent.v0" },
+    "write_intent_id": { "type": "string" },
+    "memory_record_id": { "type": "string" },
+    "external_memory_id": { "type": "string" },
+    "state": { "enum": ["intent_created", "pdp_authorized", "mem0_write_pending", "mem0_write_applied", "graph_edges_pending", "graph_edges_applied", "receipt_pending", "committed", "blocked", "poison", "erasing", "erased"] },
+    "org_id": { "type": "string" },
+    "customer_tenant_id": { "type": "string" },
+    "isolation_cell_id": { "type": "string" },
+    "memory_scope": { "type": "string" },
+    "data_class": { "type": "string" },
+    "created_by_principal_id": { "type": "string" },
+    "created_by_capability_hash": { "type": "string" },
+    "policy_decision_id": { "type": "string" },
+    "action_receipt_id": { "type": "string" },
+    "classification_epoch": { "type": "integer" },
+    "erasure_epoch": { "type": "integer" }
+  }
+}
