@@ -101,9 +101,13 @@ async function fetchCardKitJsonWithTokenRefresh<T extends { code?: number; msg?:
     });
     try {
       const data = (await response.json().catch(() => ({}))) as T;
-      if (attempt === 0 && getFeishuTokenInvalidCodeFromResponse(data) !== undefined) {
-        invalidateStreamingTokenCache(params.creds);
-        continue;
+      const tokenInvalidCode = getFeishuTokenInvalidCodeFromResponse(data);
+      if (tokenInvalidCode !== undefined) {
+        if (attempt === 0) {
+          invalidateStreamingTokenCache(params.creds);
+          continue;
+        }
+        throw new Error(`CardKit request failed with token-invalid code ${tokenInvalidCode}`);
       }
       return { ok: response.ok, status: response.status, data };
     } finally {

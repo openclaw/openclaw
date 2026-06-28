@@ -630,6 +630,61 @@ describe("FeishuStreamingSession", () => {
     expect(authTokens).toEqual(["token-1", "token-2"]);
   });
 
+  it("treats persistent CardKit token-invalid update responses as failed sends", async () => {
+    const release = vi.fn(async () => {});
+    const logs: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.includes("/auth/")) {
+        return {
+          response: {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: "token",
+              expire: 7200,
+            }),
+          },
+          release,
+        };
+      }
+      return {
+        response: {
+          ok: true,
+          status: 200,
+          json: async () => ({ code: 99991663, msg: "Invalid access token" }),
+        },
+        release,
+      };
+    });
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_persistent_cardkit_invalid",
+        appSecret: "secret",
+      },
+      (message) => logs.push(message),
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_1",
+        messageId: "om_1",
+        sequence: 1,
+        currentText: "old",
+        sentText: "old",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    await session.update("old with enough new content to send immediately");
+
+    const internals = session as unknown as { state: StreamingSessionState };
+    expect(internals.state.sentText).toBe("old");
+    expect(logs.join("\n")).toContain("CardKit request failed with token-invalid code 99991663");
+  });
+
   it("invalidates the SDK token and retries streaming card sends with a fresh client", async () => {
     const { client } = mockStreamingTokenStart((token) => ({
       code: 0,
