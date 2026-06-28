@@ -40,7 +40,7 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("./github-copilot-token.js", () => ({
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
@@ -476,17 +476,35 @@ describe("prepareSimpleCompletionModel", () => {
   });
 
   it("can preserve asynchronous provider model discovery", async () => {
+    // Use a standalone mock so the default beforeEach delegation from
+    // resolveModelAsyncMock → resolveModelMock does not pollute call
+    // history. The point of the test is that when useAsyncModelResolution
+    // is true, only the async resolver is invoked.
+    const resolveModelAsync = vi.fn().mockResolvedValue({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    // Reset the hoisted sync mock so any leftover calls from earlier tests
+    // or beforeEach setup don't cause a false positive.
+    hoisted.resolveModelMock.mockReset();
+
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       useAsyncModelResolution: true,
-      modelResolver: hoisted.resolveModelAsyncMock,
+      modelResolver: resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
     expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
-    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+    expect(resolveModelAsync).toHaveBeenCalledWith(
       "anthropic",
       "claude-opus-4-6",
       undefined,

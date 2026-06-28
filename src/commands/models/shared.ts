@@ -1,11 +1,10 @@
 /** Shared helpers for model commands that read or mutate model config. */
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
   legacyModelKey,
   modelKey,
-  parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -20,8 +19,6 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
-export { normalizeAlias } from "./alias-name.js";
-export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -147,20 +144,6 @@ export function resolveModelKeysFromEntries(params: {
     .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 }
 
-/** Builds the configured model allowlist from agents.defaults.models keys. */
-export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
-  const allowed = new Set<string>();
-  const models = cfg.agents?.defaults?.models ?? {};
-  for (const raw of Object.keys(models)) {
-    const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    allowed.add(modelKey(parsed.provider, parsed.model));
-  }
-  return allowed;
-}
-
 /** Validates an optional agent id against configured agents. */
 export function resolveKnownAgentId(params: {
   cfg: OpenClawConfig;
@@ -178,6 +161,19 @@ export function resolveKnownAgentId(params: {
     );
   }
   return agentId;
+}
+
+/** Resolves the selected model-command agent and its profile directory. */
+export function resolveModelsTargetAgent(
+  cfg: OpenClawConfig,
+  rawAgentId?: string,
+): {
+  agentId: string;
+  agentDir: string;
+} {
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId }) ?? resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */

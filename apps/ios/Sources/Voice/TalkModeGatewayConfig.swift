@@ -3,7 +3,6 @@ import OpenClawKit
 
 enum TalkModeExecutionMode {
     case native
-    case realtimeClient
     case realtimeRelay
 }
 

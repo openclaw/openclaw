@@ -15,7 +15,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -42,13 +41,14 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -177,17 +177,16 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
+  if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
+    };
+  }
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
-    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
-      return {
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-        ),
-      };
-    }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
@@ -462,6 +461,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       action: string;
       params: Record<string, unknown>;
       accountId?: string;
+      requesterAccountId?: string;
       requesterSenderId?: string;
       senderIsOwner?: boolean;
       sessionKey?: string;
@@ -470,9 +470,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       toolContext?: {
         currentChannelId?: string;
+        currentMessagingTarget?: string;
+        currentGraphChannelId?: string;
         currentChannelProvider?: string;
         currentThreadTs?: string;
         currentMessageId?: string | number;
+        replyToMode?: "off" | "first" | "all" | "batched";
+        hasRepliedRef?: { value: boolean };
+        sameChannelThreadRequired?: boolean;
+        skipCrossContextDecoration?: boolean;
       };
       idempotencyKey: string;
     };
@@ -535,6 +541,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           params: request.params,
           accountId,
+          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true

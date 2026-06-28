@@ -21,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {

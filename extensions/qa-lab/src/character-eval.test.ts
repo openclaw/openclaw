@@ -127,6 +127,7 @@ async function makeSuiteResult(params: {
   );
   return {
     outputDir: params.outputDir,
+    evidencePath: path.join(params.outputDir, "qa-evidence.json"),
     reportPath: path.join(params.outputDir, "qa-suite-report.md"),
     summaryPath,
     report: "# report",
@@ -252,6 +253,39 @@ describe("runQaCharacterEval", () => {
     expect(report).toContain("Duration:");
     expect(report).not.toContain("Duration ms:");
     expect(report).not.toContain("Judge Raw Reply");
+  });
+
+  it("creates a unique default output directory under repo artifacts", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: "USER Alice: hi\n\nASSISTANT openclaw: default dir reply",
+      }),
+    );
+    const runJudge = makeRunJudge([
+      {
+        model: "openai/gpt-5.5",
+        rank: 1,
+        score: 8,
+        summary: "solid",
+        strengths: ["clear"],
+        weaknesses: [],
+      },
+    ]);
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      models: ["openai/gpt-5.5"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(path.dirname(result.outputDir)).toBe(path.join(tempRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(result.outputDir)).toMatch(
+      /^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u,
+    );
+    await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
   });
 
   it("can hide candidate model refs from judge prompts and map rankings back", async () => {

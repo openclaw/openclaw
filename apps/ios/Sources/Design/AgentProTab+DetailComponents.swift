@@ -1,5 +1,4 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 
 extension AgentProTab {

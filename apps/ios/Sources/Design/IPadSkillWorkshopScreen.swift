@@ -213,32 +213,6 @@ struct IPadSkillWorkshopScreen: View {
         }
     }
 
-    private var statusMenu: some View {
-        HStack(spacing: 8) {
-            Text("Status")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Menu {
-                ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                    Button(Self.proposalStatusFilterLabel(filter)) {
-                        self.statusFilter = filter
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(self.statusFilterLabel)
-                        .font(.subheadline.weight(.semibold))
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .tint(self.neutralControlTint)
-        }
-    }
-
     private var agentScopeMenu: some View {
         HStack(spacing: 8) {
             Text("Agent")
@@ -1062,7 +1036,7 @@ struct IPadSkillProposalRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            self.isSelected ? Color.red.opacity(0.08) : Color.clear,
+            self.isSelected ? OpenClawBrand.danger.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
@@ -1130,7 +1104,6 @@ struct IPadSkillProposalRecord: Decodable {
     let description: String
     let createdAt: String
     let updatedAt: String
-    let proposedVersion: String
     let target: IPadSkillProposalTarget
 }
 

@@ -71,6 +71,68 @@ const hoisted = vi.hoisted(() => {
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
+  const createSessionAccessorMock = () => {
+    const resolveMockStorePath = (scope: {
+      agentId?: string;
+      env?: NodeJS.ProcessEnv;
+      storePath?: string;
+    }): string =>
+      scope.storePath ??
+      resolveStorePathMock(undefined, {
+        agentId: scope.agentId,
+        env: scope.env,
+      });
+    const loadMockEntry = (scope: {
+      agentId?: string;
+      env?: NodeJS.ProcessEnv;
+      sessionKey: string;
+      storePath?: string;
+    }): SessionEntry | undefined => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return store[scope.sessionKey];
+    };
+    return {
+      listSessionEntries: (
+        scope: {
+          agentId?: string;
+          env?: NodeJS.ProcessEnv;
+          storePath?: string;
+        } = {},
+      ) => {
+        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+          string,
+          SessionEntry
+        >;
+        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+      },
+      loadSessionEntry: loadMockEntry,
+      resolveSessionTranscriptRuntimeTarget: async (scope: {
+        agentId: string;
+        sessionId: string;
+        sessionKey: string;
+        storePath?: string;
+        threadId?: string | number;
+      }) => {
+        const store = scope.storePath
+          ? (loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
+          : undefined;
+        const resolved = await resolveSessionTranscriptFileMock({
+          ...scope,
+          ...(store ? { sessionStore: store } : {}),
+          sessionEntry: loadMockEntry(scope),
+        });
+        return {
+          agentId: scope.agentId,
+          sessionFile: resolved.sessionFile,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        };
+      },
+    };
+  };
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -98,6 +160,7 @@ const hoisted = vi.hoisted(() => {
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
+    createSessionAccessorMock,
     state,
   };
 });
@@ -133,6 +196,8 @@ vi.mock("../config/sessions/paths.js", () => ({
 vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
+
+vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
@@ -2785,6 +2850,37 @@ describe("spawnAcpDirect", () => {
     expect(accepted.mode).toBe("run");
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("persists separate requester and executor agents for global cross-agent tasks", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: {
+        ...hoisted.state.cfg.session,
+        scope: "global",
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.createRunningTaskRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerKey: "global",
+        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agentId: "codex",
+        requesterAgentId: "research",
+      }),
+    );
   });
 
   it("does not implicitly stream for subagent requester sessions when heartbeat is disabled", async () => {

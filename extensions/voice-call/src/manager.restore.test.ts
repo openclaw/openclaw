@@ -305,6 +305,42 @@ describe("CallManager verification on restore", () => {
     expect(hangupCall.reason).toBe("timeout");
   });
 
+  it.each(["speaking", "listening"] as const)(
+    "uses call start as max-duration anchor for restored live %s calls without answeredAt",
+    async (state) => {
+      vi.useFakeTimers();
+      const now = new Date("2026-03-17T03:07:00Z").getTime();
+      vi.setSystemTime(now);
+      const startedAt = now - 290_000;
+      const { manager, provider, storePath } = await initializeManager({
+        callOverrides: {
+          callId: `call-${state}`,
+          providerCallId: `provider-${state}`,
+          state,
+          startedAt,
+          answeredAt: undefined,
+        },
+        configOverrides: { maxDurationSeconds: 300 },
+      });
+
+      const activeCall = requireSingleActiveCall(manager);
+      expect(activeCall.state).toBe(state);
+      expect(activeCall.answeredAt).toBe(startedAt);
+      expect(
+        loadActiveCallsFromStore(storePath).activeCalls.get(activeCall.callId)?.answeredAt,
+      ).toBe(startedAt);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(manager.getActiveCalls()).toHaveLength(1);
+      expect(provider.hangupCalls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(manager.getActiveCalls()).toHaveLength(0);
+      const hangupCall = requireSingleHangupCall(provider);
+      expect(hangupCall.reason).toBe("timeout");
+    },
+  );
+
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
     const storePath = createTestStorePath();
     const persisted = makePersistedCall({

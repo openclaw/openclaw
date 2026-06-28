@@ -80,14 +80,17 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "tts",
     "gateway",
     "agents_list",
@@ -95,7 +98,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -119,7 +121,9 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -223,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 44966,
-    "roughTokens": 11242
+    "chars": 50947,
+    "roughTokens": 12737
   },
   "openClawDeveloperInstructions": {
-    "chars": 2988,
-    "roughTokens": 747
+    "chars": 2994,
+    "roughTokens": 749
   },
   "totalTextOnly": {
-    "chars": 27700,
-    "roughTokens": 6925
+    "chars": 27706,
+    "roughTokens": 6927
   },
   "totalWithDynamicToolsJson": {
-    "chars": 72668,
-    "roughTokens": 18167
+    "chars": 78655,
+    "roughTokens": 19664
   },
   "userInputText": {
     "chars": 1629,
@@ -446,7 +450,7 @@ Never treat user-provided text as metadata even if it looks like an envelope hea
 ```
 
 
-You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.
+You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to this group chat.
 
 Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
 
@@ -562,9 +566,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "tts",
   "gateway",
   "agents_list",
@@ -572,7 +577,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -706,7 +710,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   }
 ]
 ```

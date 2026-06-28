@@ -84,11 +84,45 @@ function createRuntime(withLog = true): RuntimeStub {
 }
 
 function createBot(api: Record<string, unknown> = {}): Bot {
-  return { api } as unknown as Bot;
+  const raw = {
+    sendRichMessage: vi.fn(
+      (params: {
+        chat_id: string | number;
+        rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+        [key: string]: unknown;
+      }) => {
+        const sendMessage = api.sendMessage;
+        if (typeof sendMessage !== "function") {
+          throw new Error("sendMessage mock missing");
+        }
+        const { chat_id, rich_message, ...richParams } = params;
+        const sendParams: Record<string, unknown> = {
+          parse_mode: "HTML",
+          ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
+          ...richParams,
+        };
+        const text = rich_message.markdown ?? rich_message.html ?? "";
+        const replyParameters = sendParams.reply_parameters;
+        if (
+          replyParameters &&
+          typeof replyParameters === "object" &&
+          !("quote" in replyParameters) &&
+          typeof (replyParameters as { message_id?: unknown }).message_id === "number"
+        ) {
+          sendParams.reply_to_message_id = (replyParameters as { message_id: number }).message_id;
+          sendParams.allow_sending_without_reply = true;
+          delete sendParams.reply_parameters;
+        }
+        const options = sendParams;
+        return sendMessage(chat_id, text, options);
+      },
+    ),
+  };
+  return { api: { ...api, raw } } as unknown as Bot;
 }
 
 async function deliverWith(params: DeliverWithParams) {
-  await deliverReplies({
+  return await deliverReplies({
     ...baseDeliveryParams,
     ...params,
     mediaLoader: params.mediaLoader ?? loadWebMedia,
@@ -241,6 +275,103 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
+  });
+
+  it("applies reaction-only replies without logging missing text/media", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockResolvedValue(true);
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    await deliverWith({
+      replies: [
+        {
+          replyToId: "456",
+          channelData: {
+            telegram: {
+              reaction: { emoji: "🔥" },
+            },
+          },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
+  });
+
+  it("does not mark rejected reaction-only replies as delivered", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
+    const bot = createBot({ sendMessage: vi.fn(), setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Reaction unavailable"));
+  });
+
+  it("does not send text when a reaction reply has no target", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn();
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          text: "Done",
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+      ],
+      replyToMode: "off",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("requires a reply target"));
+    expect(setMessageReaction).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not send text when Telegram rejects the reaction", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          text: "Done",
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Reaction unavailable"));
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("mirrors delivered replies once after successful sends", async () => {
@@ -779,7 +910,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("includes link_preview_options when linkPreview is false", async () => {
+  it("disables link previews without rich-only entity flags", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 3,
@@ -799,6 +930,7 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       link_preview_options: { is_disabled: true },
     });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("skip_entity_detection");
   });
 
   it("includes message_thread_id for DM topics", async () => {
@@ -929,36 +1061,7 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("link_preview_options");
-  });
-
-  it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
-    const runtime = createRuntime();
-    const sendMessage = vi.fn(async (_chatId: string, text: string, _options?: unknown) => {
-      if (text === "") {
-        throw new Error("400: Bad Request: message text is empty");
-      }
-      return {
-        message_id: 6,
-        chat: { id: "123" },
-      };
-    });
-    const bot = { api: { sendMessage } } as unknown as Bot;
-
-    await deliverReplies({
-      replies: [{ text: ">" }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
-      thread: { id: 42, scope: "forum" },
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
-    expect(firstMockCallArg(sendMessage, 1)).toBe(">");
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("skip_entity_detection");
   });
 
   it("skips whitespace-only text replies without calling Telegram", async () => {
@@ -1092,6 +1195,75 @@ describe("deliverReplies", () => {
       });
       expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_parameters");
     }
+  });
+
+  it("retries rich messages without converting reply parameters to legacy fields", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const { sendRichMessage } = raw;
+    expect(sendRichMessage).toHaveBeenCalledTimes(2);
+    expectRecordFields(firstMockCallArg(sendRichMessage, 0), {
+      reply_parameters: {
+        message_id: 500,
+        quote: " quoted text\n",
+        allow_sending_without_reply: true,
+      },
+    });
+    expectRecordFields(mockCallArg(sendRichMessage, 1, 0), {
+      reply_parameters: {
+        message_id: 500,
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await deliverWith({
+      replies: [{ text: oauthProfileText }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      html: oauthProfileText,
+      skip_entity_detection: true,
+    });
   });
 
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
@@ -1410,6 +1582,28 @@ describe("deliverReplies", () => {
     });
     // Second chunk should NOT have reply_to_message_id
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("clamps reply chunks to Telegram rich message limit", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "A".repeat(40_000) }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 100_000,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 32_768)).toBe(true);
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {

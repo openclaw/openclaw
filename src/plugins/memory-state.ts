@@ -102,6 +102,21 @@ export type MemoryPluginRuntime = {
     purpose?: "default" | "status" | "cli";
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
+    debug?: {
+      backend?: "builtin" | "qmd";
+      purpose?: "default" | "status" | "cli";
+      managerMs?: number;
+      managerCacheState?:
+        | "cached-full-hit"
+        | "cached-full-miss"
+        | "transient-cli"
+        | "transient-status"
+        | "pending-create-wait"
+        | "fallback-builtin"
+        | "recent-failure-cooldown";
+      qmdIdentityHash?: string;
+      failureCode?: "qmd-unavailable";
+    };
     error?: string;
   }>;
   resolveMemoryBackendConfig(params: {
@@ -249,10 +264,6 @@ function normalizeMemoryPromptLines(value: unknown): string[] {
   return value.filter((line): line is string => typeof line === "string");
 }
 
-export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder;
-}
-
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
@@ -274,10 +285,6 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
-}
-
-export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.capability?.capability.flushPlanResolver;
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
@@ -303,9 +310,10 @@ export function hasMemoryRuntime(): boolean {
 function cloneMemoryPublicArtifact(
   artifact: MemoryPluginPublicArtifact,
 ): MemoryPluginPublicArtifact {
+  const agentIds = Array.isArray(artifact.agentIds) ? artifact.agentIds : [];
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: [...agentIds],
   };
 }
 
@@ -355,5 +363,3 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }
-
-export const resetMemoryPluginState = clearMemoryPluginState;

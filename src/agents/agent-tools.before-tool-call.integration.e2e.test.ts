@@ -17,18 +17,23 @@ import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-hel
 import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   testing as beforeToolCallTesting,
   consumeAdjustedParamsForToolCall,
+  finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner.js";
+import type { ExtensionContext } from "./sessions/index.js";
+import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -89,6 +94,7 @@ describe("before_tool_call hook integration", () => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
     beforeToolCallTesting.adjustedParamsByToolCallId.clear();
+    beforeToolCallTesting.structuredReplaySafeToolCallIds.clear();
     beforeToolCallHook = installBeforeToolCallHook();
   });
 
@@ -110,6 +116,54 @@ describe("before_tool_call hook integration", () => {
       undefined,
       extensionContext,
     );
+  });
+
+  it("records structured replay trust only for concrete core-owned tools", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const coreTool = wrapToolWithBeforeToolCallHook({ name: "search", execute } as any, {
+      runId: "run-core",
+    });
+    const pluginSource = { name: "search", execute } as any;
+    setPluginToolMeta(pluginSource, { pluginId: "example", optional: false });
+    const pluginTool = wrapToolWithBeforeToolCallHook(pluginSource, {
+      runId: "run-plugin",
+    });
+
+    const [coreDefinition] = toToolDefinitions([coreTool], { runId: "run-core" });
+    const [pluginDefinition] = toToolDefinitions([pluginTool], { runId: "run-plugin" });
+    const extensionContext = {} as ExtensionContext;
+    await coreDefinition?.execute(
+      "call-core",
+      { query: "core" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await pluginDefinition?.execute(
+      "call-plugin",
+      { query: "plugin" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(
+      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-core",
+          toolCallId: "call-core",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-plugin",
+          toolCallId: "call-plugin",
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("allows hook to modify parameters", async () => {
@@ -937,6 +991,125 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits a tool-authored terminal presentation with the recorded outcome", async () => {
+    const onToolOutcome = vi.fn();
+    const sourceTool = setToolTerminalPresentation(
+      {
+        name: "web_fetch",
+        description: "fetch",
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({
+          content: [],
+          details: { status: 200 },
+        }),
+      } as any,
+      (_params, result) => ({
+        text: `Fetched with status ${(result.details as { status: number }).status}`,
+      }),
+    );
+    const tool = wrapToolWithBeforeToolCallHook(
+      normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
+      {
+        sessionId: "session-terminal-presentation",
+        onToolOutcome,
+      },
+    );
+    await tool.execute("call-terminal-presentation", {
+      url: "https://example.com",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "web_fetch",
+        terminalPresentation: "Fetched with status 200",
+      }),
+    );
+  });
+
+  it("keeps the later model-ordered result when parallel tools finish out of order", async () => {
+    type ToolResult = { content: []; details: { ok?: boolean; status?: number } };
+    let resolvePresentation!: (result: ToolResult) => void;
+    let resolvePlain!: (result: ToolResult) => void;
+    const presentationExecution = new Promise<ToolResult>((resolve) => {
+      resolvePresentation = resolve;
+    });
+    const plainExecution = new Promise<ToolResult>((resolve) => {
+      resolvePlain = resolve;
+    });
+    let terminalPresentation: string | undefined;
+    let latestOrdinal = -1;
+    const onToolOutcome = vi.fn(
+      (outcome: { toolCallOrdinal?: number; terminalPresentation?: string }) => {
+        const ordinal = outcome.toolCallOrdinal ?? latestOrdinal + 1;
+        if (ordinal >= latestOrdinal) {
+          latestOrdinal = ordinal;
+          terminalPresentation = outcome.terminalPresentation;
+        }
+      },
+    );
+    let nextToolOutcomeOrdinal = 0;
+    const hookContext = {
+      runId: "run-parallel-terminal-presentation",
+      sessionId: "session-parallel-terminal-presentation",
+      onToolOutcome,
+      allocateToolOutcomeOrdinal: () => nextToolOutcomeOrdinal++,
+    };
+    const presentationTool = wrapToolWithBeforeToolCallHook(
+      setToolTerminalPresentation(
+        {
+          name: "web_fetch",
+          description: "fetch",
+          parameters: {},
+          execute: vi.fn(() => presentationExecution),
+        } as any,
+        () => ({ text: "Fetched with status 200" }),
+      ),
+      hookContext,
+    );
+    const plainTool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read_file",
+        description: "read",
+        parameters: {},
+        execute: vi.fn(() => plainExecution),
+      } as any,
+      hookContext,
+    );
+
+    const presentationResultPromise = presentationTool.execute("call-presentation", {});
+    const plainResultPromise = plainTool.execute("call-plain", {});
+
+    resolvePlain({ content: [], details: { ok: true } });
+    const plainResult = await plainResultPromise;
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-plain",
+      runId: hookContext.runId,
+      result: plainResult,
+      isError: false,
+    });
+    expect(terminalPresentation).toBeUndefined();
+
+    resolvePresentation({ content: [], details: { status: 200 } });
+    const presentationResult = await presentationResultPromise;
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-presentation",
+      runId: hookContext.runId,
+      result: presentationResult,
+      isError: false,
+    });
+
+    expect(terminalPresentation).toBeUndefined();
+    expect(onToolOutcome.mock.calls.map(([outcome]) => outcome.toolCallOrdinal)).toEqual([
+      1, 1, 0, 0,
+    ]);
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        toolCallOrdinal: 0,
+        terminalPresentation: "Fetched with status 200",
+      }),
+    );
   });
 
   it("passes hook context for unwrapped tool definitions", async () => {

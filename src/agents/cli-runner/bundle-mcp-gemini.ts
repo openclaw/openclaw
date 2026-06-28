@@ -101,3 +101,46 @@ export async function writeGeminiSystemSettings(
     },
   };
 }
+
+/** Writes per-attempt Gemini settings with the active loopback capture token. */
+export async function writeGeminiMcpCaptureSettings(params: {
+  inheritedEnv: Record<string, string> | undefined;
+  captureKey: string;
+}): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+  const existingSettingsPath = params.inheritedEnv?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+  if (!existingSettingsPath) {
+    throw new Error("Gemini MCP capture requires prepared system settings");
+  }
+  const settings = await readJsonObject(existingSettingsPath);
+  const mcpServers = isRecord(settings.mcpServers) ? settings.mcpServers : {};
+  const openclaw = isRecord(mcpServers.openclaw) ? mcpServers.openclaw : {};
+  const headers = normalizeStringRecord(openclaw.headers) ?? {};
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-mcp-attempt-"));
+  const settingsPath = path.join(tempDir, "settings.json");
+  await writeJson(
+    settingsPath,
+    {
+      ...settings,
+      mcpServers: {
+        ...mcpServers,
+        openclaw: {
+          ...openclaw,
+          headers: {
+            ...headers,
+            "x-openclaw-cli-capture-key": params.captureKey,
+          },
+        },
+      },
+    },
+    { trailingNewline: true },
+  );
+  return {
+    env: {
+      ...params.inheritedEnv,
+      GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath,
+    },
+    cleanup: async () => {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}

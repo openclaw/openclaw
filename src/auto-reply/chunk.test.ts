@@ -513,6 +513,19 @@ describe("chunkByNewline", () => {
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
     expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
+
+  it("does not split surrogate pairs when hard-splitting an over-long line", () => {
+    // An emoji-dense line with no break point forces the raw head cut at an odd code-unit offset;
+    // it must back off to a code-point boundary so no chunk ends in a high (or starts with a low)
+    // surrogate — the same contract the recursive chunkText path already honors.
+    const text = "😀".repeat(30);
+    const chunks = chunkByNewline(text, 11);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+  });
 });
 
 describe("chunkTextWithMode", () => {
@@ -593,6 +606,20 @@ describe("chunkMarkdownTextWithMode", () => {
       "Alpha\n\nBeta",
       "Gamma",
     ]);
+  });
+
+  it("does not split surrogate pairs at hard length boundaries", () => {
+    const text = `a${"😀".repeat(20_000)}`;
+    const chunks = chunkMarkdownTextWithMode(text, 32_768, "length");
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+  });
+
+  it("keeps an astral character whole when a positive hard limit starts on its pair", () => {
+    expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
   });
 });
 

@@ -1045,6 +1045,51 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
+  it("marks queued delivery as unknown-after-send (not failed) when a later payload fails after an earlier one succeeded", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1" })
+      .mockRejectedValueOnce(new Error("second payload send failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("second payload send failed");
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(queueMocks.markDeliveryPlatformOutcomeUnknown).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it("still calls failDelivery when a payload fails before any send succeeded", async () => {
+    const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("first payload send failed");
+
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("first payload send failed"),
+    );
+    expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
   it("fails required delivery when the post-send unknown marker cannot be written", async () => {
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
       new Error("unknown marker offline"),
@@ -1189,6 +1234,59 @@ describe("deliverOutboundPayloads", () => {
     expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
     expect(mediaAccessOptions?.messageProvider).toBeUndefined();
     expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("uses the base policy key for isolated heartbeat group media read denies", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+        channels: {
+          matrix: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:attacker": {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["channels"],
+      },
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "heartbeat media", mediaUrl: "file:///tmp/policy.png" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:group:ops:heartbeat",
+        policyKey: "agent:main:matrix:group:ops",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:group:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaReadFile).toBeUndefined();
+    expect((sendOptions.mediaLocalRoots as readonly string[] | undefined) ?? []).not.toContain(
+      "/tmp",
+    );
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -3498,6 +3596,54 @@ describe("deliverOutboundPayloads", () => {
     expect(sendText).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a previous payload message id for a suppressed text send", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "first" }, { text: "second" }],
+    });
+
+    expect(results).toStrictEqual([{ channel: "matrix", messageId: "mx-1" }]);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        content: "first",
+        success: true,
+        messageId: "mx-1",
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        content: "second",
+        success: false,
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(hookMocks.runner.runMessageSent.mock.calls[1]?.[0]).not.toHaveProperty("messageId");
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {

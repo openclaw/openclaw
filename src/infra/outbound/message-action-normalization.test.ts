@@ -69,6 +69,28 @@ describe("normalizeMessageActionInput", () => {
     {
       input: {
         action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
+    },
+    {
+      input: {
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
+    },
+    {
+      input: {
+        action: "send",
         args: {
           target: "channel:C1",
         },

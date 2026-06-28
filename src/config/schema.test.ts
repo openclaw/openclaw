@@ -253,6 +253,66 @@ describe("config schema", () => {
     }
   });
 
+  it("accepts stdio transport for command-bearing MCP servers", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          myTool: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem"],
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported transport values for MCP servers", () => {
+    for (const transport of ["tcp", "websocket", "grpc", ""]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              bad: {
+                url: "https://mcp.example.com/mcp",
+                transport,
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects stdio transport for URL-only MCP servers (command required)", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            url: "https://mcp.example.com/mcp",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects stdio transport with whitespace-only command", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            command: "   ",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 
@@ -652,7 +712,7 @@ describe("config schema", () => {
       ToolsSchema.parse({
         toolSearch: {
           enabled: true,
-          mode: "tools",
+          mode: "directory",
           codeTimeoutMs: 5000,
           searchDefaultLimit: 4,
           maxSearchLimit: 12,
@@ -660,7 +720,7 @@ describe("config schema", () => {
       })?.toolSearch,
     ).toEqual({
       enabled: true,
-      mode: "tools",
+      mode: "directory",
       codeTimeoutMs: 5000,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,

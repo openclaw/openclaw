@@ -19,8 +19,14 @@ import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -93,7 +99,8 @@ type RunTuiOptions = TuiOptions & {
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
-    const lookupCmd = process.platform === "win32" ? "where" : "which";
+    const lookupCmd =
+      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
     const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
     return raw.split(/\r?\n/)[0] || null;
@@ -124,14 +131,24 @@ export function resolveLocalAuthCliInvocation(params?: {
     : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
-export function resolveLocalAuthSpawnOptions(params: {
+export function resolveLocalAuthSpawnInvocation(params: {
   command: string;
+  args: string[];
   platform?: NodeJS.Platform;
-}): { shell?: true } {
+}): {
+  args: string[];
+  command: string;
+  options: { windowsHide?: true; windowsVerbatimArguments?: true };
+} {
   const platform = params.platform ?? process.platform;
-  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
-    ? { shell: true }
-    : {};
+  if (!isWindowsBatchCommand(params.command.trim(), platform)) {
+    return { command: params.command, args: params.args, options: {} };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(platform),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
+    options: { windowsHide: true, windowsVerbatimArguments: true },
+  };
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
@@ -409,6 +426,17 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
 
 export function isTuiBusyActivityStatus(status: string): boolean {
   return TUI_BUSY_ACTIVITY_STATUSES.has(status);
+}
+
+export function resolveTuiToolsToggleActivityStatus(params: {
+  currentStatus: string;
+  toolsExpanded: boolean;
+}): string {
+  const toolsStatus = params.toolsExpanded ? "tools expanded" : "tools collapsed";
+  if (isTuiBusyActivityStatus(params.currentStatus)) {
+    return params.currentStatus;
+  }
+  return toolsStatus;
 }
 
 export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
@@ -1180,11 +1208,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                   }
                 }
 
-                const child = spawn(command, args, {
+                const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+                const child = spawn(invocation.command, invocation.args, {
                   cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
                   env: process.env,
                   stdio: "inherit",
-                  ...resolveLocalAuthSpawnOptions({ command }),
+                  ...invocation.options,
                 });
                 child.once("error", reject);
                 child.once("exit", (exitCode, signal) => {
@@ -1208,7 +1237,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
-    const fast = sessionInfo.fastMode === true;
+    const fastLabel =
+      sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -1221,7 +1251,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
-      fast ? "fast" : null,
+      fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
@@ -1281,6 +1311,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
+    handleSessionsChangedEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
@@ -1460,7 +1491,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    // Ctrl+O is presentation-only; preserve busy activity so the status loader
+    // does not disappear before the run lifecycle ends.
+    setActivityStatus(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: activityStatus,
+        toolsExpanded,
+      }),
+    );
     tui.requestRender();
   };
   editor.onCtrlL = () => {
@@ -1502,6 +1540,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      handleSessionsChangedEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1514,6 +1555,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
+      try {
+        await client.subscribeSessionEvents?.();
+      } catch (err) {
+        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+      }
       await refreshAgents();
       await restoreRememberedSession();
       updateHeader();

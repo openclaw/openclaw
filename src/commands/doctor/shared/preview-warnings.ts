@@ -1,21 +1,26 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
-import { parseModelRef } from "../../../agents/model-selection-normalize.js";
+import {
+  normalizeToolProviderPolicyKey,
+  resolveProviderToolPolicy,
+  resolveProviderToolPolicyEntry,
+} from "../../../agents/provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
-import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import type {
+  AgentToolsConfig,
+  ToolPolicyConfig,
+  ToolsConfig,
+} from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -58,19 +63,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
-function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false) {
-    return true;
-  }
-  const entries = cfg.plugins?.entries;
-  if (!hasRecord(entries)) {
-    return false;
-  }
-  return Object.values(entries).some(
-    (entry) => hasRecord(entry) && "enabled" in entry && entry.enabled === false,
-  );
-}
-
 function hasToolsBySenderKey(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(hasToolsBySenderKey);
@@ -104,55 +96,6 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
 }
 
 type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
-type ToolPolicyConfig = {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-  profile?: string;
-};
-
-function normalizeProviderPolicyKey(value: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalProviderPolicyKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderPolicyKey(value);
-}
-
-function resolveProviderToolPolicy(params: {
-  byProvider?: Record<string, ToolPolicyConfig>;
-  modelProvider: string;
-  modelId: string;
-}): ToolPolicyConfig | undefined {
-  if (!params.byProvider) {
-    return undefined;
-  }
-  const lookup = new Map<string, { canonical: boolean; value: ToolPolicyConfig }>();
-  for (const [key, value] of Object.entries(params.byProvider)) {
-    const normalized = normalizeProviderPolicyKey(key);
-    if (!normalized) {
-      continue;
-    }
-    const canonical = isCanonicalProviderPolicyKey(key);
-    const existing = lookup.get(normalized);
-    if (!existing || (canonical && !existing.canonical)) {
-      lookup.set(normalized, { canonical, value });
-    }
-  }
-
-  const provider = normalizeProviderPolicyKey(params.modelProvider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const fullModelId = modelId ? `${provider}/${modelId}` : undefined;
-  return (fullModelId ? lookup.get(fullModelId)?.value : undefined) ?? lookup.get(provider)?.value;
-}
-
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -161,7 +104,7 @@ function resolveMessageToolAvailability(params: {
   runtimeAlsoAllow?: string[];
 }): boolean {
   const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
+  const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: params.globalTools?.byProvider,
     modelProvider: modelRef.provider,
@@ -201,22 +144,6 @@ function resolveMessageToolAvailability(params: {
 }
 
 const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
-
-function resolvePrimaryModelRef(
-  cfg: OpenClawConfig,
-  agentModel?: NonNullable<ReturnType<typeof resolveAgentConfig>>["model"],
-): { provider: string; model: string } {
-  const raw =
-    resolveAgentModelPrimaryValue(agentModel) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    }
-  );
-}
 
 function resolveSourceReplyMessageToolAvailability(params: {
   cfg: OpenClawConfig;
@@ -416,6 +343,23 @@ function readPreviewStringList(value: unknown): string[] | undefined {
     : undefined;
 }
 
+function collectUncoveredConfiguredToolSectionGrantEntries(
+  configuredEntries: ConfiguredToolSectionGrantEntry[],
+  profilePolicy: ToolPolicyConfig | undefined,
+): ConfiguredToolSectionGrantEntry[] {
+  if (!profilePolicy) {
+    return [];
+  }
+  return configuredEntries
+    .map((entry) => ({
+      ...entry,
+      grants: entry.grants.filter(
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+      ),
+    }))
+    .filter((entry) => entry.grants.length > 0);
+}
+
 function formatProfileConfiguredSectionGrantAdvice(params: {
   pathLabel: string;
   grants: string[];
@@ -462,14 +406,13 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
     : params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-  const uncoveredEntries = configuredEntries
-    .map((entry) => {
-      const grants = entry.grants.filter(
-        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-      );
-      return { grants, label: entry.label };
-    })
-    .filter((entry) => entry.grants.length > 0);
+  if (!profilePolicy) {
+    return [];
+  }
+  const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
+    configuredEntries,
+    profilePolicy,
+  );
   if (uncoveredEntries.length === 0) {
     return [];
   }
@@ -517,14 +460,13 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     const alsoAllow =
       readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-    const uncoveredEntries = params.configuredEntries
-      .map((entry) => ({
-        ...entry,
-        grants: entry.grants.filter(
-          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-        ),
-      }))
-      .filter((entry) => entry.grants.length > 0);
+    if (!profilePolicy) {
+      return [];
+    }
+    const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
+      params.configuredEntries,
+      profilePolicy,
+    );
     if (uncoveredEntries.length === 0) {
       return [];
     }
@@ -553,12 +495,12 @@ function resolveInheritedProviderPolicyForPreview(
   if (!inheritedByProvider) {
     return undefined;
   }
-  const normalized = normalizeProviderPolicyKey(providerKey);
+  const normalized = normalizeToolProviderPolicyKey(providerKey);
   const slashIndex = normalized.indexOf("/");
   const modelProvider = slashIndex > 0 ? normalized.slice(0, slashIndex) : normalized;
-  const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : "";
+  const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : undefined;
   const policy = resolveProviderToolPolicy({
-    byProvider: inheritedByProvider as Record<string, ToolPolicyConfig>,
+    byProvider: inheritedByProvider,
     modelProvider,
     modelId,
   });
@@ -570,38 +512,8 @@ function resolveProviderPolicyEntryForPreview(params: {
   modelProvider?: string;
   modelId?: string;
 }): { key: string; policy: Record<string, unknown> } | undefined {
-  if (!params.byProvider || !params.modelProvider) {
-    return undefined;
-  }
-  const lookup = new Map<
-    string,
-    { key: string; policy: Record<string, unknown>; canonical: boolean }
-  >();
-  for (const [key, value] of Object.entries(params.byProvider)) {
-    const policy = hasRecord(value) ? value : undefined;
-    if (!policy) {
-      continue;
-    }
-    const normalized = normalizeProviderPolicyKey(key);
-    if (!normalized) {
-      continue;
-    }
-    const canonical = isCanonicalProviderPolicyKey(key);
-    const existing = lookup.get(normalized);
-    if (!existing || (canonical && !existing.canonical)) {
-      lookup.set(normalized, { key, policy, canonical });
-    }
-  }
-  const provider = normalizeProviderPolicyKey(params.modelProvider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const candidates = [...(modelId ? [`${provider}/${modelId}`] : []), provider];
-  for (const candidate of candidates) {
-    const match = lookup.get(candidate);
-    if (match) {
-      return { key: match.key, policy: match.policy };
-    }
-  }
-  return undefined;
+  const entry = resolveProviderToolPolicyEntry(params);
+  return entry ? { key: entry.key, policy: entry.policy } : undefined;
 }
 
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
@@ -657,14 +569,13 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       readPreviewStringList(overridingPolicy?.alsoAllow) ??
       readPreviewStringList(inheritedPolicy.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-    const uncoveredEntries = params.configuredEntries
-      .map((entry) => ({
-        ...entry,
-        grants: entry.grants.filter(
-          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-        ),
-      }))
-      .filter((entry) => entry.grants.length > 0);
+    if (!profilePolicy) {
+      return [];
+    }
+    const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
+      params.configuredEntries,
+      profilePolicy,
+    );
     if (uncoveredEntries.length === 0) {
       return [];
     }
@@ -718,7 +629,7 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-    const modelRef = resolvePrimaryModelRef(cfg, agentConfig?.model);
+    const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
     const agentPath = `agents.list[${index}].tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
@@ -764,11 +675,38 @@ export type DoctorPreviewNotes = {
   warningNotes: string[];
 };
 
+async function resolveDoctorChannelPreviewConfig(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<{ cfg: OpenClawConfig; diagnostics: string[] }> {
+  const [{ resolveCommandSecretRefsViaGateway }, { getConfiguredChannelsCommandSecretTargetIds }] =
+    await Promise.all([
+      import("../../../cli/command-secret-gateway.js"),
+      import("../../../cli/command-secret-targets.js"),
+    ]);
+  const targetIds = getConfiguredChannelsCommandSecretTargetIds(params.cfg, params.env);
+  if (targetIds.size === 0) {
+    return { cfg: params.cfg, diagnostics: [] };
+  }
+  const resolved = await resolveCommandSecretRefsViaGateway({
+    config: params.cfg,
+    commandName: "doctor preview",
+    targetIds,
+    mode: "read_only_status",
+    allowLocalExecSecretRefs: params.allowExec === true,
+    scrubUnresolvedSecretRefs: false,
+  });
+  return { cfg: resolved.resolvedConfig, diagnostics: resolved.diagnostics };
+}
+
 /** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -787,13 +725,13 @@ export async function collectDoctorPreviewNotes(params: {
     await import("./active-tool-schema-warnings.js");
   warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
 
-  const channelPluginRuntime =
-    hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
-      ? await import("./channel-plugin-blockers.js")
-      : undefined;
-  const channelPluginBlockerHits =
-    channelPluginRuntime?.scanConfiguredChannelPluginBlockers(params.cfg, env) ?? [];
-  if (channelPluginRuntime && channelPluginBlockerHits.length > 0) {
+  const channelPluginRuntime = await import("./channel-plugin-blockers.js");
+  const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    env,
+    params.activationSourceConfig,
+  );
+  if (channelPluginBlockerHits.length > 0) {
     warnings.push(
       channelPluginRuntime
         .collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits)
@@ -802,9 +740,15 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
+    const channelPreviewConfig = await resolveDoctorChannelPreviewConfig({
+      cfg: params.cfg,
+      env,
+      allowExec: params.allowExec,
+    });
+    warnings.push(...channelPreviewConfig.diagnostics);
     const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
-      cfg: params.cfg,
+      cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
       env,
     });
@@ -901,12 +845,7 @@ export async function collectDoctorPreviewNotes(params: {
         emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
     }).filter(
       (warning) =>
-        !(
-          channelPluginRuntime?.isWarningBlockedByChannelPlugin(
-            warning,
-            channelPluginBlockerHits,
-          ) ?? false
-        ),
+        !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
     );
     if (emptyAllowlistWarnings.length > 0) {
       const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
@@ -967,13 +906,4 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   return { infoNotes, warningNotes: warnings };
-}
-
-/** Collect warning notes only for callers that do not display info notes. */
-export async function collectDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
-  return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

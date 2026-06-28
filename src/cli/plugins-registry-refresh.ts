@@ -52,7 +52,7 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
   }
 }
 
-async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {
+export async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {
   logger?: PluginRegistryRefreshLogger;
 }): Promise<void> {
   try {

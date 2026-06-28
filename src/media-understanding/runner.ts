@@ -38,9 +38,10 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
@@ -48,7 +49,6 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import { providerSupportsCapability } from "./provider-supports.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -65,7 +65,7 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-export type { ActiveMediaModel } from "./active-model.types.js";
+export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type HasAvailableAuthForProvider =

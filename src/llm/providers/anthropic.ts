@@ -9,9 +9,20 @@ import type {
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "../../agents/anthropic-tool-projection.js";
+import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
+import {
+  omitFoundryBearerCredentialHeaders,
+  usesFoundryBearerAuth,
+} from "../../shared/anthropic-auth-headers.js";
 import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeAdaptiveThinking,
@@ -50,26 +61,17 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "./anthropic-thinking-replay.js";
+import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
-
-/**
- * Resolve cache retention preference.
- * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
- */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -117,16 +119,6 @@ const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
 
 // Convert tool name to CC canonical casing if it matches (case-insensitive)
 const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) ?? name;
-const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
-  if (tools && tools.length > 0) {
-    const lowerName = name.toLowerCase();
-    const matchedTool = tools.find((tool) => tool.name.toLowerCase() === lowerName);
-    if (matchedTool) {
-      return matchedTool.name;
-    }
-  }
-  return name;
-};
 
 /**
  * Convert content blocks to Anthropic API format
@@ -256,39 +248,6 @@ function mergeHeaders(
     }
   }
   return merged;
-}
-
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
-  );
-}
-
-function usesFoundryBearerAuth(model: Model<"anthropic-messages">): boolean {
-  return (
-    model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
-  );
-}
-
-function omitFoundryBearerCredentialHeaders(
-  headers?: Record<string, string>,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
-      continue;
-    }
-    next[key] = value;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 interface ServerSentEvent {
@@ -553,7 +512,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         client = created.client;
         isOAuth = created.isOAuthToken;
       }
-      let params = buildParams(model, context, isOAuth, options);
+      const builtParams = buildParams(model, context, isOAuth, options);
+      let params = builtParams.params;
+      const toolProjection = builtParams.toolProjection;
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
@@ -575,6 +536,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         index: number;
       };
       const blocks = output.content as Block[];
+      const blockIndexes = new Map<number, number>();
 
       for await (const event of iterateAnthropicEvents(
         response,
@@ -607,6 +569,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "text_start",
               contentIndex: output.content.length - 1,
@@ -620,6 +583,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -634,6 +598,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -644,13 +609,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               type: "toolCall",
               id: event.content_block.id,
               name: isOAuth
-                ? fromClaudeCodeName(event.content_block.name, context.tools)
+                ? resolveOriginalAnthropicToolName(event.content_block.name, toolProjection)
                 : event.content_block.name,
               arguments: (event.content_block.input as Record<string, unknown>) ?? {},
               partialJson: "",
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "toolcall_start",
               contentIndex: output.content.length - 1,
@@ -659,9 +625,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
         } else if (event.type === "content_block_delta") {
           if (event.delta.type === "text_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "text") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "text") {
               block.text += event.delta.text;
               eventSink.push({
                 type: "text_delta",
@@ -671,9 +637,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "thinking_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "thinking") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "thinking") {
               block.thinking += event.delta.thinking;
               eventSink.push({
                 type: "thinking_delta",
@@ -683,9 +649,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "input_json_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "toolCall") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "toolCall") {
               block.partialJson += event.delta.partial_json;
               block.arguments = parseStreamingJson(block.partialJson);
               eventSink.push({
@@ -696,17 +662,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "signature_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "thinking") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "thinking") {
               block.thinkingSignature = block.thinkingSignature || "";
               block.thinkingSignature += event.delta.signature;
             }
           }
         } else if (event.type === "content_block_stop") {
-          const index = blocks.findIndex((b) => b.index === event.index);
-          const block = blocks[index];
-          if (block) {
+          const index = blockIndexes.get(event.index);
+          const block = index === undefined ? undefined : blocks[index];
+          if (index !== undefined && block) {
+            blockIndexes.delete(event.index);
             delete (block as Partial<Block>).index;
             if (block.type === "text") {
               eventSink.push({
@@ -800,8 +767,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
 function normalizeAnthropicToolChoice(
   model: Model<"anthropic-messages">,
-  toolChoice: AnthropicOptions["toolChoice"],
-) {
+  toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
+): AnthropicProjectedToolChoice {
   if (
     requiresClaudeAdaptiveThinking(model) &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
@@ -1053,11 +1020,16 @@ function buildParams(
   context: Context,
   isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
-): MessageCreateParamsStreaming {
+): {
+  params: MessageCreateParamsStreaming;
+  toolProjection?: AnthropicToolProjection;
+} {
+  const fable5 = usesClaudeFable5MessagesContract(model);
+  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
-  const compat = context.tools?.length ? getAnthropicCompat(model) : undefined;
-  const tools =
+  const compat = context.tools ? getAnthropicCompat(model) : undefined;
+  const convertedTools =
     context.tools && compat
       ? convertTools(
           context.tools,
@@ -1066,6 +1038,8 @@ function buildParams(
           compat.supportsCacheControlOnTools ? cacheControl : undefined,
         )
       : undefined;
+  const tools = convertedTools?.tools;
+  const toolProjection = convertedTools?.projection;
   const systemCacheControlCount = countNativeCacheControlMarkers(system);
   const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
@@ -1080,6 +1054,7 @@ function buildParams(
       isOAuthTokenResult,
       cacheControl,
       messageCacheControlLimit,
+      replayThinkingEnabled,
     ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
@@ -1109,7 +1084,6 @@ function buildParams(
   // Configure thinking mode: always-on adaptive (Fable 5), adaptive (Opus
   // 4.6+ and Sonnet 4.6),
   // budget-based (older models), or explicitly disabled.
-  const fable5 = usesClaudeFable5MessagesContract(model);
   if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
@@ -1149,10 +1123,16 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const projectedToolChoice = toolProjection
+      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
+      : normalizedToolChoice;
+    if (projectedToolChoice) {
+      params.tool_choice = projectedToolChoice;
+    }
   }
 
-  return params;
+  return { params, toolProjection };
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length
@@ -1166,11 +1146,15 @@ function convertMessages(
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
+  replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
+  const activeToolTurnAssistantIndex = replayThinkingEnabled
+    ? -1
+    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1216,6 +1200,7 @@ function convertMessages(
       }
     } else if (msg.role === "assistant") {
       const blocks: ContentBlockParam[] = [];
+      let omittedThinking = false;
 
       for (const block of msg.content) {
         if (block.type === "text") {
@@ -1227,6 +1212,10 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
+          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+            omittedThinking = true;
+            continue;
+          }
           // Redacted thinking: pass the opaque payload back as redacted_thinking
           if (block.redacted) {
             blocks.push({
@@ -1269,6 +1258,9 @@ function convertMessages(
             input: block.arguments ?? {},
           });
         }
+      }
+      if (blocks.length === 0 && omittedThinking) {
+        blocks.push({ type: "text", text: ANTHROPIC_OMITTED_REASONING_TEXT });
       }
       if (blocks.length === 0) {
         continue;
@@ -1454,26 +1446,32 @@ function convertTools(
   isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming: boolean,
   cacheControl?: CacheControlEphemeral,
-): Anthropic.Messages.Tool[] {
-  if (!tools) {
-    return [];
-  }
-
-  return tools.map((tool, index) => {
-    const schema = tool.parameters as { properties?: unknown; required?: string[] };
-
-    return {
-      name: isOAuthTokenLocal ? toClaudeCodeName(tool.name) : tool.name,
+): {
+  projection: AnthropicToolProjection;
+  tools: Anthropic.Messages.Tool[];
+} {
+  const projection = projectAnthropicTools(tools, (name) =>
+    isOAuthTokenLocal ? toClaudeCodeName(name) : name,
+  );
+  const convertedTools: Anthropic.Messages.Tool[] = [];
+  for (const [index, tool] of projection.tools.entries()) {
+    const convertedTool: Anthropic.Messages.Tool = {
+      name: tool.wireName,
       description: tool.description,
-      ...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
-      input_schema: {
-        type: "object",
-        properties: schema.properties ?? {},
-        required: schema.required ?? [],
-      },
-      ...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
+      input_schema: tool.inputSchema,
     };
-  });
+    if (supportsEagerToolInputStreaming) {
+      convertedTool.eager_input_streaming = true;
+    }
+    if (cacheControl && index === projection.tools.length - 1) {
+      convertedTool.cache_control = cacheControl;
+    }
+    convertedTools.push(convertedTool);
+  }
+  return {
+    projection,
+    tools: convertedTools,
+  };
 }
 
 function mapStopReason(reason: string): StopReason {

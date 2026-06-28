@@ -29,6 +29,7 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { enabled: false },
+      allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -333,6 +334,13 @@ different visible skill set per agent.
   quarantine. `auto` allows those actions without approval.
 </ParamField>
 
+<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
+  Allow Skill Workshop apply to write through workspace skill symlinks whose
+  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep this
+  disabled unless generated proposal applies should mutate that shared skill
+  root.
+</ParamField>
+
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
   Maximum pending and quarantined proposals retained per workspace.
 </ParamField>
@@ -364,6 +372,23 @@ To allow an intentional symlink layout, declare the trusted target:
 With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills` is
 accepted after realpath resolution. `extraDirs` scans the sibling repo directly;
 `allowSymlinkTargets` preserves the symlinked path for existing layouts.
+
+Skill Workshop apply does not write through those symlinks by default. To let
+Workshop apply mutate skills under already-trusted symlink targets, opt in
+separately:
+
+```json5
+{
+  skills: {
+    load: {
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+    workshop: {
+      allowSymlinkTargetWrites: true,
+    },
+  },
+}
+```
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks (per-skill `SKILL.md` containment still

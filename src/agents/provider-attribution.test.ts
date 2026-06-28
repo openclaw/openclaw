@@ -17,7 +17,11 @@ const providerEndpointPlugins = vi.hoisted(() => [
   {
     // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        hostSuffixes: [".api.openai.com"],
+      },
       { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
@@ -73,6 +77,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -90,6 +103,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -104,13 +119,20 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `provider-endpoint-fixture-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
+}));
+
 import {
   listProviderAttributionPolicies,
-  resolveProviderAttributionHeaders,
   resolveProviderAttributionIdentity,
   resolveProviderAttributionPolicy,
   resolveProviderEndpoint,
-  resolveProviderRequestAttributionHeaders,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
   describeProviderRequestRoutingSummary,
@@ -169,16 +191,13 @@ describe("provider attribution", () => {
         "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
       },
     });
-    expect(resolveProviderAttributionHeaders("NVIDIA", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
-    });
   });
 
-  it("normalizes aliases when resolving provider headers", () => {
+  it("normalizes aliases when resolving provider policy headers", () => {
     expect(
-      resolveProviderAttributionHeaders("OpenRouter", {
+      resolveProviderAttributionPolicy("OpenRouter", {
         OPENCLAW_VERSION: "2026.3.22",
-      }),
+      })?.headers,
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
@@ -203,7 +222,9 @@ describe("provider attribution", () => {
         "User-Agent": "openclaw/2026.3.22",
       },
     });
-    expect(resolveProviderAttributionHeaders("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+    expect(
+      resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
+    ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -244,7 +265,9 @@ describe("provider attribution", () => {
         "User-Agent": "openclaw/2026.3.22",
       },
     });
-    expect(resolveProviderAttributionHeaders("xai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+    expect(
+      resolveProviderAttributionPolicy("xai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
+    ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -292,7 +315,7 @@ describe("provider attribution", () => {
       },
     );
     expect(
-      resolveProviderRequestAttributionHeaders(
+      resolveProviderRequestPolicy(
         {
           provider: "xai",
           api: "openai-responses",
@@ -301,7 +324,7 @@ describe("provider attribution", () => {
           capability: "llm",
         },
         { OPENCLAW_VERSION: "2026.3.22" },
-      ),
+      ).attributionHeaders,
     ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
@@ -547,12 +570,12 @@ describe("provider attribution", () => {
     );
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "openrouter",
         baseUrl: "https://proxy.example.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
     ).toBeUndefined();
   });
 
@@ -574,25 +597,25 @@ describe("provider attribution", () => {
     );
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "custom-nim",
         api: "openai-completions",
         baseUrl: "https://integrate.api.nvidia.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
     ).toEqual({
       "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
     });
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "nvidia",
         api: "openai-completions",
         baseUrl: "https://proxy.example.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
     ).toBeUndefined();
   });
 
@@ -839,6 +862,11 @@ describe("provider attribution", () => {
       hostname: "api.openai.com.attacker.example",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://attackerapi.openai.com"), {
+      endpointClass: "custom",
+      hostname: "attackerapi.openai.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
       endpointClass: "custom",
       hostname: "attacker.example",
@@ -849,6 +877,15 @@ describe("provider attribution", () => {
       hostname: "openrouter.ai.attacker.example",
     });
   });
+
+  it.each(["https://us.api.openai.com/v1", "https://eu.api.openai.com/v1"])(
+    "classifies regional OpenAI endpoint %s as public",
+    (baseUrl) => {
+      expectRecordFields(resolveProviderEndpoint(baseUrl), {
+        endpointClass: "openai-public",
+      });
+    },
+  );
 
   it("ignores non-http schemes when normalizing native comparable base URLs", () => {
     expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {

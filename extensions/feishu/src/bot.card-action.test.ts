@@ -183,6 +183,7 @@ describe("Feishu Card Action Handler", () => {
         tag: "button",
       },
       context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+      open_message_id: "om_card_message",
     };
 
     await handleFeishuCardAction({ cfg, event, runtime });
@@ -190,6 +191,8 @@ describe("Feishu Card Action Handler", () => {
     const message = handleMessage();
     expect(message.content).toBe('{"text":"/ping"}');
     expect(message.chat_id).toBe("chat1");
+    expect(message.reply_target_message_id).toBe("om_card_message");
+    expect(message.typing_target_message_id).toBe("om_card_message");
   });
 
   it("handles card action with JSON object payload", async () => {

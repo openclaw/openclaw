@@ -1,6 +1,7 @@
 // Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildClawHubTrustErrorDetails,
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
@@ -102,6 +103,7 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
   // not only the workspace contents, so status reports include live eligibility.
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.cfg,
+    agentId: resolved.agentId,
     eligibility: {
       remote: getRemoteSkillEligibility({
         advertiseExecNode: canExecRequestNode({
@@ -115,6 +117,12 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
 
 function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
+}
+
+function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
+  return results
+    .map((result) => normalizeOptionalString(result.warning))
+    .filter((warning): warning is string => Boolean(warning));
 }
 
 function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
@@ -483,6 +491,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         applySkillProposal({
           workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),
@@ -522,8 +531,13 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    const cfg = resolved.cfg;
+    const workspaceDirRaw = resolved.workspaceDir;
     // Skill installs are intentionally routed by source; each source owns its
     // validation, provenance checks, and result payload shape.
     if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {
@@ -532,14 +546,17 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: string;
         version?: string;
         force?: boolean;
+        acknowledgeClawHubRisk?: boolean;
       };
       const result = await installSkillFromClawHub({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         config: cfg,
       });
+      const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
       respond(
         result.ok,
         result.ok
@@ -552,9 +569,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
               slug: result.slug,
               version: result.version,
               targetDir: result.targetDir,
+              ...(result.warning ? { warning: result.warning } : {}),
             }
           : result,
-        result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.error),
+        result.ok
+          ? undefined
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              result.error,
+              errorDetails ? { details: errorDetails } : undefined,
+            ),
       );
       return;
     }
@@ -574,7 +598,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         sha256: p.sha256,
         timeoutMs: p.timeoutMs,
         workspaceDir: workspaceDirRaw,
-        config: context.getRuntimeConfig(),
+        config: cfg,
         log: context.logGateway,
       });
       const errorCode =
@@ -622,6 +646,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         source: "clawhub";
         slug?: string;
         all?: boolean;
+        acknowledgeClawHubRisk?: boolean;
       };
       if (!p.slug && !p.all) {
         respond(
@@ -642,14 +667,19 @@ export const skillsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const cfg = context.getRuntimeConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+      const resolved = resolveSkillsAgentWorkspace(params, context);
+      if (!resolved.ok) {
+        respond(false, undefined, resolved.error);
+        return;
+      }
       const results = await updateSkillsFromClawHub({
-        workspaceDir,
+        workspaceDir: resolved.workspaceDir,
         slug: p.slug,
-        config: cfg,
+        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
+      const warnings = collectClawHubTrustWarnings(results);
       respond(
         errors.length === 0,
         {
@@ -662,7 +692,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
         },
         errors.length === 0
           ? undefined
-          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; ")),
+          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; "), {
+              details: {
+                results,
+                ...(warnings.length > 0 ? { warnings } : {}),
+              },
+            }),
       );
       return;
     }

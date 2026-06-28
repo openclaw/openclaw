@@ -13,8 +13,6 @@ function getChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   return chatChannelMetaCache;
 }
 
-export type { ChatChannelMeta };
-
 /**
  * Lists built-in chat channel metadata in configured display order.
  */

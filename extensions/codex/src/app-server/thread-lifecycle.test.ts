@@ -5,6 +5,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -14,6 +15,7 @@ import {
   buildThreadStartParams,
   codexDynamicToolsFingerprint,
   formatCodexThreadLifecycleTimingSummary,
+  resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
   shouldWarnCodexThreadLifecycleTimingSummary,
   startOrResumeThread,
@@ -82,6 +84,39 @@ function createAppServerOptions() {
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+  };
+}
+
+function createNetworkProxyAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "mock-proxy",
+    permissions: {
+      "mock-proxy": {
+        filesystem: {
+          ":minimal": "read",
+          ":project_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          allow_upstream_proxy: true,
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
+  } as const;
+  return {
+    ...createAppServerOptions(),
+    networkProxy: {
+      profileName: "mock-proxy",
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
   } as const;
 }
 
@@ -124,6 +159,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -195,23 +232,31 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
         },
         {
-          name: "music_generate",
-          description: "Create music",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
-        },
-        {
-          name: "image_generate",
-          description: "Create images",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "music_generate",
+              description: "Create music",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+            {
+              type: "function",
+              name: "image_generate",
+              description: "Create images",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
         },
       ],
     });
@@ -227,11 +272,18 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
-          name: "skill_workshop",
-          description: "Manage skill proposals",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "skill_workshop",
+              description: "Manage skill proposals",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
         },
       ],
     });
@@ -249,6 +301,7 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
@@ -270,6 +323,7 @@ describe("Codex app-server native code mode config", () => {
     };
     const directFingerprint = codexDynamicToolsFingerprint([
       {
+        type: "function",
         name: "message",
         description: "Send a visible message",
         inputSchema,
@@ -277,11 +331,18 @@ describe("Codex app-server native code mode config", () => {
     ]);
     const searchableFingerprint = codexDynamicToolsFingerprint([
       {
-        name: "message",
-        description: "Load and send a visible message",
-        inputSchema,
-        namespace: "openclaw",
-        deferLoading: true,
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: [
+          {
+            type: "function",
+            name: "message",
+            description: "Load and send a visible message",
+            inputSchema,
+            deferLoading: true,
+          },
+        ],
       },
     ]);
 
@@ -309,17 +370,154 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.hooks": true,
         apps: { _default: { enabled: false } },
+        mcp_servers: {
+          local_docs: {
+            command: "node",
+            args: ["/opt/local-docs-mcp/dist/index.js"],
+          },
+        },
       },
     });
 
     expect(request.config).toEqual({
       "features.hooks": true,
       apps: { _default: { enabled: false } },
+      mcp_servers: {
+        local_docs: {
+          command: "node",
+          args: ["/opt/local-docs-mcp/dist/index.js"],
+        },
+      },
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
     expect(request.personality).toBe("none");
+  });
+
+  it("enables hosted Codex web search on thread/start by default", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
+  });
+
+  it("disables hosted Codex web search for tool-disabled runs", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.disableTools = true;
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when effective tool policy denies web_search", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      webSearchAllowed: false,
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables native Codex search when runtime policy disables native tools", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "codex" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when the active provider lacks support", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeProviderWebSearchSupport: "unsupported",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("selects the Codex network-proxy permissions profile in thread/start config", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+  });
+
+  it("selects the Codex network-proxy permissions profile in thread/resume config", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            domains: {
+              "api.openai.com": "allow",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("disables Codex tool-search features for nano models", () => {
@@ -338,6 +536,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -376,6 +576,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -395,6 +597,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -409,6 +613,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -430,6 +636,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -447,6 +655,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -475,6 +685,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -496,6 +708,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 });
@@ -521,6 +735,35 @@ describe("Codex app-server turn input image sanitizing", () => {
       networkAccess: true,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
+    });
+  });
+
+  it("uses Codex permissions for network-proxy turn/start requests", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandboxPolicy");
+  });
+
+  it("keeps explicit sandbox policy overrides ahead of network-proxy turn permissions", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "externalSandbox",
+        networkAccess: "enabled",
+      },
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request.sandboxPolicy).toEqual({
+      type: "externalSandbox",
+      networkAccess: "enabled",
     });
   });
 
@@ -601,6 +844,8 @@ describe("Codex app-server turn params", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
       serviceTier: "flex" as const,
     };
 
@@ -614,6 +859,8 @@ describe("Codex app-server turn params", () => {
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.apply_patch_streaming_events": true,
+        "features.standalone_web_search": false,
+        web_search: "cached",
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
@@ -813,6 +1060,52 @@ describe("Codex app-server model provider selection", () => {
 
     expect(request.model).toBe("local-model");
     expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("uses provider-qualified model refs for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "amazon-bedrock/local-model",
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("uses a matching bound provider for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "local-model",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("prefers provider-qualified models over bound providers for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "openai/gpt-5.5",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
   });
 
   it("normalizes provider-qualified model refs for turn/start metadata", () => {

@@ -9,6 +9,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
 import {
+  resolveAllowedSkillSymlinkTargetRealPaths,
+  tryRealpath,
+} from "../loading/symlink-targets.js";
+import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
   resetSkillsRefreshStateForTest,
@@ -111,7 +115,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
-  const allowedSymlinkTargetRealPaths = resolveAllowedSymlinkTargetRealPaths(config);
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(config);
   const signature = JSON.stringify({
     basePaths: baseRoots.map((root) => toWatchRoot(root.path)),
     extraDirs: extraDirs.map(toWatchRoot),
@@ -363,23 +367,6 @@ function watchDepthForPath(raw: string, depth: number): number {
     candidate = parent;
   }
   return depth + missingSegments;
-}
-
-function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
-  const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
-  return rawTargets
-    .map((dir) => normalizeOptionalString(dir) ?? "")
-    .filter(Boolean)
-    .map((dir) => tryRealpath(resolveUserPath(dir)))
-    .filter((dir): dir is string => Boolean(dir));
-}
-
-function tryRealpath(filePath: string): string | null {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return null;
-  }
 }
 
 function isPathInside(parent: string, child: string): boolean {

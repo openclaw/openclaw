@@ -12,7 +12,10 @@ import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
+import {
+  avoidTrailingHighSurrogateBreak,
+  chunkTextByBreakResolver,
+} from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
 export type TextChunkProvider = ChannelId;
@@ -160,7 +163,10 @@ export function chunkByNewline(
       continue;
     }
 
-    const firstLimit = Math.max(1, maxLineLength - prefix.length);
+    // Back the head cut off to a code-point boundary so an over-long line never splits a surrogate
+    // pair; the recursive chunkText below is already surrogate-safe, only this first cut was raw.
+    const rawLimit = Math.max(1, maxLineLength - prefix.length);
+    const firstLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, rawLimit);
     const first = lineValue.slice(0, firstLimit);
     chunks.push(prefix + first);
     const remaining = lineValue.slice(firstLimit);
@@ -448,6 +454,16 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
       fenceToSplit =
         fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+    }
+
+    const safeBreakIdx = avoidTrailingHighSurrogateBreak(text, start, breakIdx);
+    if (safeBreakIdx !== breakIdx) {
+      breakIdx = safeBreakIdx;
+      if (fenceToSplit) {
+        const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+        fenceToSplit =
+          fenceAtBreak && fenceAtBreak.start === fenceToSplit.start ? fenceAtBreak : undefined;
+      }
     }
 
     const rawContent = text.slice(start, breakIdx);

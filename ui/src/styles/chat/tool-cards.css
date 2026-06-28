@@ -37,7 +37,7 @@
   cursor: pointer;
 }
 
-.chat-tool-card--clickable:focus {
+.chat-tool-card--clickable:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -99,7 +99,7 @@
   justify-content: center;
   gap: 4px;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   white-space: nowrap;
   color: var(--muted);
   opacity: 1;
@@ -182,7 +182,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
   color: var(--destructive, var(--danger, #c0392b));
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -243,7 +243,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
   color: var(--destructive, var(--danger, #c0392b));
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -301,7 +301,7 @@
 }
 
 .chat-tool-card__preview-label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -429,7 +429,7 @@
 }
 
 .chat-tool-card__block-label {
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -447,7 +447,7 @@
   border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   background: color-mix(in srgb, var(--secondary) 82%, transparent);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -505,7 +505,7 @@
 
 .chat-tools-summary::before {
   content: "▸";
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   flex-shrink: 0;
   transition: transform 150ms ease;
 }
@@ -590,7 +590,7 @@
 
 .chat-json-summary::before {
   content: "▸";
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   flex-shrink: 0;
   transition: transform 150ms ease;
 }
@@ -611,7 +611,7 @@
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -621,7 +621,7 @@
 
 .chat-json-label {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -729,7 +729,7 @@
   justify-content: center;
   width: 8px;
   height: 20px;
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   line-height: 1;
   flex-shrink: 0;
   transition: transform 150ms ease;
@@ -1006,7 +1006,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
   color: var(--destructive, var(--danger, #c0392b));
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 650;
   letter-spacing: 0.04em;
   line-height: 1;
@@ -1050,12 +1050,12 @@
   .chat-tool-card__preview {
     padding: 6px 8px;
     margin-top: 6px;
-    font-size: 10px;
+    font-size: 12px; /* was 10px */
     max-height: 36px;
   }
 
   .chat-tool-card__detail {
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .chat-tools-summary {
@@ -1068,7 +1068,7 @@
 
   .chat-json-content {
     padding: 8px 10px;
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
     max-height: 300px;
   }
 }

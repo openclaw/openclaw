@@ -15,11 +15,12 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
+import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { isLocalBaseUrl, modelKey } from "./shared.js";
+import { modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
@@ -126,6 +127,7 @@ function shouldSuppressListModel(params: {
     return shouldSuppressBuiltInModelFromManifest({
       provider: params.model.provider,
       id: params.model.id,
+      baseUrl: params.model.baseUrl,
       config: params.context.cfg,
     });
   }
@@ -145,6 +147,7 @@ function normalizeListRowWithProviderPlugin(params: {
     provider: params.model.provider,
     config: params.context.cfg,
     workspaceDir: params.context.workspaceDir,
+    pluginMetadataSnapshot: params.context.metadataSnapshot,
     context: {
       config: params.context.cfg,
       agentDir: params.context.agentDir,
@@ -177,6 +180,7 @@ async function appendVisibleRow(params: {
   seenKeys?: Set<string>;
   allowProviderAvailabilityFallback?: boolean;
   skipSuppression?: boolean;
+  normalizeWithProviderPlugin?: boolean;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -184,21 +188,18 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context, params.model)) {
     return false;
   }
-  const normalizedModel = normalizeListRowWithProviderPlugin({
-    model: params.model,
-    context: params.context,
-  });
-  // Normalize provider-owned runtime model ids before suppression/filtering so
-  // list output matches the model ids users can actually select.
-  if (
-    !params.skipSuppression &&
-    shouldSuppressListModel({ model: normalizedModel, context: params.context })
-  ) {
+  const model = params.normalizeWithProviderPlugin
+    ? normalizeListRowWithProviderPlugin({
+        model: params.model,
+        context: params.context,
+      })
+    : params.model;
+  if (!params.skipSuppression && shouldSuppressListModel({ model, context: params.context })) {
     return false;
   }
   params.rows.push(
     await buildRow({
-      model: normalizedModel,
+      model,
       key: params.key,
       context: params.context,
       allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
@@ -375,6 +376,7 @@ export async function appendConfiguredProviderRows(params: {
         context: params.context,
         seenKeys: params.seenKeys,
         allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        normalizeWithProviderPlugin: true,
       });
     }
   }

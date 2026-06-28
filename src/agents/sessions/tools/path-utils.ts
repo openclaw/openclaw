@@ -42,7 +42,7 @@ function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
-export function expandPath(filePath: string): string {
+function expandPath(filePath: string): string {
   const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
   if (normalized.startsWith("file://")) {
     try {

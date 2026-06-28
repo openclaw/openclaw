@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  forceKillChildProcessTree,
+  shouldDetachChildForProcessTree,
+} from "../process/child-process-tree.js";
 import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/shared.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -534,6 +538,7 @@ async function runPolicyCommand(params: {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      detached: shouldDetachChildForProcessTree(),
     });
 
     let settled = false;
@@ -545,7 +550,7 @@ async function runPolicyCommand(params: {
     let noOutputTimer: NodeJS.Timeout | null = null;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      forceKillChildProcessTree(child);
     }, params.timeoutMs);
 
     const clearTimers = () => {
@@ -562,7 +567,7 @@ async function runPolicyCommand(params: {
       }
       noOutputTimer = setTimeout(() => {
         noOutputTimedOut = true;
-        child.kill("SIGKILL");
+        forceKillChildProcessTree(child);
       }, params.noOutputTimeoutMs);
     };
 
@@ -570,7 +575,7 @@ async function runPolicyCommand(params: {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       outputBytes += Buffer.byteLength(text, "utf8");
       if (outputBytes > params.maxOutputBytes) {
-        child.kill("SIGKILL");
+        forceKillChildProcessTree(child);
         if (!settled) {
           settled = true;
           clearTimers();

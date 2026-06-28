@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           fetch-depth: 0
@@ -271,7 +271,7 @@ jobs:
 
       - name: Upload test performance artifacts
         if: steps.gate.outputs.run_agent == 'true' && always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-performance-agent-${{ github.run_id }}
           path: .artifacts/test-perf/
