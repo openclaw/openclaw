@@ -15,6 +15,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { saveMediaBuffer } from "../media/store.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
@@ -672,6 +674,71 @@ export function extractToolResultMediaArtifact(
 
   return undefined;
 }
+
+function collectToolResultImageBlocks(result: unknown): Array<{ data: string; mimeType: string }> {
+  if (!result || typeof result !== "object") {
+    return [];
+  }
+  const content = Array.isArray((result as Record<string, unknown>).content)
+    ? ((result as Record<string, unknown>).content as unknown[])
+    : [];
+  const images: Array<{ data: string; mimeType: string }> = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type !== "image" || typeof entry.data !== "string") {
+      continue;
+    }
+    const mimeType = normalizeOptionalString(entry.mimeType);
+    if (!mimeType) {
+      continue;
+    }
+    const data = canonicalizeBase64(entry.data);
+    if (!data) {
+      continue;
+    }
+    images.push({ data, mimeType });
+  }
+  return images;
+}
+
+export async function extractReadToolImageContentMediaArtifact(params: {
+  toolName: string | undefined;
+  result: unknown;
+  builtinToolNames?: ReadonlySet<string>;
+}): Promise<ToolResultMediaArtifact | undefined> {
+  const rawToolName = params.toolName?.trim();
+  if (
+    rawToolName !== "read" ||
+    params.builtinToolNames?.has(rawToolName) === false ||
+    !isToolResultMediaTrusted(rawToolName, params.result)
+  ) {
+    return undefined;
+  }
+  if (extractToolResultMediaArtifact(params.result)) {
+    return undefined;
+  }
+  const images = collectToolResultImageBlocks(params.result);
+  if (images.length === 0) {
+    return undefined;
+  }
+  const mediaUrls: string[] = [];
+  for (const image of images) {
+    const saved = await saveMediaBuffer(
+      Buffer.from(image.data, "base64"),
+      image.mimeType,
+      "inbound",
+    );
+    const id = normalizeOptionalString(saved.id);
+    if (id) {
+      mediaUrls.push(`media://inbound/${encodeURIComponent(id)}`);
+    }
+  }
+  return mediaUrls.length > 0 ? { mediaUrls, trustedLocalMedia: true } : undefined;
+}
+
 
 export function extractToolErrorCode(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
