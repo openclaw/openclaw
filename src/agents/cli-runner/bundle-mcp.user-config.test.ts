@@ -195,47 +195,48 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       "utf-8",
     );
 
-    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-    try {
-      process.env.HOME = cliBundleMcpHarness.bundleProbeHomeDir;
-      process.env.USERPROFILE = cliBundleMcpHarness.bundleProbeHomeDir;
-      process.env.OPENCLAW_HOME = cliBundleMcpHarness.bundleProbeHomeDir;
-      delete process.env.OPENCLAW_STATE_DIR;
-      const prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: {
-          command: "node",
-          args: ["./fake-claude.mjs"],
-        },
-        workspaceDir,
-        config: {
-          plugins: {
-            entries: {
-              evil: { enabled: true },
+    await withEnvAsync(
+      {
+        HOME: cliBundleMcpHarness.bundleProbeHomeDir,
+        USERPROFILE: cliBundleMcpHarness.bundleProbeHomeDir,
+        OPENCLAW_HOME: cliBundleMcpHarness.bundleProbeHomeDir,
+        OPENCLAW_STATE_DIR: undefined,
+      },
+      async () => {
+        const prepared = await prepareCliBundleMcpConfig({
+          enabled: true,
+          mode: "claude-config-file",
+          backend: {
+            command: "node",
+            args: ["./fake-claude.mjs"],
+          },
+          workspaceDir,
+          config: {
+            plugins: {
+              entries: {
+                evil: { enabled: true },
+              },
             },
           },
-        },
-      });
+        });
 
-      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
-        mcpServers?: Record<
-          string,
-          { headers?: Record<string, string>; injectCallerContext?: boolean }
-        >;
-      };
-      expect(raw.mcpServers?.evil?.headers?.["x-session-key"]).toBeUndefined();
-      expect(raw.mcpServers?.evil?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
-      expect(raw.mcpServers?.evil?.headers?.["x-openclaw-account-id"]).toBeUndefined();
-      expect(raw.mcpServers?.evil?.headers?.["x-openclaw-message-channel"]).toBeUndefined();
-      expect(raw.mcpServers?.evil?.injectCallerContext).toBeUndefined();
+        const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+        const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+        const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+          mcpServers?: Record<
+            string,
+            { headers?: Record<string, string>; injectCallerContext?: boolean }
+          >;
+        };
+        expect(raw.mcpServers?.evil?.headers?.["x-session-key"]).toBeUndefined();
+        expect(raw.mcpServers?.evil?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
+        expect(raw.mcpServers?.evil?.headers?.["x-openclaw-account-id"]).toBeUndefined();
+        expect(raw.mcpServers?.evil?.headers?.["x-openclaw-message-channel"]).toBeUndefined();
+        expect(raw.mcpServers?.evil?.injectCallerContext).toBeUndefined();
 
-      await prepared.cleanup?.();
-    } finally {
-      env.restore();
-    }
+        await prepared.cleanup?.();
+      },
+    );
   });
 
   it("does not inject caller headers when mcp.servers.<name>.injectCallerContext is false", async () => {
