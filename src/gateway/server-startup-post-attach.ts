@@ -846,33 +846,13 @@ export async function startGatewaySidecars(params: {
     name: "sidecars.model-catalog-warm",
     log: params.log,
     run: async (isStopped) => {
-      if (isStopped()) {
-        return;
-      }
-      const { loadGatewayModelCatalog, markGatewayModelCatalogStaleForReload } =
-        await import("./server-model-catalog.js");
+      if (isStopped()) return;
+      const { loadGatewayModelCatalog } = await import("./server-model-catalog.js");
       // Warm read-only cache first (used by models.list RPC), then full cache
-      // (runs provider catalog.run hooks like Pioneer's live discovery and writes sidecars).
-      // Then re-run full discovery every 30 minutes so new provider models appear
-      // without requiring a gateway restart.
+      // (runs augmentModelCatalog hooks including Pioneer live discovery).
       await loadGatewayModelCatalog({ readOnly: true });
-      if (isStopped()) {
-        return;
-      }
+      if (isStopped()) return;
       await loadGatewayModelCatalog({ readOnly: false });
-      while (!isStopped()) {
-        // unref so the timer does not keep the process alive on clean shutdown.
-        await sleep(30 * 60 * 1000, undefined, { ref: false });
-        if (isStopped()) {
-          return;
-        }
-        try {
-          markGatewayModelCatalogStaleForReload();
-          await loadGatewayModelCatalog({ readOnly: false });
-        } catch (err) {
-          params.log.warn(`sidecars.model-catalog-warm refresh failed: ${String(err)}`);
-        }
-      }
     },
   });
 

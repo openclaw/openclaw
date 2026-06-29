@@ -1920,8 +1920,9 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(result.postReadySidecars).toHaveLength(1);
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
+    // 2 calls from model-catalog-warm sidecar (readOnly: true then false) + 1 from Gmail validation.
     await vi.waitFor(() => {
-      expect(hoisted.loadModelCatalog).toHaveBeenCalledTimes(1);
+      expect(hoisted.loadModelCatalog).toHaveBeenCalledTimes(3);
     });
     expect(hoisted.getModelRefStatus).toHaveBeenCalledWith(
       expect.objectContaining({ ref: "openai/gpt-5.4" }),
