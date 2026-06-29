@@ -397,6 +397,44 @@ class QQBotMarkdownChunkingState {
     return out;
   }
 
+  private forceFlushEmitBuffer(chunkLimit: number): void {
+    if (this.pendingEmitBuffer.length > 1) {
+      const joined = this.renderEmitBufferAsString();
+      if (utf8ByteLength(joined) <= chunkLimit) {
+        this.chunks.push(joined);
+        this.pendingEmitBuffer = [];
+        this.pendingEmitBytes = 0;
+        return;
+      }
+    }
+    let current = "";
+    let currentBytes = 0;
+    while (this.pendingEmitBuffer.length > 0) {
+      const unit = this.pendingEmitBuffer.shift()!;
+      this.pendingEmitBytes -= unit.bytes;
+      const sep = current ? 2 : 0;
+      if (currentBytes + sep + unit.bytes <= chunkLimit) {
+        current = current ? `${current}\n\n${unit.content}` : unit.content;
+        currentBytes += sep + unit.bytes;
+        continue;
+      }
+      if (current) {
+        this.chunks.push(current);
+        current = "";
+        currentBytes = 0;
+      }
+      if (unit.bytes <= chunkLimit) {
+        current = unit.content;
+        currentBytes = unit.bytes;
+      } else {
+        pushBaseChunks(this.chunks, unit.content, chunkLimit, this.baseChunker);
+      }
+    }
+    if (current) {
+      this.chunks.push(current);
+    }
+  }
+
   private endTable(chunks: string[]): void {
     this.flushTable(chunks);
     this.activeTable = null;
