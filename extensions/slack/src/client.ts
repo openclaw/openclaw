@@ -4,6 +4,7 @@ import { type WebClientOptions, WebClient } from "@slack/web-api";
 import {
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
+  type SlackClientOptions,
 } from "./client-options.js";
 
 const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
@@ -12,15 +13,16 @@ const slackWriteClientCache = new Map<string, WebClient>();
 export {
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
+  type SlackClientOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
-export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+export function createSlackWebClient(token: string, options: SlackClientOptions = {}) {
   return new WebClient(token, resolveSlackWebClientOptions(options));
 }
 
-export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
+export function createSlackWriteClient(token: string, options: SlackClientOptions = {}) {
   return new WebClient(token, resolveSlackWriteClientOptions(options));
 }
 
@@ -33,7 +35,7 @@ function slackWriteClientCacheKey(token: string, options: WebClientOptions): str
   return options.slackApiUrl ? `${tokenKey}:api:${options.slackApiUrl}` : tokenKey;
 }
 
-export function getSlackWriteClient(token: string, options: WebClientOptions = {}): WebClient {
+export function getSlackWriteClient(token: string, options: SlackClientOptions = {}): WebClient {
   const resolvedOptions = resolveSlackWriteClientOptions(options);
   const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
   const cached = slackWriteClientCache.get(tokenKey);

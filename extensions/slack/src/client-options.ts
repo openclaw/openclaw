@@ -3,6 +3,8 @@ import type { Agent } from "node:http";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 
+export type SlackClientOptions = Omit<WebClientOptions, "slackApiUrl">;
+
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
   factor: 2,
@@ -42,22 +44,20 @@ function resolveSlackProxyAgent(targetUrl: string): Agent | undefined {
   }
 }
 
-function resolveSlackApiUrl(options: Pick<WebClientOptions, "slackApiUrl">): string | undefined {
-  const explicit = options.slackApiUrl?.trim();
-  const envDefault = process.env.SLACK_API_URL?.trim();
-  return explicit || envDefault || undefined;
+function resolveSlackApiUrlFromEnv(): string | undefined {
+  return process.env.SLACK_API_URL?.trim() || undefined;
 }
 
 function resolveSlackClientOptions(
-  options: WebClientOptions,
+  options: SlackClientOptions,
   defaults: {
     retryConfig: RetryOptions;
     maxRequestConcurrency?: number;
   },
 ): WebClientOptions {
-  const slackApiUrl = resolveSlackApiUrl(options);
+  const slackApiUrl = resolveSlackApiUrlFromEnv();
   const proxyTargetUrl = slackApiUrl ?? "https://slack.com/";
-  const resolved = Object.assign({}, options);
+  const resolved: WebClientOptions = Object.assign({}, options);
   resolved.agent ??= resolveSlackProxyAgent(proxyTargetUrl);
   resolved.retryConfig ??= defaults.retryConfig;
   if (defaults.maxRequestConcurrency !== undefined) {
@@ -71,11 +71,11 @@ function resolveSlackClientOptions(
   return resolved;
 }
 
-export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
+export function resolveSlackWebClientOptions(options: SlackClientOptions = {}): WebClientOptions {
   return resolveSlackClientOptions(options, { retryConfig: SLACK_DEFAULT_RETRY_OPTIONS });
 }
 
-export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
+export function resolveSlackWriteClientOptions(options: SlackClientOptions = {}): WebClientOptions {
   return resolveSlackClientOptions(options, {
     retryConfig: SLACK_WRITE_RETRY_OPTIONS,
     maxRequestConcurrency: 1,
