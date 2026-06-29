@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -255,6 +256,75 @@ describe("SessionManager.open", () => {
         }),
         type: "message",
       }),
+    ]);
+  });
+
+  it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        channel: "dashboard",
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "assistant-message",
+      message: buildAssistantMessage("answer before branch"),
+      parentId: user.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedSessionId = sessionManager.getSessionId();
+
+    expect(branchedMarker).toContain(`sqlite:main:${branchedSessionId}:`);
+    expect(branchedSessionId).not.toBe(sessionId);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      channel: "dashboard",
+      sessionFile: branchedMarker,
+      sessionId: branchedSessionId,
+    });
+    await expect(fs.stat(path.join(process.cwd(), branchedMarker!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: branchedSessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: branchedSessionId,
+        parentSession: marker,
+        type: "session",
+      }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
   });
 

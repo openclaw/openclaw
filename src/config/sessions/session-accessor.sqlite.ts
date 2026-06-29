@@ -328,6 +328,17 @@ export async function replaceSqliteSessionEntry(
   });
 }
 
+/** Replaces one entry synchronously for sync session runtimes. */
+export function replaceSqliteSessionEntrySync(
+  scope: SessionAccessScope,
+  entry: SessionEntry,
+): void {
+  const resolved = resolveSqliteScope(scope);
+  runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, resolved.sessionKey, entry);
+  }, toDatabaseOptions(resolved));
+}
+
 /** Patches one entry in the additive SQLite session store. */
 export async function patchSqliteSessionEntry(
   scope: SessionAccessScope,

@@ -22,11 +22,14 @@ import { isProxy } from "node:util/types";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
+  loadSessionEntry,
   loadTranscriptEventsSync,
+  replaceSessionEntrySync,
   replaceTranscriptEventsSync,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
+  formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../../config/sessions/sqlite-marker.js";
@@ -2969,7 +2972,14 @@ export class SessionManager {
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
     const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const newSessionFile = join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+    const sqlitePersistence = this.sqlitePersistence;
+    const newSessionFile = sqlitePersistence
+      ? formatSqliteSessionFileMarker({
+          agentId: sqlitePersistence.agentId,
+          sessionId: newSessionId,
+          storePath: sqlitePersistence.storePath,
+        })
+      : join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
 
     const header: SessionHeader = {
       type: "session",
@@ -3012,6 +3022,28 @@ export class SessionManager {
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
       this.sessionFileSnapshot = undefined;
+      if (sqlitePersistence) {
+        const updatedAt = Date.now();
+        const previousEntry = loadSessionEntry({
+          agentId: sqlitePersistence.agentId,
+          sessionKey: sqlitePersistence.sessionKey,
+          storePath: sqlitePersistence.storePath,
+        });
+        this.sqlitePersistence = { ...sqlitePersistence, sessionId: newSessionId };
+        replaceSessionEntrySync(
+          {
+            agentId: sqlitePersistence.agentId,
+            sessionKey: sqlitePersistence.sessionKey,
+            storePath: sqlitePersistence.storePath,
+          },
+          {
+            ...(previousEntry ?? { updatedAt }),
+            sessionFile: newSessionFile,
+            sessionId: newSessionId,
+            updatedAt,
+          },
+        );
+      }
       this.buildIndex();
 
       // Only write the file now if it contains an assistant message.
