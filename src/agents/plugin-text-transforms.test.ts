@@ -194,7 +194,16 @@ describe("plugin text transforms", () => {
         stream.push({
           type: "toolcall_end",
           contentIndex: 0,
-          toolCall: { type: "toolCall", id: "call-1", name: "[MASKED]_greet" },
+          toolCall: {
+            type: "toolCall",
+            id: "call-1",
+            name: "[MASKED]_greet",
+            arguments: {
+              query: "[MASKED]",
+              nested: { note: "ask [MASKED] again" },
+              entries: ["[MASKED]", 7],
+            },
+          },
         } as never);
         stream.push({ type: "done", reason: "stop" } as never);
         stream.end();
@@ -218,8 +227,13 @@ describe("plugin text transforms", () => {
     expect(deltaEvent?.delta).toBe('{"name":"John","id":"123"}');
 
     const endEvent = events.find((e) => e?.type === "toolcall_end") as
-      | { toolCall?: { name?: string } }
+      | { toolCall?: { name?: string; arguments?: Record<string, unknown> } }
       | undefined;
     expect(endEvent?.toolCall?.name).toBe("John_greet");
+    expect(endEvent?.toolCall?.arguments).toEqual({
+      query: "John",
+      nested: { note: "ask John again" },
+      entries: ["John", 7],
+    });
   });
 });

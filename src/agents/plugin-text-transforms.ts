@@ -79,6 +79,26 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
   return next;
 }
 
+function transformToolCallArgumentText(
+  value: unknown,
+  replacements?: PluginTextReplacement[],
+): unknown {
+  if (typeof value === "string") {
+    return applyPluginTextReplacements(value, replacements);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    next[key] = transformToolCallArgumentText(entry, replacements);
+  }
+  return next;
+}
+
 function transformToolCallText(
   toolCall: Record<string, unknown>,
   replacements?: PluginTextReplacement[],
@@ -89,6 +109,9 @@ function transformToolCallText(
   const next = { ...toolCall };
   if (typeof next.name === "string") {
     next.name = applyPluginTextReplacements(next.name, replacements);
+  }
+  if (Object.hasOwn(next, "arguments")) {
+    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
   }
   return next;
 }
