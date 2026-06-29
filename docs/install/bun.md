@@ -30,7 +30,7 @@ Bun is an optional local runtime for running TypeScript directly (`bun run ...`,
   <Step title="Build and test">
     ```sh
     bun run build
-    bun run vitest run
+    pnpm test
     ```
   </Step>
 </Steps>
