@@ -152,6 +152,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveIdentityAvatarUrl,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -2910,11 +2911,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
     const avatarValue =
+      resolveIdentityAvatarUrl(cfg, identity.agentId, identity.avatar) ??
       resolveAssistantAvatarUrl({
         avatar: identity.avatar,
         agentId: identity.agentId,
         basePath: cfg.gateway?.controlUi?.basePath,
-      }) ?? identity.avatar;
+      }) ??
+      identity.avatar;
     const avatarResolution = resolveAgentAvatar(cfg, identity.agentId, { includeUiOverride: true });
     respond(
       true,

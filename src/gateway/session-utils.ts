@@ -164,7 +164,7 @@ function tryResolveExistingPath(value: string): string | null {
   }
 }
 
-function resolveIdentityAvatarUrl(
+export function resolveIdentityAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
   avatar: string | undefined,

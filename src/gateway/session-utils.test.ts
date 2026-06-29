@@ -30,6 +30,7 @@ import {
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveIdentityAvatarUrl,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -1495,6 +1496,22 @@ describe("gateway session utils", () => {
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
+      `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+    );
+  });
+
+  test("resolveIdentityAvatarUrl inlines workspace-relative avatar paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-inline-"));
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(path.join(workspace, "avatar"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "avatar", "photo.png"), "avatar", "utf8");
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, workspace }],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveIdentityAvatarUrl(cfg, "main", "avatar/photo.png")).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });

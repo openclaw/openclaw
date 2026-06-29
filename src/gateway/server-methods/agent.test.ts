@@ -5901,6 +5901,42 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
   });
 
+  it("inlines workspace avatar paths in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-identity-avatar-" }, async (root) => {
+      const workspace = `${root}/workspace`;
+      await fs.mkdir(`${workspace}/avatar`, { recursive: true });
+      await fs.writeFile(`${workspace}/avatar/photo.png`, "avatar", "utf8");
+      mocks.loadConfigReturn = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace,
+              identity: { avatar: "avatar/photo.png" },
+            },
+          ],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        {
+          sessionKey: "agent:main:main",
+        },
+        { reqId: "5-avatar-inline" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+        avatarSource: "avatar/photo.png",
+        avatarStatus: "local",
+      });
+      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+    });
+  });
+
   it("allows non-delivery agent invocations when sendPolicy is deny", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
