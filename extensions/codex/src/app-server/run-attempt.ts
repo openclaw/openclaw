@@ -841,9 +841,11 @@ export async function runCodexAppServerAttempt(
       currentChannelProvider: resolveCodexMessageToolProvider(params),
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
+      currentMessageId: params.currentMessageId,
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
@@ -1578,6 +1580,7 @@ export async function runCodexAppServerAttempt(
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
+  const activeCompletionBlockerItemIds = new Set<string>();
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -1627,6 +1630,7 @@ export async function runCodexAppServerAttempt(
     isTerminalTurnNotificationQueued: () => terminalTurnNotificationQueued,
     getActiveAppServerTurnRequests: () => activeAppServerTurnRequests,
     getActiveTurnItemCount: () => activeTurnItemIds.size,
+    getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
     turnCompletionIdleTimeoutMs,
     turnAssistantCompletionIdleTimeoutMs,
     turnAttemptIdleTimeoutMs,
@@ -1899,6 +1903,7 @@ export async function runCodexAppServerAttempt(
       currentPromptTexts: [codexTurnPromptText],
       turnWatches,
       activeTurnItemIds,
+      activeCompletionBlockerItemIds,
       activeAppServerTurnRequests,
       pendingOpenClawDynamicToolCompletionIds,
       turnCrossedToolHandoff,

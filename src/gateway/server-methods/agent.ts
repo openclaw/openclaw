@@ -13,6 +13,7 @@ import {
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -173,6 +174,10 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
+}
 
 type AgentSendSessionLifecycleTransition = {
   cfg: OpenClawConfig;
@@ -581,13 +586,63 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
   sessionKey?: string;
   inputProvenance?: InputProvenance;
+  confirmedAcpManualSpawn?: boolean;
 }): GatewayAgentTaskTrackingMode {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
-  return params.client?.internal?.agentRunTracking === "plugin_subagent"
-    ? "plugin_subagent"
-    : "cli";
+  if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
+    return "plugin_subagent";
+  }
+  // A confirmed ACP manual-spawn child turn already owns its requester-visible
+  // `acp` task row from the spawn control plane (src/agents/acp-spawn.ts). The
+  // Gateway CLI path runs that same childRunId, so tracking it here would emit a
+  // duplicate row for one run. Suppress only the CLI branch; plugin-subagent and
+  // normal CLI tracking stay intact.
+  if (params.confirmedAcpManualSpawn) {
+    return "none";
+  }
+  return "cli";
+}
+
+function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  // The ACP spawn control plane reaches the gateway through the in-process
+  // backend client (src/gateway/call.ts -> mode "backend", id "gateway-client").
+  // Only that caller creates the replacement `acp` task row, so CLI suppression
+  // is gated to it. An operator-write UI/CLI/mobile or device-token client that
+  // merely sets acpTurnSource owns no such row and must keep CLI tracking.
+  return (
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function isConfirmedAcpManualSpawnTaskOwner(params: {
+  acpTurnSource?: string;
+  sessionKey?: string;
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+}): boolean {
+  const sessionKey = params.sessionKey;
+  if (
+    !isTrustedBackendAcpSpawnClient(params.client) ||
+    params.acpTurnSource !== "manual_spawn" ||
+    sessionKey == null ||
+    !isAcpSessionKey(sessionKey)
+  ) {
+    return false;
+  }
+  try {
+    return readAcpSessionMeta({ sessionKey }) != null;
+  } catch (err) {
+    params.logGateway.warn(
+      `failed to read ACP session metadata for manual-spawn task tracking ${sessionKey}; falling back to cli task tracking: ${formatForLog(
+        err,
+      )}`,
+    );
+    return false;
+  }
 }
 
 async function registerPluginSubagentRunFromGateway(params: {
@@ -1767,6 +1822,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               policy: resetPolicy,
             })
           : undefined;
+        const visibleRequest =
+          request.bootstrapContextRunKind !== "cron" &&
+          request.bootstrapContextRunKind !== "heartbeat" &&
+          !request.internalEvents?.length;
         const resolveFailedSessionTranscriptMissingForEntry = (
           candidateEntry: SessionEntry | undefined,
         ) => {
@@ -1834,7 +1893,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         let rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction = !isSystemGatewayRun && !request.internalEvents?.length;
+        const touchInteraction = visibleRequest;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -1996,6 +2055,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             ? freshEntry?.sessionId
             : freshSessionId;
           const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
+          const freshRecoverTerminalSession =
+            freshCanReuseSession &&
+            visibleRequest &&
+            isRecoverableTerminalSessionStatus(freshEntry?.status);
+          const shouldClearTerminalState =
+            freshRecoverTerminalSession &&
+            !freshSessionRotatedSinceLoad &&
+            patchSessionId === freshEntry?.sessionId;
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
@@ -2024,14 +2091,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             space: nextGroup.groupSpace,
             ...(pluginOwnerId ? { pluginOwnerId } : {}),
-            ...(shouldClearRotatedState
+            ...(shouldClearRotatedState || shouldClearTerminalState
               ? {
                   status: undefined,
                   startedAt: undefined,
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
-                  sessionFile: undefined,
+                  ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
                 }
               : {}),
           };
@@ -2300,7 +2367,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;
-      let deliveryTargetResolutionError: Error | undefined;
+      let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
 
       if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
         const cfgResolved = cfgForAgent ?? cfg;
@@ -2326,6 +2393,27 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           deliveryDowngradeReason = String(err);
         }
+      }
+
+      if (wantsDelivery && deliveryTargetResolutionError) {
+        if (!bestEffortDeliver) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
+          );
+          return;
+        }
+        deliveryDowngradeReason = String(deliveryTargetResolutionError);
+        resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
+        deliveryTargetMode = undefined;
+        resolvedTo = undefined;
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          resolvedTo,
+          deliveryTargetMode,
+        };
       }
 
       if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -2487,10 +2575,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+      // Confirmed only when the caller is the trusted in-process backend ACP
+      // spawn client, the turn is an ACP manual spawn, the canonical session key
+      // is ACP-shaped, and persisted ACP metadata exists for it; the spawn
+      // control plane owns that childRunId's `acp` task row in those cases.
+      const confirmedAcpManualSpawn = isConfirmedAcpManualSpawnTaskOwner({
+        acpTurnSource: request.acpTurnSource,
+        sessionKey: resolvedSessionKey,
+        client,
+        logGateway: context.logGateway,
+      });
       const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
         client,
         sessionKey: resolvedSessionKey,
         inputProvenance,
+        confirmedAcpManualSpawn,
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";

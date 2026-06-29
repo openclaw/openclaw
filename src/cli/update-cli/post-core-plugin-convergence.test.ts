@@ -276,6 +276,29 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
+  it("forwards ClawHub risk acknowledgement options to repair", async () => {
+    const cfg = {
+      plugins: { entries: { matrix: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    const onClawHubRisk = vi.fn(async () => true);
+    await runPostCorePluginConvergence({
+      cfg,
+      env: {},
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledTimes(1);
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+  });
+
   it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -361,6 +384,39 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
       records: {},
       env: expect.any(Object),
+    });
+  });
+
+  it("surfaces repair notices without marking convergence errored", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      notices: [
+        'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+      ],
+      warnings: [],
+      records: { discord: { source: "clawhub", installPath: "/p/discord" } },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { discord: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      {
+        reason:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        message:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        guidance: [],
+      },
+    ]);
+    expect(convergenceWarningsToOutcomes(result)).toStrictEqual({
+      warnings: result.notices,
+      outcomes: [],
+      errored: false,
     });
   });
 

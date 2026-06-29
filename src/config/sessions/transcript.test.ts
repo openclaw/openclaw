@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -122,7 +123,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "default-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
       const sessionsDir = path.join(tempDir, "configured", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
@@ -158,9 +159,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       );
     } finally {
       if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -171,7 +172,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
-      process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "default-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
       const storeTemplate = path.join(tempDir, "agents", "{agentId}", "sessions", "sessions.json");
       const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
@@ -219,9 +220,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     } finally {
       emitSpy.mockRestore();
       if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

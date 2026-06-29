@@ -96,7 +96,7 @@ Pinned iOS version `2026.4.10` maps to:
   - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
   - syncs encrypted App Store signing assets with Fastlane `match`
   - increments App Store Connect build numbers for the pinned short version
-  - uploads screenshots and release notes before archiving a release build
+  - uploads screenshots, release notes, and the rendered App Review PDF attachment before archiving a release build
 
 ## Release-note resolution order
 
@@ -129,6 +129,37 @@ pnpm ios:version:pin -- --version 2026.4.10
 
 This keeps the TestFlight version stable while review is in flight.
 
+## Release SHA tracking
+
+Successful App Store Connect uploads create a non-tag Git ref that records the
+source commit for the uploaded store build:
+
+```text
+refs/openclaw/mobile-releases/ios/<CFBundleShortVersionString>-<CFBundleVersion>
+```
+
+Example:
+
+```text
+refs/openclaw/mobile-releases/ios/2026.6.10-8
+```
+
+These refs are intentionally outside `refs/tags/*` and `refs/heads/*`. They do
+not appear on GitHub release or tag pages, and they do not participate in the
+core OpenClaw release machinery.
+
+`pnpm ios:release:upload` checks the ref before archive/upload work and records
+it only after `upload_to_testflight` succeeds. Existing refs are immutable: the
+same ref at the same SHA is accepted, while the same ref at a different SHA
+fails.
+
+Useful direct commands:
+
+```bash
+pnpm mobile:release:preflight -- --platform ios --version 2026.6.10 --build 8
+pnpm mobile:release:resolve -- --platform ios --version 2026.6.10 --build 8
+```
+
 ## New release promotion workflow
 
 When you want the next production iOS release to align with the current gateway release:
@@ -156,4 +187,4 @@ Fastlane and Xcode should consume only the pinned iOS version from `apps/ios/ver
 
 Changing `package.json.version` alone must not change the iOS app version until a maintainer explicitly runs the pin step.
 
-App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, and upload builds, but it should not submit a build for review.
+App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, upload the App Review PDF attachment, and upload builds, but it should not upload the App Store Connect `Notes` field or submit a build for review.
