@@ -32,6 +32,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  isMarkdownBlockArtText: () => false,
   toSanitizedMarkdownHtml: markdownRenderMock,
   toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
