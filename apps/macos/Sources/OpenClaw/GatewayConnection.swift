@@ -82,6 +82,7 @@ actor GatewayConnection {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case chatAbort = "chat.abort"
+        case agentWait = "agent.wait"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
@@ -649,6 +650,33 @@ extension GatewayConnection {
     }
 
     // MARK: - Chat
+
+    struct AgentWaitCompletion: Decodable, Equatable {
+        let runId: String?
+        let status: String?
+        let error: String?
+
+        var completed: Bool {
+            switch (self.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "ok", "completed", "success", "succeeded":
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    func agentWait(runId rawRunId: String, timeoutMs: Int) async throws -> AgentWaitCompletion {
+        let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let response: AgentWaitCompletion = try await self.requestDecoded(
+            method: .agentWait,
+            params: [
+                "runId": AnyCodable(runId),
+                "timeoutMs": AnyCodable(timeoutMs),
+            ],
+            timeoutMs: Double(max(1, Int(ceil(Double(timeoutMs) / 1000.0)) + 5) * 1000))
+        return response
+    }
 
     func chatHistory(
         sessionKey: String,

@@ -224,6 +224,52 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(params?["thinking"] == nil)
     }
 
+    @Test func `agent wait sends run id and timeout`() async throws {
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                recorder.append(message)
+                guard sendIndex > 0,
+                      let data = Self.messageData(message),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = json["id"] as? String
+                else { return }
+                task.emitReceiveSuccess(.data(Self.agentWaitCompletedResponseData(id: id)))
+            })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        let transport = MacGatewayChatTransport(gateway: connection)
+        let completed = await transport.waitForRunCompletion(runId: " run-first ", timeoutMs: 300_000)
+        await connection.shutdown()
+
+        #expect(completed)
+
+        guard let waitMessage = recorder.snapshot().reversed().first(where: { message in
+            guard let data = Self.messageData(message),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return json["method"] as? String == "agent.wait"
+        }) else {
+            Issue.record("expected agent.wait websocket payload")
+            return
+        }
+
+        guard let payloadData = Self.messageData(waitMessage) else {
+            Issue.record("unexpected agent.wait websocket message type")
+            return
+        }
+
+        let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        let params = json?["params"] as? [String: Any]
+        #expect(params?["runId"] as? String == "run-first")
+        #expect(params?["timeoutMs"] as? Int == 300_000)
+    }
+
     @Test func `chat send defaults to first-run sized agent timeout`() async throws {
         let recorder = WebSocketMessageRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -289,6 +335,17 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
           "id": "\(id)",
           "ok": true,
           "payload": { "runId": "chat-1", "status": "ok" }
+        }
+        """.utf8)
+    }
+
+    private static func agentWaitCompletedResponseData(id: String) -> Data {
+        Data("""
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": true,
+          "payload": { "runId": "run-first", "status": "completed" }
         }
         """.utf8)
     }

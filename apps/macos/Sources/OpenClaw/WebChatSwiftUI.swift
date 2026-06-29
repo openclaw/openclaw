@@ -18,13 +18,19 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    private let gateway: GatewayConnection
+
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
+        try await self.gateway.chatHistory(sessionKey: sessionKey)
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
         do {
-            let data = try await GatewayConnection.shared.request(
+            let data = try await self.gateway.request(
                 method: "models.list",
                 params: [:],
                 timeoutMs: 15000)
@@ -38,7 +44,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "chat.abort",
             params: [
                 "sessionKey": AnyCodable(sessionKey),
@@ -55,12 +61,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         if let limit {
             params["limit"] = AnyCodable(limit)
         }
-        let data = try await GatewayConnection.shared.request(
+        let data = try await self.gateway.request(
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
         let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
-        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        let mainSessionKey = await self.gateway.cachedMainSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
                 modelProvider: $0.modelProvider,
@@ -87,7 +93,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "key": AnyCodable(sessionKey),
         ]
         params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
@@ -98,7 +104,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "key": AnyCodable(sessionKey),
             "thinkingLevel": AnyCodable(thinkingLevel),
         ]
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
@@ -111,7 +117,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await GatewayConnection.shared.chatSend(
+        try await self.gateway.chatSend(
             sessionKey: sessionKey,
             message: message,
             thinking: thinking,
@@ -120,18 +126,35 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+        try await self.gateway.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func waitForRunCompletion(runId rawRunId: String, timeoutMs: Int) async -> Bool {
+        let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !runId.isEmpty else { return false }
+
+        do {
+            let completion = try await self.gateway.agentWait(runId: runId, timeoutMs: timeoutMs)
+            if !completion.completed {
+                webChatSwiftLogger.warning(
+                    "agent.wait status \(completion.status ?? "unknown", privacy: .public) runId=\(runId, privacy: .public)")
+            }
+            return completion.completed
+        } catch {
+            webChatSwiftLogger.warning("agent.wait failed \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     func resetSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "sessions.reset",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
     }
 
     func compactSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "sessions.compact",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
@@ -141,7 +164,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         await MainActor.run {
             WebChatManager.shared.recordActiveSessionKey(sessionKey)
         }
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.gateway.request(
             method: "sessions.messages.subscribe",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
@@ -151,12 +174,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         AsyncStream { continuation in
             let task = Task {
                 do {
-                    try await GatewayConnection.shared.refresh()
+                    try await self.gateway.refresh()
                 } catch {
                     webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
                 }
 
-                let stream = await GatewayConnection.shared.subscribe()
+                let stream = await self.gateway.subscribe()
                 for await push in stream {
                     if Task.isCancelled { return }
                     if let evt = Self.mapPushToTransportEvent(push) {
