@@ -997,6 +997,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       await createChannelPairingChallengeIssuer({
         channel: "imessage",
+        accountId: accountInfo.accountId,
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "imessage",

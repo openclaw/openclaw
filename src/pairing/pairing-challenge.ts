@@ -1,10 +1,12 @@
 // Builds and validates channel pairing challenges for first-time setup.
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 type PairingMeta = Record<string, string | undefined>;
 
 export type PairingChallengeParams = {
   channel: string;
+  accountId?: string;
   senderId: string;
   senderIdLine: string;
   meta?: PairingMeta;
@@ -17,6 +19,33 @@ export type PairingChallengeParams = {
   onCreated?: (params: { code: string }) => void;
   onReplyError?: (err: unknown) => void;
 };
+
+async function runPairingRequestedHook(params: {
+  channel: string;
+  accountId?: string;
+  senderId: string;
+  code: string;
+  meta?: PairingMeta;
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("channel_pairing_requested")) {
+    return;
+  }
+  await hookRunner.runChannelPairingRequested(
+    {
+      channel: params.channel,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      code: params.code,
+      metadata: params.meta,
+    },
+    {
+      channelId: params.channel,
+      accountId: params.accountId,
+      senderId: params.senderId,
+    },
+  );
+}
 
 /**
  * Shared pairing challenge issuance for DM pairing policy pathways.
@@ -33,6 +62,14 @@ export async function issuePairingChallenge(
     return { created: false };
   }
   params.onCreated?.({ code });
+  // Notification/audit hooks must not delay the pairing-code reply.
+  void runPairingRequestedHook({
+    channel: params.channel,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    code,
+    meta: params.meta,
+  }).catch(() => undefined);
   const replyText =
     params.buildReplyText?.({ code, senderIdLine: params.senderIdLine }) ??
     buildPairingReply({

@@ -12,6 +12,7 @@ export {
 export { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { createScopedPairingAccess } from "./pairing-access.js";
 
 type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
@@ -20,7 +21,10 @@ type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
 export type ChannelPairingController = ScopedPairingAccess & {
   /** Issue a pairing challenge using the controller's channel and scoped store writer. */
   issueChallenge: (
-    params: Omit<Parameters<typeof issuePairingChallenge>[0], "channel" | "upsertPairingRequest">,
+    params: Omit<
+      Parameters<typeof issuePairingChallenge>[0],
+      "channel" | "accountId" | "upsertPairingRequest"
+    >,
   ) => ReturnType<typeof issuePairingChallenge>;
 };
 
@@ -28,6 +32,8 @@ export type ChannelPairingController = ScopedPairingAccess & {
 export function createChannelPairingChallengeIssuer(params: {
   /** Channel id attached to every challenge issued by the returned helper. */
   channel: ChannelId;
+  /** Optional channel account id attached to pairing-request hook payloads. */
+  accountId?: string;
   /** Store writer that persists pending pairing requests for the bound channel. */
   upsertPairingRequest: Parameters<typeof issuePairingChallenge>[0]["upsertPairingRequest"];
 }) {
@@ -35,11 +41,12 @@ export function createChannelPairingChallengeIssuer(params: {
     /** Challenge details supplied at message handling time. */
     challenge: Omit<
       Parameters<typeof issuePairingChallenge>[0],
-      "channel" | "upsertPairingRequest"
+      "channel" | "accountId" | "upsertPairingRequest"
     >,
   ) =>
     issuePairingChallenge({
       channel: params.channel,
+      accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
       upsertPairingRequest: params.upsertPairingRequest,
       ...challenge,
     });
@@ -59,6 +66,7 @@ export function createChannelPairingController(params: {
     ...access,
     issueChallenge: createChannelPairingChallengeIssuer({
       channel: params.channel,
+      accountId: access.accountId,
       upsertPairingRequest: access.upsertPairingRequest,
     }),
   };

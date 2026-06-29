@@ -127,6 +127,7 @@ observation-only.
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
+- **`channel_pairing_requested`** - observe newly created DM pairing requests
 - `message_received` — observe inbound content, sender, thread, and metadata
 - **`message_sending`** — rewrite outbound content or cancel delivery
 - **`reply_payload_sending`** — mutate or cancel normalized reply payloads before delivery
@@ -155,6 +156,28 @@ observation-only.
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect staged skill or plugin install material from a loaded
   plugin runtime
+
+### Channel pairing requests
+
+Use `channel_pairing_requested` when a plugin needs to notify an operator or
+write an audit record after an unpaired DM sender creates a pending pairing
+request. The hook is dispatched when the request is created; channel delivery of
+the pairing reply is not delayed by slow or failing hook handlers.
+
+```typescript
+api.on("channel_pairing_requested", async (event) => {
+  await notifyOperator({
+    text: `New ${event.channel} pairing request from ${event.senderId}: ${event.code}`,
+  });
+});
+```
+
+The hook is observation-only. It does not approve, reject, suppress, or rewrite
+the pairing reply. The payload includes the channel, optional `accountId`,
+channel-scoped `senderId`, pairing `code`, and channel metadata. Treat the
+pairing code as a live single-use approval credential and deliver it only to a
+trusted operator sink. Treat `metadata` as untrusted sender-supplied identity
+text. The hook does not include the inbound message body or media.
 
 ## Debug runtime hooks
 
