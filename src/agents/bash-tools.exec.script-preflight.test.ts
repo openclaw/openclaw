@@ -274,6 +274,85 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates scripts through sudo and env carrier option values before execution", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createPreflightTool();
+      const cases = [
+        {
+          name: "sudo-user-option-value",
+          command: "sudo -u openclaw python bad.py",
+        },
+        {
+          name: "sudo-prompt-option-value",
+          command: "sudo -p Password: python bad.py",
+        },
+        {
+          name: "env-search-path-option-value",
+          command: "env -P /usr/bin python bad.py",
+        },
+        {
+          name: "env-unset-option-value",
+          command: "env -u PYTHONPATH python bad.py",
+        },
+        {
+          name: "env-assignment-node",
+          command: "env NODE_ENV=test node bad.js",
+        },
+      ];
+
+      for (const testCase of cases) {
+        await expect(
+          tool.execute(`call-${testCase.name}`, {
+            command: testCase.command,
+            workdir: tmp,
+          }),
+        ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      }
+    });
+  });
+
+  it("validates scripts through clustered sudo/env shell wrappers before execution", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
+
+      const tool = createPreflightTool();
+      const cases = [
+        {
+          name: "sudo-clustered-shell",
+          command: "sudo -EH bash -lc 'python bad.py'",
+        },
+        {
+          name: "sudo-user-clustered-shell",
+          command: "sudo -Eu openclaw bash -lc 'python bad.py'",
+        },
+        {
+          name: "env-split-string-shell",
+          command: "env -S 'bash -lc' 'python bad.py'",
+        },
+        {
+          name: "nested-env-sudo-shell",
+          command: "env OPENCLAW_TEST=1 sudo -u openclaw bash -lc 'python bad.py'",
+        },
+        {
+          name: "path-qualified-env-sudo-shell",
+          command: "/usr/bin/env -P /usr/bin sudo --user=openclaw bash -lc 'python bad.py'",
+        },
+      ];
+
+      for (const testCase of cases) {
+        await expect(
+          tool.execute(`call-${testCase.name}`, {
+            command: testCase.command,
+            workdir: tmp,
+          }),
+        ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      }
+    });
+  });
+
   it("validates the first positional python script operand when extra args follow", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
