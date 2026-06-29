@@ -6,7 +6,7 @@ import {
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
 
-type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
+type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<boolean>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
 type AbortActiveMock = ReturnType<typeof vi.fn> &
   ((params?: { preferActive?: boolean }) => Promise<void>);
@@ -115,8 +115,7 @@ function createHarness(params?: {
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
-  const loadHistory =
-    params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
+  const loadHistory = params?.loadHistory ?? (vi.fn().mockResolvedValue(false) as LoadHistoryMock);
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const applySessionMutationResult = params?.applySessionMutationResult ?? vi.fn();
@@ -893,7 +892,7 @@ describe("tui command handlers", () => {
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const loadHistory = vi.fn().mockResolvedValue(false);
     const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
     const setEmptySessionMock = vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock;
     const applySessionMutationResult = vi.fn().mockReturnValue(true);
@@ -937,7 +936,7 @@ describe("tui command handlers", () => {
   });
 
   it("reloads history after /reset when the backend does not return a session entry", async () => {
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const loadHistory = vi.fn().mockResolvedValue(false);
     const applySessionMutationResult = vi.fn().mockReturnValue(false);
     const { handleCommand } = createHarness({
       loadHistory,
@@ -983,7 +982,7 @@ describe("tui command handlers", () => {
     const patchResult = { entry: { verboseLevel: "off" } };
     const patchSession = vi.fn().mockResolvedValue(patchResult);
     const applySessionInfoFromPatch = vi.fn();
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const loadHistory = vi.fn().mockResolvedValue(false);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, clearTools } = createHarness({
       patchSession,
@@ -1005,7 +1004,7 @@ describe("tui command handlers", () => {
   });
 
   it("reloads history for /verbose on so prior tool output becomes visible", async () => {
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const loadHistory = vi.fn().mockResolvedValue(false);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, clearTools } = createHarness({
       loadHistory,
@@ -1020,7 +1019,7 @@ describe("tui command handlers", () => {
   });
 
   it("refreshes session info for /trace without reloading history", async () => {
-    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const loadHistory = vi.fn().mockResolvedValue(false);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const { handleCommand } = createHarness({
       loadHistory,

@@ -44,7 +44,7 @@ type EventHandlerContext = {
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<void>;
+  loadHistory?: () => Promise<boolean>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;

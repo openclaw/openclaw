@@ -418,7 +418,12 @@ export function createSessionActions(context: SessionActionContext) {
     return true;
   };
 
-  const loadHistory = async () => {
+  const loadHistory = async (): Promise<boolean> => {
+    // Returns true when an in-flight run was adopted and the activity status
+    // was set to "streaming". Callers that clear the activity status after
+    // this resolves (e.g. the post-connect startup path) must skip that clear
+    // when this returns true, otherwise they hide the resumed run's work.
+    let adoptedInFlightRun = false;
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -547,6 +552,7 @@ export function createSessionActions(context: SessionActionContext) {
         // its completion is handled here instead of an unowned error path.
         state.activeChatRunId = inFlightRunId;
         setActivityStatus("streaming");
+        adoptedInFlightRun = true;
       }
       state.historyLoaded = true;
       if (record.runtimePluginsPrewarm?.status === "failed") {
@@ -559,6 +565,7 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
     tui.requestRender();
+    return adoptedInFlightRun;
   };
 
   const setSession = async (rawKey: string) => {

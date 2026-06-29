@@ -422,10 +422,33 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "streaming",
   "running",
   "finishing context",
+  // Post-connect initialization (agent refresh, session restore, history load)
+  // in client.onConnected is async; marking it busy keeps the status loader
+  // visible so the TUI does not look frozen before it is actually ready.
+  "starting up",
 ]);
 
 export function isTuiBusyActivityStatus(status: string): boolean {
   return TUI_BUSY_ACTIVITY_STATUSES.has(status);
+}
+
+// Active-run activity statuses owned by a live run. The reconnect streaming
+// watchdog restores "streaming" for a still-active run, and loadHistory()
+// adoption / run completion set these. The post-connect startup loader must
+// NOT overwrite them, otherwise reconnect hides active work behind the
+// "starting up" status until later history/event handling restores it.
+const TUI_ACTIVE_RUN_ACTIVITY_STATUSES = new Set(["streaming", "running", "finishing context"]);
+
+export function isTuiActiveRunActivityStatus(status: string): boolean {
+  return TUI_ACTIVE_RUN_ACTIVITY_STATUSES.has(status);
+}
+
+// Resolve the activity status the post-connect startup path should claim. When
+// an active run already owns the status line (e.g. after reconnect), preserve
+// it; otherwise claim the "starting up" loader so post-connect init does not
+// look frozen.
+export function resolveStartupActivityStatus(currentStatus: string): string {
+  return isTuiActiveRunActivityStatus(currentStatus) ? currentStatus : "starting up";
 }
 
 export function resolveTuiToolsToggleActivityStatus(params: {
@@ -1553,7 +1576,20 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (reconnected) {
       reconnectStreamingWatchdog();
     }
-    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    // Post-connect initialization (agent refresh, session restore, history
+    // load) below is async. Keep the TUI in a busy "starting up" state for
+    // that work so the status loader renders instead of a falsely "ready"
+    // idle line that makes the UI look frozen. The connection status stays at
+    // its pre-connect "starting local runtime"/"connecting" value until init
+    // finishes. Cleared on both completion and startup failure below so the
+    // ready and "startup failed" statuses still render as static text.
+    // Claim the "starting up" loader only when no active run already owns the
+    // status line. On reconnect, reconnectStreamingWatchdog() above may have
+    // restored "streaming" for a still-active run; overwriting it with
+    // "starting up" here would hide that run's work behind the startup loader
+    // until loadHistory()/event handling restores it.
+    setActivityStatus(resolveStartupActivityStatus(activityStatus));
+    tui.requestRender();
     void (async () => {
       try {
         await client.subscribeSessionEvents?.();
@@ -1564,7 +1600,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       updateAutocompleteProvider();
-      await loadHistory();
+      const adoptedInFlightRun = await loadHistory();
+      // Drop the startup "starting up" status to idle only when no active run
+      // owns the status line. loadHistory() may have adopted an in-flight run
+      // (already set "streaming"); on reconnect the watchdog may have restored
+      // "streaming" for a still-active run that history did not report as
+      // in-flight. In either case leave the active-run status intact so the
+      // resumed run's work stays visible instead of looking frozen.
+      if (!adoptedInFlightRun && !isTuiActiveRunActivityStatus(activityStatus)) {
+        setActivityStatus("idle");
+      }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1580,6 +1625,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
     })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
+      setActivityStatus("idle");
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();
     });
