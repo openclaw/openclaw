@@ -232,7 +232,9 @@ class QQBotMarkdownChunkingState {
   private pushOversizedTableRow(line: string, limit: number, _chunks: string[]): void {
     const text = renderTableRowAsFields(this.activeTable!.cells, splitTableCells(line));
     for (const piece of this.baseChunker(text, limit)) {
-      if (piece) this.enqueuePending(piece, "text", limit);
+      if (piece) {
+        this.enqueuePending(piece, "text", limit);
+      }
     }
   }
 
@@ -347,11 +349,13 @@ class QQBotMarkdownChunkingState {
       ? renderTableRowAsFields(this.activeTable.cells, splitPartialTableCells(fragment))
       : renderMalformedPipeLineAsText(fragment);
     for (const piece of this.baseChunker(text, limit)) {
-      if (piece) this.enqueuePending(piece, "text", limit);
+      if (piece) {
+        this.enqueuePending(piece, "text", limit);
+      }
     }
   }
 
-  private flushTable(chunks: string[]): void {
+  private flushTable(_chunks: string[]): void {
     if (this.tableLines.length === 0) {
       return;
     }
@@ -372,7 +376,9 @@ class QQBotMarkdownChunkingState {
 
   private enqueuePending(content: string, kind: EmitUnitKind, chunkLimit: number): void {
     const trimmed = content.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     this.pendingEmitBuffer.push({
       content: trimmed,
       kind,
@@ -676,7 +682,9 @@ function pushFenceLineChunks(params: {
       continue;
     }
     for (const piece of baseChunker(singleLineChunk, limit)) {
-      if (piece) enqueue(piece, "fence", limit);
+      if (piece) {
+        enqueue(piece, "fence", limit);
+      }
     }
   }
 
