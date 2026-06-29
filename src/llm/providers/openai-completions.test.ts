@@ -478,6 +478,37 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload).not.toHaveProperty("enable_thinking");
   });
 
+  it("omits Z.AI reasoning_effort for binary-thinking models", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "glm-5.1-flash",
+        name: "GLM-5.1 Flash",
+        provider: "zai",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        reasoning: true,
+        compat: { thinkingFormat: "zai" },
+      },
+      context,
+      {
+        apiKey: "test-key",
+        reasoningEffort: "high",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
   it("keeps prompt cache keys when long retention is disabled", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;
