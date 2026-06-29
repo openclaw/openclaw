@@ -304,6 +304,64 @@ describe("session cost usage", () => {
     });
   });
 
+  it("re-estimates cost from tokens when pricing is known but API returned $0 with non-zero tokens (DeepSeek V4)", async () => {
+    const root = await makeSessionCostRoot("cost-deepseek-v4-zero");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // DeepSeek V4 API returns usage.cost.total: 0 in every completion response.
+    // The operator has configured positive per-token pricing for the model.
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 887,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // deepseek-v4-flash: input ¥0.14/10K tokens → input: 14 per M, output ¥0.28/10K → output: 28 per M
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 14, output: 28, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(887);
+      // Cost should be estimated from tokens (881 * 14 + 6 * 28) / 1_000_000 = 0.012502
+      expect(summary.totals.totalCost).toBeCloseTo(0.012502, 6);
+      // Pricing is known, so it should NOT be marked as a missing-cost entry
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

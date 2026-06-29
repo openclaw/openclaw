@@ -1272,6 +1272,18 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
+      } else if (
+        isModelPricingKnown(cost) &&
+        entry.costTotal === 0 &&
+        computeUsageTokenTotals(entry.usage).totalTokens > 0
+      ) {
+        // Pricing is known (positive per-token rates configured), but the API or
+        // transport recorded $0 cost despite burning tokens. This is not trustworthy
+        // — for example, DeepSeek V4 returns usage.cost.total: 0 in every completion
+        // response. Re-estimate from token counts so budget and spike safeguards
+        // that read totalCost are not left blind to real spend.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       } else if (entry.costTotal === undefined) {
         // Fill in missing cost estimates.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
