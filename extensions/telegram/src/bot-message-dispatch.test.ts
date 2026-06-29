@@ -687,6 +687,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the legacy global block default when Telegram streaming is implicit", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Block streamed answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      telegramCfg: {},
+    });
+
+    const dispatchParams = expectDispatchParams({});
+    expectRecordFields(dispatchParams.replyOptions, { disableBlockStreaming: false });
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+  });
+
   it("renders default draft previews with standard Telegram HTML", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

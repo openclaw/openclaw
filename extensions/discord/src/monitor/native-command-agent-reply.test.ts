@@ -80,13 +80,13 @@ async function captureNativeReplyOptions(params: {
 }
 
 describe("dispatchDiscordNativeAgentReply", () => {
-  it("suppresses inherited block streaming when Discord preview mode is live", async () => {
+  it("preserves inherited block streaming when native commands have no preview stream", async () => {
     const replyOptions = await captureNativeReplyOptions({
       cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
       discordConfig: { streaming: { mode: "partial" } },
     });
 
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
   });
 
   it("keeps explicit Discord block streaming ahead of preview mode", async () => {

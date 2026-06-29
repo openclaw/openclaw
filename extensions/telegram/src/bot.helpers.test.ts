@@ -49,6 +49,21 @@ describe("resolveTelegramBlockStreamingEnabled", () => {
     ).toBe(false);
   });
 
+  it("preserves the legacy global block default when Telegram streaming is implicit", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: {},
+        streamMode: "partial",
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(true);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps explicit Telegram block streaming ahead of preview mode", () => {
     expect(
       resolveTelegramBlockStreamingEnabled({

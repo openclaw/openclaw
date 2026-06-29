@@ -9,6 +9,26 @@ import {
 type TelegramPreviewStreamMode = StreamingMode;
 type TelegramLegacyBlockStreamingDefault = "off" | "on" | undefined;
 
+function hasExplicitTelegramPreviewStreamMode(
+  account: StreamingCompatEntry | null | undefined,
+): boolean {
+  if (!account) {
+    return false;
+  }
+  if (typeof account.streaming === "boolean" || typeof account.streaming === "string") {
+    return true;
+  }
+  if (typeof account.streamMode === "string") {
+    return true;
+  }
+  return (
+    account.streaming !== null &&
+    typeof account.streaming === "object" &&
+    !Array.isArray(account.streaming) &&
+    Object.hasOwn(account.streaming, "mode")
+  );
+}
+
 export function resolveTelegramPreviewStreamMode(
   params: {
     streamMode?: unknown;
@@ -28,7 +48,10 @@ export function resolveTelegramBlockStreamingEnabled(params: {
     return explicitBlock;
   }
 
-  const streamMode = params.streamMode ?? resolveTelegramPreviewStreamMode(params.account ?? {});
+  const streamMode =
+    hasExplicitTelegramPreviewStreamMode(params.account) ?
+      (params.streamMode ?? resolveTelegramPreviewStreamMode(params.account ?? {}))
+    : "off";
   if (streamMode !== "off") {
     return false;
   }
