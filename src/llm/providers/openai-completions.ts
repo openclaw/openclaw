@@ -724,7 +724,14 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    // GLM-4.5+ (including GLM-5.2) uses `thinking: { type: "enabled" }` instead of the
+    // legacy `enable_thinking` boolean. Pass `reasoning_effort` when an effort level is
+    // requested; the API accepts it as a top-level field for GLM-5.2+.
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+    if (options?.reasoningEffort) {
+      params.reasoning_effort =
+        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    }
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {

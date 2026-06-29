@@ -1199,3 +1199,104 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
   });
 });
+
+describe("zai thinking params", () => {
+  function createZaiModel(reasoning = true): Model<"openai-completions"> {
+    return {
+      id: "glm-5.2",
+      name: "GLM 5.2",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/v1",
+      reasoning,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 4096,
+    };
+  }
+
+  it("sends nested thinking object and reasoning_effort for zai reasoning models", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(createZaiModel(), context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload).toHaveProperty("thinking", { type: "enabled" });
+    expect(capturedPayload).toHaveProperty("reasoning_effort", "high");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
+  it("maps reasoning_effort via thinkingLevelMap when provided", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      {
+        ...createZaiModel(),
+        thinkingLevelMap: { high: "highest" },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "high",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toHaveProperty("reasoning_effort", "highest");
+    expect(capturedPayload).toHaveProperty("thinking", { type: "enabled" });
+  });
+
+  it("sends disabled thinking object when no reasoning effort is requested", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(createZaiModel(), context, {
+      apiKey: "sk-test",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload).toHaveProperty("thinking", { type: "disabled" });
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
+  it("does not send thinking params for non-reasoning zai models", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(createZaiModel(false), context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload).not.toHaveProperty("thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+});
