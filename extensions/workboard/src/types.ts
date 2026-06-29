@@ -7,6 +7,7 @@ export const WORKBOARD_STATUSES = [
   "ready",
   "running",
   "review",
+  "ready_to_merge",
   "blocked",
   "done",
 ] as const;

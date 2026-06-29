@@ -530,9 +530,174 @@ export function createWorkboardTools(params: {
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        return runClaimedCardMutation(rawParams, (id, record, scope) =>
-          store.complete(id, record, scope),
+        const { record, id, scope } = await readClaimedCardToolParams(rawParams);
+
+        // --- REVIEW GATE HARD BLOCK ---
+        // Reject completion if card hasn't passed through a review gate.
+        // This prevents agents from skipping the mandatory review step.
+        const card = await requireClaimedCard(store, id, scope.ownerId, scope.token);
+        const allowedStatuses = new Set(["review", "ready_to_merge", "running"]);
+        if (!allowedStatuses.has(card.status)) {
+          throw new Error(
+            `Review gate required: card status is "${card.status}", expected "review" or "ready_to_merge". ` +
+              `Run the review gate (workboard_submit_review or workboard_proof with review label) before completing.`,
+          );
+        }
+
+        const proofRecords = card.metadata?.proof ?? [];
+        const hasPassedReview = proofRecords.some(
+          (p) => p.status === "passed" && p.label && /^review/i.test(p.label),
         );
+        if (proofRecords.length > 0 && !hasPassedReview) {
+          throw new Error(
+            `Review gate required: card has ${proofRecords.length} proof record(s) but none with status="passed" and a review label. ` +
+              `Run the review gate before completing.`,
+          );
+        }
+
+        return await store.complete(id, record, scope);
+      },
+    },
+    {
+      name: "workboard_submit_review",
+      label: "Workboard Submit Review",
+      description:
+        "Submit a structured review verdict for a card. Only valid verdicts: approved, changes_requested, blocked. " +
+        "Auto-moves card status based on verdict. Escalates to human after 3 failed rounds.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          token: ScopedClaimTokenField,
+          verdict: Type.String({
+            description: "approved, changes_requested, or blocked.",
+          }),
+          summary: Type.String({
+            description: "One-line review summary.",
+          }),
+          checks: Type.Object(
+            {
+              correctness: Type.String({ description: "pass, warn, or fail" }),
+              quality: Type.String({ description: "pass, warn, or fail" }),
+              performance: Type.String({ description: "pass, warn, or fail" }),
+              completeness: Type.String({ description: "pass, warn, or fail" }),
+              integration: Type.String({ description: "pass, warn, or fail" }),
+              tests: Type.String({ description: "pass, warn, or fail" }),
+            },
+            { additionalProperties: false },
+          ),
+          action_items: Type.Optional(
+            Type.Array(Type.String({ description: "Specific actionable items to address." })),
+          ),
+          round: Type.Optional(
+            Type.Number({ description: "Review round number (auto-incremented if omitted)." }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        const token = record.token as string | undefined;
+        const verdict = readStringParam(record, "verdict", { required: true });
+        const summary = readStringParam(record, "summary", { required: true });
+        const checks = record.checks as Record<string, unknown>;
+        const actionItems = Array.isArray(record.action_items)
+          ? (record.action_items as string[])
+          : undefined;
+        const explicitRound =
+          typeof record.round === "number" ? (record.round as number) : undefined;
+
+        // Validate verdict
+        const validVerdicts = new Set(["approved", "changes_requested", "blocked"]);
+        if (!validVerdicts.has(verdict)) {
+          throw new Error(
+            `Invalid verdict: "${verdict}". Must be one of: approved, changes_requested, blocked.`,
+          );
+        }
+
+        // Validate check values
+        const validCheckValues = new Set(["pass", "warn", "fail"]);
+        for (const [key, value] of Object.entries(checks ?? {})) {
+          if (typeof value !== "string" || !validCheckValues.has(value)) {
+            throw new Error(
+              `Invalid check value for "${key}": "${value}". Must be pass, warn, or fail.`,
+            );
+          }
+        }
+
+        // Require card to be claimed or scoped
+        await requireScopedCard(store, id, ownerId, token);
+        const scope = { ownerId, token };
+
+        // Calculate review round
+        const card = await store.get(id);
+        const existingRounds = (card?.metadata?.proof ?? []).filter(
+          (p) => p.label && /^review-round-/i.test(p.label),
+        ).length;
+        const round = explicitRound ?? existingRounds + 1;
+
+        // --- ESCALATION: Max 3 review rounds before blocking for human ---
+        if (round >= 3 && verdict !== "approved") {
+          const escalationMsg =
+            `Review round ${round} of 3 reached without approval. ` +
+            `Card is blocked for human intervention. Escalate to the user immediately.`;
+          await store.addWorkerLog(
+            id,
+            {
+              level: "error",
+              message: `review-round-${round}: ${verdict} — ${escalationMsg}`,
+            },
+            { ownerId, token },
+          );
+          await store.block(id, { reason: escalationMsg }, { ownerId, token });
+          return redactedRawCardResult(await store.get(id));
+        }
+
+        // Record review as proof
+        const proofStatus = verdict === "approved" ? "passed" : "failed";
+        const proofLabel = `review-round-${round}`;
+        const checksSummary = checks
+          ? Object.entries(checks)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(", ")
+          : "no checks";
+        const actionItemsText =
+          actionItems && actionItems.length > 0 ? ` Action items: ${actionItems.join("; ")}` : "";
+
+        await store.addProof(
+          id,
+          {
+            status: proofStatus,
+            label: proofLabel,
+            note: `Verdict: ${verdict}. ${summary}. Checks: ${checksSummary}.${actionItemsText}`,
+          },
+          { ownerId, token },
+        );
+
+        // Log the review round
+        await store.addWorkerLog(
+          id,
+          {
+            level: verdict === "approved" ? "info" : "warning",
+            message: `review-round-${round}: verdict=${verdict}, summary="${summary}", checks=[${checksSummary}]`,
+          },
+          { ownerId, token },
+        );
+
+        // Move card status based on verdict
+        if (verdict === "approved") {
+          return redactedRawCardResult(
+            await store.releaseClaim(id, { ...scope, status: "ready_to_merge" }),
+          );
+        } else if (verdict === "changes_requested") {
+          return redactedRawCardResult(
+            await store.releaseClaim(id, { ...scope, status: "running" }),
+          );
+        } else {
+          return redactedRawCardResult(
+            await store.block(id, { reason: `Review blocked: ${summary}` }, { ownerId, token }),
+          );
+        }
       },
     },
     {
