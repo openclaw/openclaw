@@ -35,6 +35,7 @@ import {
   type SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { checkWebSearchAvailability } from "../../plugins/web-search-tool-availability.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -131,6 +132,9 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
 );
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
+);
+const webSearchProvidersLoader = createLazyImportLoader(
+  () => import("../../plugins/web-search-providers.runtime.js"),
 );
 
 async function loadSessionStoreRuntime() {
@@ -1138,6 +1142,22 @@ async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
+
+  // Preflight: warn when web_search is in toolsAllow but no search provider
+  // plugin is enabled, so operators see a diagnostic instead of a silent apology.
+  const { resolveRuntimeWebSearchProviders } = await webSearchProvidersLoader();
+  const webSearchWarning = checkWebSearchAvailability({
+    toolsAllow: prepared.context.agentPayload?.toolsAllow,
+    providers: resolveRuntimeWebSearchProviders({
+      config: prepared.cfgWithAgentDefaults,
+      workspaceDir: prepared.workspaceDir,
+    }),
+  });
+  const webSearchPreflightDiagnostics = webSearchWarning
+    ? createCronRunDiagnosticsFromError("cron-preflight", webSearchWarning.warning, {
+        severity: "warn",
+      })
+    : undefined;
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -1160,8 +1180,9 @@ async function finalizeCronRun(params: {
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
+            webSearchPreflightDiagnostics,
           )
-        : agentDiagnostics,
+        : mergeCronRunDiagnostics(agentDiagnostics, webSearchPreflightDiagnostics),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1267,6 +1288,7 @@ async function finalizeCronRun(params: {
       diagnostics: mergeCronRunDiagnostics(
         agentDiagnostics,
         deliveryResult.result.diagnostics,
+        webSearchPreflightDiagnostics,
         deliveryResult.result.status === "error" && deliveryResult.result.error
           ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)
           : undefined,
