@@ -32,20 +32,16 @@ describe("sliceUtf16Safe", () => {
     expect(sliceUtf16Safe(emoji, 0)).toBe(emoji);
   });
 
-  it("avoids splitting surrogate pair at start", () => {
-    // 👨 is a surrogate pair (U+1F468)
+  it("returns empty string when slicing middle of surrogate pair", () => {
     const input = "👨👩";
-    // Slice at middle of surrogate pair should adjust
-    const result = sliceUtf16Safe(input, 1, 3);
-    // Should not return dangling surrogate
-    expect(result.length).toBeGreaterThanOrEqual(0);
+    // Slicing at position 1-3 hits middle of surrogate pairs
+    expect(sliceUtf16Safe(input, 1, 3)).toBe("");
   });
 
-  it("avoids splitting surrogate pair at end", () => {
+  it("returns empty string when slicing at start of surrogate pair", () => {
     const input = "👨👩";
-    const result = sliceUtf16Safe(input, 0, 1);
-    // Should not return dangling surrogate
-    expect(result.length).toBeGreaterThanOrEqual(0);
+    // Slicing at position 0-1 would cut surrogate pair, adjust to 0
+    expect(sliceUtf16Safe(input, 0, 1)).toBe("");
   });
 
   it("handles empty string", () => {
@@ -85,10 +81,8 @@ describe("truncateUtf16Safe", () => {
     expect(result.length).toBeLessThanOrEqual(emoji.length);
   });
 
-  it("avoids splitting surrogate pair", () => {
+  it("returns empty string when truncating at surrogate pair boundary", () => {
     const input = "👨👩";
-    const result = truncateUtf16Safe(input, 1);
-    // Should not return dangling surrogate
-    expect(result.length).toBeGreaterThanOrEqual(0);
+    expect(truncateUtf16Safe(input, 1)).toBe("");
   });
 });
