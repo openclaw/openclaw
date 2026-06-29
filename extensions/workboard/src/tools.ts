@@ -658,7 +658,7 @@ export function createWorkboardTools(params: {
         const proofLabel = `review-round-${String(round)}`;
         const checksSummary = checks
           ? Object.entries(checks)
-              .map(([k, v]) => `${k}=${v}`)
+              .map(([k, v]) => `${k}=${String(v)}`)
               .join(", ")
           : "no checks";
         const actionItemsText =
