@@ -294,6 +294,47 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("hydrates every channel_post album sibling photo for model context (#96846)", async () => {
+    setOpenChannelPostConfig();
+
+    const fetchSpy = createImageFetchSpy();
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const handler = getChannelPostHandler();
+      const photoFileIds = ["album-a", "album-b", "album-c"];
+      const baseMessageId = 801;
+      await Promise.all(
+        photoFileIds.map((fileId, index) =>
+          handler(
+            createChannelPostContext({
+              messageId: baseMessageId + index,
+              date: 1736380800 + index,
+              ...(index === 0 ? { caption: "album caption" } : {}),
+              mediaGroupId: "channel-album-hydration",
+              photoFileId: fileId,
+            }),
+          ),
+        ),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await waitForMockCalls(replySpy, 1);
+
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      const payloadJson = JSON.stringify(replyPayload());
+      // Each sibling photo should hydrate to a media://inbound path keyed by its
+      // own message id, instead of leaking the raw telegram:file/<fileId> ref.
+      expect(payloadJson).not.toContain("telegram:file/");
+      for (const fileId of photoFileIds) {
+        expect(payloadJson).not.toContain(`telegram:file/${fileId}`);
+      }
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("honors configured mediaGroupFlushMs for channel_post albums", async () => {
     loadConfig.mockReturnValue({
       channels: {

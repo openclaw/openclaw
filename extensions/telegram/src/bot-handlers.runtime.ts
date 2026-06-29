@@ -950,8 +950,12 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      // Track each surviving album item's source message id so prompt-context
+      // hydration can map every sibling photo to a `media://inbound/...` path
+      // instead of letting the cache fall through to raw `telegram:file/...` refs.
+      const albumMessageIds: string[] = [];
       let skippedCount = 0;
-      for (const { ctx } of entry.messages) {
+      for (const { ctx, msg } of entry.messages) {
         let media;
         try {
           media = await resolveMedia({
@@ -975,6 +979,9 @@ export const registerTelegramHandlers = ({
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
           });
+          if (typeof msg.message_id === "number") {
+            albumMessageIds.push(String(msg.message_id));
+          }
         } else {
           skippedCount++;
         }
@@ -1004,6 +1011,7 @@ export const registerTelegramHandlers = ({
         ctx: primaryEntry.ctx,
         msg: primaryEntry.msg,
         allMedia,
+        albumMessageIds,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1373,6 +1381,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
+    albumMessageIds?: string[];
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
@@ -1450,15 +1459,27 @@ export const registerTelegramHandlers = ({
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
         typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
-      const currentMedia = params.allMedia[0];
-      const currentPromptMediaPath = currentMedia?.path
-        ? resolveTelegramPromptMediaPath(currentMedia.path)
-        : undefined;
-      if (currentMessageId && currentMedia && currentPromptMediaPath) {
-        promptContextMediaByMessageId.set(currentMessageId, {
-          ...currentMedia,
-          path: currentPromptMediaPath,
-        });
+      const albumMessageIds = params.albumMessageIds ?? [];
+      for (let index = 0; index < params.allMedia.length; index += 1) {
+        const media = params.allMedia[index];
+        if (!media?.path) {
+          continue;
+        }
+        const promptMediaPath = resolveTelegramPromptMediaPath(media.path);
+        if (!promptMediaPath) {
+          continue;
+        }
+        // Album siblings hydrate under their own message ids so the prompt
+        // builder can resolve each cached sibling photo to a media://inbound
+        // path; non-album callers fall back to the primary message id for the
+        // first item, preserving the single-photo behavior.
+        const messageId = albumMessageIds[index] ?? (index === 0 ? currentMessageId : undefined);
+        if (messageId) {
+          promptContextMediaByMessageId.set(messageId, {
+            ...media,
+            path: promptMediaPath,
+          });
+        }
       }
       for (const entry of replyChain) {
         const promptMediaPath = entry.mediaPath
