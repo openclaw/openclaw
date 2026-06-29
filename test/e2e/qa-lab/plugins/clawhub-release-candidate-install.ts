@@ -16,6 +16,7 @@ const SCENARIO_TITLE = "ClawHub release candidate npm package install proof";
 const SOURCE_PATH = "test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts";
 const COVERAGE_ID = "clawhub.npm-pack-local-release-candidate-installs";
 const DEFAULT_TARBALL_ENV = "OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL";
+const CHECKOUT_BUILD_RESULT_PREFIX = "__OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL__";
 const execFileAsync = promisify(execFile);
 
 type ProducerOptions = {
@@ -171,7 +172,7 @@ async function buildCandidateTarballFromCheckout(options: ProducerOptions) {
   const evalScript = `
     import { packOpenClaw } from "./scripts/e2e/parallels/package-artifact.ts";
     const artifact = await packOpenClaw({ destination: ${JSON.stringify(destination)} });
-    process.stdout.write(JSON.stringify({ path: artifact.path }));
+    process.stdout.write(${JSON.stringify(CHECKOUT_BUILD_RESULT_PREFIX)} + JSON.stringify({ path: artifact.path }) + "\\n");
   `;
   const result = await execFileAsync(
     process.execPath,
@@ -182,7 +183,15 @@ async function buildCandidateTarballFromCheckout(options: ProducerOptions) {
       maxBuffer: 10 * 1024 * 1024,
     },
   );
-  const parsed = JSON.parse(result.stdout) as { path?: unknown };
+  const resultLine = result.stdout
+    .split("\n")
+    .find((line) => line.startsWith(CHECKOUT_BUILD_RESULT_PREFIX));
+  if (!resultLine) {
+    throw new Error("checkout package build did not report a tarball marker");
+  }
+  const parsed = JSON.parse(resultLine.slice(CHECKOUT_BUILD_RESULT_PREFIX.length)) as {
+    path?: unknown;
+  };
   if (typeof parsed.path !== "string" || !parsed.path.trim()) {
     throw new Error("checkout package build did not report a tarball path");
   }
@@ -335,11 +344,12 @@ function assertParallelsSummary(params: {
 
 function isBlockedPrerequisiteFailure(message: string) {
   return [
-    /parallels/i,
     /\bprlctl\b/i,
+    /failed to detect parallels host ip/i,
     /vm .*not found/i,
     /could not resolve .*vm/i,
     /no .*vm/i,
+    /parallels desktop .*not/i,
     /api key/i,
     /provider auth/i,
   ].some((pattern) => pattern.test(message));

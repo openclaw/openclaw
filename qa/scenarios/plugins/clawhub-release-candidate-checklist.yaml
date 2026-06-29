@@ -27,6 +27,7 @@ scenario:
     path: test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts
     summary: Runs the Parallels npm-update install proof against a candidate release tarball and emits QA Lab evidence.
     allowBlockedEvidence: true
+    timeoutMs: 14400000
     args:
       - --artifact-base
       - ${outputDir}
