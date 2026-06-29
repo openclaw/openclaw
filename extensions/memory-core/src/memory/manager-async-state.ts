@@ -19,15 +19,20 @@ export async function startAsyncSearchSync(params: {
 export async function awaitPendingManagerWork(params: {
   pendingSync?: Promise<void> | null;
   pendingProviderInit?: Promise<void> | null;
+  onError?: (err: unknown, kind: "sync" | "provider-init") => void;
 }): Promise<void> {
   if (params.pendingSync) {
     try {
       await params.pendingSync;
-    } catch {}
+    } catch (err: unknown) {
+      params.onError?.(err, "sync");
+    }
   }
   if (params.pendingProviderInit) {
     try {
       await params.pendingProviderInit;
-    } catch {}
+    } catch (err: unknown) {
+      params.onError?.(err, "provider-init");
+    }
   }
 }
