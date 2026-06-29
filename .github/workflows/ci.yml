@@ -1360,6 +1360,9 @@ jobs:
           - check_name: check-shrinkwrap
             task: shrinkwrap
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-bundled-channel-config-metadata
+            task: bundled-channel-config-metadata
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1450,6 +1453,9 @@ jobs:
               ;;
             shrinkwrap)
               pnpm deps:shrinkwrap:check
+              ;;
+            bundled-channel-config-metadata)
+              pnpm check:bundled-channel-config-metadata
               ;;
             prod-types)
               pnpm tsgo:prod

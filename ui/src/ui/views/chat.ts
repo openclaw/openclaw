@@ -20,6 +20,7 @@ import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
 import { copyToClipboard } from "../chat/clipboard.ts";
+import { decodeCodeBlockCopyPayload } from "../chat/code-block-copy-payload.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -2072,7 +2073,8 @@ export function renderChat(props: ChatProps) {
     if (!btn) {
       return;
     }
-    const code = (btn as HTMLElement).dataset.code ?? "";
+    const button = btn as HTMLElement;
+    const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
     void copyToClipboard(code).then((copied) => {
       if (!copied) {
         return;
