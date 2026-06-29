@@ -1,5 +1,7 @@
 // Google Meet tests prove bounded reads through the real SSRF fetch guard.
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { fetchGoogleMeetSpace } from "./meet.js";
 
@@ -119,5 +121,82 @@ describe("Google Meet API bounded reads through the real fetch guard", () => {
     console.log(
       `[google-meet fetch-guard proof] Meet spaces oversized JSON canceled at ${state.bytesPulled}/${overCap} bytes`,
     );
+  });
+});
+
+describe("google-meet bound reads — real HTTP server (no fetch mock)", () => {
+  it("rejects oversized response before fully buffering 20 MiB (OOM guard)", async () => {
+    const CHUNK = Buffer.alloc(1024 * 1024, 0x61); // 1 MiB, all 'a'
+    const TOTAL_CHUNKS = 20; // 20 MiB total, well above 16 MiB cap
+    let chunksWritten = 0;
+
+    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        let sent = 0;
+        const sendChunk = () => {
+          if (sent >= TOTAL_CHUNKS) {
+            res.end();
+            return;
+          }
+          sent++;
+          chunksWritten++;
+          const ok = res.write(CHUNK);
+          if (ok) setImmediate(sendChunk);
+          else res.once("drain", sendChunk);
+        };
+        sendChunk();
+      });
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as { port: number };
+        resolve({
+          port: addr.port,
+          stop: () => new Promise<void>((r, e) => server.close(err => (err ? e(err) : r()))),
+        });
+      });
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
+      // Mutation-control: bare `response.json()` would buffer all 20 MiB before throwing.
+      // readProviderJsonResponse aborts the stream at 16 MiB.
+      await expect(
+        readProviderJsonResponse(response, "google-meet.bound-proof"),
+      ).rejects.toThrow(/JSON response exceeds/);
+      // Proves the body was NOT fully consumed before the cap fired.
+      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+      console.log(`[bound-proof] canceled at ${chunksWritten}/${TOTAL_CHUNKS} chunks`);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it("parses well-formed JSON response under the 16 MiB cap", async () => {
+    const payload = { kind: "calendar#events", items: [] };
+    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(payload));
+      });
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as { port: number };
+        resolve({
+          port: addr.port,
+          stop: () => new Promise<void>((r, e) => server.close(err => (err ? e(err) : r()))),
+        });
+      });
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
+      const result = await readProviderJsonResponse<typeof payload>(
+        response,
+        "google-meet.bound-proof",
+      );
+      expect(result).toEqual(payload);
+    } finally {
+      await srv.stop();
+    }
   });
 });
