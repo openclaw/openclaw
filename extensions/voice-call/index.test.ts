@@ -550,8 +550,9 @@ describe("voice-call plugin", () => {
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.calls).toHaveLength(1);
-    expectRedactedVoiceCallStatus((payload?.calls as unknown[])[0]);
+    const calls = (payload?.calls as unknown[] | undefined) ?? [];
+    expect(calls).toHaveLength(1);
+    expectRedactedVoiceCallStatus(calls[0]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {
