@@ -272,4 +272,58 @@ describe("fetchDiscord", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
     expect(request?.signal).toBe(timeoutController.signal);
   });
+
+  it("reads happy-path response body without calling response.text()", async () => {
+    // mutation control: if code falls back to res.text(), the spy would intercept
+    // the catch(() => "") branch returns "" which makes requestDiscord return undefined,
+    // so the assertion on result also catches the regression.
+    const payload = { id: "channel-42", type: 0 };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const textSpy = vi
+      .spyOn(response, "text")
+      .mockRejectedValue(new Error("response.text() must not be called on happy-path"));
+    const fetcher = withFetchPreconnect(async () => response);
+
+    const result = await requestDiscord<typeof payload>("/channels/channel-42", "test", {
+      fetcher,
+      retry: { attempts: 1 },
+    });
+
+    expect(result).toEqual(payload);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("truncates oversized Discord API success responses to prevent unbounded memory growth", async () => {
+    // over-cap: a response larger than DISCORD_API_RESPONSE_BODY_LIMIT_BYTES (4 MiB)
+    // readResponseTextLimited cancels the reader after the cap and returns a truncated string.
+    // JSON.parse on a truncated JSON document throws SyntaxError, which surfaces to the caller.
+    let canceled = false;
+    const chunk = new Uint8Array(4 * 1024 * 1024 + 64).fill(0x78); // 'x' * (4MiB + 64)
+    const prefix = new TextEncoder().encode('{"items":[');
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(prefix);
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetcher = withFetchPreconnect(async () => new Response(stream, { status: 200 }));
+
+    await expect(
+      requestDiscord("/channels/123/messages", "test", { fetcher, retry: { attempts: 1 } }),
+    ).rejects.toThrow(SyntaxError);
+
+    expect(canceled).toBe(true);
+  });
 });

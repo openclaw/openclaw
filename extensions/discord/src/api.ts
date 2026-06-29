@@ -19,6 +19,7 @@ const DISCORD_API_RETRY_DEFAULTS = {
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
 const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_API_RESPONSE_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -191,7 +192,9 @@ export async function requestDiscord<T>(
           retryAfter,
         );
       }
-      const text = await res.text().catch(() => "");
+      const text = await readResponseTextLimited(res, DISCORD_API_RESPONSE_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
       if (!text.trim()) {
         return undefined as T;
       }
