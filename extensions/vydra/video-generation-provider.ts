@@ -5,7 +5,6 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   postJsonRequest,
-  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
@@ -112,10 +111,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra video generation failed");
-        const submitted = await readProviderJsonResponse<unknown>(
-          response,
-          "Vydra video generation",
-        );
+        const submitted = await response.json();
         const completedPayload = await resolveCompletedVydraPayload({
           submitted,
           baseUrl,

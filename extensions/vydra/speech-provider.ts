@@ -2,7 +2,6 @@
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -130,7 +129,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra speech synthesis failed");
-        const payload = await readProviderJsonResponse<unknown>(response, "Vydra speech synthesis");
+        const payload = await response.json();
         const audioUrl = extractVydraResultUrls(payload, "audio")[0];
         if (!audioUrl) {
           throw new Error("Vydra speech synthesis response missing audio URL");
