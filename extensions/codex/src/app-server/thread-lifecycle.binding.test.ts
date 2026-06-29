@@ -148,22 +148,20 @@ function createDeferredNamedDynamicTool(
   };
 }
 
-function createPluginAppConfigPatch() {
+function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
   return {
-    approvals_reviewer: "user",
     apps: {
       _default: {
         enabled: false,
-        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
       "google-calendar-app": {
         enabled: true,
-        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
+        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -194,7 +192,6 @@ function createTwoPluginAppConfigPatch() {
       ...createPluginAppConfigPatch().apps,
       "gmail-app": {
         enabled: true,
-        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -230,7 +227,6 @@ function createTwoCalendarAppConfigPatch() {
       ...createPluginAppConfigPatch().apps,
       "google-calendar-secondary-app": {
         enabled: true,
-        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -1416,7 +1412,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         apps: {
           _default: {
             enabled: false,
-            approvals_reviewer: "user",
             destructive_enabled: false,
             open_world_enabled: false,
           },
@@ -1478,7 +1473,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1757,7 +1751,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         },
       },
     };
-    const alwaysApprovalConfigPatch = createPluginAppConfigPatch();
+    const alwaysApprovalConfigPatch = createPluginAppConfigPatch({ approvalsReviewer: "user" });
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
       configPatch: alwaysApprovalConfigPatch,
@@ -1839,7 +1833,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         apps: {
           _default: {
             enabled: false,
-            approvals_reviewer: "user",
             destructive_enabled: false,
             open_world_enabled: false,
           },
@@ -1873,7 +1866,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -2022,7 +2014,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         apps: {
           _default: {
             enabled: false,
-            approvals_reviewer: "user",
             destructive_enabled: false,
             open_world_enabled: false,
           },
@@ -2052,11 +2043,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },

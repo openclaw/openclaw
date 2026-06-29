@@ -1370,7 +1370,6 @@ export async function runCodexAppServerAttempt(
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
-  let pluginApprovalsRequireUser = false;
   let trajectoryEndRecorded = false;
   const markTrajectoryEndRecorded = () => {
     trajectoryEndRecorded = true;
@@ -1506,7 +1505,6 @@ export async function runCodexAppServerAttempt(
     });
     client = startupResult.client;
     thread = startupResult.thread;
-    pluginApprovalsRequireUser = startupResult.pluginApprovalsRequireUser;
     pluginAppServer = startupResult.pluginAppServer;
     sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
     codexEnvironmentSelection = startupResult.environmentSelection;
@@ -2452,7 +2450,6 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
       appServer: turnAppServer,
-      ...(pluginApprovalsRequireUser ? { approvalsReviewer: "user" as const } : {}),
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
