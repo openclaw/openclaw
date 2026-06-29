@@ -564,6 +564,16 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("length");
     expect(result.content).toEqual([{ type: "text", text: "Partial turn" }]);
     expect(result.usage).toMatchObject({ input: 4, output: 8 });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_stop_reason",
+        details: {
+          provider: "anthropic",
+          rawStopReason: "max_turns",
+          normalizedStopReason: "length",
+        },
+      }),
+    ]);
   });
 
   it("discards buffered Fable output when the stream fails before terminal status", async () => {

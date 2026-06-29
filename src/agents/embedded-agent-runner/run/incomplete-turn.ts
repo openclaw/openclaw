@@ -303,9 +303,38 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (hasProviderMaxTurnsStopDiagnostic(params.attempt.lastAssistant)) {
+    return "⚠️ Anthropic stopped because the run reached the provider max-turns limit. Please start a fresh session with /new, or retry with a smaller task.";
+  }
+
   return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+function hasProviderMaxTurnsStopDiagnostic(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const diagnostics = (message as { diagnostics?: unknown }).diagnostics;
+  if (!Array.isArray(diagnostics)) {
+    return false;
+  }
+  return diagnostics.some((diagnostic) => {
+    if (!diagnostic || typeof diagnostic !== "object") {
+      return false;
+    }
+    const entry = diagnostic as { type?: unknown; details?: unknown };
+    if (
+      entry.type !== "provider_stop_reason" ||
+      !entry.details ||
+      typeof entry.details !== "object"
+    ) {
+      return false;
+    }
+    const details = entry.details as { provider?: unknown; rawStopReason?: unknown };
+    return details.provider === "anthropic" && details.rawStopReason === "max_turns";
+  });
 }
 
 /**

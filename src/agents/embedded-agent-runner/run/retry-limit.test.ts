@@ -45,7 +45,7 @@ describe("handleRetryLimitExhaustion", () => {
     ).toThrow();
   });
 
-  it("includes the detailed message for idle-timeout breaker exhaustion", () => {
+  it("keeps internal idle-timeout breaker diagnostics out of the user-visible payload", () => {
     const result = handleRetryLimitExhaustion({
       ...baseParams,
       message:
@@ -53,10 +53,24 @@ describe("handleRetryLimitExhaustion", () => {
         "3 consecutive idle timeouts without completed model progress " +
         "(cap=3). Halting further attempts to bound paid model calls. " +
         "See issue #76293.",
+      userMessage:
+        "Request stopped after repeated idle timeouts before the model completed a response.",
     });
 
-    expect(result.payloads![0]?.text).toContain("Idle-timeout cost-runaway breaker tripped");
-    expect(result.payloads![0]?.text).toContain("See issue #76293.");
-    expect(result.payloads![0]?.text).toContain("Please try again");
+    expect(result.payloads![0]?.text).toBe(
+      "Request stopped after repeated idle timeouts before the model completed a response. " +
+        "Please try again, or use /new to start a fresh session.",
+    );
+    expect(result.payloads![0]?.text).not.toContain("cost-runaway breaker");
+    expect(result.payloads![0]?.text).not.toContain("paid model calls");
+    expect(result.payloads![0]?.text).not.toContain("See issue #76293");
+    expect(result.meta?.error).toEqual({
+      kind: "retry_limit",
+      message:
+        "Idle-timeout cost-runaway breaker tripped: " +
+        "3 consecutive idle timeouts without completed model progress " +
+        "(cap=3). Halting further attempts to bound paid model calls. " +
+        "See issue #76293.",
+    });
   });
 });

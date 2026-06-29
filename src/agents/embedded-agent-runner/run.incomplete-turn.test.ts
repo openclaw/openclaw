@@ -50,6 +50,41 @@ function resolveIncompleteTurnPayloadText(
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
 }
 
+describe("resolveIncompleteTurnPayloadText", () => {
+  it("surfaces Anthropic max_turns context for length-limited terminal turns", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Partial turn"],
+        lastAssistant: {
+          stopReason: "length",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Partial turn" }],
+          diagnostics: [
+            {
+              type: "provider_stop_reason",
+              timestamp: 1,
+              details: {
+                provider: "anthropic",
+                rawStopReason: "max_turns",
+                normalizedStopReason: "length",
+              },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(text).toBe(
+      "⚠️ Anthropic stopped because the run reached the provider max-turns limit. " +
+        "Please start a fresh session with /new, or retry with a smaller task.",
+    );
+  });
+});
+
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
