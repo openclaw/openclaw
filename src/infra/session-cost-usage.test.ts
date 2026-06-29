@@ -304,6 +304,58 @@ describe("session cost usage", () => {
     });
   });
 
+  it("estimates DeepSeek usage when known-pricing transcripts carry a zero provider cost", async () => {
+    const root = await makeSessionCostRoot("cost-deepseek-zero-provider-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBeCloseTo(0.02, 8);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -330,16 +382,16 @@ describe("session cost usage", () => {
 
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      // Simulate a durable cache written by a build from before this change: refresh
-      // under the current code, then stamp the cache with an older semantics version.
+      // Simulate a durable cache written by a build from before this semantics bump:
+      // refresh under the current code, then stamp the cache with the previous version.
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 3;
+      cache.version = 4;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
-      // under the new missing-cost semantics instead of reusing old complete-$0 totals.
+      // under the current cost semantics instead of reusing old complete-$0 totals.
       const cached = await loadSessionCostSummaryFromCache({
         sessionId: "sess-upgrade",
         sessionFile,
