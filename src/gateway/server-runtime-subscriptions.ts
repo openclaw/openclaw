@@ -102,7 +102,7 @@ export function startGatewayEventSubscriptions(params: {
               entry.projectSessionTerminalPersistence = persistence;
               if (entry.registrationCleanupRequested === true) {
                 void persistence
-                  .catch((err) => {
+                  .catch((err: unknown) => {
                     // Still release the entry on failure, but surface the
                     // persistence error instead of swallowing it silently.
                     log.error?.(
@@ -124,7 +124,7 @@ export function startGatewayEventSubscriptions(params: {
                 sessionKey &&
                 sessionId
               ) {
-                void persistence.catch((err) => {
+                void persistence.catch((err: unknown) => {
                   // Fall back to restart recovery on failure, and log the
                   // persistence error so the fallback is not silent.
                   log.error?.(

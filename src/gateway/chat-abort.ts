@@ -176,7 +176,7 @@ export function registerChatAbortController(params: {
               params.chatAbortControllers.delete(params.runId);
             }
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             // A rejected terminal persistence must still release the controller,
             // but log it so operators can see DB/file-system health failures
             // instead of losing the terminal state silently.
