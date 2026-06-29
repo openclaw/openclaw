@@ -94,10 +94,6 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
-/** Apple/iCloud context keywords — when one of these appears within 80 chars of a
- * 4×4-kebab token in a generic field, the app-password sweep fires. Derived from
- * Apple's own docs and common error messages. Sorted longest-first for substring
- * matching efficiency. */
 
 /** Common 4-letter words that appear in kebab-case identifiers (URL slugs,
  * package names, resource names, etc.). Tokens composed entirely of these
@@ -1264,18 +1260,36 @@ function redactSensitiveFieldValueWithOptions(
   const redacted = redactText(value, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
-  // Always check for Apple app-specific passwords — looksLikeAppSpecificPassword()
-  // preserves dictionary-word kebab identifiers like "help-desk-team-page", so
-  // only random-looking 4×4 tokens that resemble real passwords get masked.
-  const shouldRedactAppPassword = true;
-  if (shouldRedactAppPassword) {
-    const appRedacted = redactAppSpecificPasswords(redacted);
+  // Tier 1 — Apple-specific fields (apple, icloud, appSpecificPassword):
+  // mask ALL 4x4 tokens unconditionally (fail-closed).
+  // Tier 2 — Secret-context (another pattern already redacted in this value):
+  // also mask all 4x4 tokens, because a value known to contain secrets is
+  // high-risk and should not leak any password-shaped token.
+  // Tier 3 — Generic fields without other secrets: use wordlist precision
+  // (looksLikeAppSpecificPassword) so dictionary-word kebab identifiers
+  // like "help-desk-team-page" survive while random-looking tokens mask.
+  if (STRUCTURED_APP_PASSWORD_FIELD_RE.test(key)) {
+    const appRedacted = replacePatternBounded(redacted, APP_SPECIFIC_PASSWORD_RE, (match) =>
+      redactMatch(match, [match], APP_SPECIFIC_PASSWORD_RE),
+    );
     if (appRedacted !== value) {
       return appRedacted;
     }
   }
   if (redacted !== value) {
+    // Secret-context sweep: mask all 4x4 tokens fail-closed.
+    const appRedacted = replacePatternBounded(redacted, APP_SPECIFIC_PASSWORD_RE, (match) =>
+      redactMatch(match, [match], APP_SPECIFIC_PASSWORD_RE),
+    );
+    if (appRedacted !== value) {
+      return appRedacted;
+    }
     return redacted;
+  }
+  // Generic fields without other secrets: wordlist-precision check.
+  const appRedacted = redactAppSpecificPasswords(redacted);
+  if (appRedacted !== value) {
+    return appRedacted;
   }
   if (isSensitiveFieldKey(key)) {
     if (isShellReferenceToKey(key, value)) {

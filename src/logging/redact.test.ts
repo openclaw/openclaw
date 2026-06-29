@@ -1028,7 +1028,7 @@ describe("redactSensitiveText", () => {
       "kxbv-qwfn-zptl-mrqd",
     );
     expect(
-      redactSensitiveFieldValue("message", "token abcd-efgh-ijkl-mnop detected"),
+      redactSensitiveFieldValue("message", "found abcd-efgh-ijkl-mnop sequence"),
     ).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
