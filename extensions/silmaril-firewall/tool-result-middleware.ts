@@ -5,6 +5,10 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "openclaw/plugin-sdk/agent-harness";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_CLASSIFY_TIMEOUT_MS = 2500;
 const MIN_CLASSIFY_TIMEOUT_MS = 250;
@@ -69,21 +73,31 @@ class DirectSilmarilClassifier implements SilmarilClassifier {
       payload.tool_name = options.toolName;
     }
 
-    const response = await fetch(this.config.apiUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.config.apiKey,
+    const { response, release } = await fetchWithSsrFGuard({
+      url: this.config.apiUrl,
+      init: {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": this.config.apiKey,
+        },
+        body: JSON.stringify(payload),
+        redirect: "error",
       },
-      body: JSON.stringify(payload),
-      redirect: "error",
-      signal: AbortSignal.timeout(this.config.timeoutMs),
+      timeoutMs: this.config.timeoutMs,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(this.config.apiUrl),
+      auditContext: "silmaril-firewall.classify",
     });
-    if (!response.ok) {
-      throw new Error(`Silmaril classify request failed with status ${response.status}`);
-    }
 
-    return blockResultFromResponse(await response.json());
+    try {
+      if (!response.ok) {
+        throw new Error(`Silmaril classify request failed with status ${response.status}`);
+      }
+
+      return blockResultFromResponse(await response.json());
+    } finally {
+      await release();
+    }
   }
 }
 
@@ -259,10 +273,10 @@ function isLowSurrogate(code: number): boolean {
 function withClientMetadata(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
-  const payload = { ...(metadata ?? {}) };
+  const payload = { ...metadata };
   const existing = readRecord(payload.silmaril);
   payload.silmaril = {
-    ...(existing ?? {}),
+    ...existing,
     client_language: "typescript",
     client_name: "openclaw-bundled-silmaril-firewall",
     request_id: randomUUID(),

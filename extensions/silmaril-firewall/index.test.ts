@@ -6,7 +6,20 @@ import plugin, {
   createSilmarilFirewallAgentToolResultMiddleware,
 } from "./index.js";
 
-const fetchMock = vi.fn();
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+    ssrfPolicyFromHttpBaseUrlAllowedHostname: (url: string) => ({
+      allowedHostnames: [new URL(url).hostname],
+    }),
+  };
+});
 
 function makeEvent(
   overrides: Partial<AgentToolResultMiddlewareEvent> = {},
@@ -25,17 +38,19 @@ function makeEvent(
 }
 
 function mockClassifyResponse(response: Record<string, unknown>) {
-  fetchMock.mockResolvedValue({
-    ok: true,
-    status: 200,
-    json: async () => response,
+  fetchWithSsrFGuardMock.mockResolvedValue({
+    response: {
+      ok: true,
+      status: 200,
+      json: async () => response,
+    },
+    release: vi.fn(),
   });
 }
 
 describe("silmaril-firewall bundled plugin", () => {
   beforeEach(() => {
-    fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockReset();
   });
 
   it("registers tool result middleware for Pi and Codex runtimes", () => {
@@ -75,20 +90,27 @@ describe("silmaril-firewall bundled plugin", () => {
     const result = await middleware(makeEvent(), { runtime: "codex" });
 
     expect(result).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://classifier.example/classify",
-      expect.objectContaining({
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://classifier.example/classify",
+      init: expect.objectContaining({
         method: "POST",
-        headers: {
+        headers: expect.objectContaining({
           "content-type": "application/json",
           "x-api-key": "key",
-        },
+        }),
         redirect: "error",
         body: expect.any(String),
-        signal: expect.any(AbortSignal),
       }),
-    );
-    const requestBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+      timeoutMs: 2500,
+      policy: {
+        allowedHostnames: ["classifier.example"],
+      },
+      auditContext: "silmaril-firewall.classify",
+    });
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | { init?: { body?: unknown } }
+      | undefined;
+    const requestBody = JSON.parse(String(request?.init?.body));
     expect(requestBody).toMatchObject({
       text: "tool output",
       hook: "tool_response",
@@ -223,7 +245,7 @@ describe("silmaril-firewall bundled plugin", () => {
   });
 
   it("fails open when classification throws and does not log raw output", async () => {
-    fetchMock.mockRejectedValue(new Error("raw malicious tool output"));
+    fetchWithSsrFGuardMock.mockRejectedValue(new Error("raw malicious tool output"));
     const logger = { warn: vi.fn() };
     const middleware = createSilmarilFirewallAgentToolResultMiddleware(
       {
@@ -263,7 +285,7 @@ describe("silmaril-firewall bundled plugin", () => {
       missingConfigMiddleware(makeEvent(), { runtime: "codex" }),
     ).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
 
     const middleware = createSilmarilFirewallAgentToolResultMiddleware({
       silmarilApiKey: "key",
@@ -280,6 +302,6 @@ describe("silmaril-firewall bundled plugin", () => {
         { runtime: "pi" },
       ),
     ).resolves.toBeUndefined();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });
