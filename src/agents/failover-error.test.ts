@@ -3,7 +3,11 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
-import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
+import {
+  classifyAssistantFailoverReason,
+  classifyFailoverSignal,
+  isFailoverAssistantError,
+} from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -17,6 +21,7 @@ import {
   resolveFailoverStatus,
 } from "./failover-error.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -1435,5 +1440,82 @@ describe("isSignalTimeoutReason", () => {
   it("returns false for null and undefined", () => {
     expect(isSignalTimeoutReason(null)).toBe(false);
     expect(isSignalTimeoutReason(undefined)).toBe(false);
+  });
+});
+
+describe("upstream_error type triggers fallback", () => {
+  // GitHub: openclaw/openclaw#95519 — provider returns error with type "upstream_error"
+  // but OpenClaw does not classify it as fallbackable, ending the turn immediately
+  // instead of trying the next configured fallback model.
+  it("classifies upstream_error errorType as timeout (fallbackable)", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "upstream_error",
+        message: "Upstream request failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+  });
+
+  it("classifies server_error errorType as server_error (fallbackable)", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "server_error",
+        message: "Internal server error",
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
+  it("resolves upstream_error via resolveFailoverReasonFromError with nested payload", () => {
+    // Matches the real provider payload shape from #95519:
+    // {"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "demo-provider",
+        type: "error",
+        error: {
+          type: "upstream_error",
+          message: "Upstream request failed",
+        },
+      }),
+    ).toBe("timeout");
+  });
+
+  it("does not classify unknown errorType as fallbackable", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        errorType: "some_unknown_type",
+        message: "Something went wrong",
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies upstream_error via JSON api_error transient signals (regex)", () => {
+    // Verify the regex also matches the underscore variant in api_error payloads
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: '{"type":"api_error","message":"upstream_error: backend unavailable"}',
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+  });
+
+  it("treats an upstream_error assistant message as fallbackable at the production gate", () => {
+    // The #95519 runtime path: the provider error surfaces as an assistant message with
+    // stopReason "error" and errorType "upstream_error" (no leading HTTP status, so HTTP-status
+    // classification does not apply). run.ts assistant-stage failover calls these exact
+    // functions (isFailoverAssistantError / classifyAssistantFailoverReason); before this fix
+    // both reported "not a failover error", so the run returned an error payload instead of
+    // throwing a FailoverError into the configured fallback chain.
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "error",
+      provider: "demo-provider",
+      errorType: "upstream_error",
+      errorMessage: "Upstream request failed",
+    });
+    expect(classifyAssistantFailoverReason(assistant)).toBe("timeout");
+    expect(isFailoverAssistantError(assistant)).toBe(true);
   });
 });
