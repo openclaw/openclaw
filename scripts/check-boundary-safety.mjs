@@ -319,16 +319,38 @@ export function isBoundarySafetyCandidateFile(filePath) {
   return /^(?:src\/|extensions\/|packages\/)/.test(normalized);
 }
 
-function entryKey(entry) {
-  return `${entry.ruleId}:${normalizePath(entry.file)}:${entry.line}:${entry.match}`;
+function entryIdentity(entry) {
+  return `${entry.ruleId}:${normalizePath(entry.file)}:${entry.match}`;
+}
+
+function countEntriesByIdentity(entries) {
+  const counts = new Map();
+  for (const entry of entries) {
+    const key = entryIdentity(entry);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function collectEntriesNotCoveredByCounts(entries, counts) {
+  const remaining = new Map(counts);
+  const uncovered = [];
+  for (const entry of entries) {
+    const key = entryIdentity(entry);
+    const count = remaining.get(key) ?? 0;
+    if (count > 0) {
+      remaining.set(key, count - 1);
+    } else {
+      uncovered.push(entry);
+    }
+  }
+  return uncovered;
 }
 
 export function diffBoundaryInventory(expected, actual) {
-  const expectedKeys = new Set(expected.map(entryKey));
-  const actualKeys = new Set(actual.map(entryKey));
   return {
-    missing: expected.filter((entry) => !actualKeys.has(entryKey(entry))),
-    unexpected: actual.filter((entry) => !expectedKeys.has(entryKey(entry))),
+    missing: collectEntriesNotCoveredByCounts(expected, countEntriesByIdentity(actual)),
+    unexpected: collectEntriesNotCoveredByCounts(actual, countEntriesByIdentity(expected)),
   };
 }
 
