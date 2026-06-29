@@ -2408,7 +2408,7 @@ describe("stuck session diagnostics threshold", () => {
         30_000,
       ),
     ).toBe(48 * 60 * 60_000);
-    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(3 * 60_000);
+    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(5 * 60_000);
   });
 });
 

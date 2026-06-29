@@ -77,11 +77,8 @@ const webhookStats = {
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
-// FIX #94650: Lower stalled-run abort floor so stuck model calls are killed
-// sooner. 300 s (5 min) left sessions blocked far longer than users tolerate.
-// 180 s gives runners enough time for retries while still cutting off hangs.
-const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 3 * 60_000;
-const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 2;
+const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
+const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
