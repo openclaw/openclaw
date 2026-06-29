@@ -337,6 +337,7 @@ export interface ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<BootstrapResult>;
 
   /**

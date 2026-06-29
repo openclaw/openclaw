@@ -5,6 +5,8 @@ import {
 
 export type VisibleTranscriptEventEntry<T> = {
   event: T;
+  /** Parent id after active-branch normalization; null when no visible parent exists. */
+  parentId: string | null;
   seq: number;
 };
 
@@ -15,9 +17,15 @@ export function selectVisibleTranscriptEventEntries<T>(
   const tree = scanSessionTranscriptTree(events);
   const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
   if (visiblePath.length > 0) {
-    return visiblePath.map((node) => ({ event: node.entry, seq: node.index + 1 }));
+    return visiblePath.map((node) => ({
+      event: node.entry,
+      parentId: node.parentId,
+      seq: node.index + 1,
+    }));
   }
-  return tree.hasLeafControl ? [] : events.map((event, index) => ({ event, seq: index + 1 }));
+  return tree.hasLeafControl
+    ? []
+    : events.map((event, index) => ({ event, parentId: null, seq: index + 1 }));
 }
 
 /** Selects only events on the active visible transcript branch. */

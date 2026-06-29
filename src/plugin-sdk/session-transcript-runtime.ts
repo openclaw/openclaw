@@ -13,7 +13,10 @@ import {
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import {
+  selectVisibleTranscriptEventEntries,
+  selectVisibleTranscriptEvents,
+} from "../config/sessions/transcript-visible-events.js";
 import type {
   LatestAssistantTranscriptText,
   SessionTranscriptAppendResult,
@@ -24,6 +27,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import type { AgentMessage } from "./agent-core.js";
 import {
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
@@ -53,6 +57,23 @@ export type {
 export type SessionTranscriptEvent = unknown;
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
+
+export type SessionTranscriptMessageEntry = {
+  /** Stable transcript event id for this message entry. */
+  entryId: string;
+  /** Parent id after active-branch normalization; null when this is a visible root. */
+  parentId: string | null;
+  /** Ordered read metadata for this full transcript read, not a resumable cursor. */
+  seq: number;
+  /** Redacted agent message payload as persisted by the runtime. */
+  message: AgentMessage;
+  /** Convenience mirror of message.role. */
+  role: AgentMessage["role"];
+  /** Entry timestamp recorded by the transcript store, when present. */
+  createdAt?: string;
+  /** Message idempotency key, when the persisted message has one. */
+  idempotencyKey?: string;
+};
 
 export type SessionTranscriptTarget = SessionTranscriptIdentity & {
   targetKind: "runtime-session";
@@ -124,6 +145,20 @@ export async function readSessionTranscriptEvents(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptEvent[]> {
   return await loadTranscriptEvents(params);
+}
+
+/**
+ * Reads visible transcript message entries by scoped identity.
+ *
+ * This is a branch-safe message projection over the current full transcript
+ * read. `seq` is ordered read metadata, not a resumable cursor.
+ */
+export async function readVisibleSessionTranscriptMessageEntries(
+  params: SessionTranscriptTargetParams,
+): Promise<SessionTranscriptMessageEntry[]> {
+  return selectVisibleTranscriptEventEntries(await loadTranscriptEvents(params)).flatMap(
+    projectVisibleMessageEntry,
+  );
 }
 
 /**
@@ -357,6 +392,43 @@ function extractAssistantMirrorComparableText(
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function projectVisibleMessageEntry(entry: {
+  event: SessionTranscriptEvent;
+  parentId: string | null;
+  seq: number;
+}): SessionTranscriptMessageEntry[] {
+  const event = entry.event;
+  if (!isRecord(event) || event.type !== "message") {
+    return [];
+  }
+  const entryId = readNonEmptyString(event.id);
+  const message = event.message;
+  if (!entryId || !isRecord(message) || !readNonEmptyString(message.role)) {
+    return [];
+  }
+  const createdAt = readNonEmptyString(event.timestamp);
+  const idempotencyKey = readNonEmptyString(message.idempotencyKey);
+  return [
+    {
+      entryId,
+      parentId: entry.parentId,
+      seq: entry.seq,
+      message: message as AgentMessage,
+      role: message.role as AgentMessage["role"],
+      ...(createdAt ? { createdAt } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    },
+  ];
 }
 
 function projectPublicTarget(target: {
