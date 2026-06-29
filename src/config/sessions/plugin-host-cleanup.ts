@@ -7,6 +7,8 @@ import type { SessionEntry } from "./types.js";
 export type PluginHostSessionCleanupMode = "plugin-owned-state" | "promoted-slots";
 
 export type PluginHostSessionCleanupStoreParams = {
+  /** Agent that owns the resolved session store target. */
+  agentId?: string;
   /** Cleanup mode chosen by the plugin host lifecycle reason. */
   mode: PluginHostSessionCleanupMode;
   /** Plugin owner to clear. Omit only for session-scoped all-plugin cleanup. */
