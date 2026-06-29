@@ -451,6 +451,7 @@ function buildGroupedMessageRenderOptions(
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
+    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
@@ -520,7 +521,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : toolLabels.length <= 3
           ? toolLabels.join(", ")
           : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
-    const hasError = cards.some(isToolCardError);
+    // Non-terminal internal tool failures (turn produced a clean reply) stay
+    // collapsed and unstyled; detail remains available on expand. #89683
+    const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
@@ -1618,6 +1621,9 @@ function renderGroupedMessage(
     duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
+    // True when the tool's turn still produced a clean assistant reply: a failed
+    // internal tool then renders collapsed, not as a primary error banner. #89683
+    turnSucceeded?: boolean;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -1730,7 +1736,7 @@ function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError);
+  const toolMessageHasError = toolCards.some(isToolCardError) && opts.turnSucceeded !== true;
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -1772,7 +1778,11 @@ function renderGroupedMessage(
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses}"
+      data-message-id=${messageKey}
+      data-message-text=${extractedText || nothing}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">

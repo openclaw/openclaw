@@ -338,6 +338,41 @@ function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage:
   );
 }
 
+function assistantGroupHasReplyText(group: MessageGroup): boolean {
+  // A real reply is assistant text; a tool-only assistant group does not count.
+  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+}
+
+// Stamp each tool group with whether its turn ended in a successful assistant
+// reply. Codex marks any non-zero exec exit as failed, so a benign internal tool
+// failure (e.g. a no-match search) must not render as a primary error banner
+// once a clean reply exists. Backward pass: a user group ends the turn
+// downstream; an assistant reply marks success for earlier tool groups in the
+// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
+// preserving the existing error banner.
+function annotateToolTurnOutcome(
+  items: Array<ChatItem | MessageGroup>,
+): Array<ChatItem | MessageGroup> {
+  let sawAssistantReply = false;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.kind !== "group") {
+      continue;
+    }
+    const role = item.role.toLowerCase();
+    if (role === "user") {
+      sawAssistantReply = false;
+    } else if (role === "assistant") {
+      if (assistantGroupHasReplyText(item)) {
+        sawAssistantReply = true;
+      }
+    } else if (role === "tool") {
+      item.turnSucceeded = sawAssistantReply;
+    }
+  }
+  return items;
+}
+
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (isPendingSendMessage(message)) {
     return null;
@@ -817,7 +852,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  return groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items)));
+  return annotateToolTurnOutcome(
+    groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items))),
+  );
 }
 
 function messageKey(message: unknown, index: number): string {
