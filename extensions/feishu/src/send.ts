@@ -571,22 +571,46 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
-function isMarkdownFenceLine(line: string): boolean {
-  const trimmed = line.trimStart();
-  return trimmed.startsWith("```") || trimmed.startsWith("~~~");
+type MarkdownFence = {
+  marker: "`" | "~";
+  length: number;
+};
+
+function readOpeningMarkdownFence(line: string): MarkdownFence | undefined {
+  const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+  const fence = match?.[1];
+  if (!fence) {
+    return undefined;
+  }
+  return {
+    marker: fence[0] as "`" | "~",
+    length: fence.length,
+  };
+}
+
+function isClosingMarkdownFence(line: string, activeFence: MarkdownFence): boolean {
+  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const fence = match?.[1];
+  return Boolean(fence && fence[0] === activeFence.marker && fence.length >= activeFence.length);
 }
 
 function materializeFeishuPostMarkdownLineBreaks(text: string): string {
   const parts = text.split(/(\r\n|\n|\r)/);
-  let inFence = false;
+  let activeFence: MarkdownFence | undefined;
   let result = "";
   for (let index = 0; index < parts.length; index += 2) {
     const line = parts[index] ?? "";
     const separator = parts[index + 1] ?? "";
-    const wasInFence = inFence;
-    const isFenceLine = isMarkdownFenceLine(line);
-    if (isFenceLine) {
-      inFence = !inFence;
+    const wasInFence = Boolean(activeFence);
+    let isFenceBoundary = false;
+    if (activeFence) {
+      if (isClosingMarkdownFence(line, activeFence)) {
+        activeFence = undefined;
+        isFenceBoundary = true;
+      }
+    } else {
+      activeFence = readOpeningMarkdownFence(line);
+      isFenceBoundary = Boolean(activeFence);
     }
     result += line;
     if (!separator) {
@@ -595,8 +619,8 @@ function materializeFeishuPostMarkdownLineBreaks(text: string): string {
     const nextLine = parts[index + 2] ?? "";
     const keepSingleBreak =
       wasInFence ||
-      isFenceLine ||
-      isMarkdownFenceLine(nextLine) ||
+      isFenceBoundary ||
+      Boolean(readOpeningMarkdownFence(nextLine)) ||
       line.trim().length === 0 ||
       nextLine.trim().length === 0;
     result += keepSingleBreak ? separator : `${separator}${separator}`;

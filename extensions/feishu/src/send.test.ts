@@ -143,6 +143,26 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("preserves nested shorter fences inside longer markdown code fences", () => {
+    const nestedFence = "````md\n```ts\nconst a = 1;\n```\n````\nAfter";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: nestedFence,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: nestedFence,
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
