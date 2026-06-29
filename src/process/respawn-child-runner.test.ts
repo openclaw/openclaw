@@ -2,6 +2,7 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_RESPAWN_PARENT_PID } from "./child-process-bridge.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
@@ -43,15 +44,17 @@ describe("runRespawnChildWithSignalBridge", () => {
       onError: vi.fn(),
     });
 
-    expect(spawnChild).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      ["/repo/openclaw/dist/entry.js"],
-      {
-        stdio: "inherit",
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached: process.platform !== "win32",
-      },
-    );
+    expect(spawnChild).toHaveBeenCalledWith("/usr/bin/node", ["/repo/openclaw/dist/entry.js"], {
+      stdio: "inherit",
+      env:
+        process.platform === "win32"
+          ? { OPENCLAW_NODE_OPTIONS_READY: "1" }
+          : {
+              OPENCLAW_NODE_OPTIONS_READY: "1",
+              [OPENCLAW_RESPAWN_PARENT_PID]: String(process.pid),
+            },
+      detached: process.platform !== "win32",
+    });
   });
 
   it("signals detached respawn process groups after forwarded signal grace", () => {
@@ -172,7 +175,10 @@ describe("runRespawnChildWithSignalBridge", () => {
       ["/repo/openclaw/dist/entry.js", "configure"],
       {
         stdio: "inherit",
-        env: {},
+        env:
+          process.platform === "win32"
+            ? {}
+            : { [OPENCLAW_RESPAWN_PARENT_PID]: String(process.pid) },
         detached: false,
       },
     );
