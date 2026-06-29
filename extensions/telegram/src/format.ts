@@ -674,14 +674,30 @@ function preserveSupportedTelegramHtmlTags(
 
 type TelegramRawLiteralHtmlExtraction = {
   markdown: string;
-  blocks: string[];
+  blocks: TelegramRawLiteralHtmlBlock[];
 };
 
-const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX = "TG_RICH_RAW_LITERAL_HTML_BLOCK_";
-const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX = "_TOKEN";
+type TelegramRawLiteralHtmlBlock = {
+  placeholder: string;
+  html: string;
+};
 
-function buildTelegramRawLiteralHtmlPlaceholder(index: number): string {
-  return `${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX}${index}${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX}`;
+const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX = "\u{e000}TG_RICH_RAW_LITERAL_HTML_BLOCK_";
+const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX = "_TOKEN\u{e001}";
+
+function buildTelegramRawLiteralHtmlPlaceholder(index: number, attempt: number): string {
+  return `${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX}${index}_${attempt}${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX}`;
+}
+
+function buildUnusedTelegramRawLiteralHtmlPlaceholder(markdown: string, index: number): string {
+  let attempt = 0;
+  while (true) {
+    const placeholder = buildTelegramRawLiteralHtmlPlaceholder(index, attempt);
+    if (!markdown.includes(placeholder)) {
+      return placeholder;
+    }
+    attempt++;
+  }
 }
 
 function preserveTelegramRawLiteralHtmlBlock(block: string): string {
@@ -752,11 +768,14 @@ function extractTelegramRawLiteralHtmlBlocks(markdown: string): TelegramRawLiter
 
   let out = "";
   let lastIndex = 0;
-  const blocks: string[] = [];
+  const blocks: TelegramRawLiteralHtmlBlock[] = [];
   for (const range of ranges) {
     out += markdown.slice(lastIndex, range.start);
-    const placeholder = buildTelegramRawLiteralHtmlPlaceholder(blocks.length);
-    blocks.push(preserveTelegramRawLiteralHtmlBlock(markdown.slice(range.start, range.end)));
+    const placeholder = buildUnusedTelegramRawLiteralHtmlPlaceholder(markdown, blocks.length);
+    blocks.push({
+      placeholder,
+      html: preserveTelegramRawLiteralHtmlBlock(markdown.slice(range.start, range.end)),
+    });
     out += placeholder;
     lastIndex = range.end;
   }
@@ -764,10 +783,13 @@ function extractTelegramRawLiteralHtmlBlocks(markdown: string): TelegramRawLiter
   return { markdown: out, blocks };
 }
 
-function restoreTelegramRawLiteralHtmlBlocks(html: string, blocks: readonly string[]): string {
+function restoreTelegramRawLiteralHtmlBlocks(
+  html: string,
+  blocks: readonly TelegramRawLiteralHtmlBlock[],
+): string {
   let result = html;
-  for (const [index, block] of blocks.entries()) {
-    result = result.replaceAll(buildTelegramRawLiteralHtmlPlaceholder(index), block);
+  for (const block of blocks) {
+    result = result.replace(block.placeholder, block.html);
   }
   return result;
 }

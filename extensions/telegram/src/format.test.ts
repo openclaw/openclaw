@@ -144,6 +144,29 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("does not restore user placeholder-looking text outside raw code HTML", () => {
+    const placeholderText = "TG_RICH_RAW_LITERAL_HTML_BLOCK_0_TOKEN";
+    const preHtml = markdownToTelegramRichHtml(
+      [
+        `Literal ${placeholderText} stays visible.`,
+        "<pre><code>",
+        "- First item",
+        "- Second item",
+        "</code></pre>",
+      ].join("\n"),
+    );
+
+    expect(preHtml).toBe(
+      [
+        `Literal ${placeholderText} stays visible.`,
+        "<pre><code>",
+        "- First item",
+        "- Second item",
+        "</code></pre>",
+      ].join("\n"),
+    );
+  });
+
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
