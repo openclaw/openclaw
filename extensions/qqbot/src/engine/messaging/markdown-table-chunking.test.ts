@@ -374,6 +374,44 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunks).toHaveLength(1);
     expect(Buffer.byteLength(chunks[0], "utf8")).toBeLessThan(3600);
   });
+
+  it("splits oversized paragraph via baseChunker", () => {
+    const hugePara = "x".repeat(4000);
+    const chunks = chunkQQBotMarkdownText(hugePara, 5000, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
+  });
+
+  it("handles empty text without errors", () => {
+    expect(chunkQQBotMarkdownText("", 5000, baseChunker)).toEqual([]);
+  });
+
+  it("coalesces multiple small paragraphs into one chunk at flushPendingText", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+    chunker.chunkText("段落一。", 5000);
+    chunker.chunkText("段落二。", 5000);
+    chunker.chunkText("段落三。", 5000);
+    const chunks = chunker.flushPendingText(5000);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe("段落一。\n\n段落二。\n\n段落三。");
+  });
+
+  it("drains oversized unit from emit buffer without infinite loop", () => {
+    const huge = "y".repeat(5000);
+    const chunker = createQQBotMarkdownChunker((text) =>
+      text.length <= 3600 ? [text] : [text.slice(0, 3600), text.slice(3600)],
+    );
+    // Streaming drain path: chunkText drains the oversized unit via maybeFlushEmitBuffer
+    // (and forceFlushEmitBuffer at end-of-stream); a regression that re-enqueues instead
+    // of draining would hang here. Combined output must be multi-chunk and within budget.
+    const chunks = [...chunker.chunkText(huge, 5000), ...chunker.flushPendingText(5000)];
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
+  });
 });
 
 describe("table-cell splitting", () => {
