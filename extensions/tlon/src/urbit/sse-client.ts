@@ -2,10 +2,13 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
+
+const TLON_SSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 type UrbitSseLogger = {
   log?: (message: string) => void;
@@ -231,20 +234,27 @@ export class UrbitSSEClient {
       body instanceof ReadableStream
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
-    let buffer = "";
 
     try {
-      for await (const chunk of stream) {
-        if (this.aborted) {
-          break;
-        }
-        buffer += chunk.toString();
-        let eventEnd;
-        while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
-          const eventData = buffer.slice(0, eventEnd);
-          buffer = buffer.slice(eventEnd + 2);
-          this.processEvent(eventData);
-        }
+      // 16 MiB cap on the SSE body. Without this, a hostile or broken Urbit
+      // node can return an unbounded event stream and exhaust OpenClaw memory
+      // before any caller-side guard fires. Mirrors the JSON / OAuth response
+      // cap pattern used elsewhere in the codebase.
+      const buffer = await readByteStreamWithLimit(stream, {
+        maxBytes: TLON_SSE_BODY_MAX_BYTES,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`tlon Urbit SSE: body exceeds ${maxBytes} bytes (got ${size})`),
+      });
+      if (this.aborted) {
+        return;
+      }
+      const text = buffer.toString("utf8");
+      let cursor = 0;
+      let eventEnd;
+      while ((eventEnd = text.indexOf("\n\n", cursor)) !== -1) {
+        const eventData = text.slice(cursor, eventEnd);
+        cursor = eventEnd + 2;
+        this.processEvent(eventData);
       }
     } finally {
       if (this.streamRelease) {
