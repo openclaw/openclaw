@@ -199,11 +199,16 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
 }
 
 /** Resolves the file artifacts that should be backed up before mutating a session store. */
-export function resolveSessionStoreBackupPaths(params: { storePath: string }): string[] {
+export function resolveSessionStoreBackupPaths(params: {
+  agentId?: string;
+  storePath: string;
+}): string[] {
   const backupPaths = new Set<string>();
   backupPaths.add(path.resolve(params.storePath));
 
-  const sqlitePath = resolveSqliteTargetFromSessionStorePath(params.storePath).path;
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.agentId,
+  }).path;
   if (sqlitePath) {
     for (const suffix of SQLITE_SESSION_STORE_BACKUP_SUFFIXES) {
       backupPaths.add(`${sqlitePath}${suffix}`);

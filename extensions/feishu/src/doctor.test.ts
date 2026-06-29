@@ -80,9 +80,12 @@ async function writeStore(entries: Record<string, unknown>, agentId = "main"): P
   return target;
 }
 
-function readStoreEntries(target: string): Record<string, SessionEntry> {
+function readStoreEntries(target: string, agentId = "main"): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath: target }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId, storePath: target }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
@@ -422,6 +425,54 @@ describe("Feishu doctor state repair", () => {
     ).toBe(true);
 
     expect(readStoreEntries(targetStorePath)[sessionKey]).toBeUndefined();
+  });
+
+  it("backs up and repairs Feishu sessions in an agent-scoped custom SQLite store", async () => {
+    const customStorePath = path.join(stateDir(), "custom-sessions", "sessions.json");
+    const customSqlitePath = path.join(
+      path.dirname(customStorePath),
+      "openclaw-agent.support.sqlite",
+    );
+    const sessionKey = "agent:support:feishu:direct:ou_migrated";
+    await upsertSessionEntry({
+      agentId: "support",
+      storePath: customStorePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-support-bad",
+        updatedAt: Date.now(),
+      },
+    });
+
+    expect(fs.existsSync(customStorePath)).toBe(false);
+    expect(fs.existsSync(customSqlitePath)).toBe(true);
+
+    const result = await runFeishuDoctorSequence({
+      cfg: {
+        ...feishuConfig(),
+        agents: { list: [{ id: "support", default: true }] },
+        session: { store: customStorePath },
+      } as OpenClawConfig,
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+
+    const backups = listBackupDirs();
+    expect(backups).toHaveLength(1);
+    const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
+    expect(fs.existsSync(path.join(backupDir, "session-stores", "support", "sessions.json"))).toBe(
+      false,
+    );
+    expect(
+      fs.existsSync(
+        path.join(backupDir, "session-stores", "support", "openclaw-agent.support.sqlite"),
+      ),
+    ).toBe(true);
+
+    expect(readStoreEntries(customStorePath, "support")[sessionKey]).toBeUndefined();
   });
 
   it("archives unhealthy default-scope sessions when metadata identifies Feishu", async () => {
