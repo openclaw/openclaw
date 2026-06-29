@@ -1732,6 +1732,11 @@ export class ChatPage extends LitElement {
     state.assistantName = this.context.assistantName;
     if (!snapshot.connected) {
       if (wasConnected) {
+        const currentSessionId =
+          typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
+        if (currentSessionId) {
+          state.reconnectResumeSessionId = currentSessionId;
+        }
         markQueuedChatSendsWaitingForReconnect(state);
       }
       this.connectedClient = null;

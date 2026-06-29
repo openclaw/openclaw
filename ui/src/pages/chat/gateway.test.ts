@@ -2002,6 +2002,23 @@ describe("sendChatMessage", () => {
     expect(state.reconnectResumeSessionId).toBeNull();
   });
 
+  it("clears reconnect resume when history returns a different backing session", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "session-after-reconnect",
+      messages: [],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      reconnectResumeSessionId: "session-before-reconnect",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.currentSessionId).toBe("session-after-reconnect");
+    expect(state.reconnectResumeSessionId).toBeNull();
+  });
+
   it("does not reuse another global agent's visible session id for queued sends", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-work", status: "started" });
     const state = createState({
