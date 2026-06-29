@@ -351,6 +351,15 @@ async function maybeApplyTtsToReplyPayload(
   if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
+  // Reasoning payloads are private thinking text delivered as their own
+  // notice on opted-in channels (e.g. Matrix m.notice). They must never be
+  // synthesised into audio, so skip TTS application for them on every path
+  // (final reply, per-block reply, and the post-stream TTS-only synthetic).
+  // This is a no-op for channels that suppress reasoning before delivery,
+  // since such payloads never reach TTS today.
+  if (params.payload.isReasoning === true) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
@@ -3309,14 +3318,20 @@ export async function dispatchReplyFromConfig(
                 // Suppress reasoning payloads — channels using this generic dispatch
                 // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
                 // Telegram has its own dispatch path that handles reasoning splitting.
-                if (payload.isReasoning === true) {
+                // Channels that own a reasoning lane opt in via supportsReasoningBlocks.
+                if (payload.isReasoning === true && !params.replyOptions?.supportsReasoningBlocks) {
                   return;
                 }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
-                // and must not be synthesised into the spoken reply.
+                // and must not be synthesised into the spoken reply. Exclude
+                // explicit reasoning payloads too: opted-in channels deliver
+                // them as their own notice (e.g. Matrix m.notice), so reasoning
+                // text must never be accumulated into the post-stream TTS-only
+                // synthetic reply or counted toward the TTS block gate.
                 const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                if (payload.text && !isStatusNotice) {
+                const isReasoningBlock = payload.isReasoning === true;
+                if (payload.text && !isStatusNotice && !isReasoningBlock) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                   if (accumulatedBlockText.length > 0) {
@@ -3480,8 +3495,9 @@ export async function dispatchReplyFromConfig(
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
-      // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
+      // generic dispatch path do not have a dedicated reasoning lane. Channels
+      // that own a reasoning lane opt in via supportsReasoningBlocks.
+      if (reply.isReasoning === true && !params.replyOptions?.supportsReasoningBlocks) {
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {

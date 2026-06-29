@@ -7960,6 +7960,140 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 
+  it("forwards isReasoning final replies when the channel opts in via supportsReasoningBlocks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix" });
+    const replyResolver = async () =>
+      [
+        { text: "thinking...", isReasoning: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    // Both the reasoning payload and the answer reach the channel unchanged.
+    expect(finalCalls).toHaveLength(2);
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("thinking...");
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.isReasoning).toBe(true);
+    expect((finalCalls[1]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
+  });
+
+  it("forwards isReasoning block replies when the channel opts in via supportsReasoningBlocks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return { text: "The answer is 42" };
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    // The reasoning block is now forwarded instead of suppressed.
+    expect(blockReplySentTexts).toContain("thinking...");
+    expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("does not synthesize TTS for forwarded isReasoning final replies (opted-in channel)", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix" });
+    const replyResolver = async () =>
+      [
+        { text: "thinking...", isReasoning: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    // Both payloads are still delivered (forwarded) — TTS exclusion must not
+    // suppress the reasoning notice.
+    expect(finalCalls).toHaveLength(2);
+    const reasoningFinal = finalCalls[0]?.[0] as ReplyPayload | undefined;
+    const answerFinal = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(reasoningFinal?.text).toBe("thinking...");
+    // The reasoning notice is NOT synthesized into audio.
+    expect(reasoningFinal?.mediaUrl).toBeUndefined();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ isReasoning: true }) }),
+    );
+    // The answer is still eligible for TTS synthesis.
+    expect(answerFinal?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+  });
+
+  it("excludes isReasoning blocks from accumulated block TTS-only synthesis (opted-in channel)", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:main:feishu:ou_user",
+    });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    // The reasoning block is forwarded as its own notice (not suppressed).
+    expect(blockReplySentTexts).toContain("thinking...");
+    expect(blockReplySentTexts).toContain("The answer is 42");
+    // The post-stream TTS-only synthetic reply is built from the accumulated
+    // block text. Reasoning text must NOT be synthesized into audio.
+    const ttsOnlyPayload = firstFinalReplyPayload(dispatcher);
+    expect(ttsOnlyPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(ttsOnlyPayload?.spokenText).toBe("The answer is 42");
+    expect(ttsOnlyPayload?.spokenText).not.toContain("thinking");
+  });
+
   it("strips split TTS directives from streamed block text before delivery", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

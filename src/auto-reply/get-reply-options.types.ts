@@ -237,4 +237,12 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /**
+   * Channel owns a dedicated reasoning lane, so generic dispatch must forward
+   * explicit `isReasoning` payloads instead of suppressing them. Generic-dispatch
+   * channels without a reasoning lane (WhatsApp, web, etc.) keep reasoning
+   * suppressed; channels that render reasoning themselves (e.g. Matrix as an
+   * m.notice) opt in here.
+   */
+  supportsReasoningBlocks?: boolean;
 };

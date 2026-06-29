@@ -2959,6 +2959,7 @@ describe("matrix monitor handler draft streaming", () => {
       spokenText?: string;
       ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
       isCompactionNotice?: boolean;
+      isReasoning?: boolean;
       replyToId?: string;
     },
     info: { kind: string },
@@ -3132,6 +3133,37 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Single block");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("delivers a reasoning block as a separate notice instead of editing the live answer draft", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { deliver, opts, finish } = await dispatch();
+
+    // Establish the live answer draft so a draftEventId exists.
+    opts.onPartialReply?.({ text: "Working answer" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    editMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockClear();
+
+    // A reasoning block arrives mid-stream: it must be delivered as its own
+    // notice (deliverMatrixReplies) and must NOT be edited into the answer
+    // draft, which the next answer block would overwrite.
+    await deliver({ text: "Reasoning: weighing options", isReasoning: true }, { kind: "block" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    const delivered = lastCallArg(deliverMatrixRepliesMock, 0, "deliver replies payload") as {
+      replies?: { isReasoning?: boolean }[];
+    };
+    expect(delivered.replies?.[0]?.isReasoning).toBe(true);
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+
     await finish();
   });
 
