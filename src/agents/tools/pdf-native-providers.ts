@@ -7,7 +7,7 @@ import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
   postJsonRequest,
   readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../../media-understanding/shared.js";
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
@@ -125,7 +125,7 @@ export async function anthropicAnalyzePdf(params: {
   content.push({ type: "text", text: params.prompt });
 
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
-    resolveProviderHttpRequestConfig({
+    resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: params.baseUrl,
       defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
       defaultHeaders: {
@@ -224,7 +224,7 @@ export async function geminiAnalyzePdf(params: {
     },
   }) ?? { baseUrl: params.baseUrl };
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
-    resolveProviderHttpRequestConfig({
+    resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: transport.baseUrl,
       defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
       defaultHeaders: {

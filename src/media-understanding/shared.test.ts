@@ -40,8 +40,9 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
-  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+  resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "./shared.js";
 
@@ -537,13 +538,13 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
-  it("carries configured-origin trust eligibility for custom and local endpoints", () => {
-    const custom = resolveProviderHttpRequestConfig({
+  it("keeps configured-origin trust eligibility internal to core callers", () => {
+    const custom = resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: "https://models.internal/v1",
       defaultBaseUrl: "https://api.example.com/v1",
       provider: "example",
     });
-    const deniedLocal = resolveProviderHttpRequestConfig({
+    const deniedLocal = resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: "http://127.0.0.1:11434/v1",
       defaultBaseUrl: "https://api.example.com/v1",
       provider: "example",
@@ -552,6 +553,13 @@ describe("resolveProviderHttpRequestConfig", () => {
 
     expect(custom.trustConfiguredBaseUrlOrigin).toBe(true);
     expect(deniedLocal.trustConfiguredBaseUrlOrigin).toBe(false);
+    expect(
+      resolveProviderHttpRequestConfig({
+        baseUrl: "https://models.internal/v1",
+        defaultBaseUrl: "https://api.example.com/v1",
+        provider: "example",
+      }),
+    ).not.toHaveProperty("trustConfiguredBaseUrlOrigin");
   });
 
   it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {

@@ -324,7 +324,19 @@ function sanitizeAuditContext(auditContext: string | undefined): string | undefi
   return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
 }
 
-export function resolveProviderHttpRequestConfig(params: {
+type ResolvedProviderHttpRequestConfig = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  requestConfig: ResolvedProviderRequestConfig;
+};
+
+type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
+  trustConfiguredBaseUrlOrigin: boolean;
+};
+
+function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
@@ -335,14 +347,7 @@ export function resolveProviderHttpRequestConfig(params: {
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-}): {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-  headers: Headers;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
-  trustConfiguredBaseUrlOrigin: boolean;
-} {
+}): ResolvedProviderHttpRequestConfigWithOriginTrust {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
@@ -374,6 +379,25 @@ export function resolveProviderHttpRequestConfig(params: {
       (requestConfig.policy.endpointClass === "custom" ||
         requestConfig.policy.endpointClass === "local"),
   };
+}
+
+export function resolveProviderHttpRequestConfig(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfig {
+  const resolved = resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
+  return {
+    baseUrl: resolved.baseUrl,
+    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    headers: resolved.headers,
+    dispatcherPolicy: resolved.dispatcherPolicy,
+    requestConfig: resolved.requestConfig,
+  };
+}
+
+export function resolveProviderHttpRequestConfigWithOriginTrust(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
 /**
