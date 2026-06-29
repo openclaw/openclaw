@@ -11,8 +11,11 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
+
+const log = createSubsystemLogger("gateway/chat-abort");
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -173,7 +176,13 @@ export function registerChatAbortController(params: {
               params.chatAbortControllers.delete(params.runId);
             }
           })
-          .catch(() => {
+          .catch((err) => {
+            // A rejected terminal persistence must still release the controller,
+            // but log it so operators can see DB/file-system health failures
+            // instead of losing the terminal state silently.
+            log.error?.(
+              `failed to persist terminal session state for run ${params.runId}: ${String(err)}`,
+            );
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
               params.chatAbortControllers.delete(params.runId);
             }

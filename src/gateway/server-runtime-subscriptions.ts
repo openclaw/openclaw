@@ -1,6 +1,7 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
@@ -10,6 +11,8 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+const log = createSubsystemLogger("gateway/runtime-subscriptions");
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
@@ -99,7 +102,13 @@ export function startGatewayEventSubscriptions(params: {
               entry.projectSessionTerminalPersistence = persistence;
               if (entry.registrationCleanupRequested === true) {
                 void persistence
-                  .catch(() => undefined)
+                  .catch((err) => {
+                    // Still release the entry on failure, but surface the
+                    // persistence error instead of swallowing it silently.
+                    log.error?.(
+                      `failed to persist terminal session state for run ${candidateRunId}: ${String(err)}`,
+                    );
+                  })
                   .then(() => {
                     if (params.chatAbortControllers.get(candidateRunId) === entry) {
                       params.chatAbortControllers.delete(candidateRunId);
@@ -115,7 +124,12 @@ export function startGatewayEventSubscriptions(params: {
                 sessionKey &&
                 sessionId
               ) {
-                void persistence.catch(() => {
+                void persistence.catch((err) => {
+                  // Fall back to restart recovery on failure, and log the
+                  // persistence error so the fallback is not silent.
+                  log.error?.(
+                    `failed to persist terminal session state for run ${candidateRunId}, falling back to restart recovery: ${String(err)}`,
+                  );
                   params.restartRecoveryCandidates.set(candidateRunId, {
                     runId: candidateRunId,
                     lifecycleGeneration,
