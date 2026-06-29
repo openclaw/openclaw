@@ -1058,6 +1058,48 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
+  it("does not leave both OpenRouter reasoning and DeepSeek V4 reasoning_effort", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
+        const payload = {
+          reasoning: { effort: "low" },
+          messages: [{ role: "user", content: "hello" }],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/deepseek/deepseek-v4-pro",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
+    expect(capturedPayload?.reasoning_effort).toBe("high");
+    expect(capturedPayload).not.toHaveProperty("reasoning");
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
   it("keeps OpenRouter DeepSeek V4 reasoning_effort within OpenRouter values", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];

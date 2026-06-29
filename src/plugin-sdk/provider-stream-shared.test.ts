@@ -234,6 +234,31 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  it("removes nested reasoning when writing DeepSeek V4 reasoning_effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "low" },
+      messages: [{ role: "user", content: "hello" }],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+      shouldPatchModel: () => true,
+      resolveReasoningEffort: () => "high",
+    });
+
+    void wrapped?.({} as never, {} as never, {});
+
+    expect(payload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
   it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
     const payload = {
       messages: [

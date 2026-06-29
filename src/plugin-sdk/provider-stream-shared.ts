@@ -550,6 +550,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
+      delete payload.reasoning;
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
       ensureDeepSeekV4AssistantReasoningContent(payload, {
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
