@@ -362,7 +362,7 @@ describe("createFeishuClient HTTP timeout", () => {
       },
     });
 
-    const delegated = readCallOptions(mockBaseHttpInstance);
+    const delegated = readCallOptions(mockBaseHttpInstance.request);
     expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
     expect(delegated.headers).toEqual({
       "Content-Type": "multipart/form-data",
