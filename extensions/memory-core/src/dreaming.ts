@@ -21,14 +21,14 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { MemoryDreamOutcome } from "openclaw/plugin-sdk/memory-host-events";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import type { MemoryDreamOutcome } from "openclaw/plugin-sdk/memory-host-events";
-import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
@@ -702,7 +702,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       // can distinguish failed from successful dreaming runs without parsing logs.
       await appendMemoryHostEvent(workspaceDir, {
         type: "memory.dream.completed",
-        timestamp: resolveMemoryCoreTimestamp(sweepNowMs),
+        timestamp: resolveMemoryCoreTimestamp(Date.now()),
         phase: "deep",
         outcome: "failed" as MemoryDreamOutcome,
         error: errorText,
