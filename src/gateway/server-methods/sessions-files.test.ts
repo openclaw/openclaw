@@ -671,4 +671,87 @@ describe("sessions.files RPC handlers", () => {
       fs.rmSync(outsidePath, { force: true });
     }
   });
+
+  it("excludes path-traversal files (../../etc/passwd)", async () => {
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      visit(assistantToolCall("read", { path: "../../etc/passwd" }), 2);
+      return 2;
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    // Internal file present
+    expect(payload.files.some((f: Record<string, unknown>) => f.path === "src/readme.md")).toBe(true);
+    // Path traversal file excluded
+    expect(payload.files.some((f: Record<string, unknown>) => f.path === "../../etc/passwd")).toBe(false);
+  });
+
+  it("shows missing=true for workspace-internal files that do not exist on disk", async () => {
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      visit(assistantToolCall("read", { path: "src/deleted-file.ts" }), 2);
+      return 2;
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    const missingFile = payload.files.find(
+      (f: Record<string, unknown>) => f.path === "src/deleted-file.ts",
+    );
+    expect(missingFile).toBeDefined();
+    expect(missingFile.missing).toBe(true);
+  });
+
+  it("includes files in nested workspace subdirectories", async () => {
+    writeWorkspaceFile(workspaceRoot, "deep/nested/lib/helper.ts", "export const help = true;\n");
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "deep/nested/lib/helper.ts" }), 1);
+      return 1;
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    const nestedFile = payload.files.find(
+      (f: Record<string, unknown>) => f.path === "deep/nested/lib/helper.ts",
+    );
+    expect(nestedFile).toBeDefined();
+    expect(nestedFile.missing).toBe(false);
+  });
+
+  it("excludes files read via absolute paths that point outside the workspace", async () => {
+    const outsidePath = path.join(os.tmpdir(), `openclaw-absolute-outside-${Date.now()}.txt`);
+    fs.writeFileSync(outsidePath, "outside\n", "utf8");
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: outsidePath }), 1);
+      return 1;
+    });
+
+    try {
+      const payload = expectOkPayload(
+        await invokeSessionFilesHandler("sessions.files.list", {
+          sessionKey: "agent:main:main",
+        }),
+      );
+
+      const outsideFile = payload.files.find(
+        (f: Record<string, unknown>) => f.path === outsidePath,
+      );
+      expect(outsideFile).toBeUndefined();
+    } finally {
+      fs.rmSync(outsidePath, { force: true });
+    }
+  });
 });
