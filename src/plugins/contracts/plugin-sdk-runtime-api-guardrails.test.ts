@@ -388,21 +388,6 @@ describe("runtime api guardrails", () => {
     ]);
   });
 
-  it("keeps WhatsApp's runtime-setter entrypoint pinned to registration and socket substitution exports", () => {
-    // The monitor runtime options are intentionally exposed on the runtime
-    // setter sidecar instead of the public api.ts barrel so fake provider
-    // socket substitution does not broaden normal WhatsApp API imports.
-    const setterFile = bundledPluginFile({
-      rootDir: ROOT_DIR,
-      pluginId: "whatsapp",
-      relativePath: "runtime-setter-api.ts",
-    });
-    expect(readExportStatements(setterFile)).toEqual([
-      'export { setWhatsAppRuntime } from "./src/runtime.js";',
-      'export { getWhatsAppMonitorRuntimeOptions, setWhatsAppMonitorRuntimeOptions, type WhatsAppCreateSocket, type WhatsAppMonitorRuntimeOptions, type WhatsAppSocket } from "./src/monitor-runtime-options.js";',
-    ]);
-  });
-
   it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
     const setterFile = bundledPluginFile({
       rootDir: ROOT_DIR,

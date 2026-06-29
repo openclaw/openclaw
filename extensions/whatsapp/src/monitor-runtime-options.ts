@@ -27,9 +27,7 @@ function getWhatsAppMonitorRuntimeOptionsState(): WhatsAppMonitorRuntimeOptionsS
 }
 
 export function setWhatsAppMonitorRuntimeOptions(options?: WhatsAppMonitorRuntimeOptions): void {
-  getWhatsAppMonitorRuntimeOptionsState().options = options?.createSocket
-    ? { createSocket: options.createSocket }
-    : {};
+  getWhatsAppMonitorRuntimeOptionsState().options = { createSocket: options?.createSocket };
 }
 
 export function getWhatsAppMonitorRuntimeOptions(): WhatsAppMonitorRuntimeOptions {

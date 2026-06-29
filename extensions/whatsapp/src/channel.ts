@@ -341,7 +341,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
               channelRuntime: ctx.channelRuntime,
-              ...(monitorOptions.createSocket ? { createSocket: monitorOptions.createSocket } : {}),
+              createSocket: monitorOptions.createSocket,
             },
           );
         },
