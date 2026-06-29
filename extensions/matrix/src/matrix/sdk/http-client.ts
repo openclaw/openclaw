@@ -4,12 +4,13 @@ import type { SsrFPolicy } from "../../runtime-api.js";
 import { buildHttpError } from "./event-helpers.js";
 import { type HttpMethod, type QueryParams, performMatrixRequest } from "./transport.js";
 
+const DEFAULT_API_PREFIX = "/_matrix/client/v3";
+
 type MatrixAuthedHttpClientParams = {
   homeserver: string;
   accessToken: string;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-  apiPrefix?: string;
 };
 
 export class MatrixAuthedHttpClient {
@@ -17,14 +18,13 @@ export class MatrixAuthedHttpClient {
   private readonly accessToken: string;
   private readonly ssrfPolicy?: SsrFPolicy;
   private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
-  private readonly apiPrefix: string;
+  private readonly apiPrefix: string = DEFAULT_API_PREFIX;
 
   constructor(params: MatrixAuthedHttpClientParams) {
     this.homeserver = params.homeserver;
     this.accessToken = params.accessToken;
     this.ssrfPolicy = params.ssrfPolicy;
     this.dispatcherPolicy = params.dispatcherPolicy;
-    this.apiPrefix = params.apiPrefix ?? "/_matrix/client/v3";
   }
 
   private resolveEndpoint(endpoint: string): string {

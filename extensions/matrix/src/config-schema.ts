@@ -108,7 +108,6 @@ export const MatrixConfigSchema = z.object({
   accounts: z.record(z.string(), z.unknown()).optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
-  apiPrefix: z.string().optional(),
   network: matrixNetworkSchema,
   proxy: z.string().optional(),
   userId: z.string().optional(),

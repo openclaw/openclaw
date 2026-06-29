@@ -128,8 +128,6 @@ export type MatrixConfig = {
   network?: MatrixNetworkConfig;
   /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
   proxy?: string;
-  /** Optional Matrix API prefix. Default: "/_matrix/client/v3". Use "/_matrix/client" for servers without versioned endpoints. */
-  apiPrefix?: string;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */

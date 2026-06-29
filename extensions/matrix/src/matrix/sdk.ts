@@ -377,16 +377,13 @@ export class MatrixClient {
       autoBootstrapCrypto?: boolean;
       ssrfPolicy?: SsrFPolicy;
       dispatcherPolicy?: PinnedDispatcherPolicy;
-      apiPrefix?: string;
     } = {},
   ) {
-    const apiPrefix = (opts.apiPrefix?.trim() || undefined) ?? "/_matrix/client/v3";
     this.httpClient = new MatrixAuthedHttpClient({
       homeserver,
       accessToken,
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
-      apiPrefix,
     });
     this.localTimeoutMs = resolveMatrixLocalTimeoutMs(opts.localTimeoutMs);
     this.initialSyncLimit = opts.initialSyncLimit;
