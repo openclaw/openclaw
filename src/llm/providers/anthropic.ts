@@ -15,6 +15,7 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "../../agents/anthropic-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -909,6 +910,7 @@ function createClient(
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
       dangerouslyAllowBrowser: true,
+      fetch: buildGuardedModelFetch(model),
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -931,6 +933,7 @@ function createClient(
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
+      fetch: buildGuardedModelFetch(model),
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -952,6 +955,7 @@ function createClient(
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
+      fetch: buildGuardedModelFetch(model),
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -974,6 +978,7 @@ function createClient(
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
+      fetch: buildGuardedModelFetch(model),
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -1000,6 +1005,7 @@ function createClient(
     authToken: null,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
+    fetch: buildGuardedModelFetch(model),
     defaultHeaders: mergeHeaders(
       {
         accept: "application/json",

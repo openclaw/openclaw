@@ -1306,4 +1306,50 @@ describe("Anthropic provider", () => {
       },
     ]);
   });
+
+  describe("createClient fetch injection (5 branches)", () => {
+    it.each([
+      {
+        name: "default API key auth",
+        model: makeAnthropicModel({ provider: "anthropic" }),
+        apiKey: "sk-ant-provider",
+      },
+      {
+        name: "Cloudflare AI Gateway",
+        model: makeAnthropicModel({
+          provider: "cloudflare-ai-gateway",
+          baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
+        }),
+        apiKey: "sk-ant-provider",
+      },
+      {
+        name: "GitHub Copilot",
+        model: makeAnthropicModel({ provider: "github-copilot" }),
+        apiKey: "sk-ant-provider",
+      },
+      {
+        name: "Microsoft Foundry bearer auth",
+        model: makeAnthropicModel({ provider: "microsoft-foundry", authHeader: true }),
+        apiKey: "entra-access-token",
+      },
+      {
+        name: "OAuth token",
+        model: makeAnthropicModel({ provider: "anthropic" }),
+        apiKey: "sk-ant-oat-test",
+      },
+    ] as const)(
+      "wires buildGuardedModelFetch into $name constructor",
+      async ({ model, apiKey }) => {
+        const context = {
+          messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        } satisfies Context;
+
+        streamAnthropic(model, context, { apiKey });
+
+        await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+        const config = anthropicMockState.configs[0] as Record<string, unknown>;
+        expect(typeof config.fetch).toBe("function");
+      },
+    );
+  });
 });
