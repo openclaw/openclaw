@@ -60,6 +60,37 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("collapses and expands the Workboard controls from the compact toolbar", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    renderInto(container, props);
+    const toolbar = container.querySelector<HTMLElement>(".workboard-toolbar");
+    const toggle = container.querySelector<HTMLButtonElement>(".workboard-toolbar__toggle");
+    expect(toolbar?.classList.contains("workboard-toolbar--collapsed")).toBe(true);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".workboard-toolbar__summary-text")?.textContent).toContain(
+      "All cards",
+    );
+    expect(container.querySelector(".workboard-toolbar__health .workboard-health")).toBeNull();
+
+    toggle?.click();
+    expect(toolbar?.classList.contains("workboard-toolbar--expanded")).toBe(true);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("renders lifecycle refresh errors without replacing generic errors", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -883,8 +914,8 @@ describe("renderWorkboard", () => {
       [...container.querySelectorAll(".workboard-column h2")].map((heading) => heading.textContent),
     ).not.toContain("Blocked");
     expect(
-      container.querySelector<HTMLButtonElement>(".workboard-health__item--blocked")?.textContent,
-    ).toContain("0blocked");
+      container.querySelector<HTMLButtonElement>(".workboard-health__item--blocked"),
+    ).toBeNull();
   });
 
   it("shows an empty state and disables zero-result view presets", () => {
@@ -1559,7 +1590,7 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("treats the detail drawer as a labelled keyboard-modal dialog", async () => {
+  it("treats the detail drawer as a labelled non-modal side panel", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -1600,8 +1631,8 @@ describe("renderWorkboard", () => {
 
       const drawer = container.querySelector<HTMLElement>(".workboard-detail-drawer");
       const main = container.querySelector<HTMLElement>(".workboard-main");
-      expect(drawer?.getAttribute("role")).toBe("dialog");
-      expect(drawer?.getAttribute("aria-modal")).toBe("true");
+      expect(drawer?.getAttribute("role")).toBe("complementary");
+      expect(drawer?.hasAttribute("aria-modal")).toBe(false);
       expect(drawer?.getAttribute("aria-labelledby")).toBe("workboard-card-detail-title");
       expect(drawer?.getAttribute("aria-describedby")).toBe("workboard-card-detail-description");
       expect(container.querySelector("#workboard-card-detail-title")?.textContent).toContain(
@@ -1611,22 +1642,27 @@ describe("renderWorkboard", () => {
         "Start or link a session",
       );
       expect(document.activeElement).toBe(drawer);
-      expect(main?.hasAttribute("inert")).toBe(true);
-      expect(main?.getAttribute("aria-hidden")).toBe("true");
+      expect(main?.hasAttribute("inert")).toBe(false);
+      expect(main?.hasAttribute("aria-hidden")).toBe(false);
 
       const close = drawer!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
       const tab = dispatchKey(drawer!, "Tab");
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(close);
+      expect(tab.defaultPrevented).toBe(false);
 
-      const lastFocusable = [
-        ...drawer!.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href]"),
-      ]
-        .toReversed()
-        .find((element) => !element.hasAttribute("disabled"));
       const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
-      expect(shiftTab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(lastFocusable);
+      expect(shiftTab.defaultPrevented).toBe(false);
+
+      const chatTab = [...drawer!.querySelectorAll<HTMLButtonElement>("[role='tab']")].find(
+        (button) => button.textContent?.includes("Chat"),
+      );
+      chatTab?.click();
+      await nextFrame();
+      expect(
+        container.querySelector<HTMLTextAreaElement>(".workboard-detail__chat-input")?.placeholder,
+      ).toBe("Message this card's agent...");
+      expect(container.querySelector(".workboard-detail__chat-context")?.textContent).toContain(
+        "workboard:default:card-1",
+      );
 
       dispatchKey(drawer!, "Escape");
       await nextFrame();

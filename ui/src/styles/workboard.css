@@ -19,6 +19,34 @@
   min-height: 0;
 }
 
+@media (min-width: 861px) {
+  .workboard--detail-open {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 42vw, 460px);
+    align-items: stretch;
+    column-gap: 12px;
+  }
+
+  .workboard--detail-open .workboard-main {
+    min-width: 0;
+  }
+
+  .workboard--detail-open .workboard-detail-drawer {
+    position: sticky;
+    inset: auto;
+    top: 0;
+    align-self: start;
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    pointer-events: auto;
+  }
+
+  .workboard--detail-open .workboard-detail {
+    max-height: calc(100dvh - 24px);
+    border-radius: 8px 0 0 8px;
+  }
+}
+
 .workboard-sr-only {
   position: absolute;
   width: 1px;
@@ -33,17 +61,54 @@
 }
 
 .workboard-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.workboard-toolbar {
+  display: grid;
+  gap: 8px;
   padding: 9px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 56%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel-strong) 64%, var(--panel) 36%);
+}
+
+.workboard-toolbar__summary,
+.workboard-toolbar__body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.workboard-toolbar__summary {
+  min-height: var(--workboard-control-height);
+}
+
+.workboard-toolbar__toggle {
+  flex: 0 0 var(--workboard-control-height);
+  min-width: var(--workboard-control-height);
+}
+
+.workboard-toolbar__summary-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-toolbar__health {
+  min-width: 0;
+  max-width: min(50vw, 520px);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.workboard-toolbar__body {
+  justify-content: space-between;
+}
+
+.workboard-toolbar--collapsed .workboard-toolbar__body {
+  display: none;
 }
 
 .workboard-toolbar__filters,
@@ -103,6 +168,12 @@
   padding: 0 2px;
 }
 
+.workboard-health--compact {
+  flex-wrap: nowrap;
+  min-height: 0;
+  padding: 0;
+}
+
 .workboard-health__item {
   --workboard-health-color: var(--border-strong);
   display: inline-flex;
@@ -124,6 +195,12 @@
     background var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
+}
+
+.workboard-health--compact .workboard-health__item {
+  min-height: 24px;
+  padding: 2px 7px;
+  white-space: nowrap;
 }
 
 .workboard-health__item:hover {
@@ -1363,6 +1440,17 @@
   line-height: 1.25;
 }
 
+.workboard-detail__tabs {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+
+.workboard-detail__tabs .btn {
+  flex: 1;
+  justify-content: center;
+}
+
 .workboard-detail__section {
   display: grid;
   gap: 8px;
@@ -1489,6 +1577,57 @@
   resize: vertical;
 }
 
+.workboard-detail__chat {
+  gap: 12px;
+}
+
+.workboard-detail__chat-session,
+.workboard-detail__chat-form {
+  display: grid;
+  gap: 8px;
+}
+
+.workboard-detail__chat-session {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workboard-detail__chat-session span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-detail__chat-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workboard-detail__chat-context code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard textarea.input.workboard-detail__chat-input {
+  width: 100%;
+  min-height: 156px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.workboard-detail__chat-form .btn {
+  justify-content: center;
+}
+
 .workboard-detail__actions {
   display: grid;
   gap: 8px;
@@ -1525,7 +1664,10 @@
   }
 
   .workboard-toolbar {
-    display: flex;
+    align-items: stretch;
+  }
+
+  .workboard-toolbar__body {
     flex-direction: column;
     align-items: stretch;
   }

@@ -73,6 +73,8 @@ export const WORKBOARD_ENGINE_MODELS = {
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 
+const WORKBOARD_UI_CLAIM_OWNER = "workboard-ui";
+
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[number];
@@ -414,7 +416,12 @@ export type WorkboardUiState = {
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
   detailCardId: string | null;
+  detailTab: "details" | "chat";
   detailCommentBody: string;
+  detailChatDraft: string;
+  detailChatSending: boolean;
+  detailChatError: string | null;
+  toolbarExpanded: boolean;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
@@ -794,7 +801,12 @@ function createDefaultState(): WorkboardUiState {
     draftTemplateId: "",
     draftCommentBody: "",
     detailCardId: null,
+    detailTab: "details",
     detailCommentBody: "",
+    detailChatDraft: "",
+    detailChatSending: false,
+    detailChatError: null,
+    toolbarExpanded: false,
     busyCardIds: new Set(),
     draggedCardId: null,
     syncingCardIds: new Set(),
@@ -1499,6 +1511,18 @@ function normalizeCardPayload(payload: unknown): WorkboardCard {
     throw new Error("workboard response did not include a card");
   }
   return card;
+}
+
+function normalizeClaimPayload(payload: unknown): { card: WorkboardCard; token: string } {
+  const card = normalizeCardPayload(payload);
+  const token =
+    isRecord(payload) && typeof payload.token === "string" && payload.token.trim()
+      ? payload.token.trim()
+      : "";
+  if (!token) {
+    throw new Error("workboard claim response did not include a token");
+  }
+  return { card, token };
 }
 
 function normalizeTaskStatus(value: unknown): WorkboardTaskStatus | null {
@@ -3709,6 +3733,25 @@ function buildCardPrompt(card: WorkboardCard): string {
   return lines.join("\n");
 }
 
+function buildClaimedCardPrompt(params: {
+  card: WorkboardCard;
+  ownerId: string;
+  token: string;
+}): string {
+  return [
+    buildCardPrompt(params.card),
+    "",
+    "## Worker protocol",
+    `Card id: ${params.card.id}`,
+    `Claim ownerId: ${params.ownerId}`,
+    `Claim token: ${params.token}`,
+    "",
+    "Heartbeat with workboard_heartbeat using the card id and token while working.",
+    "When done, call workboard_complete with the card id, token, summary, and proof.",
+    "If blocked, call workboard_block with the card id, token, and reason.",
+  ].join("\n");
+}
+
 function buildCardSessionLabel(card: WorkboardCard): string {
   const suffix = card.id.trim().slice(0, 8) || "card";
   const title = card.title.trim() || "Workboard card";
@@ -3744,6 +3787,40 @@ function buildCardRunIdempotencyKey(card: WorkboardCard): string {
   const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
   return `workboard:${boardId}:${cardId}:${card.updatedAt}`;
+}
+
+function buildCardChatIdempotencyKey(card: WorkboardCard, message: string): string {
+  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
+  const cardId = sanitizeSessionSegment(card.id, "card");
+  let hash = 0;
+  for (let index = 0; index < message.length; index += 1) {
+    hash = (hash * 31 + message.charCodeAt(index)) | 0;
+  }
+  return `workboard:${boardId}:${cardId}:chat:${Date.now()}:${Math.abs(hash).toString(36)}`;
+}
+
+function buildCardChatMessage(card: WorkboardCard, message: string): string {
+  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
+  const workUnitKey = `workboard:${boardId}:${sanitizeSessionSegment(card.id, "card")}`;
+  const contextLines = [
+    "## Workboard context",
+    `Work unit key: ${workUnitKey}`,
+    `Card id: ${card.id}`,
+    `Title: ${card.title}`,
+    `Status: ${card.status}`,
+    `Priority: ${card.priority}`,
+    card.agentId ? `Assigned agent: ${card.agentId}` : "Assigned agent: default",
+    (card.sessionKey ?? card.execution?.sessionKey)
+      ? `Session key: ${card.sessionKey ?? card.execution?.sessionKey}`
+      : "",
+    (card.runId ?? card.execution?.runId) ? `Run id: ${card.runId ?? card.execution?.runId}` : "",
+    card.taskId ? `Gateway task id: ${card.taskId}` : "",
+  ].filter(Boolean);
+  const notes = card.notes?.trim();
+  if (notes) {
+    contextLines.push("", "## Card notes", notes);
+  }
+  return [...contextLines, "", "## User message", message].join("\n");
 }
 
 function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
@@ -3884,7 +3961,10 @@ export async function startWorkboardCard(params: {
   invalidateWorkboardLoads(params.host);
   state.busyCardIds.add(params.card.id);
   params.requestUpdate?.();
-  let preflightCard: WorkboardCard | null = null;
+  let claimedCard: WorkboardCard | null = null;
+  let claimToken: string | null = null;
+  const assignedAgentId = params.card.agentId?.trim();
+  let claimOwnerId = assignedAgentId || WORKBOARD_UI_CLAIM_OWNER;
   let createdSessionKey: string | null = null;
   let createdRunId: string | undefined;
   try {
@@ -3896,15 +3976,16 @@ export async function startWorkboardCard(params: {
     const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
     let card = params.card;
     if (mode === "autonomous") {
-      const preflightPayload = await params.client.request("workboard.cards.update", {
+      const claimPayload = await params.client.request("workboard.cards.claim", {
         id: params.card.id,
-        patch: { status: nextCardStatus },
+        ownerId: claimOwnerId,
       });
-      preflightCard = normalizeCardPayload(preflightPayload);
-      if (preflightCard) {
-        replaceCard(state, preflightCard);
-        card = preflightCard;
-      }
+      const claim = normalizeClaimPayload(claimPayload);
+      claimedCard = claim.card;
+      claimToken = claim.token;
+      claimOwnerId = claimedCard.metadata?.claim?.ownerId || claimOwnerId;
+      replaceCard(state, claimedCard);
+      card = assignedAgentId ? claimedCard : { ...claimedCard, agentId: undefined };
     }
     const created =
       mode === "autonomous"
@@ -3913,7 +3994,10 @@ export async function startWorkboardCard(params: {
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
             ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-            message: buildCardPrompt(card),
+            message:
+              claimToken && mode === "autonomous"
+                ? buildClaimedCardPrompt({ card, ownerId: claimOwnerId, token: claimToken })
+                : buildCardPrompt(card),
             deliver: false,
             bootstrapContextMode: "lightweight",
             idempotencyKey: buildCardRunIdempotencyKey(card),
@@ -3957,6 +4041,7 @@ export async function startWorkboardCard(params: {
         ...(sessionKey ? { sessionKey } : {}),
         runId: runId ?? null,
         taskId: task?.taskId ?? null,
+        ...(mode === "autonomous" && !assignedAgentId ? { agentId: null } : {}),
         ...(engine
           ? {
               execution: buildWorkboardExecution({
@@ -3990,16 +4075,12 @@ export async function startWorkboardCard(params: {
         // Preserve the card-start failure; the user-facing repair is the rollback below.
       }
     }
-    if (preflightCard) {
+    if (claimedCard && claimToken) {
       try {
-        const rollbackPayload = await params.client.request("workboard.cards.update", {
+        const rollbackPayload = await params.client.request("workboard.cards.release", {
           id: params.card.id,
-          patch: {
-            status: params.card.status,
-            startedAt: params.card.startedAt ?? null,
-            completedAt: params.card.completedAt ?? null,
-            ...(params.card.execution !== undefined ? { execution: params.card.execution } : {}),
-          },
+          token: claimToken,
+          status: params.card.status,
         });
         replaceCard(state, normalizeCardPayload(rollbackPayload) ?? params.card);
       } catch {
@@ -4010,6 +4091,72 @@ export async function startWorkboardCard(params: {
     return null;
   } finally {
     state.busyCardIds.delete(params.card.id);
+    params.requestUpdate?.();
+  }
+}
+
+export async function sendWorkboardCardChat(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  card: WorkboardCard;
+  message: string;
+  requestUpdate?: () => void;
+}): Promise<string | null> {
+  const state = getWorkboardState(params.host);
+  const message = params.message.trim();
+  if (
+    !params.client ||
+    !message ||
+    state.dispatching ||
+    state.detailChatSending ||
+    state.busyCardIds.has(params.card.id)
+  ) {
+    return null;
+  }
+
+  state.detailChatSending = true;
+  state.detailChatError = null;
+  params.requestUpdate?.();
+  try {
+    const currentSessionKey = workboardCardSessionKey(params.card);
+    const sessionKey = currentSessionKey ?? buildCardTaskSessionKey(params.card);
+    const result = await params.client.request("agent", {
+      sessionKey,
+      ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
+      label: buildCardSessionLabel(params.card),
+      message: buildCardChatMessage(params.card, message),
+      deliver: false,
+      bootstrapContextMode: "lightweight",
+      idempotencyKey: buildCardChatIdempotencyKey(params.card, message),
+    });
+    const nextSessionKey =
+      isRecord(result) && normalizeString(result.sessionKey)
+        ? normalizeString(result.sessionKey)
+        : isRecord(result) && normalizeString(result.key)
+          ? normalizeString(result.key)
+          : sessionKey;
+    const runId = isRecord(result) ? normalizeString(result.runId) : null;
+    const patch: Record<string, unknown> = {};
+    if (nextSessionKey && nextSessionKey !== currentSessionKey) {
+      patch.sessionKey = nextSessionKey;
+    }
+    if (runId && runId !== workboardCardRunId(params.card)) {
+      patch.runId = runId;
+    }
+    if (Object.keys(patch).length > 0) {
+      const payload = await params.client.request("workboard.cards.update", {
+        id: params.card.id,
+        patch,
+      });
+      replaceCard(state, normalizeCardPayload(payload));
+    }
+    state.detailChatDraft = "";
+    return nextSessionKey;
+  } catch (error) {
+    state.detailChatError = formatError(error);
+    return null;
+  } finally {
+    state.detailChatSending = false;
     params.requestUpdate?.();
   }
 }

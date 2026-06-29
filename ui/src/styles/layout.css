@@ -1319,7 +1319,8 @@
 .content--workboard {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-bottom: 16px;
 }
 

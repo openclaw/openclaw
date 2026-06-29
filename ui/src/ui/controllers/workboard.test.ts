@@ -18,6 +18,7 @@ import {
   moveWorkboardCard,
   refreshWorkboard,
   saveWorkboardCardDraft,
+  sendWorkboardCardChat,
   startWorkboardCard,
   stopWorkboardLifecycleRefresh,
   stopWorkboardPolling,
@@ -51,6 +52,10 @@ function createDeferred<T>() {
     throw new Error("Expected deferred resolver");
   }
   return { promise, resolve };
+}
+
+function claimResponse(card: WorkboardCard, token = "claim-token") {
+  return { card, token };
 }
 
 const sampleCard: WorkboardCard = {
@@ -3483,6 +3488,7 @@ describe("workboard controller", () => {
     const client = createClient({
       agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
       "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.claim": claimResponse(running),
       "workboard.cards.update": { card: running },
     });
 
@@ -3495,10 +3501,10 @@ describe("workboard controller", () => {
     expect(sessionKey).toBe(sampleTaskSessionKey);
     expect(client.request).toHaveBeenNthCalledWith(
       1,
-      "workboard.cards.update",
+      "workboard.cards.claim",
       expect.objectContaining({
         id: "card-1",
-        patch: { status: "running" },
+        ownerId: "workboard-ui",
       }),
     );
     expect(client.request).toHaveBeenNthCalledWith(
@@ -3511,7 +3517,23 @@ describe("workboard controller", () => {
         idempotencyKey: "workboard:default:card-1:1",
       }),
     );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("Claim token: claim-token"),
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("workboard_complete with the card id"),
+        idempotencyKey: "workboard:default:card-1:1",
+      }),
+    );
     expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("model");
+    expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("agentId");
     expect(client.request).toHaveBeenNthCalledWith(3, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(
       4,
@@ -3526,6 +3548,72 @@ describe("workboard controller", () => {
       }),
     );
     expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
+  });
+
+  it("sends detail chat through the card session binding", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      agentId: "bo",
+      sessionKey: "agent:bo:subagent:workboard-default-card-1",
+    } satisfies WorkboardCard;
+    const updated = { ...linked, runId: "run-chat" };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    state.detailChatDraft = "please check the proof";
+    const client = createClient((method) => {
+      if (method === "agent") {
+        return { sessionKey: linked.sessionKey, runId: "run-chat" };
+      }
+      if (method === "workboard.cards.update") {
+        return { card: updated };
+      }
+      return {};
+    });
+
+    const sessionKey = await sendWorkboardCardChat({
+      host,
+      client: client as never,
+      card: linked,
+      message: state.detailChatDraft,
+    });
+
+    expect(sessionKey).toBe(linked.sessionKey);
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "agent",
+      expect.objectContaining({
+        agentId: "bo",
+        sessionKey: linked.sessionKey,
+        label: "Build board (card-1)",
+        message: expect.stringContaining("Work unit key: workboard:default:card-1"),
+        deliver: false,
+        bootstrapContextMode: "lightweight",
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("Card id: card-1"),
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("## User message\nplease check the proof"),
+      }),
+    );
+    expect(
+      String((client.request.mock.calls[0]?.[1] as { idempotencyKey?: unknown }).idempotencyKey),
+    ).toMatch(/^workboard:default:card-1:chat:/);
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { runId: "run-chat" },
+    });
+    expect(state.detailChatDraft).toBe("");
+    expect(state.cards[0]?.runId).toBe("run-chat");
   });
 
   it("starts reassigned cards with the current task session key", async () => {
@@ -3548,6 +3636,7 @@ describe("workboard controller", () => {
       "tasks.list": {
         tasks: [{ ...sampleTask, childSessionKey: expectedSessionKey }],
       },
+      "workboard.cards.claim": claimResponse(running),
       "workboard.cards.update": { card: running },
     });
 
@@ -3580,6 +3669,9 @@ describe("workboard controller", () => {
     };
     let taskLists = 0;
     const client = createClient((method) => {
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
+      }
       if (method === "agent") {
         return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
       }
@@ -3618,6 +3710,9 @@ describe("workboard controller", () => {
       runId: "run-1",
     } satisfies WorkboardCard;
     const client = createClient((method) => {
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
+      }
       if (method === "agent") {
         return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
       }
@@ -3671,6 +3766,9 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return { cards: [parent, child], statuses: ["todo", "running", "done"] };
       }
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
+      }
       if (method === "agent") {
         return { sessionKey: "subagent:workboard-default-child-1", runId: "run-1" };
       }
@@ -3691,8 +3789,8 @@ describe("workboard controller", () => {
     expect(sessionKey).toBe("subagent:workboard-default-child-1");
     expect(client.request).toHaveBeenNthCalledWith(
       1,
-      "workboard.cards.update",
-      expect.objectContaining({ id: child.id, patch: { status: "running" } }),
+      "workboard.cards.claim",
+      expect.objectContaining({ id: child.id, ownerId: "workboard-ui" }),
     );
     expect(client.request).toHaveBeenNthCalledWith(
       2,
@@ -3704,7 +3802,7 @@ describe("workboard controller", () => {
   it("does not create a session when the gateway rejects start preflight", async () => {
     const host = {};
     const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
+      if (method === "workboard.cards.claim") {
         throw new Error("Parent cards must be done before starting this card.");
       }
       return { key: "agent:main:dashboard:1" };
@@ -3719,8 +3817,8 @@ describe("workboard controller", () => {
     expect(sessionKey).toBeNull();
     expect(client.request).toHaveBeenCalledTimes(1);
     expect(client.request).toHaveBeenCalledWith(
-      "workboard.cards.update",
-      expect.objectContaining({ patch: { status: "running" } }),
+      "workboard.cards.claim",
+      expect.objectContaining({ id: "card-1", ownerId: "workboard-ui" }),
     );
     expect(getWorkboardState(host).error).toBe(
       "Parent cards must be done before starting this card.",
@@ -3730,14 +3828,15 @@ describe("workboard controller", () => {
   it("rolls back the running preflight when task run creation fails", async () => {
     const host = {};
     const running = { ...sampleCard, status: "running" } satisfies WorkboardCard;
-    let updateCalls = 0;
     const client = createClient((method) => {
-      if (method === "workboard.cards.update") {
-        updateCalls += 1;
-        return { card: updateCalls === 1 ? running : sampleCard };
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
       }
       if (method === "agent") {
         throw new Error("gateway disconnected");
+      }
+      if (method === "workboard.cards.release") {
+        return { card: sampleCard };
       }
       return {};
     });
@@ -3751,17 +3850,23 @@ describe("workboard controller", () => {
     expect(sessionKey).toBeNull();
     expect(client.request).toHaveBeenNthCalledWith(
       1,
-      "workboard.cards.update",
-      expect.objectContaining({ patch: { status: "running" } }),
+      "workboard.cards.claim",
+      expect.objectContaining({ id: "card-1", ownerId: "workboard-ui" }),
     );
     expect(client.request).toHaveBeenNthCalledWith(
       3,
+      "workboard.cards.release",
+      expect.objectContaining({
+        id: "card-1",
+        token: "claim-token",
+        status: "todo",
+      }),
+    );
+    expect(client.request).not.toHaveBeenCalledWith(
       "workboard.cards.update",
       expect.objectContaining({
         patch: expect.objectContaining({
           status: "todo",
-          startedAt: null,
-          completedAt: null,
         }),
       }),
     );
@@ -3772,17 +3877,12 @@ describe("workboard controller", () => {
   it("rolls back the running preflight when final session link update fails", async () => {
     const host = {};
     const running = { ...sampleCard, status: "running" } satisfies WorkboardCard;
-    let updateCalls = 0;
     const client = createClient((method) => {
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
+      }
       if (method === "workboard.cards.update") {
-        updateCalls += 1;
-        if (updateCalls === 1) {
-          return { card: running };
-        }
-        if (updateCalls === 2) {
-          throw new Error("write conflict");
-        }
-        return { card: sampleCard };
+        throw new Error("write conflict");
       }
       if (method === "agent") {
         return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
@@ -3792,6 +3892,9 @@ describe("workboard controller", () => {
       }
       if (method === "chat.abort") {
         return { aborted: true, runIds: ["run-1"] };
+      }
+      if (method === "workboard.cards.release") {
+        return { card: sampleCard };
       }
       return {};
     });
@@ -3809,13 +3912,11 @@ describe("workboard controller", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(
       6,
-      "workboard.cards.update",
+      "workboard.cards.release",
       expect.objectContaining({
-        patch: expect.objectContaining({
-          status: "todo",
-          startedAt: null,
-          completedAt: null,
-        }),
+        id: "card-1",
+        token: "claim-token",
+        status: "todo",
       }),
     );
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
@@ -3939,6 +4040,9 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return { cards: [dueScheduled], statuses: ["scheduled", "running", "done"] };
       }
+      if (method === "workboard.cards.claim") {
+        return claimResponse(dueRunning);
+      }
       if (method === "agent") {
         return {
           sessionKey: "subagent:workboard-default-scheduled-3",
@@ -4004,6 +4108,7 @@ describe("workboard controller", () => {
     const client = createClient({
       agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
       "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.claim": claimResponse(running),
       "workboard.cards.update": { card: running },
     });
 
@@ -4016,9 +4121,10 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(
       1,
-      "workboard.cards.update",
+      "workboard.cards.claim",
       expect.objectContaining({
-        patch: { status: "running" },
+        id: "card-1",
+        ownerId: "workboard-ui",
       }),
     );
     expect(client.request).toHaveBeenNthCalledWith(
@@ -4081,6 +4187,7 @@ describe("workboard controller", () => {
             },
           ],
         },
+        "workboard.cards.claim": claimResponse({ ...previous, status: "running" }),
         "workboard.cards.update": { card: previous },
       });
 
@@ -4233,8 +4340,11 @@ describe("workboard controller", () => {
 
   it("rolls back when the Gateway does not return a task run id", async () => {
     const host = {};
-    let updateCalls = 0;
+    const running = { ...sampleCard, status: "running" } satisfies WorkboardCard;
     const client = createClient((method) => {
+      if (method === "workboard.cards.claim") {
+        return claimResponse(running);
+      }
       if (method === "agent") {
         return {
           sessionKey: sampleTaskSessionKey,
@@ -4242,9 +4352,8 @@ describe("workboard controller", () => {
           runError: { message: "provider unavailable" },
         };
       }
-      if (method === "workboard.cards.update") {
-        updateCalls += 1;
-        return { card: updateCalls === 1 ? { ...sampleCard, status: "running" } : sampleCard };
+      if (method === "workboard.cards.release") {
+        return { card: sampleCard };
       }
       return {};
     });
@@ -4259,8 +4368,8 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(2, "agent", expect.any(Object));
     expect(client.request).toHaveBeenNthCalledWith(
       3,
-      "workboard.cards.update",
-      expect.objectContaining({ patch: expect.objectContaining({ status: "todo" }) }),
+      "workboard.cards.release",
+      expect.objectContaining({ id: "card-1", token: "claim-token", status: "todo" }),
     );
     expect(getWorkboardState(host).error).toBe("Gateway agent method returned an invalid runId.");
   });
@@ -4723,6 +4832,9 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.delete") {
         return { deleted: true };
       }
+      if (method === "workboard.cards.claim") {
+        return claimResponse({ ...child, status: "running", metadata: undefined });
+      }
       if (method === "sessions.create") {
         return { key: "agent:main:dashboard:child", runId: "run-child" };
       }
@@ -4749,10 +4861,10 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(
       1,
-      "workboard.cards.update",
+      "workboard.cards.claim",
       expect.objectContaining({
         id: child.id,
-        patch: { status: "running" },
+        ownerId: "workboard-ui",
       }),
     );
   });
