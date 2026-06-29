@@ -2,10 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseFfprobeVideoDimensions, probeVideoDimensions } from "./video-dimensions.js";
 
-const { runFfprobe, open, unlink } = vi.hoisted(() => ({
+const { runFfprobe, open, unlink, resolvePreferredOpenClawTmpDir } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
   open: vi.fn(),
   unlink: vi.fn(),
+  resolvePreferredOpenClawTmpDir: vi.fn(),
 }));
 
 vi.mock("./ffmpeg-exec.js", () => ({
@@ -17,6 +18,10 @@ vi.mock("node:fs/promises", () => ({
   unlink,
 }));
 
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir,
+}));
+
 const handle = {
   writeFile: vi.fn().mockResolvedValue(undefined),
   close: vi.fn().mockResolvedValue(undefined),
@@ -26,6 +31,7 @@ afterEach(() => {
   vi.clearAllMocks();
   handle.writeFile.mockResolvedValue(undefined);
   handle.close.mockResolvedValue(undefined);
+  resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
 });
 
 describe("parseFfprobeVideoDimensions", () => {
@@ -56,7 +62,7 @@ describe("probeVideoDimensions", () => {
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
 
     expect(open).toHaveBeenCalledTimes(1);
-    const tempPath = open.mock.calls[0]![0] as string;
+    const tempPath = open.mock.calls[0][0];
     expect(tempPath).toContain("openclaw-ffprobe-");
     expect(tempPath).toContain(".bin");
     expect(handle.writeFile).toHaveBeenCalledWith(buffer);

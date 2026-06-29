@@ -1,8 +1,8 @@
 // Video dimension helpers read video dimensions through ffprobe.
 import { randomUUID } from "node:crypto";
 import { open, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 /** Positive video dimensions reported by ffprobe for the first video stream. */
@@ -34,7 +34,7 @@ export function parseFfprobeVideoDimensions(stdout: string): VideoDimensions | u
  * Temp-file probing resolves dimensions reliably for any buffer size.
  */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const tempPath = join(tmpdir(), `openclaw-ffprobe-${randomUUID()}.bin`);
+  const tempPath = join(resolvePreferredOpenClawTmpDir(), `openclaw-ffprobe-${randomUUID()}.bin`);
   let handle;
   try {
     handle = await open(tempPath, "w", 0o600);
