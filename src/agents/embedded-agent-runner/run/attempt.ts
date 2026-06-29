@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -1536,23 +1537,32 @@ export async function runEmbeddedAttempt(
       disableTools: params.disableTools || isRawModelRun,
       toolsAllow: params.toolsAllow,
     });
-    const bundleMcpSessionRuntime = bundleMcpEnabled
-      ? await getOrCreateSessionMcpRuntime({
+    if (bundleMcpEnabled) {
+      try {
+        const bundleMcpSessionRuntime = await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-        })
-      : undefined;
-    bundleMcpRuntime = bundleMcpSessionRuntime
-      ? await materializeBundleMcpToolsForRun({
+        });
+        bundleMcpRuntime = await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
           ],
-        })
-      : undefined;
+        });
+      } catch (error) {
+        if (params.abortSignal?.aborted || isRunnerAbortError(error)) {
+          throw error;
+        }
+        const errorMessage = redactSensitiveUrlLikeString(formatErrorMessage(error));
+        log.warn(
+          `bundle-mcp tools unavailable for this attempt; continuing with core tools: ${errorMessage}`,
+        );
+        bundleMcpRuntime = undefined;
+      }
+    }
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
