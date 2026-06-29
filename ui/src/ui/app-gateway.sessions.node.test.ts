@@ -220,6 +220,30 @@ describe("handleGatewayEvent sessions.changed", () => {
     });
   });
 
+  it("keeps terminal chat refreshes scoped when the sidebar all-agents toggle is enabled", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    (
+      host as typeof host & { sidebarRecentSessionsAllAgents?: boolean }
+    ).sidebarRecentSessionsAllAgents = true;
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "agent:ops:main", agentId: "ops" });
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "agent:ops:main", agentId: "ops" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "ops",
+    });
+  });
+
   it("scopes selected-global chat session refreshes after a completed run", () => {
     loadSessionsMock.mockReset();
     handleChatEventMock.mockReset().mockReturnValue("final");
@@ -304,6 +328,31 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(clearPendingQueueItemsForRunMock).toHaveBeenCalledWith(host, "run-1");
     expect(flushChatQueueForEventMock).toHaveBeenCalledWith(host);
     expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps deferred session-message refreshes scoped when the sidebar all-agents toggle is enabled", () => {
+    loadSessionsMock.mockReset().mockResolvedValue(undefined);
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    host.chatRunId = "run-1";
+    (
+      host as typeof host & { sidebarRecentSessionsAllAgents?: boolean }
+    ).sidebarRecentSessionsAllAgents = true;
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:ops:main", agentId: "ops" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "ops",
+      publishChatRunStatus: false,
+    });
   });
 
   it("replays deferred history before flushing queued work after session completion", async () => {

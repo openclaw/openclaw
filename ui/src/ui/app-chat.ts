@@ -1230,7 +1230,7 @@ async function sendQueuedChatMessage(
       if (ack.status === "ok") {
         void loadSessions(host as unknown as SessionsState, {
           ...createChatSessionsLoadOverrides(host),
-          ...sidebarRecentSessionsListParamsForRefreshTarget(host, refreshTarget),
+          ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);

@@ -14,9 +14,9 @@ import {
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
   retryReconnectableQueuedChatSends,
+  scopedAgentListParamsForRefreshTarget,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-  sidebarRecentSessionsListParamsForRefreshTarget,
-  sidebarRecentSessionsListParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -1015,7 +1015,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
-        ...sidebarRecentSessionsListParamsForRefreshTarget(host, refreshTarget),
+        ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
       });
     }
   }
@@ -1199,7 +1199,7 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
-      ...sidebarRecentSessionsListParamsForSession(host, host.sessionKey),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
       publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
