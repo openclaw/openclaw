@@ -346,11 +346,26 @@ function getGeneratedQmdEnvOverrides(value: unknown): Record<string, string> | n
 }
 
 function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boolean {
-  if (!isQmdExecutableCommand(server.command)) {
+  const command = server.command;
+  if (!isQmdExecutableCommand(command)) {
+    return false;
+  }
+  if (typeof command === "string" && isRelativeMcporterCommandPath(command)) {
     return false;
   }
   const args = server.args;
   return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+}
+
+function isRelativeMcporterCommandPath(command: string): boolean {
+  const normalized = command.replace(/\\/g, "/");
+  if (!normalized.includes("/")) {
+    return false;
+  }
+  if (path.isAbsolute(command) || path.isAbsolute(normalized)) {
+    return false;
+  }
+  return !/^[A-Za-z]:\//.test(normalized);
 }
 
 function normalizeMcporterSerializedStdioServer(
@@ -374,16 +389,32 @@ function normalizeMcporterSerializedRemoteServer(
   server: Record<string, unknown>,
 ): Record<string, unknown> | null {
   const normalized: Record<string, unknown> = {};
+  let hasEndpoint = false;
   for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
     const value = server[key];
     if (typeof value === "string" && value.length > 0) {
       normalized[key] = value;
+      hasEndpoint = true;
     }
   }
-  if (server.headers !== undefined) {
-    normalized.headers = server.headers;
+  for (const [key, value] of Object.entries(server)) {
+    if (
+      key === "transport" ||
+      key === "baseUrl" ||
+      key === "base_url" ||
+      key === "url" ||
+      key === "serverUrl" ||
+      key === "server_url"
+    ) {
+      continue;
+    }
+    if (key === "headers" || key === "httpFetch" || key === "http_fetch") {
+      normalized[key] = value;
+      continue;
+    }
+    return null;
   }
-  return Object.keys(normalized).length > 0 ? normalized : null;
+  return hasEndpoint ? normalized : null;
 }
 
 function isQmdExecutableCommand(command: unknown): boolean {
