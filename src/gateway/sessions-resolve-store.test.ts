@@ -176,7 +176,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
       const cfg = {
-        session: { mainKey: "main" },
+        session: { mainKey: "main", store: undefined },
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
       await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "main" }), {
