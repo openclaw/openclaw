@@ -2064,6 +2064,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(chatLog.addSystem).not.toHaveBeenCalledWith("run aborted");
     });
 
+    it("renders displayable late final when loadHistory restored surrendered run as empty streaming (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      // Populate sessionRuns and streamAssembler via a delta.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      // sessions.changed "new" surrenders run-active.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      // loadHistory restored as empty in-flight streaming.
+      chatLog.hasStreamingRun.mockReturnValue(true);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late displayable final — should pass through surrender and render.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "recovered reply" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    });
+
     it("does not surrender runs on sessions.changed reset (#96979)", () => {
       const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
         {
