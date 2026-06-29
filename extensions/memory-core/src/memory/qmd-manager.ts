@@ -3425,10 +3425,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!isGeneratedQmdServer || hasUserOwnedMaterial || hasContextPathFields) {
         return {
           mode: "external",
-          useAgentQmdEnv:
-            !hasUserOwnedMaterial &&
-            isQmdMcpStdioServer(server) &&
-            !hasMcporterStdioQmdPathEnv(server),
+          useAgentQmdEnv: isQmdMcpStdioServer(server) && !hasMcporterStdioQmdPathEnv(server),
         };
       }
       return {

@@ -6112,10 +6112,17 @@ describe("QmdMemoryManager", () => {
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(args).not.toContain("--config");
-    expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(callOpts?.env?.XDG_CONFIG_HOME?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config",
+    );
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
+    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
+    expect(callOpts?.env?.XDG_CACHE_HOME?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-cache",
+    );
+    expect(callOpts?.env?.MCPORTER_DISABLE_KEEPALIVE).toBe("qmd");
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
