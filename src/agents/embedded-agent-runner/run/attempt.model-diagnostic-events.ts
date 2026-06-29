@@ -260,14 +260,15 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   } catch {
     return;
   }
-  if (type === "done") {
-    observeModelCallUsage(state, message);
-  }
-  if (!state.contentCapture?.outputMessages) {
-    return;
-  }
+  // Terminal events carry the final AssistantMessage with usage — `done` for
+  // success, `error` for aborted/error streams. Capture usage from either so
+  // iterated error-terminated calls still report the per-call usage that the
+  // model.call.error event and its OTel span already expose.
   if (message !== undefined) {
-    state.outputMessages = [cloneDiagnosticContentValue(message)];
+    observeModelCallUsage(state, message);
+    if (state.contentCapture?.outputMessages) {
+      state.outputMessages = [cloneDiagnosticContentValue(message)];
+    }
   }
 }
 
@@ -812,7 +813,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   return ((model, streamContext, options) => {
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
-    const promptStats = streamContextModelPromptStats(streamContext);
+    // Prompt stats JSON-stringify the input messages and tool definitions; only
+    // the diagnostic events consume them (plugin hooks never receive prompt
+    // stats), so skip the work when diagnostics are disabled and those events
+    // would be dropped.
+    const promptStats = areDiagnosticsEnabledForProcess()
+      ? streamContextModelPromptStats(streamContext)
+      : undefined;
     const eventBase = baseModelCallEvent(ctx, callId, trace, promptStats);
     const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
     emitModelCallStarted(eventBase, modelContent);
