@@ -8,6 +8,7 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
+  classifyProviderOAuthAuthenticationFailure,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
 
@@ -36,5 +37,23 @@ describe("oauth refresh failure hints", () => {
       provider: "openai",
       reason: "invalid_grant",
     });
+  });
+
+  it("classifies Claude CLI OAuth 401 authentication failures for re-auth guidance", () => {
+    expect(
+      classifyProviderOAuthAuthenticationFailure({
+        provider: "claude-cli",
+        message: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyProviderOAuthAuthenticationFailure({
+        provider: "anthropic",
+        message: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      }),
+    ).toBeNull();
   });
 });

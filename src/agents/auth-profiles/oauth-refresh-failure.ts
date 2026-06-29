@@ -34,6 +34,8 @@ export class OAuthRefreshFailureError extends Error {
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const CLAUDE_CLI_AUTH_FAILURE_RE =
+  /\bfailed to authenticate\b[\s\S]*\b401\b[\s\S]*\binvalid authentication credentials\b/i;
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -87,6 +89,24 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
   return {
     provider: sanitizeOAuthRefreshFailureProvider(extractOAuthRefreshFailureProvider(message)),
     reason: classifyOAuthRefreshFailureReason(message),
+  };
+}
+
+/**
+ * Claude CLI 401s come from its local OAuth login state, not inherited API keys,
+ * so route that typed provider failure through the existing re-auth hint path.
+ */
+export function classifyProviderOAuthAuthenticationFailure(params: {
+  provider: string | null | undefined;
+  message: string;
+}): OAuthRefreshFailure | null {
+  const provider = sanitizeOAuthRefreshFailureProvider(params.provider);
+  if (provider !== "claude-cli" || !CLAUDE_CLI_AUTH_FAILURE_RE.test(params.message)) {
+    return null;
+  }
+  return {
+    provider,
+    reason: "sign_in_again",
   };
 }
 

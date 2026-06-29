@@ -23,6 +23,7 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
+  classifyProviderOAuthAuthenticationFailure,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -68,6 +69,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -788,6 +790,9 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
+const CLAUDE_CLI_LOCAL_AUTH_COMMAND = "claude auth login";
+const CLAUDE_CLI_OPENCLAW_AUTH_COMMAND =
+  "openclaw models auth login --provider anthropic --method cli --set-default";
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
@@ -930,6 +935,45 @@ function buildAuthProfileFailoverFailureText(error: unknown): string | null {
   });
 }
 
+function buildOAuthFailureReplyForError(
+  error: unknown,
+  normalizedMessage: string,
+): ExternalRunFailureReply | null {
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ??
+    (isFailoverError(error)
+      ? classifyProviderOAuthAuthenticationFailure({
+          provider: error.provider,
+          message: error.rawError ?? formatErrorMessage(error),
+        })
+      : null) ??
+    classifyOAuthRefreshFailure(normalizedMessage);
+  if (!oauthRefreshFailure) {
+    return null;
+  }
+  if (oauthRefreshFailure.provider === "claude-cli") {
+    const openClawAuthCommand = formatCliCommand(CLAUDE_CLI_OPENCLAW_AUTH_COMMAND);
+    const text = oauthRefreshFailure.reason
+      ? "⚠️ Model login expired on the gateway for claude-cli."
+      : "⚠️ Model login failed on the gateway for claude-cli.";
+    return {
+      text: `${text} Re-auth with \`${CLAUDE_CLI_LOCAL_AUTH_COMMAND}\`, then refresh OpenClaw's CLI auth profile with \`${openClawAuthCommand}\`, then try again.`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+  if (oauthRefreshFailure.reason) {
+    return {
+      text: `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  return {
+    text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
+    isGenericRunnerFailure: false,
+  };
+}
+
 function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = sanitizeUserFacingText(message, { errorContext: true })
     .trim()
@@ -957,6 +1001,10 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
+  const oauthFailureReply = buildOAuthFailureReplyForError(error, normalizedMessage);
+  if (oauthFailureReply) {
+    return oauthFailureReply;
+  }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return {
@@ -970,21 +1018,6 @@ function buildExternalRunFailureReply(
   });
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
-  }
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
-  if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
-    if (oauthRefreshFailure.reason) {
-      return {
-        text: `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`,
-        isGenericRunnerFailure: false,
-      };
-    }
-    return {
-      text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
-      isGenericRunnerFailure: false,
-    };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -3131,8 +3164,14 @@ export async function runAgentTurnWithFallback(params: {
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      const oauthFailureReply =
+        !isBilling && !shouldSurfaceToControlUi
+          ? buildOAuthFailureReplyForError(err, collapseRepeatedFailureDetail(message))
+          : null;
       const providerRequestError =
-        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
+        !isBilling && !shouldSurfaceToControlUi && !oauthFailureReply
+          ? classifyProviderRequestError(err)
+          : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
@@ -3212,6 +3251,16 @@ export async function runAgentTurnWithFallback(params: {
               runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
+          }),
+        };
+      }
+      if (oauthFailureReply) {
+        takePendingLifecycleTerminal()?.emit("error", err);
+        params.replyOperation?.fail("run_failed", err);
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: oauthFailureReply.text,
           }),
         };
       }
