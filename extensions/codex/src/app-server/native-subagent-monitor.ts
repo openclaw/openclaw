@@ -937,7 +937,7 @@ export class CodexNativeSubagentMonitor {
         scheduleTranscriptPoll: false,
       });
       const childState = this.childStates.get(childThreadId);
-      if (childState && !childState.transcriptPollTimer) {
+      if (childState && !childState.transcriptPollTimer && !childState.completionDeliveryTimer) {
         candidates.push({ childThreadId, childState });
       }
     }
