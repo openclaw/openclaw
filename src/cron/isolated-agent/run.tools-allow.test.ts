@@ -1,8 +1,19 @@
 // Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import type { PluginWebSearchProviderEntry } from "../../plugins/types.js";
+vi.mock("../../web-search/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../web-search/runtime.js")>(
+    "../../web-search/runtime.js",
+  );
+  return {
+    ...actual,
+    listWebSearchProviders: (): PluginWebSearchProviderEntry[] => [],
+  };
+});
 import {
   loadRunCronIsolatedAgentTurn,
+  logWarnMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
@@ -125,6 +136,19 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+    },
+  );
+
+  it(
+    "warns when web_search is in toolsAllow but no search provider is enabled",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      logWarnMock.mockClear();
+      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(logWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("web_search is in toolsAllow"),
+      );
     },
   );
 });

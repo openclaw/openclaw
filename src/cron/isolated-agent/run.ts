@@ -886,7 +886,7 @@ async function prepareCronRunContext(params: {
       if (providers.length === 0) {
         logWarn(
           `[cron:${input.job.id}] web_search is in toolsAllow but no web search provider plugin is enabled. ` +
-            `Enable one with: openclaw plugins enable duckduckgo`,
+            `Enable a search provider plugin (e.g. via: openclaw plugins enable <id>)`,
         );
       }
     }
