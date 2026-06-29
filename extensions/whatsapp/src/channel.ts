@@ -18,7 +18,6 @@ import {
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
-import type { WhatsAppCreateSocket } from "./connection-controller.js";
 import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
@@ -47,20 +46,6 @@ import {
 } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
-
-export type WhatsAppMonitorRuntimeOptions = {
-  createSocket?: WhatsAppCreateSocket;
-};
-
-let whatsappMonitorRuntimeOptions: WhatsAppMonitorRuntimeOptions = {};
-
-export function setWhatsAppMonitorRuntimeOptions(options?: WhatsAppMonitorRuntimeOptions): void {
-  whatsappMonitorRuntimeOptions = { createSocket: options?.createSocket };
-}
-
-function getWhatsAppMonitorRuntimeOptions(): WhatsAppMonitorRuntimeOptions {
-  return { ...whatsappMonitorRuntimeOptions };
-}
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
@@ -339,7 +324,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
-          const monitorOptions = getWhatsAppMonitorRuntimeOptions();
           const { e164, jid } = (await loadWhatsAppChannelRuntime()).readWebSelfId(account.authDir);
           const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
           ctx.log?.info(`[${account.accountId}] starting provider (${identity})`);
@@ -355,7 +339,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
               channelRuntime: ctx.channelRuntime,
-              createSocket: monitorOptions.createSocket,
             },
           );
         },

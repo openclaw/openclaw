@@ -1,10 +1,5 @@
 // Whatsapp API module exposes the plugin public contract.
-export {
-  setWhatsAppMonitorRuntimeOptions,
-  whatsappPlugin,
-  type WhatsAppMonitorRuntimeOptions,
-} from "./src/channel.js";
-export type { WhatsAppCreateSocket } from "./src/connection-controller.js";
+export { whatsappPlugin } from "./src/channel.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {
   DEFAULT_WHATSAPP_MEDIA_MAX_MB,

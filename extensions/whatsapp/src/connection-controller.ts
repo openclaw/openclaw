@@ -16,7 +16,6 @@ import {
   logoutWeb,
   readWebAuthExistsForDecision,
   waitForWaConnection,
-  type WhatsAppConnectionWaitOptions,
   WhatsAppAuthUnstableError,
 } from "./session.js";
 import {
@@ -45,24 +44,6 @@ export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
-
-export type WhatsAppCreateSocketOptions = {
-  authDir?: string;
-  onQr?: (qr: string) => void;
-  getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
-  cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
-} & WhatsAppSocketTimingOptions;
-
-export type WhatsAppCreateSocket = (
-  printQr: boolean,
-  verbose: boolean,
-  opts?: WhatsAppCreateSocketOptions,
-) => Promise<WaSocket>;
-
-export type WhatsAppWaitForConnection = (
-  sock: WaSocket,
-  options?: WhatsAppConnectionWaitOptions,
-) => Promise<void>;
 
 export type ManagedWhatsAppListener = ActiveWebListener & {
   close?: () => Promise<void>;
@@ -246,8 +227,8 @@ export async function waitForWhatsAppLoginResult(params: {
   isLegacyAuthDir: boolean;
   verbose: boolean;
   runtime: RuntimeEnv;
-  waitForConnection?: WhatsAppWaitForConnection;
-  createSocket?: WhatsAppCreateSocket;
+  waitForConnection?: typeof waitForWaConnection;
+  createSocket?: typeof createWaSocket;
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
@@ -394,8 +375,6 @@ export class WhatsAppConnectionController {
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly isNonRetryableStatus: (statusCode: unknown) => boolean;
   private readonly socketTiming: Required<WhatsAppSocketTimingOptions>;
-  private readonly createSocket: WhatsAppCreateSocket;
-  private readonly waitForConnection: WhatsAppWaitForConnection;
   private readonly abortPromise?: Promise<"aborted">;
   private readonly disconnectRetryController = new AbortController();
 
@@ -417,8 +396,6 @@ export class WhatsAppConnectionController {
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
     isNonRetryableStatus?: (statusCode: unknown) => boolean;
     socketTiming?: WhatsAppSocketTimingOptions;
-    createSocket?: WhatsAppCreateSocket;
-    waitForConnection?: WhatsAppWaitForConnection;
   }) {
     this.accountId = params.accountId;
     this.authDir = params.authDir;
@@ -437,8 +414,6 @@ export class WhatsAppConnectionController {
       ...DEFAULT_WHATSAPP_SOCKET_TIMING,
       ...params.socketTiming,
     };
-    this.createSocket = params.createSocket ?? createWaSocket;
-    this.waitForConnection = params.waitForConnection ?? waitForWaConnection;
     this.socketRef = { current: null };
     this.abortPromise =
       params.abortSignal &&
@@ -563,13 +538,13 @@ export class WhatsAppConnectionController {
     let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
-      sock = await this.createSocket(false, this.verbose, {
+      sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
         ...this.socketTiming,
         ...(params.getMessage ? { getMessage: params.getMessage } : {}),
         ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
       });
-      await this.waitForConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
+      await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
 
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;

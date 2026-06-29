@@ -3,7 +3,7 @@ import type { WASocket } from "baileys";
 import type { WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
-export type WhatsAppConnectionControllerHandle = {
+type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
   getCurrentSock(): WASocket | null;
   /**

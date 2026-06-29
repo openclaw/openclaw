@@ -1,6 +1,5 @@
 // Whatsapp type declarations define plugin contracts.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { WhatsAppCreateSocket } from "../connection-controller.js";
 import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
 import type { WhatsAppSocketTimingOptions } from "../socket-timing.js";
@@ -38,7 +37,6 @@ export type WebChannelStatus = {
 
 export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
-  createSocket?: WhatsAppCreateSocket;
   socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
   transportTimeoutMs?: number;
