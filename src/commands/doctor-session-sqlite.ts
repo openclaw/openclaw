@@ -1,4 +1,3 @@
-/** Doctor submode for migrating legacy session JSON/JSONL state into SQLite. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,6 +29,7 @@ import {
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type DoctorSessionSqliteRestoreReport,
+  type SessionSqliteMigrationFailureIssue,
   type SessionSqliteMigrationMoveKind,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
@@ -42,6 +42,7 @@ import {
   readSqliteEntryCount,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
+import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 export {
   restoreSessionSqliteMigrationRun,
@@ -50,7 +51,13 @@ export {
   type DoctorSessionSqliteRestoreReport,
 } from "./doctor-session-sqlite-migration-run.js";
 
-export type DoctorSessionSqliteMode = "dry-run" | "import" | "validate" | "inspect" | "restore";
+export type DoctorSessionSqliteMode =
+  | "dry-run"
+  | "import"
+  | "validate"
+  | "inspect"
+  | "restore"
+  | "recover";
 
 export type DoctorSessionSqliteOptions = {
   allAgents?: boolean;
@@ -93,6 +100,7 @@ export type DoctorSessionSqliteReport = {
     runId: string;
   };
   mode: DoctorSessionSqliteMode;
+  supportIssue?: SessionSqliteMigrationFailureIssue;
   targets: DoctorSessionSqliteTargetReport[];
   totals: {
     archivedTranscriptFiles: number;
@@ -137,6 +145,14 @@ export async function runDoctorSessionSqlite(
       targets,
     });
   }
+  if (options.mode === "recover") {
+    return recoverDoctorSessionSqliteTargets({
+      env,
+      options,
+      targets,
+      validateTarget: (target) => inspectOrMigrateTarget({ cfg, env, mode: "validate", target }),
+    });
+  }
   const activeRun =
     options.mode === "import"
       ? createSessionSqliteMigrationRun(env, targets.map(createMigrationTargetInput))
@@ -168,8 +184,7 @@ export async function runDoctorSessionSqlite(
   return summarizeDoctorSessionSqliteReport(options.mode, reports, activeRun);
 }
 
-// Direct store migrations are already fully scoped by the path; broader agent
-// discovery needs the current runtime config boundary.
+// Direct store migrations are scoped by path; broader agent discovery needs runtime config.
 function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): OpenClawConfig {
   if (options.cfg) {
     return options.cfg;
@@ -213,7 +228,7 @@ function filterLegacySessionStoreTargets(
   targets: SessionStoreTarget[],
   mode: DoctorSessionSqliteMode,
 ): SessionStoreTarget[] {
-  if (mode === "inspect" || mode === "restore") {
+  if (mode === "inspect" || mode === "restore" || mode === "recover") {
     return targets;
   }
   return targets.filter((target) => fs.existsSync(target.storePath));
@@ -223,7 +238,7 @@ async function inspectOrMigrateTarget(params: {
   activeRun?: ActiveSessionSqliteMigrationRun;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  mode: Exclude<DoctorSessionSqliteMode, "restore">;
+  mode: Exclude<DoctorSessionSqliteMode, "restore" | "recover">;
   target: SessionStoreTarget;
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
