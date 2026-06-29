@@ -108,6 +108,39 @@ describe("parseTelegramTarget", () => {
       chatType: "group",
     });
   });
+
+  it("rejects multi-colon targets via fallback colon regex", () => {
+    // "chatId:topic:42:99" — 4 segments; topic regex doesn't match
+    // (doesn't end with :topic:N), and colon regex must not greedily
+    // swallow ":topic:42" into chatId.
+    expect(parseTelegramTarget("chatId:topic:42:99")).toEqual({
+      chatId: "chatId:topic:42:99",
+      chatType: "unknown",
+    });
+  });
+
+  it("rejects deeply nested multi-colon targets", () => {
+    expect(parseTelegramTarget("a:b:c:d:e:42")).toEqual({
+      chatId: "a:b:c:d:e:42",
+      chatType: "unknown",
+    });
+  });
+
+  it("regression: chatId:topic:N still works", () => {
+    expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 456,
+      chatType: "group",
+    });
+  });
+
+  it("regression: chatId:N (colon format) still works", () => {
+    expect(parseTelegramTarget("-1001234567890:99")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      chatType: "group",
+    });
+  });
 });
 
 describe("telegram numeric target normalization", () => {

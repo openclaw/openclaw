@@ -124,7 +124,9 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     };
   }
 
-  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
+  // `[^:]+` prevents greedy misparse of multi-colon targets like "chatId:topic:42:99"
+  // where the fallback would otherwise silently embed ":topic:42" into chatId.
+  const colonMatch = /^([^:]+):(\d+)$/.exec(normalized);
   if (colonMatch) {
     const chatId = colonMatch[1];
     const threadIdText = colonMatch[2];
