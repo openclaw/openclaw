@@ -97,9 +97,7 @@ const ACP_TRANSCRIPT_USAGE = {
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
-function shouldSuppressEmbeddedLiveStreamOutput(params: {
-  opts: AgentCommandOpts;
-}): boolean {
+function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
 
@@ -489,6 +487,8 @@ export function runAgentAttempt(params: {
   runTimeoutOverrideMs?: number;
   runId: string;
   lifecycleGeneration: string;
+  /** Run this attempt LLM-only (no built-in tools), e.g. an announce relay turn. */
+  disableTools?: boolean;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -829,7 +829,7 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools: params.opts.modelRun === true || params.disableTools === true,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,

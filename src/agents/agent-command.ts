@@ -138,6 +138,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
+import { isSubagentAnnounceCompletionHandoff } from "./subagent-announce-handoff.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -1939,6 +1940,13 @@ async function agentCommandInternal(
               runTimeoutOverrideMs,
               runId,
               lifecycleGeneration,
+              // A subagent-completion announce handoff relays frozen child output
+              // into the parent topic; it must run tool-free so a child cannot
+              // drive parent-topic bash/apply_patch through the delivery turn.
+              disableTools: isSubagentAnnounceCompletionHandoff({
+                inputProvenance: opts.inputProvenance,
+                internalEvents: opts.internalEvents,
+              }),
               opts,
               runContext,
               spawnedBy,

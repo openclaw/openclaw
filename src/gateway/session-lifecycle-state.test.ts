@@ -108,6 +108,48 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("flags a persisted announce delivery run on start so restart recovery can skip it", () => {
+    const patch = derivePersistedSessionLifecyclePatch({
+      entry: { updatedAt: 1_000, startedAt: 1_050 },
+      event: {
+        ts: 2_000,
+        runId: "announce:v1:agent:openclaw:subagent:abc:run-1",
+        lifecycleGeneration: "gen-1",
+        data: { phase: "start", startedAt: 1_900 },
+      },
+    });
+    expect(patch.status).toBe("running");
+    expect(patch.announceLastRun).toBe(true);
+  });
+
+  it("clears the announce marker when a normal human turn starts", () => {
+    const patch = derivePersistedSessionLifecyclePatch({
+      entry: { updatedAt: 1_000, startedAt: 1_050, announceLastRun: true },
+      event: {
+        ts: 2_000,
+        runId: "human-run-1",
+        lifecycleGeneration: "gen-1",
+        data: { phase: "start", startedAt: 1_900 },
+      },
+    });
+    expect(patch.status).toBe("running");
+    expect(patch.announceLastRun).toBeUndefined();
+  });
+
+  it("clears the announce marker when the announce run reaches a terminal state", () => {
+    const patch = derivePersistedSessionLifecyclePatch({
+      entry: { updatedAt: 1_000, startedAt: 1_050, announceLastRun: true },
+      event: {
+        ts: 2_000,
+        runId: "announce:v1:agent:openclaw:subagent:abc:run-1",
+        lifecycleGeneration: "gen-1",
+        data: { phase: "end", startedAt: 1_050, endedAt: 1_900 },
+      },
+    });
+    expect(patch.status).toBe("done");
+    expect(patch.announceLastRun).toBeUndefined();
+  });
+
   it("marks completed lifecycle end events as done with terminal timing", () => {
     expect(
       deriveGatewaySessionLifecycleSnapshot({

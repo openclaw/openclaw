@@ -40,6 +40,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isAnnounceRunId } from "./announce-idempotency.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -376,6 +377,52 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     log.warn(`marked ${result.marked} startup-orphaned main session(s) for restart recovery`);
   }
   return result;
+}
+
+function isAnnounceInterruptedEntry(entry: SessionEntry): boolean {
+  // A subagent-completion announce turn runs on the parent topic session and
+  // reuses its `announce:v1:...` idempotency key as the gateway run id. It is a
+  // delivery turn, not a human turn, so it must never be revived as a
+  // "[System] previous turn interrupted" recovery task. The persisted
+  // announceLastRun marker survives a full restart; restartRecoveryRuns covers
+  // the in-process drain path where the marker may not have been written yet.
+  if (entry.announceLastRun === true) {
+    return true;
+  }
+  const runs = entry.restartRecoveryRuns;
+  return Array.isArray(runs) && runs.length > 0 && runs.every((run) => isAnnounceRunId(run.runId));
+}
+
+async function reconcileAnnounceInterruptedSession(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<void> {
+  await applyRestartRecoveryLifecycle({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry || entry.status !== "running") {
+        return { result: undefined };
+      }
+      // Clear the running marker so the topic is responsive again. The announce
+      // turn was aborted by the restart; the underlying human session is idle.
+      const now = Date.now();
+      entry.status = "killed";
+      entry.abortedLastRun = false;
+      entry.announceLastRun = undefined;
+      entry.restartRecoveryRuns = undefined;
+      entry.endedAt = now;
+      entry.updatedAt = now;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  log.info(`reconciled interrupted announce main session to non-running: ${params.sessionKey}`);
 }
 
 function getMessageRole(message: unknown): string | undefined {
@@ -778,6 +825,16 @@ async function recoverStore(params: {
     }
     const resumeDedupeKey = sessionKey;
     if (params.resumedSessionKeys.has(resumeDedupeKey)) {
+      result.skipped++;
+      continue;
+    }
+
+    if (isAnnounceInterruptedEntry(entry)) {
+      await reconcileAnnounceInterruptedSession({
+        storePath: params.storePath,
+        sessionKey,
+      });
+      params.resumedSessionKeys.add(resumeDedupeKey);
       result.skipped++;
       continue;
     }
