@@ -43,7 +43,10 @@ describe("handleControlUiHttpRequest", () => {
     return JSON.parse(responseBody(end)) as {
       basePath: string;
       assistantName: string;
-      assistantAvatar: string;
+      assistantAvatar: string | null;
+      assistantAvatarSource?: string | null;
+      assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+      assistantAvatarReason?: string | null;
       assistantAgentId: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
@@ -831,11 +834,70 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("/avatar/main");
+        expect(parsed.assistantAvatar).toBeNull();
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.timeFormat).toBe("24");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("serves workspace-relative bootstrap avatars as data URLs", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const workspace = path.join(tmp, "workspace");
+        await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "avatars", "main.png"), "avatar", "utf8");
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace } },
+              ui: { assistant: { name: "Ops", avatar: "avatars/main.png" } },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.assistantAvatar).toBe(
+          `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+        );
+      },
+    });
+  });
+
+  it("does not serve rejected bootstrap avatar paths as avatar routes", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const workspace = path.join(tmp, "workspace");
+        await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "avatars", "notes.txt"), "secret", "utf8");
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace } },
+              ui: { assistant: { name: "Ops", avatar: "avatars/notes.txt" } },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.assistantAvatar).toBeNull();
+        expect(parsed.assistantAvatarSource).toBe("avatars/notes.txt");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("unsupported_extension");
       },
     });
   });
@@ -914,7 +976,10 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
-        expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
+        expect(parsed.assistantAvatar).toBeNull();
+        expect(parsed.assistantAvatarSource).toBe("ops.png");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
