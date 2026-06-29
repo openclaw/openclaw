@@ -257,12 +257,35 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
+    // Prefer the gateway-scoped key. When it is absent, fall back to the
+    // unscoped legacy keys but only if the stored gateway URL resolves to the
+    // same basePath as the current page.  Accepting settings from a different
+    // basePath would connect this page to a sibling gateway's WebSocket,
+    // which is the bug reported in #97636.
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
+    const scopedRaw = storage?.getItem(scopedKey);
+    let raw: string | null | undefined = scopedRaw;
+    if (!raw) {
+      const fallbackRaw =
+        storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
+        storage?.getItem(LEGACY_SETTINGS_KEY);
+      if (fallbackRaw) {
+        try {
+          const fallback = JSON.parse(fallbackRaw) as PersistedUiSettings;
+          const storedUrl = normalizeOptionalString(fallback.gatewayUrl);
+          // Accept the fallback only when its gateway URL belongs to the same
+          // basePath as this page, or when no URL was persisted (fresh entry).
+          if (
+            !storedUrl ||
+            normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(pageDerivedUrl)
+          ) {
+            raw = fallbackRaw;
+          }
+        } catch {
+          raw = fallbackRaw;
+        }
+      }
+    }
     if (!raw) {
       return defaults;
     }
@@ -505,7 +528,9 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    // The legacy unscoped key is intentionally not written here.  Persisting it
+    // would let the last gateway to save overwrite the shared key and contaminate
+    // settings for every sibling gateway on the same origin (#97636).
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied

@@ -114,10 +114,13 @@ describe("loadSettings default gateway URL derivation", () => {
   });
 
   it("ignores and scrubs legacy persisted tokens", () => {
+    // Use a pathname that shares the same basePath as the stored gatewayUrl so
+    // the fallback is accepted.  The test verifies that the persisted token is
+    // scrubbed even when the rest of the settings are migrated.
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
-      pathname: "/",
+      pathname: "/openclaw/chat",
     });
     sessionStorage.setItem("openclaw.control.token.v1", "legacy-session-token");
     localStorage.setItem(
@@ -633,6 +636,64 @@ describe("loadSettings default gateway URL derivation", () => {
       "wss://stale-10.example:8443",
       "wss://gateway.example:8443",
     ]);
+  });
+
+  it("does not adopt the gateway URL from a sibling gateway sharing the same origin", () => {
+    // Reproduces issue #97636: two gateways under the same origin with different
+    // basePaths must not share localStorage state through the legacy unscoped key.
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+
+    // Simulate gateway-a having previously written to the legacy unscoped key.
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-a",
+        theme: "dash",
+        sessionKey: "gw-a-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    // Gateway B must use its own basePath-derived URL, not gateway A's.
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(settings.theme).toBe("claw");
+    expect(settings.sessionKey).toBe("main");
+  });
+
+  it("does not write to the legacy unscoped settings key when saving", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    // The unscoped legacy key must remain absent so it cannot contaminate
+    // sibling gateways on the same origin.
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
   });
 
   it("persists local user identity separately from gateway settings", () => {
