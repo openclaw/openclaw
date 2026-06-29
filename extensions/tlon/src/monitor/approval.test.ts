@@ -42,7 +42,7 @@ describe("approval preview UTF-16 boundary safety", () => {
   // U+1F600 is two UTF-16 code units.
   // Place it so the high surrogate lands exactly at the 100-unit cap.
   // "a".repeat(99) = 99 units, then \uD83D at index 99 splits the pair.
-  const textWithEmojiAtBoundary = "a".repeat(99) + "\uD83D\uDE00" + "tail";
+  const textWithEmojiAtBoundary = "a".repeat(99) + "\uD83D\uDE00tail";
 
   it("DM path: messagePreview stored in PendingApproval is free of lone surrogates", () => {
     cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
