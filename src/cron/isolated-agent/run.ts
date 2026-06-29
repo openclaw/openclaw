@@ -41,6 +41,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -876,6 +877,21 @@ async function prepareCronRunContext(params: {
       : undefined,
   };
 
+  // Preflight: warn when web_search is in toolsAllow but no provider is available.
+  const toolsAllow = agentPayload?.toolsAllow;
+  if (toolsAllow && toolsAllow.length > 0) {
+    const expanded = expandToolGroups(toolsAllow);
+    if (expanded.some((t) => normalizeToolName(t) === "web_search")) {
+      const providers = listWebSearchProviders({ config: cfgWithAgentDefaults });
+      if (providers.length === 0) {
+        logWarn(
+          `[cron:${input.job.id}] web_search is in toolsAllow but no web search provider plugin is enabled. ` +
+            `Enable one with: openclaw plugins enable duckduckgo`,
+        );
+      }
+    }
+  }
+
   return {
     ok: true,
     context: {
@@ -1135,9 +1151,29 @@ async function finalizeCronRun(params: {
     pendingPresentationWarningError,
   } = cronPayloadOutcome;
   let { summary, outputText, hasFatalErrorPayload, embeddedRunError } = cronPayloadOutcome;
-  const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+  let agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
+  // Preflight web_search diagnostic: if web_search is in toolsAllow but no
+  // provider is available, add a warning so diagnostics_summary is actionable.
+  const pld = prepared.agentPayload;
+  if (pld?.toolsAllow?.length && !hasFatalErrorPayload) {
+    const expanded = expandToolGroups(pld.toolsAllow);
+    if (expanded.some((t) => normalizeToolName(t) === "web_search")) {
+      const providers = listWebSearchProviders({ config: prepared.cfgWithAgentDefaults });
+      if (providers.length === 0) {
+        const diag = createCronRunDiagnosticsFromError(
+          "cron-preflight",
+          "web_search is in toolsAllow but no web search provider plugin is enabled. " +
+            "Enable one with: openclaw plugins enable duckduckgo",
+          { severity: "warn" },
+        );
+        if (diag) {
+          agentDiagnostics = mergeCronRunDiagnostics(agentDiagnostics, diag);
+        }
+      }
+    }
+  }
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
