@@ -105,6 +105,44 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("materializes single newlines in markdown post text", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "First line\nSecond line\n\nExisting paragraph",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "First line\n\nSecond line\n\nExisting paragraph",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves single newlines inside markdown code fences", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
@@ -691,7 +729,7 @@ describe("editMessageFeishu", () => {
     const result = await editMessageFeishu({
       cfg: {} as ClawdbotConfig,
       messageId: "om_edit",
-      text: "updated body",
+      text: "updated\nbody",
     });
 
     expect(mockClientPatch).toHaveBeenCalledWith({
@@ -703,7 +741,7 @@ describe("editMessageFeishu", () => {
               [
                 {
                   tag: "md",
-                  text: "updated body",
+                  text: "updated\n\nbody",
                 },
               ],
             ],
