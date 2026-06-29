@@ -117,13 +117,43 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   return cfg.browser?.enabled !== false;
 }
 
+function listIncludesPluginId(list: readonly string[] | undefined, pluginId: string): boolean {
+  const normalizedPluginId = pluginId.trim().toLowerCase();
+  return list?.some((entry) => entry.trim().toLowerCase() === normalizedPluginId) ?? false;
+}
+
+function hasBrowserStartupIntent(cfg: OpenClawConfig): boolean {
+  return cfg.browser !== undefined && cfg.browser.enabled !== false;
+}
+
+function isBrowserControlSummaryEnabled(cfg: OpenClawConfig): boolean {
+  if (cfg.browser?.enabled === false || cfg.plugins?.enabled === false) {
+    return false;
+  }
+  if (
+    cfg.plugins?.entries?.browser?.enabled === false ||
+    listIncludesPluginId(cfg.plugins?.deny, "browser")
+  ) {
+    return false;
+  }
+  if (
+    Array.isArray(cfg.plugins?.allow) &&
+    cfg.plugins.allow.length > 0 &&
+    !listIncludesPluginId(cfg.plugins.allow, "browser") &&
+    !hasBrowserStartupIntent(cfg)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
   const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
-  const browserEnabled = cfg.browser?.enabled ?? true;
+  const browserEnabled = isBrowserControlSummaryEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
