@@ -664,6 +664,20 @@ function tagPendingCommentaryText(content: TransportContentBlock[]): void {
   }
 }
 
+function appendProviderStopReasonDiagnostic(
+  output: { diagnostics?: AssistantMessageDiagnostic[] },
+  details: { provider: string; rawStopReason: string; normalizedStopReason: string },
+): void {
+  output.diagnostics = [
+    ...(output.diagnostics ?? []),
+    {
+      type: "provider_stop_reason",
+      timestamp: Date.now(),
+      details,
+    },
+  ];
+}
+
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
@@ -1775,7 +1789,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               if (delta.stop_reason === "refusal") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
-                output.stopReason = mapStopReason(delta.stop_reason);
+                const normalizedStopReason = mapStopReason(delta.stop_reason);
+                output.stopReason = normalizedStopReason;
+                if (delta.stop_reason === "max_turns") {
+                  appendProviderStopReasonDiagnostic(output, {
+                    provider: model.provider,
+                    rawStopReason: delta.stop_reason,
+                    normalizedStopReason,
+                  });
+                }
               }
             }
             const inputTokens = readAnthropicUsageTokenCount(usage?.input_tokens);

@@ -3031,6 +3031,8 @@ async function runEmbeddedAgentInternal(
             });
             return handleRetryLimitExhaustion({
               message: breakerMessage,
+              userMessage:
+                "Request stopped after repeated idle timeouts before the model completed a response.",
               decision: breakerDecision,
               provider,
               model: modelId,

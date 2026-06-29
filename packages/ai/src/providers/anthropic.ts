@@ -15,6 +15,7 @@ import type {
   AnthropicMessagesCompat,
   Api,
   AssistantMessage,
+  AssistantMessageDiagnostic,
   AssistantMessageEvent,
   CacheRetention,
   Context,
@@ -853,7 +854,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             if (event.delta.stop_reason === "refusal") {
               applyAnthropicRefusal(output, event.delta.stop_details, model.provider);
             } else {
-              output.stopReason = mapStopReason(event.delta.stop_reason);
+              const rawStopReason = event.delta.stop_reason as string;
+              const normalizedStopReason = mapStopReason(rawStopReason);
+              output.stopReason = normalizedStopReason;
+              if (rawStopReason === "max_turns") {
+                appendProviderStopReasonDiagnostic(output, {
+                  provider: model.provider,
+                  rawStopReason,
+                  normalizedStopReason,
+                });
+              }
             }
           }
           // Only update usage fields if present (not null).
@@ -1810,4 +1820,18 @@ function mapStopReason(reason: string): StopReason {
       // Handle unknown stop reasons gracefully (API may add new values)
       throw new Error(`Unhandled stop reason: ${reason}`);
   }
+}
+
+function appendProviderStopReasonDiagnostic(
+  output: { diagnostics?: AssistantMessageDiagnostic[] },
+  details: { provider: string; rawStopReason: string; normalizedStopReason: StopReason },
+): void {
+  output.diagnostics = [
+    ...(output.diagnostics ?? []),
+    {
+      type: "provider_stop_reason",
+      timestamp: Date.now(),
+      details,
+    },
+  ];
 }
