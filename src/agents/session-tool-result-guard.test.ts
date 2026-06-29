@@ -176,6 +176,43 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("does not flush-synthesize for sibling pending calls when a toolResult arrives (#84134)", () => {
+    // Regression: shouldFlushBeforeNonToolResult returned true for
+    // toolResult messages, causing flushPendingToolResults to inject
+    // synthetic errors for still-pending sibling tool calls.
+    //
+    // Feishu message tool triggers this: CardKit streaming lifetime
+    // causes the flush to fire while other tool results are in-flight.
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_read", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_message", name: "message", arguments: {} },
+        ],
+      }),
+    );
+    expect(guard.getPendingIds().sort()).toStrictEqual(["call_message", "call_read"]);
+
+    // read result arrives — must NOT flush-synthesize for call_message
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    // call_read resolved; call_message remains pending legitimately
+    expect(guard.getPendingIds()).toStrictEqual(["call_message"]);
+    const roles = getPersistedMessages(sm).map((m) => m.role);
+    expect(roles.filter((r) => r === "toolResult")).toHaveLength(1);
+  });
+
   it("applies count-based truncation wording when persisting oversized tool results", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
