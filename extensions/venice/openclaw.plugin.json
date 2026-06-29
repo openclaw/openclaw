@@ -40,6 +40,11 @@
       }
     ]
   },
+  "contracts": {
+    "imageGenerationProviders": [
+      "venice"
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "venice": {

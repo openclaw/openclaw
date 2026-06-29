@@ -4,6 +4,7 @@ import {
   type ModelCompatConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildVeniceImageGenerationProvider } from "./image-generation-provider.js";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
@@ -66,5 +67,8 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
     wrapStreamFn: (ctx) => createVeniceDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
+  },
+  register(api) {
+    api.registerImageGenerationProvider(buildVeniceImageGenerationProvider());
   },
 });

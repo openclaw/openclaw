@@ -89,7 +89,7 @@ Anonymized models are **not** fully private. Venice strips metadata before forwa
 After setup, OpenClaw shows all available Venice models. Pick based on your needs:
 
 - **Default model**: `venice/kimi-k2-5` for strong private reasoning plus vision.
-- **High-capability option**: `venice/claude-opus-4-6` for the strongest anonymized Venice path.
+- **High-capability option**: `venice/claude-opus-4-8` for the strongest anonymized Venice path.
 - **Privacy**: Choose "private" models for fully private inference.
 - **Capability**: Choose "anonymized" models to access Claude, GPT, Gemini via Venice's proxy.
 
@@ -97,7 +97,7 @@ Change your default model anytime:
 
 ```bash
 openclaw models set venice/kimi-k2-5
-openclaw models set venice/claude-opus-4-6
+openclaw models set venice/claude-opus-4-8
 ```
 
 List all available models:
@@ -111,15 +111,15 @@ You can also run `openclaw configure`, select **Model/auth**, and choose **Venic
 <Tip>
 Use the table below to pick the right model for your use case.
 
-| Use Case                   | Recommended Model                | Why                                          |
-| -------------------------- | -------------------------------- | -------------------------------------------- |
-| **General chat (default)** | `kimi-k2-5`                      | Strong private reasoning plus vision         |
-| **Best overall quality**   | `claude-opus-4-6`                | Strongest anonymized Venice option           |
-| **Privacy + coding**       | `qwen3-coder-480b-a35b-instruct` | Private coding model with large context      |
-| **Private vision**         | `kimi-k2-5`                      | Vision support without leaving private mode  |
-| **Fast + cheap**           | `qwen3-4b`                       | Lightweight reasoning model                  |
-| **Complex private tasks**  | `deepseek-v3.2`                  | Strong reasoning, but no Venice tool support |
-| **Uncensored**             | `venice-uncensored`              | No content restrictions                      |
+| Use Case                   | Recommended Model                      | Why                                          |
+| -------------------------- | -------------------------------------- | -------------------------------------------- |
+| **General chat (default)** | `kimi-k2-5`                            | Strong private reasoning plus vision         |
+| **Best overall quality**   | `claude-opus-4-8`                      | Strongest anonymized Venice option           |
+| **Privacy + coding**       | `qwen3-coder-480b-a35b-instruct-turbo` | Private coding model with large context      |
+| **Private vision**         | `kimi-k2-5`                            | Vision support without leaving private mode  |
+| **Fast + cheap**           | `qwen3-5-9b`                           | Lightweight reasoning model                  |
+| **Complex private tasks**  | `deepseek-v3.2`                        | Strong reasoning, but no Venice tool support |
+| **Uncensored**             | `venice-uncensored-1-2`                | No content restrictions                      |
 
 </Tip>
 
@@ -132,55 +132,119 @@ omits it. Venice rejects DeepSeek's native top-level `thinking` control, so
 OpenClaw keeps that provider-specific replay fix separate from the native
 DeepSeek provider's thinking controls.
 
-## Built-in catalog (41 total)
+## Image generation
+
+Venice image models are available through the `image_generate` tool — the same
+tool used for every other image provider. Once `VENICE_API_KEY` is set, OpenClaw
+registers Venice as an image-generation provider automatically; no extra
+configuration is needed.
+
+- **Default model**: `venice-sd35`. Override with any Venice image model, for
+  example `flux-2-pro`, `seedream-v5-lite`, `nano-banana-pro`, or the uncensored
+  `lustify-v8`.
+- **Geometry**: pass `size` (width/height up to 1280px), `aspectRatio`, or
+  `resolution` (`1K`/`2K`/`4K`) — Venice applies each model's own defaults for
+  anything you omit.
+- **Uncensored by default**: Venice's `safe_mode` is disabled for this provider
+  so uncensored image models behave as intended.
+- **Text-to-image only**: image editing is not wired through this provider.
+
+List the registered image providers and models at runtime with the tool's
+`list` action:
+
+```text
+/tool image_generate action=list
+```
+
+See [Image generation](/tools/image-generation) for the full tool reference.
+
+## Built-in catalog (76 total)
 
 <AccordionGroup>
-  <Accordion title="Private models (26) — fully private, no logging">
-    | Model ID                               | Name                                | Context | Features                   |
-    | -------------------------------------- | ----------------------------------- | ------- | -------------------------- |
-    | `kimi-k2-5`                            | Kimi K2.5                           | 256k    | Default, reasoning, vision |
-    | `kimi-k2-thinking`                     | Kimi K2 Thinking                    | 256k    | Reasoning                  |
-    | `llama-3.3-70b`                        | Llama 3.3 70B                       | 128k    | General                    |
-    | `llama-3.2-3b`                         | Llama 3.2 3B                        | 128k    | General                    |
-    | `hermes-3-llama-3.1-405b`              | Hermes 3 Llama 3.1 405B            | 128k    | General, tools disabled    |
-    | `qwen3-235b-a22b-thinking-2507`        | Qwen3 235B Thinking                | 128k    | Reasoning                  |
-    | `qwen3-235b-a22b-instruct-2507`        | Qwen3 235B Instruct                | 128k    | General                    |
-    | `qwen3-coder-480b-a35b-instruct`       | Qwen3 Coder 480B                   | 256k    | Coding                     |
-    | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo             | 256k    | Coding                     |
-    | `qwen3-5-35b-a3b`                      | Qwen3.5 35B A3B                    | 256k    | Reasoning, vision          |
-    | `qwen3-next-80b`                       | Qwen3 Next 80B                     | 256k    | General                    |
-    | `qwen3-vl-235b-a22b`                   | Qwen3 VL 235B (Vision)             | 256k    | Vision                     |
-    | `qwen3-4b`                             | Venice Small (Qwen3 4B)            | 32k     | Fast, reasoning            |
-    | `deepseek-v3.2`                        | DeepSeek V3.2                      | 160k    | Reasoning, tools disabled  |
-    | `venice-uncensored`                    | Venice Uncensored (Dolphin-Mistral) | 32k     | Uncensored, tools disabled |
-    | `mistral-31-24b`                       | Venice Medium (Mistral)            | 128k    | Vision                     |
-    | `google-gemma-3-27b-it`                | Google Gemma 3 27B Instruct        | 198k    | Vision                     |
-    | `openai-gpt-oss-120b`                  | OpenAI GPT OSS 120B               | 128k    | General                    |
-    | `nvidia-nemotron-3-nano-30b-a3b`       | NVIDIA Nemotron 3 Nano 30B         | 128k    | General                    |
-    | `olafangensan-glm-4.7-flash-heretic`   | GLM 4.7 Flash Heretic              | 128k    | Reasoning                  |
-    | `zai-org-glm-4.6`                      | GLM 4.6                            | 198k    | General                    |
-    | `zai-org-glm-4.7`                      | GLM 4.7                            | 198k    | Reasoning                  |
-    | `zai-org-glm-4.7-flash`                | GLM 4.7 Flash                      | 128k    | Reasoning                  |
-    | `zai-org-glm-5`                        | GLM 5                              | 198k    | Reasoning                  |
-    | `minimax-m21`                          | MiniMax M2.1                       | 198k    | Reasoning                  |
-    | `minimax-m25`                          | MiniMax M2.5                       | 198k    | Reasoning                  |
+  <Accordion title="Private models (43) - fully private, no logging">
+    | Model ID | Name | Context | Features |
+    | --- | --- | --- | --- |
+    | `zai-org-glm-5-2` | GLM 5.2 | 1M | Reasoning |
+    | `zai-org-glm-5-1` | GLM 5.1 | 200k | Reasoning |
+    | `zai-org-glm-5` | GLM 5 | 198k | Reasoning |
+    | `olafangensan-glm-4.7-flash-heretic` | GLM 4.7 Flash Heretic | 128k | Reasoning, uncensored |
+    | `zai-org-glm-4.7-flash` | GLM 4.7 Flash | 128k | Reasoning |
+    | `zai-org-glm-4.6` | GLM 4.6 | 198k | General |
+    | `zai-org-glm-4.7` | GLM 4.7 | 198k | Reasoning |
+    | `venice-uncensored-1-2` | Venice Uncensored 1.2 | 128k | Vision, uncensored |
+    | `venice-uncensored-role-play` | Venice Role Play Uncensored | 128k | Vision, uncensored |
+    | `qwen3-6-27b` | Qwen 3.6 27B | 256k | Reasoning, vision |
+    | `qwen3-5-9b` | Qwen 3.5 9B | 256k | Reasoning, vision |
+    | `qwen3-5-35b-a3b` | Qwen3.5 35B A3B | 256k | Reasoning, vision |
+    | `qwen3-235b-a22b-thinking-2507` | Qwen3 235B Thinking | 128k | Reasoning |
+    | `qwen3-235b-a22b-instruct-2507` | Qwen3 235B Instruct | 128k | General |
+    | `qwen3-next-80b` | Qwen3 Next 80B | 256k | General |
+    | `qwen3-vl-235b-a22b` | Qwen3 VL 235B (Vision) | 256k | Vision |
+    | `qwen3-coder-480b-a35b-instruct-turbo` | Qwen3 Coder 480B Turbo | 256k | Coding |
+    | `google-gemma-4-26b-a4b-it` | Google Gemma 4 26B A4B Instruct | 256k | Reasoning, vision |
+    | `google-gemma-4-31b-it` | Google Gemma 4 31B Instruct | 256k | Reasoning, vision |
+    | `gemma-4-uncensored` | Gemma 4 Uncensored | 256k | Vision, uncensored |
+    | `google-gemma-3-27b-it` | Google Gemma 3 27B Instruct | 198k | Vision |
+    | `arcee-trinity-large-thinking` | Trinity Large Thinking | 256k | Reasoning |
+    | `grok-4-3` | Grok 4.3 | 1M | Reasoning, vision |
+    | `grok-4-20` | Grok 4.20 | 2M | Reasoning, vision |
+    | `grok-4-20-multi-agent` | Grok 4.20 Multi-Agent | 2M | Reasoning, vision, tools disabled |
+    | `grok-build-0-1` | Grok Build 0.1 | 256k | Reasoning, vision |
+    | `mistral-small-3-2-24b-instruct` | Mistral Small 3.2 24B Instruct | 256k | General |
+    | `mistral-small-2603` | Mistral Small 4 | 256k | Reasoning, vision |
+    | `hermes-3-llama-3.1-405b` | Hermes 3 Llama 3.1 405B | 128k | Tools disabled |
+    | `openai-gpt-oss-120b` | OpenAI GPT OSS 120B | 128k | General |
+    | `kimi-k2-6` | Kimi K2.6 | 256k | Reasoning, vision |
+    | `kimi-k2-7-code` | Kimi K2.7 Code | 256k | Reasoning, vision, coding |
+    | `kimi-k2-5` | Kimi K2.5 | 256k | Default, reasoning, vision |
+    | `xiaomi-mimo-v2-5` | MiMo-V2.5 | 1M | Reasoning, vision |
+    | `deepseek-v3.2` | DeepSeek V3.2 | 160k | Reasoning, tools disabled |
+    | `llama-3.2-3b` | Llama 3.2 3B | 128k | General |
+    | `llama-3.3-70b` | Llama 3.3 70B | 128k | General |
+    | `minimax-m3-preview` | MiniMax M3 Preview | 524k | Reasoning |
+    | `minimax-m25` | MiniMax M2.5 | 198k | Reasoning |
+    | `minimax-m27` | MiniMax M2.7 | 198k | Reasoning |
+    | `nvidia-nemotron-3-nano-30b-a3b` | NVIDIA Nemotron 3 Nano 30B | 128k | General |
+    | `nvidia-nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra | 256k | Reasoning |
+    | `nvidia-nemotron-cascade-2-30b-a3b` | Nemotron Cascade 2 30B A3B | 256k | Reasoning |
   </Accordion>
 
-  <Accordion title="Anonymized models (12) — via Venice proxy">
-    | Model ID                        | Name                           | Context | Features                  |
-    | ------------------------------- | ------------------------------ | ------- | ------------------------- |
-    | `claude-opus-4-6`               | Claude Opus 4.6 (via Venice)   | 1M      | Reasoning, vision         |
-    | `claude-sonnet-4-6`             | Claude Sonnet 4.6 (via Venice) | 1M      | Reasoning, vision         |
-    | `openai-gpt-54`                 | GPT-5.4 (via Venice)           | 1M      | Reasoning, vision         |
-    | `openai-gpt-53-codex`           | GPT-5.3 Codex (via Venice)     | 400k    | Reasoning, vision, coding |
-    | `openai-gpt-52`                 | GPT-5.2 (via Venice)           | 256k    | Reasoning                 |
-    | `openai-gpt-52-codex`           | GPT-5.2 Codex (via Venice)     | 256k    | Reasoning, vision, coding |
-    | `openai-gpt-4o-2024-11-20`      | GPT-4o (via Venice)            | 128k    | Vision                    |
-    | `openai-gpt-4o-mini-2024-07-18` | GPT-4o Mini (via Venice)       | 128k    | Vision                    |
-    | `gemini-3-1-pro-preview`        | Gemini 3.1 Pro (via Venice)    | 1M      | Reasoning, vision         |
-    | `gemini-3-pro-preview`          | Gemini 3 Pro (via Venice)      | 198k    | Reasoning, vision         |
-    | `gemini-3-flash-preview`        | Gemini 3 Flash (via Venice)    | 256k    | Reasoning, vision         |
-    | `grok-41-fast`                  | Grok 4.1 Fast (via Venice)     | 1M      | Reasoning, vision         |
+  <Accordion title="Anonymized models (33) - via Venice proxy">
+    | Model ID | Name | Context | Features |
+    | --- | --- | --- | --- |
+    | `z-ai-glm-5-turbo` | GLM 5 Turbo | 200k | Reasoning |
+    | `z-ai-glm-5v-turbo` | GLM 5V Turbo | 200k | Reasoning, vision |
+    | `qwen-3-7-max` | Qwen 3.7 Max | 1M | Reasoning, vision |
+    | `qwen-3-7-plus` | Qwen 3.7 Plus | 1M | Reasoning, vision |
+    | `qwen-3-6-plus` | Qwen 3.6 Plus Uncensored | 1M | Reasoning, vision, uncensored |
+    | `qwen3-5-397b-a17b` | Qwen 3.5 397B | 128k | Reasoning, vision |
+    | `gemini-3-1-pro-preview` | Gemini 3.1 Pro (via Venice) | 1M | Reasoning, vision |
+    | `gemini-3-5-flash` | Gemini 3.5 Flash | 1M | Reasoning, vision |
+    | `gemini-3-flash-preview` | Gemini 3 Flash (via Venice) | 256k | Reasoning, vision |
+    | `claude-fable-5` | Claude Fable 5 | 1M | Reasoning, vision |
+    | `claude-opus-4-8` | Claude Opus 4.8 | 1M | Reasoning, vision |
+    | `claude-opus-4-8-fast` | Claude Opus 4.8 Fast | 1M | Reasoning, vision |
+    | `claude-opus-4-7` | Claude Opus 4.7 | 1M | Reasoning, vision |
+    | `claude-opus-4-7-fast` | Claude Opus 4.7 Fast | 1M | Reasoning, vision |
+    | `claude-opus-4-8` | Claude Opus 4.6 (via Venice) | 1M | Reasoning, vision |
+    | `claude-opus-4-6-fast` | Claude Opus 4.6 Fast | 1M | Reasoning, vision |
+    | `claude-opus-4-5` | Claude Opus 4.5 | 198k | Reasoning, vision |
+    | `claude-sonnet-4-6` | Claude Sonnet 4.6 (via Venice) | 1M | Reasoning, vision |
+    | `claude-sonnet-4-5` | Claude Sonnet 4.5 | 198k | Reasoning, vision |
+    | `deepseek-v4-pro` | DeepSeek V4 Pro | 1M | Reasoning |
+    | `deepseek-v4-flash` | DeepSeek V4 Flash | 1M | Reasoning |
+    | `aion-labs-aion-2-0` | Aion 2.0 | 128k | Reasoning, tools disabled |
+    | `openai-gpt-52` | GPT-5.2 (via Venice) | 256k | Reasoning |
+    | `openai-gpt-52-codex` | GPT-5.2 Codex (via Venice) | 256k | Reasoning, vision, coding |
+    | `openai-gpt-53-codex` | GPT-5.3 Codex (via Venice) | 400k | Reasoning, vision, coding |
+    | `openai-gpt-54` | GPT-5.4 (via Venice) | 1M | Reasoning, vision |
+    | `openai-gpt-54-pro` | GPT-5.4 Pro | 1M | Reasoning, vision |
+    | `openai-gpt-54-mini` | GPT-5.4 Mini | 400k | Reasoning, vision |
+    | `openai-gpt-55` | GPT-5.5 | 1M | Reasoning, vision |
+    | `openai-gpt-55-pro` | GPT-5.5 Pro | 1M | Reasoning, vision |
+    | `openai-gpt-4o-2024-11-20` | GPT-4o (via Venice) | 128k | Vision |
+    | `openai-gpt-4o-mini-2024-07-18` | GPT-4o Mini (via Venice) | 128k | Vision |
+    | `mercury-2` | Mercury 2 | 128k | Reasoning |
   </Accordion>
 </AccordionGroup>
 
@@ -222,16 +286,16 @@ Venice uses a credit-based system. Check [venice.ai/pricing](https://venice.ai/p
 openclaw agent --model venice/kimi-k2-5 --message "Quick health check"
 
 # Use Claude Opus via Venice (anonymized)
-openclaw agent --model venice/claude-opus-4-6 --message "Summarize this task"
+openclaw agent --model venice/claude-opus-4-8 --message "Summarize this task"
 
 # Use uncensored model
-openclaw agent --model venice/venice-uncensored --message "Draft options"
+openclaw agent --model venice/venice-uncensored-1-2 --message "Draft options"
 
 # Use vision model with image
 openclaw agent --model venice/qwen3-vl-235b-a22b --message "Review attached image"
 
 # Use coding model
-openclaw agent --model venice/qwen3-coder-480b-a35b-instruct --message "Refactor this function"
+openclaw agent --model venice/qwen3-coder-480b-a35b-instruct-turbo --message "Refactor this function"
 ```
 
 ## Troubleshooting

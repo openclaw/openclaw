@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
+summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, Venice, xAI, Vydra"
 read_when:
   - Generating or editing images via the agent
   - Configuring image-generation providers and models
@@ -103,6 +103,7 @@ backend emits it.
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
 | OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| Venice     | `venice-sd35`                           | No                                 | `VENICE_API_KEY`                                      |
 | Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
 | xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
@@ -121,13 +122,13 @@ current session:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Venice       | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ------------ | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 4            | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -            | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | Up to 1280px | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | ✓            | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | 1K, 2K, 4K   | -     | 1K, 2K         |
 
 ## Tool parameters
 
