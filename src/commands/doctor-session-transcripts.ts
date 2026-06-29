@@ -16,7 +16,10 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -34,6 +37,10 @@ type TranscriptRepairResult = {
   legacyOpenAICodexEntries: number;
   backupPath?: string;
   reason?: string;
+};
+
+export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+  broken: true;
 };
 
 type ActiveTranscriptPath = {
@@ -372,6 +379,57 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+export async function detectSessionTranscriptHealthIssues(params?: {
+  sessionDirs?: string[];
+}): Promise<SessionTranscriptHealthIssue[]> {
+  let sessionDirs = params?.sessionDirs;
+  try {
+    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+  } catch {
+    return [];
+  }
+
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  const issues: SessionTranscriptHealthIssue[] = [];
+  for (const filePath of files) {
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+    if (result.broken) {
+      issues.push(result as SessionTranscriptHealthIssue);
+    }
+  }
+  return issues;
+}
+
+export function sessionTranscriptIssueToHealthFinding(
+  issue: SessionTranscriptHealthIssue,
+): HealthFinding {
+  const metadata =
+    issue.legacyOpenAICodexEntries > 0
+      ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
+          issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
+        }`
+      : "";
+  return {
+    checkId: SESSION_TRANSCRIPTS_CHECK_ID,
+    severity: "info",
+    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
+    path: issue.filePath,
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
+  };
+}
+
+export function sessionTranscriptIssueToRepairEffect(
+  issue: SessionTranscriptHealthIssue,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-rewrite-session-transcript",
+    target: issue.filePath,
+    dryRunSafe: false,
+  };
+}
+
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
@@ -386,14 +444,14 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
-  const files = await listSessionTranscriptFiles(sessionDirs);
-  if (files.length === 0) {
-    return;
-  }
-
   const results: TranscriptRepairResult[] = [];
-  for (const filePath of files) {
-    results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+  if (shouldRepair) {
+    const files = await listSessionTranscriptFiles(sessionDirs);
+    for (const filePath of files) {
+      results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+    }
+  } else {
+    results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
   }
   const broken = results.filter((result) => result.broken);
   if (broken.length === 0) {

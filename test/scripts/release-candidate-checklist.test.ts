@@ -79,6 +79,41 @@ describe("release candidate checklist", () => {
     );
   });
 
+  it("rejects duplicate release candidate CLI options", () => {
+    const requiredArgs = ["--tag", "v2026.5.14-beta.3"];
+    const duplicateOption = (
+      flag: string,
+      firstValue: string,
+      secondValue: string,
+      prefix = requiredArgs,
+    ): [string, string[]] => [flag, [...prefix, flag, firstValue, flag, secondValue]];
+    const duplicateFlag = (flag: string): [string, string[]] => [flag, [...requiredArgs, flag, flag]];
+    const duplicateCases = [
+      duplicateOption("--tag", "v2026.5.14-beta.3", "v2026.5.14-beta.4", []),
+      duplicateOption("--workflow-ref", "release/a", "release/b"),
+      duplicateOption("--repo", "openclaw/openclaw", "fork/openclaw"),
+      duplicateOption("--full-release-run", "111", "222"),
+      duplicateOption("--npm-preflight-run", "111", "222"),
+      duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
+      duplicateFlag("--skip-dispatch"),
+      duplicateFlag("--skip-local-generated-check"),
+      duplicateFlag("--skip-parallels"),
+      duplicateFlag("--skip-telegram"),
+      duplicateOption("--telegram-provider-mode", "mock-openai", "live-frontier"),
+      duplicateOption("--provider", "blacksmith-testbox", "crabbox"),
+      duplicateOption("--mode", "fresh", "upgrade"),
+      duplicateOption("--release-profile", "beta", "stable"),
+      duplicateOption("--npm-dist-tag", "beta", "latest"),
+      duplicateOption("--plugin-publish-scope", "all-publishable", "selected"),
+      duplicateOption("--plugins", "telegram", "discord"),
+      duplicateOption("--output-dir", ".artifacts/a", ".artifacts/b"),
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("requires stable validation evidence to include soak and blocking performance", () => {
     const stableManifest = {
       workflowName: "Full Release Validation",

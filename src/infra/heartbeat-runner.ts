@@ -26,6 +26,7 @@ import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -839,11 +840,30 @@ function stripLeadingHeartbeatResponsePrefix(
   return text.replace(prefixPattern, "");
 }
 
+type NormalizedHeartbeatDelivery = {
+  shouldSkip: boolean;
+  text: string;
+  hasMedia: boolean;
+  isInternalPlaceholderOnly: boolean;
+};
+
+function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
+  let remaining = text.trim();
+  if (!remaining) {
+    return false;
+  }
+
+  while (remaining.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
+    remaining = remaining.slice(STREAM_ERROR_FALLBACK_TEXT.length).trimStart();
+  }
+  return remaining.length === 0;
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
-) {
+): NormalizedHeartbeatDelivery {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, {
@@ -851,29 +871,36 @@ function normalizeHeartbeatReply(
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  if (stripped.shouldSkip && !hasMedia) {
+  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(stripped.text);
+  if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
     return {
       shouldSkip: true,
       text: "",
       hasMedia,
+      isInternalPlaceholderOnly,
     };
   }
-  let finalText = stripped.text;
+  let finalText = isInternalPlaceholderOnly ? "" : stripped.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia };
+  return { shouldSkip: false, text: finalText, hasMedia, isInternalPlaceholderOnly };
 }
 
 function normalizeHeartbeatToolNotification(
   response: HeartbeatToolResponse,
   responsePrefix: string | undefined,
-) {
+): NormalizedHeartbeatDelivery {
   let finalText = getHeartbeatToolNotificationText(response);
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia: false };
+  return {
+    shouldSkip: false,
+    text: finalText,
+    hasMedia: false,
+    isInternalPlaceholderOnly: false,
+  };
 }
 
 type HeartbeatWakePayloadFlags = {
@@ -1316,6 +1343,32 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   return preflight.pendingEventEntries;
 }
 
+// Recovery fields a completed heartbeat delivery must clear. Mirrors the
+// canonical clearPendingFinalDeliveryAfterSuccess in dispatch-from-config.ts so
+// the send-success and duplicate-skip paths drop the exact same set; leaving any
+// behind keeps the session stuck on a delivery that already happened.
+const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
+  pendingFinalDelivery: undefined,
+  pendingFinalDeliveryText: undefined,
+  pendingFinalDeliveryCreatedAt: undefined,
+  pendingFinalDeliveryLastAttemptAt: undefined,
+  pendingFinalDeliveryAttemptCount: undefined,
+  pendingFinalDeliveryLastError: undefined,
+  pendingFinalDeliveryContext: undefined,
+  pendingFinalDeliveryIntentId: undefined,
+} as const;
+
+// Clear pending-final only when this run produced it: the agent run stamps
+// createdAt during the run, so createdAt >= run start means we own it. An older
+// final (e.g. one a message_tool_only run never refreshed) must keep its recovery path.
+function heartbeatRunOwnsPendingFinalDelivery(
+  entry: SessionEntry | undefined,
+  runStartedAt: number,
+): boolean {
+  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  return typeof createdAt === "number" && createdAt >= runStartedAt;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1698,6 +1751,33 @@ export async function runHeartbeatOnce(opts: {
     });
   };
 
+  // The duplicate-suppression branch returns before any send, so it never hits
+  // the send-success clear. A duplicate means this run's own output was already
+  // delivered within the dedupe window, so this run's pending-final is satisfied
+  // and gets cleared the same way the send-success path does. We must not
+  // text-match the pending against the delivered text: agent-runner stores it
+  // pre-normalization (no responsePrefix), so a byte compare would leave
+  // prefixed agents permanently stuck. Ownership is gated on createdAt instead,
+  // so an older final this run did not produce is preserved, not erased.
+  const clearSatisfiedPendingFinalDelivery = async () => {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const current = store[sessionKey];
+        if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+          return false;
+        }
+        if (!heartbeatRunOwnsPendingFinalDelivery(current, startedAt)) {
+          return false;
+        }
+        store[sessionKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        return true;
+      },
+      // No pending to clear is the common case; avoid rewriting the store then.
+      { skipSaveWhenResult: (cleared) => !cleared },
+    );
+  };
+
   const consumeInspectedSystemEvents = () => {
     if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
@@ -1927,7 +2007,12 @@ export async function runHeartbeatOnce(opts: {
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
       : replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
-        : { shouldSkip: true, text: "", hasMedia: false };
+        : {
+            shouldSkip: true,
+            text: "",
+            hasMedia: false,
+            isInternalPlaceholderOnly: false,
+          };
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
@@ -1936,6 +2021,7 @@ export async function runHeartbeatOnce(opts: {
       !heartbeatToolResponse &&
       hasRelayableExecCompletion &&
       !normalized.text.trim() &&
+      !normalized.isInternalPlaceholderOnly &&
       replyPayload?.text?.trim()
         ? replyPayload.text.trim()
         : null;
@@ -1952,7 +2038,9 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip = false;
     }
     const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+      normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -2006,6 +2094,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await clearSatisfiedPendingFinalDelivery();
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -2138,10 +2227,18 @@ export async function runHeartbeatOnce(opts: {
         if (!current) {
           return;
         }
+        // A heartbeat-driven agent run can leave its own pendingFinalDelivery
+        // set; a successful send completes it, so clear the recovery fields.
+        // Only clear the pending-final this run owns — an older final the run
+        // did not produce keeps its own recovery path.
+        const clearedRecoveryFields = heartbeatRunOwnsPendingFinalDelivery(current, startedAt)
+          ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
+          : {};
         store[sessionKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
+          ...clearedRecoveryFields,
         };
       });
     }

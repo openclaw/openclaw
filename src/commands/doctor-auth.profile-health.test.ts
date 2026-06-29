@@ -6,18 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+type MockAuthProfileStore = {
+  version: number;
+  profiles: Record<
+    string,
+    | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
+    | { type: "api_key"; provider: string; key: string }
+  >;
+};
+
 const authProfileMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn<
-    (
-      agentDir?: string,
-      options?: { allowKeychainPrompt?: boolean },
-    ) => {
-      version: number;
-      profiles: Record<
-        string,
-        { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
-      >;
-    }
+    (agentDir?: string, options?: { allowKeychainPrompt?: boolean }) => MockAuthProfileStore
   >(() => {
     throw new Error("unexpected auth profile load");
   }),
@@ -200,6 +200,46 @@ describe("noteAuthProfileHealth", () => {
     });
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("openai-codex:main"),
+      "Model auth",
+    );
+  });
+
+  it("prints malformed API-key profile diagnostics", async () => {
+    const agentDir = path.join(tempDir, "main-agent");
+    writeAuthStore(agentDir);
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockImplementation(
+      (receivedAgentDir): MockAuthProfileStore => {
+        if (receivedAgentDir === agentDir) {
+          return {
+            version: 1,
+            profiles: {
+              "zai:default": {
+                type: "api_key",
+                provider: "zai",
+                key: "openclaw onboard --auth-choice zai-coding-global",
+              },
+            },
+          };
+        }
+        return { version: 1, profiles: {} };
+      },
+    );
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true, agentDir }],
+        },
+      } as OpenClawConfig,
+      prompter: {
+        confirmAutoFix: vi.fn(async () => false),
+      } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("zai:default: missing [malformed_api_key]"),
       "Model auth",
     );
   });

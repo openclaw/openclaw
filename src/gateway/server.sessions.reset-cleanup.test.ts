@@ -654,3 +654,24 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
     reason: "session-reset",
   });
 });
+
+test("sessions.reset preserves explicit responseUsage preference across session rollover", async () => {
+  // Regression: a full session reset must carry the user's display preference forward
+  // so the usage footer mode survives rollovers. Only /usage reset clears the override.
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { responseUsage: "tokens" }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; responseUsage?: string };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.responseUsage).toBe("tokens");
+});

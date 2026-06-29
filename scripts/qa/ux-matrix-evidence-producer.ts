@@ -10,6 +10,7 @@ import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+  resolveQaEvidenceEnvironment,
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
@@ -84,19 +85,31 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
   let skipVisualProof = false;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      artifactBase = value;
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      repoRoot = value;
       index += 1;
       continue;
     }
     if (arg === "--skip-visual-proof") {
+      recordOnce(arg);
       skipVisualProof = true;
       continue;
     }
@@ -162,15 +175,15 @@ function sanitizeArtifactText(
 
 function buildExecution(params: {
   artifacts: MatrixCell["artifacts"];
+  repoRoot: string;
   source: string;
 }): QaEvidenceSummaryEntry["execution"] {
   return {
     runner: "ux-matrix-script-producer",
-    environment: {
-      ref: process.env.OPENCLAW_QA_REF?.trim() || process.env.GITHUB_SHA?.trim() || null,
-      os: process.platform,
-      nodeVersion: process.version,
-    },
+    environment: resolveQaEvidenceEnvironment({
+      env: process.env,
+      repoRoot: params.repoRoot,
+    }),
     provider: {
       id: "ux-matrix",
       live: false,
@@ -190,7 +203,7 @@ function buildExecution(params: {
   };
 }
 
-function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
+function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSummaryEntry {
   const source = `ux-matrix:${cell.surface}:${cell.stage}`;
   return {
     test: {
@@ -209,6 +222,7 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
     ],
     execution: buildExecution({
       artifacts: cell.artifacts,
+      repoRoot,
       source,
     }),
     result: {
@@ -231,13 +245,14 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
 function buildEvidenceSummary(params: {
   cells: readonly MatrixCell[];
   generatedAt: string;
+  repoRoot: string;
 }): QaEvidenceSummaryJson {
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
     evidenceMode: "full",
-    entries: params.cells.map(buildEvidenceEntry),
+    entries: params.cells.map((cell) => buildEvidenceEntry(cell, params.repoRoot)),
   });
 }
 
@@ -681,6 +696,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   const previewEvidence = buildEvidenceSummary({
     cells: initialCells,
     generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
   });
   const screenshotLog = await fs.readFile(path.join(screenshotCellDir, "logs.txt"), "utf8");
   await writeProducerArtifactFixtureHtml({
@@ -741,7 +757,11 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     ...initialCells,
   ];
 
-  const evidence = buildEvidenceSummary({ cells, generatedAt: new Date().toISOString() });
+  const evidence = buildEvidenceSummary({
+    cells,
+    generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
+  });
   await writeProducerArtifactFixtureHtml({
     artifactBase: options.artifactBase,
     evidence,

@@ -115,6 +115,40 @@ describe("crabline transport", () => {
           direction: "outbound",
           text: "assistant via fake telegram",
         });
+
+        await transport.state.reset();
+        const delivery = transport.buildAgentDelivery({ target: "dm:qa-operator" });
+        const { response: directResponse, release: directRelease } = await fetchWithSsrFGuard({
+          url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
+          init: {
+            body: JSON.stringify({
+              chat_id: delivery.to,
+              text: "assistant after reset",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-transport-reset-test",
+        });
+        await directRelease();
+        expect(directResponse.ok).toBe(true);
+
+        await expect(
+          transport.state.waitFor({
+            direction: "outbound",
+            kind: "message-text",
+            textIncludes: "assistant after reset",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: {
+            id: "qa-operator",
+            kind: "direct",
+          },
+          direction: "outbound",
+          text: "assistant after reset",
+        });
       } finally {
         await transport.cleanup?.();
       }

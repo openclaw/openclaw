@@ -10,6 +10,8 @@ import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
+let mockFunctionCallSequence = 0;
+
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
   | {
@@ -220,7 +222,7 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
@@ -773,8 +775,10 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
-  const callId = `call_mock_${name}_${callSuffix}`;
-  const itemId = `fc_mock_${name}_${callSuffix}`;
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const callId = `call_mock_${name}_${uniqueSuffix}`;
+  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
   const item = {
     type: "function_call",
     id: itemId,
@@ -786,7 +790,7 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
-    responseId: `resp_mock_${name}_${callSuffix}`,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
     serialized,
   };
 }
@@ -1494,6 +1498,16 @@ function buildAssistantText(
   }
   if (
     toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
+  }
+  if (
+    toolOutput &&
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
   ) {
     return [
@@ -1507,16 +1521,6 @@ function buildAssistantText(
       "Follow-up:",
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
-      return `FAKE_PLUGIN_OK ${targetTool}`;
-    }
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -2608,8 +2612,8 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/memory tools check/i.test(allInputText)) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
         maxResults: 3,
@@ -2619,10 +2623,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)

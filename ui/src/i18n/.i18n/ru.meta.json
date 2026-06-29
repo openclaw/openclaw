@@ -1,0 +1,16 @@
+{
+  "fallbackKeys": [
+    "skillWorkshop.modeSwitcher.board",
+    "skillWorkshop.modeSwitcher.boardTitle",
+    "skillWorkshop.modeSwitcher.label",
+    "skillWorkshop.modeSwitcher.todayTitle"
+  ],
+  "generatedAt": "2026-06-29T05:29:19.077Z",
+  "locale": "ru",
+  "model": "gpt-5.5",
+  "provider": "openai",
+  "sourceHash": "68fa90b6585f6d134e45b32b5efd26a0ca7fcc0740fe1c214f26a7792a77ba9b",
+  "totalKeys": 1421,
+  "translatedKeys": 1417,
+  "workflow": 1
+}

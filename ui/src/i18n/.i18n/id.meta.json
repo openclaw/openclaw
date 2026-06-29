@@ -1,17 +1,11 @@
 {
-  "fallbackKeys": [
-    "skillWorkshop.modeSwitcher.board",
-    "skillWorkshop.modeSwitcher.boardTitle",
-    "skillWorkshop.modeSwitcher.label",
-    "skillWorkshop.modeSwitcher.today",
-    "skillWorkshop.modeSwitcher.todayTitle"
-  ],
-  "generatedAt": "2026-06-23T12:38:08.011Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-06-29T05:29:17.544Z",
   "locale": "id",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "3cb596d78b202c14e5c5d20942013157dd29650ff052bd0c4d6d2d578368dd80",
-  "totalKeys": 1419,
-  "translatedKeys": 1414,
+  "sourceHash": "68fa90b6585f6d134e45b32b5efd26a0ca7fcc0740fe1c214f26a7792a77ba9b",
+  "totalKeys": 1421,
+  "translatedKeys": 1421,
   "workflow": 1
 }

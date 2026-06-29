@@ -1450,6 +1450,7 @@ export const fa: TranslationMap = {
     jaJP: "日本語 (ژاپنی)",
     ko: "한국어 (کره‌ای)",
     fr: "Français (فرانسوی)",
+    hi: "हिन्दी (هندی)",
     ar: "العربية (عربی)",
     it: "Italiano (ایتالیایی)",
     tr: "Türkçe (ترکی)",
@@ -1460,6 +1461,7 @@ export const fa: TranslationMap = {
     vi: "Tiếng Việt (ویتنامی)",
     nl: "Nederlands (هلندی)",
     fa: "فارسی",
+    ru: "Русский (روسی)",
   },
   cron: {
     quickCreate: {
