@@ -163,8 +163,10 @@ Example:
 
 - Session rows, token usage, and last route metadata:
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
-- Session transcript files:
-  `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
+- Session transcript rows:
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Legacy/archive transcript artifacts:
+  `~/.openclaw/agents/<agentId>/sessions/`
 - Legacy row migration source:
   `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, OpenClaw acknowledges the reset without invoking the model.

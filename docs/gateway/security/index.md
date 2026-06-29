@@ -427,10 +427,13 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
-## Local session logs live on disk
+## Local session history lives on disk
 
-OpenClaw stores session transcripts on disk under `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
-This is required for session continuity and (optionally) session memory indexing, but it also means
+OpenClaw stores active session rows and transcripts in the per-agent SQLite
+database under `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+Legacy, archive, import/export, and support transcript artifacts can also live
+under `~/.openclaw/agents/<agentId>/sessions/`. The SQLite database is required
+for session continuity and (optionally) session memory indexing, but it also means
 **any process/user with filesystem access can read those logs**. Treat disk access as the trust
 boundary and lock down permissions on `~/.openclaw` (see the audit section below). If you need
 stronger isolation between agents, run them under separate OS users or separate hosts.
@@ -1001,8 +1004,11 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
-- `agents/<agentId>/agent/openclaw-agent.sqlite`: per-agent runtime state, including session rows that can contain private messages and tool output.
-- `agents/<agentId>/sessions/**`: active transcript files plus legacy session migration sources and archives that can contain private messages and tool output.
+- `agents/<agentId>/agent/openclaw-agent.sqlite`: per-agent runtime state,
+  including session rows and transcripts that can contain private messages and
+  tool output.
+- `agents/<agentId>/sessions/**`: legacy session migration sources and archives
+  that can contain private messages and tool output.
 - bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 
@@ -1316,7 +1322,8 @@ If your AI does something bad:
 ### Audit
 
 1. Check Gateway logs: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (or `logging.file`).
-2. Review the relevant transcript(s): `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
+2. Review the relevant transcript(s) through `openclaw sessions` or a scoped
+   SQLite inspection of `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 3. Review recent config changes (anything that could have widened access: `gateway.bind`, `gateway.auth`, dm/group policies, `tools.elevated`, plugin changes).
 4. Re-run `openclaw security audit --deep` and confirm critical findings are resolved.
 

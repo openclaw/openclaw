@@ -592,9 +592,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     | `$OPENCLAW_STATE_DIR/secrets.json`                              | Optional file-backed secret payload for `file` SecretRef providers |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
     | `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |
-    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                              |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent SQLite state, including session rows                  |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Transcript files plus legacy session migration sources             |
+    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + legacy/archive session artifacts)      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent SQLite state, including session rows and transcripts  |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Legacy session migration sources and archive/support artifacts     |
 
     Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
@@ -1415,14 +1415,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
   <Accordion title="How many workspaces and agents can I create?">
     No hard limits. Dozens (even hundreds) are fine, but watch for:
 
-    - **Disk growth:** sessions + transcripts live under `~/.openclaw/agents/<agentId>/sessions/`.
+    - **Disk growth:** active sessions and transcripts live in the per-agent SQLite database; legacy/archive artifacts can still accumulate under `~/.openclaw/agents/<agentId>/sessions/`.
     - **Token cost:** more agents means more concurrent model usage.
     - **Ops overhead:** per-agent auth profiles, workspaces, and channel routing.
 
     Tips:
 
     - Keep one **active** workspace per agent (`agents.defaults.workspace`).
-    - Prune old sessions (delete JSONL or store entries) if disk grows.
+    - Prune old sessions with `openclaw sessions cleanup`; do not edit active SQLite state by hand.
     - Use `openclaw doctor` to spot stray workspaces and profile mismatches.
 
   </Accordion>
