@@ -14,7 +14,10 @@ import {
   type VoiceModelProvider,
 } from "../../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
+import {
+  getRealtimeTranscriptionProvider,
+  listRealtimeTranscriptionProviders,
+} from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
@@ -151,7 +154,28 @@ function collectTalkTranscriptionProviderIds(
 }
 
 export function listTalkTranscriptionProviders(config: OpenClawConfig) {
-  return listRealtimeTranscriptionProviders(config);
+  const providers = listRealtimeTranscriptionProviders(config);
+  const merged = new Map<string, RealtimeProviderWithConfig<RealtimeTranscriptionProviderConfig>>();
+  const addProvider = (
+    provider: RealtimeProviderWithConfig<RealtimeTranscriptionProviderConfig>,
+  ) => {
+    if (!merged.has(provider.id)) {
+      merged.set(provider.id, provider);
+    }
+  };
+  for (const provider of providers) {
+    addProvider(provider);
+  }
+  for (const providerId of collectTalkTranscriptionProviderIds(config)) {
+    if (providers.some((provider) => providerMatchesId(provider, providerId))) {
+      continue;
+    }
+    const provider = getRealtimeTranscriptionProvider(providerId, config);
+    if (provider) {
+      addProvider(provider);
+    }
+  }
+  return [...merged.values()];
 }
 
 type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {
