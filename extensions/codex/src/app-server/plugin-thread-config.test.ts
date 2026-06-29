@@ -58,11 +58,13 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
         "google-calendar-app": {
           enabled: true,
+          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
@@ -100,6 +102,7 @@ describe("Codex plugin thread config", () => {
       | undefined;
     expect(disabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
@@ -132,6 +135,7 @@ describe("Codex plugin thread config", () => {
       | undefined;
     expect(enabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
@@ -161,6 +165,7 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["google-calendar-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
@@ -259,6 +264,7 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["google-calendar-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
@@ -357,6 +363,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -452,6 +459,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -525,6 +533,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -568,6 +577,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -617,6 +627,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -664,11 +675,13 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
         "google-calendar-app": {
           enabled: true,
+          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
@@ -849,6 +862,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -911,6 +925,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -970,11 +985,13 @@ describe("Codex plugin thread config", () => {
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
+        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
       "google-calendar-app": {
         enabled: true,
+        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -1062,11 +1079,13 @@ describe("Codex plugin thread config", () => {
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
+        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
       "google-calendar-app": {
         enabled: true,
+        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -1218,6 +1237,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1266,6 +1286,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1323,6 +1344,7 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
+          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1408,6 +1430,7 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["github-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",

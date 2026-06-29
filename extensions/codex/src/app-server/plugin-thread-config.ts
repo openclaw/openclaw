@@ -225,6 +225,7 @@ export async function buildCodexPluginThreadConfig(
   const apps: JsonObject = {
     _default: {
       enabled: false,
+      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: false,
     },
@@ -265,6 +266,7 @@ export async function buildCodexPluginThreadConfig(
       }
       const appConfig: JsonObject = {
         enabled: true,
+        approvals_reviewer: "user",
         destructive_enabled: record.policy.allowDestructiveActions,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -362,6 +364,7 @@ function buildDisabledAppsConfigPatch(): JsonObject {
     apps: {
       _default: {
         enabled: false,
+        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
@@ -376,6 +379,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   const apps: JsonObject = {
     _default: {
       enabled: false,
+      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: false,
     },
@@ -385,6 +389,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   )) {
     apps[appId] = {
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: policy.allowDestructiveActions,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
