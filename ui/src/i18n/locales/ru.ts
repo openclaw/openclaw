@@ -1396,6 +1396,7 @@ export const ru: TranslationMap = {
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
       attachFile: "Прикрепить файл",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Скрыть ошибку Talk",
       startTalk: "Начать Talk",
       stillListening: "Прослушивание продолжается",

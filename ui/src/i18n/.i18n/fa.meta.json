@@ -1,17 +1,18 @@
 {
   "fallbackKeys": [
+    "chat.composer.cancelReply",
     "skillWorkshop.modeSwitcher.board",
     "skillWorkshop.modeSwitcher.boardTitle",
     "skillWorkshop.modeSwitcher.label",
     "skillWorkshop.modeSwitcher.today",
     "skillWorkshop.modeSwitcher.todayTitle"
   ],
-  "generatedAt": "2026-06-29T12:16:47.275Z",
+  "generatedAt": "2026-06-29T14:48:58.835Z",
   "locale": "fa",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "68fa90b6585f6d134e45b32b5efd26a0ca7fcc0740fe1c214f26a7792a77ba9b",
-  "totalKeys": 1421,
+  "sourceHash": "02b7087c50a168df911ca6d956cd2170c939f2dd85671bf35fc7366ccabc0598",
+  "totalKeys": 1422,
   "translatedKeys": 1416,
   "workflow": 1
 }

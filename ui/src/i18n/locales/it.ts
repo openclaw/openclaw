@@ -1393,6 +1393,7 @@ export const it: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Ignora errore Talk",
       startTalk: "Start Talk",
       stillListening: "Ancora in ascolto",

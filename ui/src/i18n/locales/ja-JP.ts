@@ -1391,6 +1391,7 @@ export const ja_JP: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talkエラーを閉じる",
       startTalk: "Start Talk",
       stillListening: "まだ聞いています",

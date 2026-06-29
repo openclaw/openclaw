@@ -1372,6 +1372,7 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       attachFile: "फ़ाइल संलग्न करें",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talk त्रुटि खारिज करें",
       startTalk: "Talk शुरू करें",
       stillListening: "अभी भी सुन रहा है",

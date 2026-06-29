@@ -1349,6 +1349,7 @@ export const zh_CN: TranslationMap = {
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       attachFile: "附加文件",
+      cancelReply: "Cancel reply",
       dismissTalkError: "忽略 Talk 错误",
       startTalk: "开始 Talk",
       stillListening: "仍在聆听",

@@ -1377,6 +1377,7 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talk 오류 닫기",
       startTalk: "Start Talk",
       stillListening: "계속 듣는 중",
