@@ -1,4 +1,8 @@
-import type { DurableWorkflowRegistry, DurableWorkflowStepHandlerResult } from "./registry.js";
+import type {
+  DurableWorkflowRegistry,
+  DurableWorkflowStepHandlerResult,
+  DurableWorkflowStepSideEffectPolicy,
+} from "./registry.js";
 import type {
   DurableWorkflowRef,
   DurableWorkflowRun,
@@ -243,8 +247,9 @@ function applyStepResult(params: {
   workerId: string;
   now: number;
   result: DurableWorkflowStepHandlerResult;
+  sideEffectPolicy: DurableWorkflowStepSideEffectPolicy;
 }): DurableExecutorRunOnceResult {
-  const { store, run, step, workerId, now, result } = params;
+  const { store, run, step, workerId, now, result, sideEffectPolicy } = params;
   if (!isStepClaimOwned({ store, step, workerId })) {
     return markClaimLost({ store, run, step, workerId, now });
   }
@@ -325,9 +330,58 @@ function applyStepResult(params: {
       metadata: result.error ?? { message: "durable step failed" },
       now,
     });
-    const retryAllowed = Boolean(
+    const retryRequested = Boolean(
       result.retryAfterMs && (!step.maxAttempts || step.attempt < step.maxAttempts),
     );
+    const retrySafe =
+      sideEffectPolicy === "none" ||
+      sideEffectPolicy === "idempotent" ||
+      Boolean(step.idempotencyKey);
+    const retryAllowed = retryRequested && retrySafe;
+    if (retryRequested && !retrySafe) {
+      const updatedStep = updateOwnedStep({
+        store,
+        step,
+        workerId,
+        input: {
+          status: "waiting",
+          recoveryState: "unknown_after_side_effect",
+          errorRef: errorRef.refId,
+          checkpointRef: result.checkpointRef ?? null,
+          ...clearStepClaimFields(workerId),
+          now,
+        },
+      });
+      if (!updatedStep) {
+        return markClaimLost({ store, run, step, workerId, now });
+      }
+      store.updateRun({
+        workflowRunId: run.workflowRunId,
+        status: "waiting",
+        recoveryState: "unknown_after_side_effect",
+        checkpointRef: result.checkpointRef ?? undefined,
+        heartbeatAt: null,
+        now,
+      });
+      store.appendEvent({
+        workflowRunId: run.workflowRunId,
+        eventType: "workflow.step.retry_blocked_unknown_side_effect",
+        eventTime: now,
+        stepId: step.stepId,
+        payload: {
+          errorRef: errorRef.refId,
+          retryAfterMs: result.retryAfterMs,
+          sideEffectPolicy,
+          workerId,
+        },
+      });
+      return {
+        claimed: true,
+        workflowRunId: run.workflowRunId,
+        stepId: step.stepId,
+        outcome: "unknown_after_side_effect",
+      };
+    }
     if (retryAllowed) {
       const timer = store.createTimer({
         workflowRunId: run.workflowRunId,
@@ -568,7 +622,8 @@ export async function runDurableExecutorOnce(
     });
     return { claimed: false, reason: "no_runnable_step" };
   }
-  const handler = options.registry.getStepHandler(step.stepType);
+  const registration = options.registry.getStepHandlerRegistration(step.stepType);
+  const handler = registration?.handler;
   const startTime = now();
   const runningStep = updateOwnedStep({
     store: options.store,
@@ -671,6 +726,7 @@ export async function runDurableExecutorOnce(
       workerId: options.workerId,
       now: now(),
       result,
+      sideEffectPolicy: registration?.sideEffectPolicy ?? "unknown",
     });
   } catch (err) {
     return markHandlerException({

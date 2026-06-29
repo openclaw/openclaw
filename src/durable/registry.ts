@@ -14,6 +14,12 @@ export type DurableWorkflowDefinition = {
   metadata?: Record<string, unknown>;
 };
 
+export type DurableWorkflowStepSideEffectPolicy =
+  | "none"
+  | "idempotent"
+  | "non_idempotent"
+  | "unknown";
+
 export type DurableWorkflowStepHandlerContext = {
   store: DurableWorkflowStore;
   run: DurableWorkflowRun;
@@ -60,12 +66,28 @@ export type DurableWorkflowStepHandler = (
   context: DurableWorkflowStepHandlerContext,
 ) => DurableWorkflowStepHandlerResult | Promise<DurableWorkflowStepHandlerResult>;
 
+export type DurableWorkflowStepHandlerOptions = {
+  sideEffectPolicy?: DurableWorkflowStepSideEffectPolicy;
+};
+
+export type DurableWorkflowStepHandlerRegistration = {
+  handler: DurableWorkflowStepHandler;
+  sideEffectPolicy: DurableWorkflowStepSideEffectPolicy;
+};
+
 export type DurableWorkflowRegistry = {
   registerWorkflow(definition: DurableWorkflowDefinition): void;
   getWorkflow(workflowId: string, version?: string): DurableWorkflowDefinition | undefined;
   listWorkflows(): DurableWorkflowDefinition[];
-  registerStepHandler(stepType: DurableWorkflowStepType, handler: DurableWorkflowStepHandler): void;
+  registerStepHandler(
+    stepType: DurableWorkflowStepType,
+    handler: DurableWorkflowStepHandler,
+    options?: DurableWorkflowStepHandlerOptions,
+  ): void;
   getStepHandler(stepType: DurableWorkflowStepType): DurableWorkflowStepHandler | undefined;
+  getStepHandlerRegistration(
+    stepType: DurableWorkflowStepType,
+  ): DurableWorkflowStepHandlerRegistration | undefined;
 };
 
 function workflowKey(workflowId: string, version: string): string {
@@ -74,7 +96,7 @@ function workflowKey(workflowId: string, version: string): string {
 
 export function createDurableWorkflowRegistry(): DurableWorkflowRegistry {
   const workflows = new Map<string, DurableWorkflowDefinition>();
-  const handlers = new Map<DurableWorkflowStepType, DurableWorkflowStepHandler>();
+  const handlers = new Map<DurableWorkflowStepType, DurableWorkflowStepHandlerRegistration>();
 
   return {
     registerWorkflow(definition: DurableWorkflowDefinition): void {
@@ -92,12 +114,28 @@ export function createDurableWorkflowRegistry(): DurableWorkflowRegistry {
     registerStepHandler(
       stepType: DurableWorkflowStepType,
       handler: DurableWorkflowStepHandler,
+      options?: DurableWorkflowStepHandlerOptions,
     ): void {
-      handlers.set(stepType, handler);
+      handlers.set(stepType, {
+        handler,
+        sideEffectPolicy: options?.sideEffectPolicy ?? "unknown",
+      });
     },
 
     getStepHandler(stepType: DurableWorkflowStepType): DurableWorkflowStepHandler | undefined {
-      return handlers.get(stepType);
+      return handlers.get(stepType)?.handler;
+    },
+
+    getStepHandlerRegistration(
+      stepType: DurableWorkflowStepType,
+    ): DurableWorkflowStepHandlerRegistration | undefined {
+      const registration = handlers.get(stepType);
+      return registration
+        ? {
+            handler: registration.handler,
+            sideEffectPolicy: registration.sideEffectPolicy,
+          }
+        : undefined;
     },
   };
 }

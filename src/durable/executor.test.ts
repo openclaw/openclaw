@@ -91,11 +91,15 @@ describe("durable workflow executor", () => {
     const { store, cleanup } = tempStore();
     try {
       const registry = createDurableWorkflowRegistry();
-      registry.registerStepHandler("tool", () => ({
-        kind: "failed",
-        error: { code: "temporary" },
-        retryAfterMs: 500,
-      }));
+      registry.registerStepHandler(
+        "tool",
+        () => ({
+          kind: "failed",
+          error: { code: "temporary" },
+          retryAfterMs: 500,
+        }),
+        { sideEffectPolicy: "idempotent" },
+      );
       const run = store.createRun({
         workflowId: "test.workflow",
         status: "queued",
@@ -209,6 +213,57 @@ describe("durable workflow executor", () => {
         "workflow.step.running",
         "workflow.step.claim_lost",
       ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("blocks automatic retry when side effects are not declared idempotent", async () => {
+    const { store, cleanup } = tempStore();
+    try {
+      const registry = createDurableWorkflowRegistry();
+      registry.registerStepHandler("tool", () => ({
+        kind: "failed",
+        error: { code: "maybe-delivered" },
+        retryAfterMs: 500,
+      }));
+      const run = store.createRun({
+        workflowId: "test.workflow",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      const step = store.createStep({
+        workflowRunId: run.workflowRunId,
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        maxAttempts: 3,
+        now: 110,
+      });
+
+      const result = await runDurableExecutorOnce({
+        store,
+        registry,
+        workerId: "worker-1",
+        workflowId: "test.workflow",
+        now: () => 200,
+      });
+
+      expect(result).toEqual({
+        claimed: true,
+        workflowRunId: run.workflowRunId,
+        stepId: step.stepId,
+        outcome: "unknown_after_side_effect",
+      });
+      expect(store.getRun(run.workflowRunId)).toMatchObject({
+        status: "waiting",
+        recoveryState: "unknown_after_side_effect",
+      });
+      expect(store.listTimers(run.workflowRunId)).toEqual([]);
+      expect(store.getTimeline(run.workflowRunId).map((event) => event.eventType)).toContain(
+        "workflow.step.retry_blocked_unknown_side_effect",
+      );
     } finally {
       cleanup();
     }
