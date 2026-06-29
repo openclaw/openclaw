@@ -178,6 +178,22 @@ function expectWarningIncludes(text: string): void {
   expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
+function expectRedactedVoiceCallStatus(value: unknown): void {
+  expect(value).toEqual({
+    callId: "call-1",
+    provider: "mock",
+    direction: "outbound",
+    state: "active",
+    startedAt: Date.UTC(2026, 4, 2, 9, 0, 0),
+  });
+  expect(value).not.toHaveProperty("from");
+  expect(value).not.toHaveProperty("to");
+  expect(value).not.toHaveProperty("sessionKey");
+  expect(value).not.toHaveProperty("transcript");
+  expect(value).not.toHaveProperty("processedEventIds");
+  expect(value).not.toHaveProperty("metadata");
+}
+
 async function registerVoiceCallCli(
   program: Command,
   pluginConfig: Record<string, unknown> = { provider: "mock" },
@@ -475,7 +491,21 @@ describe("voice-call plugin", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
-  it("returns call status", async () => {
+  it("returns redacted call status", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
       | ((ctx: {
@@ -488,6 +518,40 @@ describe("voice-call plugin", () => {
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.found).toBe(true);
+    expectRedactedVoiceCallStatus(payload?.call);
+  });
+
+  it("returns redacted active call status list", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getActiveCalls = vi.fn(() => [call]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    const [ok, payload] = firstRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload?.found).toBe(true);
+    expect(payload?.calls).toHaveLength(1);
+    expectRedactedVoiceCallStatus((payload?.calls as unknown[])[0]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {
@@ -650,6 +714,20 @@ describe("voice-call plugin", () => {
   });
 
   it("tool get_status returns json payload", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
     const { tools } = setup({ provider: "mock" });
     const tool = tools[0] as {
       execute: (id: string, params: unknown) => Promise<unknown>;
@@ -657,8 +735,9 @@ describe("voice-call plugin", () => {
     const result = (await tool.execute("id", {
       action: "get_status",
       callId: "call-1",
-    })) as { details: { found?: boolean } };
+    })) as { details: { found?: boolean; call?: unknown } };
     expect(result.details.found).toBe(true);
+    expectRedactedVoiceCallStatus(result.details.call);
   });
 
   it("tool send_dtmf returns json payload", async () => {
