@@ -51,6 +51,7 @@ import {
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
   replaceSqliteSessionEntry,
+  replaceSqliteSessionEntrySync,
   resolveSqliteSessionKeyBySessionId,
   resolveSqliteSessionParentForkDecision,
   resetSqliteSessionEntryLifecycle,
@@ -1064,6 +1065,11 @@ export async function replaceSessionEntry(
   entry: SessionEntry,
 ): Promise<SessionEntry | null> {
   return await replaceSqliteSessionEntry(scope, entry);
+}
+
+/** Replaces one entry synchronously for sync session runtimes. */
+export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
+  replaceSqliteSessionEntrySync(scope, entry);
 }
 
 /**
