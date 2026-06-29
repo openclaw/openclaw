@@ -68,10 +68,15 @@ type VideoGenerationSourceInput = {
 };
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
-  const payload = await readProviderJsonResponse<unknown>(
-    response,
-    "xAI video generation response",
-  );
+  let payload: unknown;
+  try {
+    payload = await readProviderJsonResponse<unknown>(response, "xAI video generation response");
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      throw new Error(XAI_VIDEO_MALFORMED_RESPONSE, { cause: error });
+    }
+    throw error;
+  }
   if (!isRecord(payload)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }

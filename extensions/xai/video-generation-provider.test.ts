@@ -4,9 +4,10 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, readProviderJsonResponseMock } =
+  getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
 
@@ -15,6 +16,51 @@ beforeAll(async () => {
 });
 
 installProviderHttpMockCleanup();
+
+beforeEach(() => {
+  readProviderJsonResponseMock.mockImplementation(async <T>(response: Response, label: string) => {
+    const maxBytes = 16 * 1024 * 1024;
+    if (!response.body) {
+      try {
+        return (await response.json()) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const body = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder().decode(body)) as T;
+    } catch (cause) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+  });
+});
 
 function requirePostJsonCall(index = 0): {
   url?: string;
@@ -272,7 +318,7 @@ describe("xai video generation provider", () => {
         prompt: "html body",
         cfg: {},
       }),
-    ).rejects.toThrow("xAI video generation response: malformed JSON response");
+    ).rejects.toThrow("xAI video generation response malformed");
   });
 
   it("treats unknown xAI poll statuses as continue-polling and returns when terminal", async () => {
