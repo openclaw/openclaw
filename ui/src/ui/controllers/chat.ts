@@ -48,6 +48,7 @@ import type {
   GatewaySessionsDefaults,
   ModelCatalogEntry,
 } from "../types.ts";
+import type { ChatAccordionBoxState, ChatAccordionView } from "../types/chat-types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -389,6 +390,7 @@ export type ChatState = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  chatAccordion: ChatAccordionView | null;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -420,6 +422,7 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  accordion?: ChatAccordionView;
 };
 
 export type ChatMetadataResult = CommandsListResult & {
@@ -478,6 +481,54 @@ function resolveSelectedAgentId(state: ChatState): string | undefined {
       : undefined;
   const selectedAgentId = assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId;
   return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
+}
+
+/**
+ * Manually collapse/expand a topic box from the Control UI. Optimistically flips the
+ * local accordion state, then round-trips through the `accordion.toggle` gateway method;
+ * on failure it reverts so the strip never drifts from the canonical store. The next
+ * chat.history load re-syncs from the store regardless.
+ */
+export async function toggleAccordionBox(
+  state: ChatState,
+  boxId: string,
+  nextState: ChatAccordionBoxState,
+): Promise<void> {
+  const box = state.chatAccordion?.boxes.find((entry) => entry.id === boxId);
+  if (!box || !state.client) {
+    return;
+  }
+  const previousState = box.state;
+  if (previousState === nextState) {
+    return;
+  }
+  // Flip only the named box on the LATEST accordion each time, so a concurrent
+  // chat.history reload (which replaces state.chatAccordion) is never clobbered — and a
+  // failed-request revert no-ops if that box no longer exists.
+  const setBoxState = (boxState: ChatAccordionBoxState): void => {
+    const view = state.chatAccordion;
+    const index = view ? view.boxes.findIndex((entry) => entry.id === boxId) : -1;
+    if (!view || index < 0) {
+      return;
+    }
+    const target = view.boxes[index];
+    const boxes = view.boxes.slice();
+    boxes[index] = { id: target.id, label: target.label, state: boxState, summary: target.summary };
+    state.chatAccordion = { ...view, boxes };
+  };
+  setBoxState(nextState);
+  const agentId = resolveSelectedAgentId(state);
+  try {
+    await state.client.request("accordion.toggle", {
+      sessionKey: state.sessionKey,
+      ...(agentId ? { agentId } : {}),
+      boxId,
+      state: nextState,
+    });
+  } catch (err) {
+    setBoxState(previousState);
+    setChatError(state, err instanceof Error ? err.message : String(err));
+  }
 }
 
 function resolveDefaultAgentId(state: ChatState): string | undefined {
@@ -751,6 +802,7 @@ async function loadChatHistoryUncached(
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
     replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
+    state.chatAccordion = res.accordion ?? null;
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId

@@ -57,7 +57,7 @@ import {
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, toggleAccordionBox } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -3774,6 +3774,11 @@ export function renderApp(state: AppViewState) {
                   fallbackStatus: state.fallbackStatus,
                   assistantAvatarUrl: chatAvatarUrl,
                   messages: state.chatMessages,
+                  accordion: state.chatAccordion,
+                  unifiedSession: state.unifiedSession,
+                  onToggleTopic: (boxId, nextState) => {
+                    void toggleAccordionBox(state, boxId, nextState);
+                  },
                   sideResult: state.chatSideResult,
                   toolMessages: state.chatToolMessages,
                   streamSegments: state.chatStreamSegments,

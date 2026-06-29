@@ -41,6 +41,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { readAccordionView } from "../../agents/memory/accordion-ui.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -2893,6 +2894,35 @@ async function readChatHistoryPage(params: {
   };
 }
 
+/**
+ * Read the topic accordion for a chat-history response. Gated on both
+ * conversationalMemory (off by default → no boxes exist) and the unified-session
+ * control surface that actually renders the strip — same condition the UI gates on, so
+ * we never pay the store read + payload bytes for a client that would discard them.
+ * `sessionKey` must be the canonical store key (turns/boxes are keyed under it, not the
+ * raw request alias). Swallows read errors so the durable store can never break history.
+ */
+function readAccordionViewForChatHistory(opts: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}) {
+  if (opts.cfg.agents?.defaults?.conversationalMemory?.enabled !== true) {
+    return undefined;
+  }
+  if (opts.cfg.gateway?.controlUi?.unifiedSession !== true) {
+    return undefined;
+  }
+  try {
+    return readAccordionView({ agentId: opts.agentId, sessionKey: opts.sessionKey });
+  } catch (err) {
+    console.warn(
+      `[conversational-memory] accordion read skipped: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+}
+
 async function handleChatHistoryRequest({
   params,
   respond,
@@ -3069,6 +3099,14 @@ async function handleChatHistoryRequest({
     messages: bounded.messages,
     maxBytes: maxHistoryBytes,
   });
+  // Surface the durable topic accordion (boxes + span ranges) so the Control UI can
+  // render per-topic collapse/expand controls. Read-only and best-effort: a store read
+  // must never fail history. Only when conversational memory is on (off by default).
+  const accordion = readAccordionViewForChatHistory({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey: canonicalKey,
+  });
   const payload = {
     sessionKey,
     sessionId,
@@ -3085,6 +3123,7 @@ async function handleChatHistoryRequest({
     fastMode: entry?.fastMode,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
+    ...(accordion ? { accordion } : {}),
     ...(includeAgentsList ? { agentsList: listAgentsForGateway(cfg, modelCatalog) } : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };

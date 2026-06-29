@@ -106,6 +106,7 @@ export type AppViewState = {
   chatAttachments: ChatAttachment[];
   chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   chatMessages: unknown[];
+  chatAccordion: import("./types/chat-types.js").ChatAccordionView | null;
   chatToolMessages: unknown[];
   activityEntries: ActivityEntry[];
   activityFilterText: string;

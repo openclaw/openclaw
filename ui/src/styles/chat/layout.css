@@ -61,6 +61,57 @@
   min-width: 180px;
 }
 
+/* Topic accordion strip (Phase 2, 02-03): per-topic collapse/expand controls above
+   the transcript. Only rendered when conversational memory surfaces topic boxes. */
+.chat-topics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px clamp(6px, 1vw, 12px);
+  min-width: 0;
+}
+
+.chat-topics__title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, var(--text-secondary));
+  margin-right: 2px;
+}
+
+.chat-topic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--surface-2, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chat-topic:hover {
+  border-color: var(--accent);
+}
+
+.chat-topic--collapsed {
+  color: var(--text-muted, var(--text-secondary));
+  background: transparent;
+  border-style: dashed;
+}
+
+.chat-topic__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
   flex: 1 1 0;

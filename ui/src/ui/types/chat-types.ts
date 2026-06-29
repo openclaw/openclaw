@@ -2,6 +2,31 @@
  * Chat message types for the UI layer.
  */
 
+/** Box render state, mirroring the durable conversational-memory store. */
+export type ChatAccordionBoxState = "live" | "collapsed";
+
+/** One durable topic box surfaced to the UI for collapse/expand controls. */
+export type ChatAccordionBox = {
+  id: string;
+  label: string | null;
+  state: ChatAccordionBoxState;
+  summary: string | null;
+};
+
+/** A span's box → seq-range mapping (carried for a later inline-fold consumer). */
+export type ChatAccordionSpan = {
+  boxId: string | null;
+  startSeq: number;
+  endSeq: number;
+  topic: string | null;
+};
+
+/** The topic accordion projection delivered with chat history (Phase 2, 02-03). */
+export type ChatAccordionView = {
+  boxes: ChatAccordionBox[];
+  spans: ChatAccordionSpan[];
+};
+
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }

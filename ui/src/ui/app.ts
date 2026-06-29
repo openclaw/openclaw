@@ -162,6 +162,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "./types.ts";
+import type { ChatAccordionView } from "./types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -270,6 +271,7 @@ export class OpenClawApp extends LitElement {
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
+  @state() chatAccordion: ChatAccordionView | null = null;
   @state() chatToolMessages: unknown[] = [];
   @state() activityEntries: ActivityEntry[] = [];
   @state() activityFilterText = "";

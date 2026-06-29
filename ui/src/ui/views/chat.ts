@@ -61,12 +61,14 @@ import {
   renderFallbackIndicator,
 } from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
+import { renderTopicAccordion } from "../chat/topic-accordion.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionWorkspaceListResult, SessionGoal, SessionsListResult } from "../types.ts";
+import type { ChatAccordionView } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -115,6 +117,12 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  // Conversational-memory topic accordion (Phase 2, 02-03): boxes/spans surfaced with
+  // history, plus the unified-session gate and the toggle callback that round-trips
+  // through the `accordion.toggle` gateway method.
+  accordion?: ChatAccordionView | null;
+  unifiedSession?: boolean;
+  onToggleTopic?: (boxId: string, nextState: "live" | "collapsed") => void;
   sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
@@ -2934,6 +2942,11 @@ export function renderChat(props: ChatProps) {
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
+              ${renderTopicAccordion({
+                enabled: Boolean(props.unifiedSession),
+                accordion: props.accordion ?? null,
+                onToggleTopic: props.onToggleTopic,
+              })}
               ${thread} ${chatColumnFooter}
             </div>
 

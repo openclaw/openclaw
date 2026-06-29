@@ -14,6 +14,7 @@ import {
   sendChatMessage,
   sendDetachedChatMessage,
   sendSteerChatMessage,
+  toggleAccordionBox,
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -26,6 +27,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatAccordion: null,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -3649,5 +3651,61 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+  });
+});
+
+describe("toggleAccordionBox", () => {
+  const view = () => ({
+    boxes: [
+      { id: "box-live", label: "Voice", state: "live" as const, summary: null },
+      { id: "box-folded", label: "Coding", state: "collapsed" as const, summary: null },
+    ],
+    spans: [],
+  });
+
+  it("optimistically flips state and round-trips through accordion.toggle", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      sessionKey: "agent:main:main",
+      chatAccordion: view(),
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await toggleAccordionBox(state, "box-live", "collapsed");
+
+    expect(state.chatAccordion?.boxes.find((b) => b.id === "box-live")?.state).toBe("collapsed");
+    const [method, params] = requireFirstRequestCall(request);
+    expect(method).toBe("accordion.toggle");
+    expect(requireRecord(params)).toMatchObject({
+      sessionKey: "agent:main:main",
+      boxId: "box-live",
+      state: "collapsed",
+    });
+  });
+
+  it("reverts the optimistic flip and records the error when the request fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("nope"));
+    const state = createState({
+      chatAccordion: view(),
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await toggleAccordionBox(state, "box-folded", "live");
+
+    expect(state.chatAccordion?.boxes.find((b) => b.id === "box-folded")?.state).toBe("collapsed");
+    expect(state.chatError).toBe("nope");
+  });
+
+  it("no-ops when the box is unknown or already in the target state", async () => {
+    const request = vi.fn();
+    const state = createState({
+      chatAccordion: view(),
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await toggleAccordionBox(state, "missing", "collapsed");
+    await toggleAccordionBox(state, "box-live", "live");
+
+    expect(request).not.toHaveBeenCalled();
   });
 });

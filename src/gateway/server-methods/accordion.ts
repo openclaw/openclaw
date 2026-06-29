@@ -3,6 +3,7 @@
 // override path) — turns are never mutated — mirroring the agent expand/collapse tools.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { setBoxStateManual } from "../../agents/memory/turns-store.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -37,7 +38,15 @@ export const accordionHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const changed = setBoxStateManual({ agentId: resolved.agentId, sessionKey, boxId, state });
+    // Boxes are keyed under the canonical store key (turns are captured under it); the UI
+    // sends the raw selected session key, so canonicalize here to match the read side.
+    const storeKey = resolveSessionStoreKey({ cfg: resolved.cfg, sessionKey });
+    const changed = setBoxStateManual({
+      agentId: resolved.agentId,
+      sessionKey: storeKey,
+      boxId,
+      state,
+    });
     if (!changed) {
       respond(
         false,
