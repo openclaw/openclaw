@@ -1185,6 +1185,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
           timeoutMs: compactionTimeoutMs,
         }),
       }),
+      // Compaction runs inside the embedded attempt, which already holds the
+      // session write lock via createEmbeddedAttemptSessionLockController.
+      // Without reentrancy, the nested acquire blocks for the full timeout
+      // and then fails — extending overflow recovery across every fallback
+      // model and rejecting concurrent webchat messages with "session file
+      // locked". Match the reentrancy already used by transcript-append /
+      // session-accessor writes so the in-process nested acquire bumps the
+      // refcount instead. (#97747)
+      allowReentrant: true,
     });
     try {
       await repairSessionFileIfNeeded({

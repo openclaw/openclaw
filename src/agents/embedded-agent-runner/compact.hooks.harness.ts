@@ -99,6 +99,9 @@ function createDefaultSessionMessages(): unknown[] {
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+export const acquireSessionWriteLockMock: Mock<
+  (params?: unknown) => Promise<{ release: () => Promise<void> }>
+> = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
 function createMockCompactionSession() {
   const session = {
     sessionId: "session-1",
@@ -355,6 +358,8 @@ export function resetCompactSessionStateMocks(): void {
 
 export function resetCompactHooksHarnessMocks(): void {
   clearAgentHarnesses();
+  acquireSessionWriteLockMock.mockReset();
+  acquireSessionWriteLockMock.mockResolvedValue({ release: vi.fn(async () => {}) });
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
   hookRunner.runBeforeCompaction.mockReset();
@@ -560,7 +565,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({

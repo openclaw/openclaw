@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
+  acquireSessionWriteLockMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
   createAgentSessionMock,
@@ -210,6 +211,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("acquires the session write lock reentrantly so overflow recovery does not self-deadlock", async () => {
+    // Regression for #97747: the embedded attempt already holds the session
+    // write lock when overflow recovery calls compactEmbeddedAgentSessionDirect.
+    // The nested acquire must pass allowReentrant:true so the lock manager
+    // bumps the refcount instead of blocking for the full 60s timeout.
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowReentrant: true }),
+    );
   });
 
   it("bootstraps runtime plugins with the resolved workspace", async () => {
