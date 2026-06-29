@@ -1,13 +1,14 @@
 // Slack plugin module implements thread behavior.
-import type { WebClient as SlackWebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { formatSlackFileReferenceList } from "../file-reference.js";
-import type { SlackFile } from "../types.js";
+import type { SlackAttachment, SlackFile } from "../types.js";
 import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
@@ -45,6 +46,56 @@ function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
 }
 
+function cleanSlackTextCandidate(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function pushUniqueText(parts: string[], value: string | undefined): void {
+  const text = cleanSlackTextCandidate(value);
+  if (text && !parts.includes(text)) {
+    parts.push(text);
+  }
+}
+
+function resolveSlackBlocksFallbackText(blocks: unknown[] | undefined): string | undefined {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return undefined;
+  }
+  return cleanSlackTextCandidate(buildSlackBlocksFallbackText(blocks as (Block | KnownBlock)[]));
+}
+
+function resolveSlackAttachmentFallbackText(attachments: SlackAttachment[] | undefined): string | undefined {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  for (const attachment of attachments) {
+    pushUniqueText(parts, attachment.pretext);
+    pushUniqueText(parts, attachment.title);
+    pushUniqueText(parts, attachment.text);
+    pushUniqueText(parts, attachment.fallback);
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
+  }
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function resolveSlackMessageText(message: {
+  text?: string;
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
+}): string | undefined {
+  return (
+    cleanSlackTextCandidate(message.text) ??
+    resolveSlackAttachmentFallbackText(message.attachments) ??
+    resolveSlackBlocksFallbackText(message.blocks)
+  );
+}
+
 export async function resolveSlackThreadStarter(params: {
   channelId: string;
   threadTs: string;
@@ -73,10 +124,12 @@ export async function resolveSlackThreadStarter(params: {
         bot_id?: string;
         ts?: string;
         files?: SlackFile[];
+        blocks?: unknown[];
+        attachments?: SlackAttachment[];
       }>;
     };
     const message = response?.messages?.[0];
-    const text = (message?.text ?? "").trim();
+    const text = message ? resolveSlackMessageText(message) : undefined;
     const files = message?.files?.length ? message.files : undefined;
     if (!message || (!text && !files)) {
       return null;
@@ -126,6 +179,8 @@ type SlackRepliesPageMessage = {
   bot_id?: string;
   ts?: string;
   files?: SlackFile[];
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
 };
 
 type SlackRepliesPage = {
@@ -168,8 +223,9 @@ export async function resolveSlackThreadHistory(params: {
       })) as SlackRepliesPage;
 
       for (const msg of response.messages ?? []) {
-        // Keep messages with text OR file attachments.
-        if (!msg.text?.trim() && !msg.files?.length) {
+        const text = resolveSlackMessageText(msg);
+        // Keep messages with text, Slack attachment/block fallback text, or file attachments.
+        if (!text && !msg.files?.length) {
           continue;
         }
         if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
@@ -187,7 +243,7 @@ export async function resolveSlackThreadHistory(params: {
 
     return retained.map((msg) => ({
       // For file-only messages, create a placeholder showing attached filenames.
-      text: msg.text?.trim() ? msg.text : formatSlackFilePlaceholder(msg.files),
+      text: resolveSlackMessageText(msg) ?? formatSlackFilePlaceholder(msg.files),
       userId: msg.user,
       botId: msg.bot_id,
       ts: msg.ts,

@@ -11,6 +11,7 @@ export type SlackFile = {
 
 export type SlackAttachment = {
   fallback?: string;
+  title?: string;
   text?: string;
   pretext?: string;
   author_name?: string;
