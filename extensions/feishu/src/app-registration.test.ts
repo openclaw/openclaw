@@ -204,15 +204,15 @@ describe("feishu bound reads — real HTTP server (no fetch mock)", () => {
           if (sent >= TOTAL_CHUNKS) { res.end(); return; }
           sent++; chunksWritten++;
           const ok = res.write(CHUNK);
-          if (ok) setImmediate(sendChunk);
-          else res.once("drain", sendChunk);
+          if (ok) { setImmediate(sendChunk); }
+          else { res.once("drain", sendChunk); }
         };
         sendChunk();
       });
       server.on("error", reject);
       server.listen(0, "127.0.0.1", () => {
         const addr = server.address() as { port: number };
-        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => server.close(err => err ? e(err) : r())) });
+        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }) });
       });
     });
 
@@ -237,7 +237,7 @@ describe("feishu bound reads — real HTTP server (no fetch mock)", () => {
       server.on("error", reject);
       server.listen(0, "127.0.0.1", () => {
         const addr = server.address() as { port: number };
-        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => server.close(err => err ? e(err) : r())) });
+        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }) });
       });
     });
     try {
