@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
+  CommandLaneTaskTimeoutError,
   enqueueCommandInLane,
   markGatewayDraining,
   resetCommandQueueStateForTest,
@@ -1288,6 +1289,55 @@ describe("runContextEngineMaintenance", () => {
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("gateway draining");
         expect(maintain).not.toHaveBeenCalled();
+      } finally {
+        enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("treats a foreign-lane timeout error as a schedule failure, not its own timeout", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-foreign-lane-", async () => {
+      vi.useFakeTimers();
+      // A timeout error carrying a DIFFERENT lane than this maintenance lane:
+      // the scoped classifier must not mistake it for this run's own timeout.
+      const foreignLaneError = new CommandLaneTaskTimeoutError("some-other-lane:xyz", 5_000);
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockRejectedValue(foreignLaneError);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const sessionKey = "agent:main:session-foreign-lane-timeout";
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-foreign-lane-timeout",
+          sessionKey,
+          sessionFile: "/tmp/session-foreign-lane-timeout.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+        });
+        await flushAsyncWork();
+
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(tasks[0], "foreign-lane schedule-failure task");
+        expect(task.status).toBe("cancelled");
+        // Normal schedule-failure path: names the foreign lane, not this run's timeout.
+        const summary = String(task.terminalSummary);
+        expect(summary).toContain("could not be scheduled");
+        expect(summary).toContain("some-other-lane:xyz");
+        expect(summary).not.toContain("Deferred maintenance timed out after");
       } finally {
         enqueueSpy.mockRestore();
         vi.useRealTimers();
