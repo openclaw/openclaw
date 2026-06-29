@@ -9,7 +9,7 @@ scenario:
     secondary:
       - plugins.plugin-tools
       - tools.invocation
-  objective: Verify the Tool Search gateway E2E script keeps a large plugin-owned tool catalog behind the compact bridge while still invoking the selected plugin tool.
+  objective: Verify the Tool Search gateway QA Lab flow keeps a large plugin-owned tool catalog behind the compact bridge while still invoking the selected plugin tool.
   successCriteria:
     - Direct mode exposes the fake plugin tool schemas and calls the selected plugin tool.
     - Tool Search code mode exposes only the compact bridge to the provider.
@@ -36,6 +36,9 @@ flow:
   steps:
     - name: stages fake plugin tool catalog
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
         - call: qaImport
           saveAs: toolSearch
           args:
