@@ -17,11 +17,8 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
-<<<<<<< HEAD
-import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
-=======
 import { normalizeStructuredPromptSection } from "../../agents/prompt-cache-stability.js";
->>>>>>> d3363dab9e... feat: add disableBoundaryAwareCache compat option for prefix-matching prompt cache providers
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
