@@ -73,7 +73,7 @@ class QQBotMarkdownChunkingState {
     }
     const chunkLimit = resolveQQBotMarkdownChunkLimit(limit);
 
-    const chunks: string[] = [];
+    this.chunks = [];
     const textWithPendingRow = this.consumePendingRowPrefix(text);
     const textWithPendingFenceLine = this.consumePendingFenceLinePrefix(textWithPendingRow);
     const hasTrailingNewline = textWithPendingFenceLine.endsWith("\n");
@@ -82,26 +82,27 @@ class QQBotMarkdownChunkingState {
       const isTrailingSplitLine = index === lines.length - 1 && line === "";
       this.consumeLine(line, {
         limit: chunkLimit,
-        chunks,
+        chunks: this.chunks,
         hasTrailingNewline,
         isTrailingSplitLine,
         isLastLine: index === lines.length - 1,
       });
     }
-    this.flushText(chunks, chunkLimit);
-    this.flushTable(chunks);
-    return chunks;
+    this.flushText(this.chunks, chunkLimit);
+    this.flushTable(this.chunks);
+    return this.chunks;
   }
 
   flushPendingText(limit: number): string[] {
     const chunkLimit = resolveQQBotMarkdownChunkLimit(limit);
-    const chunks: string[] = [];
-    this.flushPendingRowFragment(chunks, chunkLimit);
+    this.chunks = [];
+    this.flushPendingRowFragment(this.chunks, chunkLimit);
     this.flushPendingFenceLineFragment();
     this.flushPendingHeaderAsText();
-    this.flushText(chunks, chunkLimit);
-    this.flushTable(chunks);
-    return chunks;
+    this.flushText(this.chunks, chunkLimit);
+    this.flushTable(this.chunks);
+    this.forceFlushEmitBuffer(chunkLimit);
+    return this.chunks;
   }
 
   private consumeLine(
