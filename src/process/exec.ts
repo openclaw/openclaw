@@ -7,13 +7,13 @@ import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import {
@@ -22,6 +22,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "./windows-command.js";
+import { reapZombies } from "./zombie-reaper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -473,6 +474,9 @@ export async function runCommandWithTimeout(
           }
         }
         terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        // Reap zombie grandchildren after the process-tree kill settles
+        // (the SIGTERM/SIGKILL race can leave unreaped zombies, #97616).
+        setTimeout(() => reapZombies(), COMMAND_PROCESS_TREE_KILL_GRACE_MS + 500);
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
@@ -491,6 +495,8 @@ export async function runCommandWithTimeout(
         }
       }
       child.kill("SIGKILL");
+      // Give the SIGKILL time to take effect before reaping orphans.
+      setTimeout(() => reapZombies(), 500);
     };
 
     const armNoOutputTimer = () => {
