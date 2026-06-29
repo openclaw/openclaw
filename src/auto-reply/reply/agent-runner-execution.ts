@@ -981,6 +981,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -3306,6 +3311,9 @@ async function runAgentTurnWithFallbackInternal(
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
+      // the targeted re-auth/failover copy is surfaced instead of the generic
+      // provider-auth message.
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
