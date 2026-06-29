@@ -501,6 +501,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: false,
     });
   });
 
@@ -540,7 +541,9 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("fallback-ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", {
+      isFinalFallbackAttempt: true,
+    });
   });
 
   it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {

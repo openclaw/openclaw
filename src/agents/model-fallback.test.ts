@@ -1190,7 +1190,7 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[0]).toEqual([
       "anthropic",
       "claude-sonnet-4-6",
-      { isFinalFallbackAttempt: true },
+      { allowTransientCooldownProbe: true, isFinalFallbackAttempt: true },
     ]);
     expect(result.attempts).toStrictEqual([]);
   });
@@ -1239,7 +1239,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("direct cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["claude-cli", "opus", { isFinalFallbackAttempt: true }]);
+    expect(run.mock.calls[0]).toEqual([
+      "claude-cli",
+      "opus",
+      { allowTransientCooldownProbe: true, isFinalFallbackAttempt: true },
+    ]);
     expect(result.attempts).toStrictEqual([]);
   });
 
