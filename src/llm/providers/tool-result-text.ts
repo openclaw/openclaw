@@ -126,6 +126,8 @@ export function extractToolResultText(blocks: readonly unknown[]): string {
       structuredTexts.push(structured);
     }
   }
-  const parts = explicitTexts.length > 0 ? explicitTexts : structuredTexts;
-  return sanitizeSurrogates(truncateProviderToolText(parts.join("\n")));
+  if (explicitTexts.length > 0) {
+    return sanitizeSurrogates(explicitTexts.join("\n"));
+  }
+  return sanitizeSurrogates(truncateProviderToolText(structuredTexts.join("\n")));
 }

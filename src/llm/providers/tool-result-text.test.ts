@@ -90,13 +90,15 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("ciphertext");
   });
 
-  it("uses structured replay only as a no-text fallback", () => {
+  it("uses structured replay only as a no-text fallback without capping explicit text", () => {
+    const textTail = "explicit-tail-marker";
     const text = extractToolResultText([
-      { type: "text", text: "curated summary" },
+      { type: "text", text: `${"x".repeat(8_200)}${textTail}` },
       { type: "json", internal: "extra structured detail" },
     ]);
 
-    expect(text).toBe("curated summary");
+    expect(text).toContain(textTail);
+    expect(text).not.toContain("…(truncated)…");
     expect(text).not.toContain("extra structured detail");
   });
 
