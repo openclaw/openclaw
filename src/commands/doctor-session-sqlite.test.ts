@@ -531,6 +531,36 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(true);
     expect(inspect.totals.sqliteEntries).toBe(0);
   });
+
+  it("reports malformed selected legacy transcripts during validation", async () => {
+    const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      { sessionId: "session-1", updatedAt: 2000 },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "validate",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      issues: 2,
+      sqliteEntries: 1,
+      validatedEntries: 1,
+      validatedTranscriptEvents: 0,
+    });
+    expect(report.targets[0]?.issues[0]).toMatchObject({
+      code: "transcript_malformed",
+      sessionKey: "agent:main:main",
+    });
+  });
 });
 
 function createLegacyStore(

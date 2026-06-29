@@ -509,6 +509,11 @@ function validateTranscriptEventCount(
     return;
   }
   if (result.status !== "ok") {
+    report.issues.push({
+      code: "transcript_malformed",
+      message: result.message,
+      sessionKey: record.sessionKey,
+    });
     return;
   }
   const sqliteEvents = loadSqliteTranscriptEventsSync({
