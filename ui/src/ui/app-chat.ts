@@ -1989,7 +1989,7 @@ function prependReplyQuote(
 }
 
 function escapeMarkdownInline(value: string): string {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
 }
 
 // ── Slash Command Dispatch ──
