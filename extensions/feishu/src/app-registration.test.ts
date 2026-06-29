@@ -1,5 +1,7 @@
 // Feishu tests cover app registration plugin behavior.
+import { createServer } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
 import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
@@ -185,5 +187,65 @@ describe("Feishu app registration", () => {
 
     await expect(beginAppRegistration()).rejects.toThrow(/feishu\.api: malformed JSON response/);
     expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+describe("feishu bound reads — real HTTP server (no fetch mock)", () => {
+  it("rejects oversized response before fully buffering 20 MiB (OOM guard)", async () => {
+    const CHUNK = Buffer.alloc(1024 * 1024, 0x61);
+    const TOTAL_CHUNKS = 20;
+    let chunksWritten = 0;
+
+    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        let sent = 0;
+        const sendChunk = () => {
+          if (sent >= TOTAL_CHUNKS) { res.end(); return; }
+          sent++; chunksWritten++;
+          const ok = res.write(CHUNK);
+          if (ok) setImmediate(sendChunk);
+          else res.once("drain", sendChunk);
+        };
+        sendChunk();
+      });
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as { port: number };
+        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => server.close(err => err ? e(err) : r())) });
+      });
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
+      // Mutation-control: bare `response.json()` would buffer all 20 MiB.
+      await expect(readProviderJsonResponse(response, "feishu.bound-proof")).rejects.toThrow(/JSON response exceeds/);
+      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+      console.log(`[bound-proof] canceled at ${chunksWritten}/${TOTAL_CHUNKS} chunks`);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it("parses well-formed JSON response under the cap", async () => {
+    const payload = { code: 0, data: { app_id: "cli_test" } };
+    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(payload));
+      });
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as { port: number };
+        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => server.close(err => err ? e(err) : r())) });
+      });
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
+      const result = await readProviderJsonResponse<typeof payload>(response, "feishu.bound-proof");
+      expect(result).toEqual(payload);
+    } finally {
+      await srv.stop();
+    }
   });
 });
