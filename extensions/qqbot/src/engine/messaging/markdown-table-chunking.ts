@@ -50,6 +50,9 @@ class QQBotMarkdownChunkingState {
   private activeFence: ActiveFence | null = null;
   private pendingTextFenceOpenLine: string | null = null;
   private pendingFenceLineFragment: string | null = null;
+  // Paragraph block waiting to be merged with an adjacent table or fenced
+  // block; flushed as its own chunk if no such block arrives before stream end.
+  private pendingParagraphBlock: string | null = null;
 
   constructor(private readonly baseChunker: QQBotBaseMarkdownChunker) {}
 
@@ -78,7 +81,8 @@ class QQBotMarkdownChunkingState {
       });
     }
     this.flushText(chunks, chunkLimit);
-    this.flushTable(chunks);
+    this.flushTable(chunks, chunkLimit);
+    this.flushPendingParagraphBlock(chunks, chunkLimit);
     return chunks;
   }
 
@@ -89,8 +93,21 @@ class QQBotMarkdownChunkingState {
     this.flushPendingFenceLineFragment();
     this.flushPendingHeaderAsText();
     this.flushText(chunks, chunkLimit);
-    this.flushTable(chunks);
+    this.flushTable(chunks, chunkLimit);
+    this.flushPendingParagraphBlock(chunks, chunkLimit);
     return chunks;
+  }
+
+  private flushPendingParagraphBlock(chunks: string[], limit: number): void {
+    if (this.pendingParagraphBlock === null) {
+      return;
+    }
+    const text = this.pendingParagraphBlock;
+    this.pendingParagraphBlock = null;
+    if (!text) {
+      return;
+    }
+    pushBaseChunks(chunks, text, limit, this.baseChunker);
   }
 
   private consumeLine(
@@ -105,9 +122,15 @@ class QQBotMarkdownChunkingState {
   ): void {
     const fence = parseFenceLine(line);
     if (fence) {
-      this.endTable(params.chunks);
+      this.endTable(params.chunks, params.limit);
       if (!this.activeFence) {
-        this.pushTextLine(line);
+        // Drain any preceding prose into the pending paragraph block so it
+        // can be merged with this fence in flushFenceText / pushFenceLineChunks.
+        const drained = this.drainTextLinesToParagraph(params.limit);
+        if (drained !== null) {
+          this.pendingParagraphBlock = drained;
+        }
+        this.pushFenceTextLine(line);
         this.activeFence = fence;
         this.clearPendingTableHeader();
         return;
@@ -149,7 +172,10 @@ class QQBotMarkdownChunkingState {
     }
 
     if (this.pendingHeaderLine && isTableSeparatorLine(line)) {
-      this.flushText(params.chunks, params.limit);
+      const drained = this.drainTextLinesToParagraph(params.limit);
+      if (drained !== null) {
+        this.pendingParagraphBlock = drained;
+      }
       this.activeTable = {
         header: this.pendingHeaderLine,
         separator: line,
@@ -162,7 +188,10 @@ class QQBotMarkdownChunkingState {
     }
 
     if (isTableRowLine(line) && this.activeTable && !isTableSeparatorLine(line)) {
-      this.flushText(params.chunks, params.limit);
+      const drained = this.drainTextLinesToParagraph(params.limit);
+      if (drained !== null) {
+        this.pendingParagraphBlock = drained;
+      }
       this.appendTableRow(line, params.limit, params.chunks);
       return;
     }
@@ -171,11 +200,14 @@ class QQBotMarkdownChunkingState {
       if (!line.trim() && params.isTrailingSplitLine) {
         return;
       }
-      this.endTable(params.chunks);
+      this.endTable(params.chunks, params.limit);
     }
 
     if (isTableRowLine(line) && !isTableSeparatorLine(line)) {
-      this.flushText(params.chunks, params.limit);
+      const drained = this.drainTextLinesToParagraph(params.limit);
+      if (drained !== null) {
+        this.pendingParagraphBlock = drained;
+      }
       this.pendingHeaderLine = line;
       this.pendingHeaderCells = splitTableCells(line);
       return;
@@ -251,6 +283,24 @@ class QQBotMarkdownChunkingState {
     pushBaseChunks(chunks, text, limit, this.baseChunker);
   }
 
+  // Move accumulated textLines into a paragraph string without emitting yet;
+  // the caller decides whether to merge with an upcoming table or fence.
+  private drainTextLinesToParagraph(_limit: number): string | null {
+    if (this.textLines.length === 0 && !this.pendingTextFenceOpenLine && !this.activeFence) {
+      return null;
+    }
+    let text = this.textLines.join("\n");
+    this.textLines = [];
+    if (this.pendingTextFenceOpenLine) {
+      text = text ? `${this.pendingTextFenceOpenLine}\n${text}` : this.pendingTextFenceOpenLine;
+      this.pendingTextFenceOpenLine = null;
+    }
+    if (this.activeFence) {
+      text = text ? `${text}\n${this.activeFence.closeLine}` : this.activeFence.closeLine;
+    }
+    return text || null;
+  }
+
   private flushFenceText(chunks: string[], limit: number): boolean {
     const pendingFenceOpenLine = this.pendingTextFenceOpenLine;
     const firstLineFence = pendingFenceOpenLine ? null : parseFenceLine(this.textLines[0] ?? "");
@@ -269,6 +319,7 @@ class QQBotMarkdownChunkingState {
       return true;
     }
 
+    const pendingRef = { value: this.pendingParagraphBlock };
     pushFenceLineChunks({
       chunks,
       openLine: fence.openLine,
@@ -276,7 +327,9 @@ class QQBotMarkdownChunkingState {
       bodyLines,
       limit,
       baseChunker: this.baseChunker,
+      pendingParagraph: pendingRef,
     });
+    this.pendingParagraphBlock = pendingRef.value;
     return true;
   }
 
@@ -335,12 +388,23 @@ class QQBotMarkdownChunkingState {
     pushBaseChunks(chunks, text, limit, this.baseChunker);
   }
 
-  private flushTable(chunks: string[]): void {
+  private flushTable(chunks: string[], limit: number): void {
     if (this.tableLines.length === 0) {
       return;
     }
-    chunks.push(this.tableLines.join("\n"));
+    const tableText = this.tableLines.join("\n");
     this.tableLines = [];
+    if (this.pendingParagraphBlock !== null) {
+      const paragraph = this.pendingParagraphBlock;
+      this.pendingParagraphBlock = null;
+      const candidate = `${paragraph}\n${tableText}`;
+      if (utf8ByteLength(candidate) <= limit) {
+        chunks.push(candidate);
+        return;
+      }
+      pushBaseChunks(chunks, paragraph, limit, this.baseChunker);
+    }
+    chunks.push(tableText);
   }
 
   private dropHeaderOnlyTableChunk(): void {
@@ -354,8 +418,8 @@ class QQBotMarkdownChunkingState {
     }
   }
 
-  private endTable(chunks: string[]): void {
-    this.flushTable(chunks);
+  private endTable(chunks: string[], limit: number): void {
+    this.flushTable(chunks, limit);
     this.activeTable = null;
   }
 }
@@ -565,15 +629,30 @@ function pushFenceLineChunks(params: {
   bodyLines: string[];
   limit: number;
   baseChunker: QQBotBaseMarkdownChunker;
+  pendingParagraph?: { value: string | null };
 }): void {
   const { chunks, openLine, closeLine, bodyLines, limit, baseChunker } = params;
+  const pendingRef = params.pendingParagraph;
   let currentLines: string[] = [];
+  let mergedPending = false;
   const render = (lines: string[]) => [openLine, ...lines, closeLine].join("\n");
   const flushCurrent = (): void => {
     if (currentLines.length === 0) {
       return;
     }
-    chunks.push(render(currentLines));
+    let chunk = render(currentLines);
+    if (!mergedPending && pendingRef && pendingRef.value !== null) {
+      const candidate = `${pendingRef.value}\n${chunk}`;
+      if (utf8ByteLength(candidate) <= limit) {
+        chunk = candidate;
+        pendingRef.value = null;
+      } else {
+        pushBaseChunks(chunks, pendingRef.value, limit, baseChunker);
+        pendingRef.value = null;
+      }
+      mergedPending = true;
+    }
+    chunks.push(chunk);
     currentLines = [];
   };
 
@@ -593,7 +672,7 @@ function pushFenceLineChunks(params: {
   }
 
   if (currentLines.length > 0 || bodyLines.length === 0) {
-    chunks.push(render(currentLines));
+    flushCurrent();
   }
 }
 
