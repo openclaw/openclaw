@@ -3,6 +3,8 @@
  * Verifies typed and message-based classification plus sanitized login command
  * generation.
  */
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { FailoverError } from "../failover-error.js";
 import {
@@ -76,5 +78,89 @@ describe("oauth refresh failure hints", () => {
     const otherProviderMessage =
       "Provider openai failed: Failed to authenticate. API Error: 401 Unauthorized";
     expect(classifyOAuthRefreshFailure(otherProviderMessage)).toBeNull();
+  });
+});
+
+type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
+
+async function withLoopbackServer<T>(
+  handler: LoopbackHandler,
+  run: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const { port } = server.address() as AddressInfo;
+  try {
+    return await run(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+}
+
+async function fetchClaudeCliOAuthProbe(baseUrl: string): Promise<{ ok: true; body: unknown }> {
+  const response = await fetch(`${baseUrl}/oauth-expiry`);
+  const body = await response.text();
+  if (!response.ok) {
+    const rawError = body.trim() || `HTTP ${response.status}`;
+    const failure = new FailoverError(rawError, {
+      reason: "auth",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-20250514",
+      status: response.status,
+      rawError,
+    });
+    const oauthFailure =
+      classifyOAuthRefreshFailureError(failure) ?? classifyOAuthRefreshFailure(failure.message);
+    if (oauthFailure?.reason) {
+      const command = buildOAuthRefreshFailureLoginCommand(oauthFailure.provider);
+      throw new Error(
+        `Model login expired on the gateway for ${oauthFailure.provider}. Re-auth with \`${command}\`, then try again.`,
+        { cause: failure },
+      );
+    }
+    throw failure;
+  }
+  return { ok: true, body: JSON.parse(body) };
+}
+
+describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
+  it("throws a re-auth hint when the server returns 401", async () => {
+    await withLoopbackServer(
+      (_request, response) => {
+        response.writeHead(401, { "content-type": "text/plain" });
+        response.end("Failed to authenticate. API Error: 401 Invalid authentication credentials");
+      },
+      async (baseUrl) => {
+        await expect(fetchClaudeCliOAuthProbe(baseUrl)).rejects.toThrow(
+          "Re-auth with `openclaw models auth login --provider anthropic --method cli`",
+        );
+      },
+    );
+  });
+
+  it("works normally when the server returns 200", async () => {
+    await withLoopbackServer(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ provider: "claude-cli", ok: true }));
+      },
+      async (baseUrl) => {
+        await expect(fetchClaudeCliOAuthProbe(baseUrl)).resolves.toEqual({
+          ok: true,
+          body: { provider: "claude-cli", ok: true },
+        });
+      },
+    );
   });
 });
