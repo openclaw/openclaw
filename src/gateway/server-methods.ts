@@ -86,6 +86,10 @@ const loadCommandsHandlers = lazyHandlerModule(
   () => import("./server-methods/commands.js"),
   (module) => module.commandsHandlers,
 );
+const loadAccordionHandlers = lazyHandlerModule(
+  () => import("./server-methods/accordion.js"),
+  (module) => module.accordionHandlers,
+);
 const loadConfigHandlers = lazyHandlerModule(
   () => import("./server-methods/config.js"),
   (module) => module.configHandlers,
@@ -306,6 +310,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["commands.list"],
     loadHandlers: loadCommandsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["accordion.toggle"],
+    loadHandlers: loadAccordionHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

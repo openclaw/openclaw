@@ -13,6 +13,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import type { ContextEvent, ExtensionAPI, ExtensionFactory } from "../sessions/index.js";
 import { applyFold, messageAnchorId } from "./accordion-blocks.js";
 import { type AnchorBox, buildAccordionFoldPlan } from "./accordion-seq-walk.js";
+import { applyAutoCollapse } from "./active-tag-set.js";
 import { turnIdempotencyKey } from "./turns-capture.js";
 import { getTurns, listBoxes, listSpans } from "./turns-store.js";
 
@@ -75,6 +76,9 @@ export function conversationalMemoryAccordionExtension(opts: {
     api.on("context", (event: ContextEvent) => {
       let anchorToBox: Map<string, AnchorBox> | null;
       try {
+        // Run the active-tag-set rule first (spec §16: collapse decision in the
+        // context-pruning seam) so any newly-stale topic is folded out this turn.
+        applyAutoCollapse({ agentId: opts.agentId, sessionKey: opts.sessionKey });
         anchorToBox = resolveAnchorBoxes(opts.agentId, opts.sessionKey, event.messages);
       } catch (err) {
         // Never break a model call over the accordion; fall through to verbatim context.

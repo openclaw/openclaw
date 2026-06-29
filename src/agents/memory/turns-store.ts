@@ -244,3 +244,52 @@ export function setBoxState(
     );
   }, options);
 }
+
+/**
+ * Operator/agent manual toggle (tool, gateway, UI). Flips state, and on a manual
+ * EXPAND bumps `last_active_seq` to the current conversation head so the auto-collapse
+ * dwell (active-tag-set rule) treats the box as freshly active — the override holds
+ * until the topic genuinely moves on. A manual COLLAPSE only sets state; the auto rule
+ * never re-expands, so nothing can undo it. Returns false when the box does not exist.
+ */
+export function setBoxStateManual(
+  options: SessionScopedOptions & { boxId: string; state: BoxState },
+): boolean {
+  return runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<TurnsDatabase>(database.db);
+    const box = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("boxes")
+        .select("box_id")
+        .where("box_id", "=", options.boxId)
+        .where("session_key", "=", options.sessionKey),
+    );
+    if (box == null) {
+      return false;
+    }
+    if (options.state === "live") {
+      const head = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("turns")
+          .select((eb) => eb.fn.max("seq").as("max_seq"))
+          .where("session_key", "=", options.sessionKey),
+      );
+      const headSeq = head?.max_seq == null ? null : Number(head.max_seq);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("boxes")
+          .set({ state: "live", last_active_seq: headSeq })
+          .where("box_id", "=", options.boxId),
+      );
+      return true;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db.updateTable("boxes").set({ state: "collapsed" }).where("box_id", "=", options.boxId),
+    );
+    return true;
+  }, options);
+}

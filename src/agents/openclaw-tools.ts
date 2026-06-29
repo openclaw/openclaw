@@ -23,6 +23,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { createAccordionTools } from "./memory/accordion-tools.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -416,6 +417,13 @@ export function createOpenClawTools(
     pluginToolDenylist: options?.pluginToolDenylist,
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
+  // Topic-accordion manual override tools — only when conversational memory is on and
+  // the run has a durable session scope (matches the capture/accordion extension gate).
+  const accordionTools =
+    resolvedConfig?.agents?.defaults?.conversationalMemory?.enabled === true &&
+    options?.agentSessionKey
+      ? createAccordionTools({ agentId: sessionAgentId, sessionKey: options.agentSessionKey })
+      : [];
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -558,6 +566,7 @@ export function createOpenClawTools(
       },
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
+    ...accordionTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
