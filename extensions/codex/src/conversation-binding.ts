@@ -53,6 +53,10 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
+import {
+  canMutateCodexHost,
+  CODEX_NATIVE_EXECUTION_AUTH_ERROR,
+} from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -236,6 +240,9 @@ export async function handleCodexConversationInboundClaim(
   const data = readCodexConversationBindingData(ctx.pluginBinding);
   if (!data) {
     return undefined;
+  }
+  if (!canMutateCodexHost(event)) {
+    return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   if (event.commandAuthorized !== true) {
     return { handled: true };
