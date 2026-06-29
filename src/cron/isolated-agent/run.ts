@@ -50,6 +50,7 @@ import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
+  normalizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
@@ -60,8 +61,10 @@ import type {
   CronDeliveryTraceMessageTarget,
   CronDeliveryTraceTarget,
   CronJob,
+  CronRunDiagnostics,
   CronRunTelemetry,
 } from "../types.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
@@ -483,6 +486,12 @@ type PreparedCronRunContext = {
    * the LLM idle watchdog can honor the cron's per-run choice.
    */
   runTimeoutOverrideMs?: number;
+  /**
+   * Diagnostic warnings assembled during preflight (e.g. toolsAllow lists a
+   * tool that has no registered provider). Merged into the final run result so
+   * operators can see the misconfiguration even when the run status is "ok".
+   */
+  preflightDiagnostics?: CronRunDiagnostics;
 };
 
 type CronPreparationResult =
@@ -876,6 +885,38 @@ async function prepareCronRunContext(params: {
       : undefined,
   };
 
+  // Preflight: warn when toolsAllow requests web_search but no provider is enabled.
+  // This avoids silent failures where the model apologises instead of searching.
+  let preflightDiagnostics: CronRunDiagnostics | undefined;
+  const agentPayloadToolsAllow = agentPayload?.toolsAllow;
+  if (agentPayloadToolsAllow && agentPayloadToolsAllow.length > 0) {
+    const normalizedAllow = expandToolGroups(agentPayloadToolsAllow).map((t) =>
+      normalizeToolName(t),
+    );
+    const requestsWebSearch =
+      normalizedAllow.includes("*") || normalizedAllow.includes("web_search");
+    if (requestsWebSearch) {
+      const webSearchProviders = listWebSearchProviders({ config: cfgWithAgentDefaults });
+      if (webSearchProviders.length === 0) {
+        preflightDiagnostics = normalizeCronRunDiagnostics({
+          summary:
+            "web_search tool requested (toolsAllow) but no web search provider plugin is enabled. " +
+            "Enable one with: openclaw plugins enable duckduckgo",
+          entries: [
+            {
+              ts: Date.now(),
+              source: "cron-preflight",
+              severity: "warn",
+              message:
+                "web_search tool requested (toolsAllow) but no web search provider plugin is enabled. " +
+                "Enable one with: openclaw plugins enable duckduckgo",
+            },
+          ],
+        });
+      }
+    }
+  }
+
   return {
     ok: true,
     context: {
@@ -908,6 +949,7 @@ async function prepareCronRunContext(params: {
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
+      preflightDiagnostics,
     },
   };
 }
@@ -1471,11 +1513,22 @@ export async function runCronIsolatedAgentTurn(params: {
         cronRunSessionCleanupAttempted = true;
       },
     });
-    if (finalized.status === "error") {
+    // Merge any preflight warnings (e.g. toolsAllow misconfiguration) so they
+    // appear in diagnostics_summary even when the run status is "ok".
+    const result = prepared.context.preflightDiagnostics
+      ? {
+          ...finalized,
+          diagnostics: mergeCronRunDiagnostics(
+            prepared.context.preflightDiagnostics,
+            finalized.diagnostics,
+          ),
+        }
+      : finalized;
+    if (result.status === "error") {
       outcome = "error";
-      outcomeError = finalized.error;
+      outcomeError = result.error;
     }
-    return finalized;
+    return result;
   } catch (err) {
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
