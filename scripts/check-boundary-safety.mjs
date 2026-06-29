@@ -476,13 +476,14 @@ export async function main(
   const args = parseArgs(argv);
   const actual = await collectBoundarySafetyInventory({ all: args.all });
 
+  const statusStream = args.json ? io.stderr : io.stdout;
   if (args.json) {
     io.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
   }
 
   if (args.updateBaseline) {
     await fs.writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`);
-    io.stdout.write(
+    statusStream.write(
       `Updated ${path.relative(repoRoot, baselinePath)} with ${actual.length} entries.\n`,
     );
     return 0;
@@ -493,7 +494,7 @@ export async function main(
 
   if (args.all) {
     if (diff.unexpected.length === 0 && diff.missing.length === 0) {
-      io.stdout.write(`Boundary safety baseline matches (${actual.length} entries).\n`);
+      statusStream.write(`Boundary safety baseline matches (${actual.length} entries).\n`);
       return 0;
     }
     io.stderr.write("Boundary safety baseline mismatch.\n");
@@ -506,7 +507,7 @@ export async function main(
   }
 
   if (diff.unexpected.length === 0) {
-    io.stdout.write(
+    statusStream.write(
       `Boundary safety changed-file check passed (${actual.length} changed-file entries, all baseline-known).\n`,
     );
     return 0;
