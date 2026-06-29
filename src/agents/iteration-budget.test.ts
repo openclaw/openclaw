@@ -178,3 +178,47 @@ describe("resolveIterationBudgetConfig", () => {
     });
   });
 });
+
+describe("IterationBudget — summary path fail-closed", () => {
+  it("blocks tools during forced summary when no refund is given", () => {
+    // Simulates the budget exhaustion + forceSummaryOnExhaustion flow:
+    // After the budget is fully consumed, the runner requests a summary turn.
+    // The onBeforeToolCallingRound callback calls consume() — it must return
+    // false so that agent-loop.ts stops without executing any tools.
+    // This test documents why we do NOT refund before the summary attempt.
+    const budget = new IterationBudget(3);
+
+    // Consume all 3 iterations (simulating 3 tool-calling rounds).
+    expect(budget.consume()).toBe(true);
+    expect(budget.consume()).toBe(true);
+    expect(budget.consume()).toBe(true);
+    expect(budget.remaining).toBe(0);
+
+    // Summary attempt: the model tries to call tools despite the no-tool
+    // instruction. Without a refund, consume() returns false — tools are
+    // blocked by agent-loop.ts, enforcing a hard cap.
+    expect(budget.consume()).toBe(false);
+    expect(budget.used).toBe(3);
+    expect(budget.remaining).toBe(0);
+  });
+
+  it("a refund before summary would incorrectly allow tool execution", () => {
+    // Documents the anti-pattern fixed in PR review round 2:
+    // If we refund before the summary attempt, consume() returns true,
+    // which lets the model execute another tool batch after exhaustion.
+    const budget = new IterationBudget(3);
+
+    budget.consume();
+    budget.consume();
+    budget.consume();
+    expect(budget.remaining).toBe(0);
+
+    // Anti-pattern: refund before summary — DO NOT do this in production.
+    budget.refund();
+    expect(budget.remaining).toBe(1);
+
+    // With the refund, a rogue tool call during the summary would succeed.
+    expect(budget.consume()).toBe(true); // BAD: tools execute after exhaustion
+    expect(budget.remaining).toBe(0);
+  });
+});
