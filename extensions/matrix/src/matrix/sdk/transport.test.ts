@@ -584,8 +584,8 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
         sent++;
         chunksWritten++;
         const ok = res.write(CHUNK);
-        if (ok) setImmediate(sendChunk);
-        else res.once("drain", sendChunk);
+        if (ok) { setImmediate(sendChunk); }
+        else { res.once("drain", sendChunk); }
       };
       sendChunk();
     });
