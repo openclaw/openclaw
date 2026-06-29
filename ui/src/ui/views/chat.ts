@@ -2030,14 +2030,58 @@ function renderSlashMenu(
   `;
 }
 
+let activeReplyContextMenu: HTMLElement | null = null;
+let contextMenuDocumentClickHandler: ((e: MouseEvent) => void) | null = null;
 let contextMenuKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
 function removeReplyContextMenu() {
+  activeReplyContextMenu?.remove();
+  activeReplyContextMenu = null;
   document.querySelector(".chat-reply-context-menu")?.remove();
+  if (contextMenuDocumentClickHandler) {
+    document.removeEventListener("click", contextMenuDocumentClickHandler);
+    contextMenuDocumentClickHandler = null;
+  }
   if (contextMenuKeydownHandler) {
     document.removeEventListener("keydown", contextMenuKeydownHandler);
     contextMenuKeydownHandler = null;
   }
+}
+
+function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
+  const source = `${senderLabel ?? ""}\n${text}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `reply:${(hash >>> 0).toString(16)}`;
+}
+
+function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", "Reply to message");
+
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "16");
+  icon.setAttribute("height", "16");
+  icon.setAttribute("fill", "currentColor");
+  icon.setAttribute("stroke", "none");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
+  icon.appendChild(path);
+
+  const label = document.createElement("span");
+  label.textContent = "Reply";
+
+  button.append(icon, label);
+  button.addEventListener("click", onClick);
+  return button;
 }
 
 export function renderChat(props: ChatProps) {
@@ -2099,7 +2143,6 @@ export function renderChat(props: ChatProps) {
   };
   const handleChatContextMenu = (e: MouseEvent, p: ChatProps) => {
     const bubble = (e.target as HTMLElement).closest(".chat-bubble");
-    // Always suppress native menu on chat bubbles; we show our own Reply menu.
     if (!bubble) {
       return;
     }
@@ -2125,20 +2168,23 @@ export function renderChat(props: ChatProps) {
     }
     e.preventDefault();
     e.stopPropagation();
-    const messageId = `msg-${Date.now()}`;
+    const messageId =
+      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
     removeReplyContextMenu();
     const menu = document.createElement("div");
     menu.className = "chat-reply-context-menu";
     menu.setAttribute("role", "menu");
-    menu.innerHTML = `<button type="button" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Reply</button>`;
+    menu.setAttribute("aria-label", "Message actions");
     menu.style.left = `${e.clientX}px`;
     menu.style.top = `${e.clientY}px`;
-    menu.querySelector("button")?.addEventListener("click", () => {
+    const button = createReplyContextMenuButton(() => {
       p.onSetReply?.({ messageId, text, senderLabel });
       removeReplyContextMenu();
       composerTextarea?.focus();
     });
+    menu.append(button);
     document.body.appendChild(menu);
+    activeReplyContextMenu = menu;
     // Clamp menu position within the viewport
     const menuRect = menu.getBoundingClientRect();
     let left = e.clientX;
@@ -2151,15 +2197,26 @@ export function renderChat(props: ChatProps) {
     }
     menu.style.left = `${Math.max(0, left)}px`;
     menu.style.top = `${Math.max(0, top)}px`;
-    menu.querySelector<HTMLButtonElement>("button")?.focus();
+    button.focus();
     requestAnimationFrame(() => {
-      document.addEventListener("click", removeReplyContextMenu, { once: true });
-      const handleKeydown = (ev: KeyboardEvent) => {
-        if (ev.key === "Escape") {
+      if (!menu.isConnected || activeReplyContextMenu !== menu) {
+        return;
+      }
+      contextMenuDocumentClickHandler = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node | null)) {
           removeReplyContextMenu();
         }
       };
+      const handleKeydown = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removeReplyContextMenu();
+          composerTextarea?.focus();
+        }
+      };
       contextMenuKeydownHandler = handleKeydown;
+      document.addEventListener("click", contextMenuDocumentClickHandler);
       document.addEventListener("keydown", handleKeydown);
     });
   };

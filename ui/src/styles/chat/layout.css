@@ -593,14 +593,15 @@
   border: none;
   background: none;
   color: var(--fg);
-  font-size: 13px;
   cursor: pointer;
   border-radius: 6px;
   text-align: left;
 }
 
-.chat-reply-context-menu button:hover {
+.chat-reply-context-menu button:hover,
+.chat-reply-context-menu button:focus-visible {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
 }
 
 .chat-reply-context-menu button svg {

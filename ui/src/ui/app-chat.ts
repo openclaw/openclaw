@@ -1911,9 +1911,6 @@ export async function handleSendChat(
     if (!queued) {
       return;
     }
-    // Quote is captured in the queue; safe to clear the transient reply target.
-    host.chatReplyTarget = null;
-
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {
       if (host.sessionKey === submittedSessionKey) {
         cancelPendingSendBeforeRequest(host, queued, {
@@ -1950,7 +1947,7 @@ export async function handleSendChat(
       return;
     }
 
-    await sendChatMessageNow(host, effectiveMessage, {
+    const accepted = await sendChatMessageNow(host, effectiveMessage, {
       queueItemId: queued.id,
       previousDraft: cleared.previousDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
@@ -1960,6 +1957,14 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
     });
+    if (
+      accepted &&
+      replyTarget &&
+      host.chatReplyTarget?.messageId === replyTarget.messageId &&
+      host.sessionKey === submittedSessionKey
+    ) {
+      host.chatReplyTarget = null;
+    }
   });
 }
 
@@ -1971,7 +1976,7 @@ function prependReplyQuote(
   message: string,
   replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
 ): string {
-  const label = replyTarget.senderLabel ?? "User";
+  const label = escapeMarkdownInline(replyTarget.senderLabel ?? "User");
   const text = replyTarget.text.trim();
   if (!text.includes("\n")) {
     return `> **${label}:** ${text}\n\n${message}`;
@@ -1981,6 +1986,10 @@ function prependReplyQuote(
     .map((line) => `> ${line}`)
     .join("\n");
   return `> **${label}:**\n${quoted}\n\n${message}`;
+}
+
+function escapeMarkdownInline(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
 }
 
 // ── Slash Command Dispatch ──
