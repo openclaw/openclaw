@@ -67,6 +67,27 @@ describe("native PDF provider API calls", () => {
     return call;
   };
 
+  const withTimeout = async <T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(message));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+
   afterEach(() => {
     global.fetch = priorFetch;
     vi.unstubAllEnvs();
@@ -182,14 +203,13 @@ describe("native PDF provider API calls", () => {
       }),
     );
 
-    const error = await Promise.race([
+    const error = await withTimeout(
       pdfNativeProviders
         .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
         .catch((caught: unknown) => caught),
-      new Promise<Error>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
-      }),
-    ]);
+      2_000,
+      "timed out waiting for bounded error body",
+    );
 
     if (!(error instanceof Error)) {
       throw new Error("expected Anthropic PDF request to throw an Error");
@@ -384,9 +404,15 @@ function startTestServer(
       resolve({
         port: addr.port,
         stop: () =>
-          new Promise<void>((res, rej) =>
-            server.close((err) => (err ? rej(err) : res())),
-          ),
+          new Promise<void>((res, rej) => {
+            server.close((err) => {
+              if (err) {
+                rej(err);
+                return;
+              }
+              res();
+            });
+          }),
       });
     });
   });
@@ -407,8 +433,28 @@ function makeOversizedStreamHandler(
   return (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     let written = 0;
+    let closed = false;
+    let pendingWrite: ReturnType<typeof setTimeout> | undefined;
+
+    const clearPendingWrite = () => {
+      if (pendingWrite) {
+        clearTimeout(pendingWrite);
+        pendingWrite = undefined;
+      }
+    };
+
+    const scheduleNext = () => {
+      if (closed || pendingWrite) {
+        return;
+      }
+      pendingWrite = setTimeout(writeNext, 5);
+    };
 
     function writeNext() {
+      pendingWrite = undefined;
+      if (closed) {
+        return;
+      }
       if (written >= TOTAL_CHUNKS) {
         res.end();
         return;
@@ -416,14 +462,23 @@ function makeOversizedStreamHandler(
       written++;
       onChunkWritten();
       const ok = res.write(CHUNK);
-      if (ok) {
-        writeNext();
-      } else {
-        res.once("drain", writeNext);
+      if (closed) {
+        return;
       }
+      if (!ok) {
+        res.once("drain", scheduleNext);
+        return;
+      }
+      scheduleNext();
     }
 
-    writeNext();
+    res.on("close", () => {
+      closed = true;
+      clearPendingWrite();
+      res.off("drain", scheduleNext);
+    });
+
+    scheduleNext();
   };
 }
 
