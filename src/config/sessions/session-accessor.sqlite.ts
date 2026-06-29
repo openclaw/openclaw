@@ -12,6 +12,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import {
@@ -992,17 +993,20 @@ export function loadLatestSqliteAssistantText(
 ): LatestTranscriptAssistantText | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const statement = database.db.prepare(`
-    SELECT te.event_json AS event_json
-    FROM transcript_events te
-    INNER JOIN transcript_event_identities ti
-      ON ti.session_id = te.session_id
-      AND ti.seq = te.seq
-    WHERE te.session_id = ?
-      AND ti.event_type = 'message'
-    ORDER BY te.seq DESC
-  `);
-  for (const row of statement.iterate(resolved.sessionId) as Iterable<{ event_json: string }>) {
+  const db = getSessionKysely(database.db);
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events as te")
+      .innerJoin("transcript_event_identities as ti", (join) =>
+        join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
+      )
+      .select("te.event_json as event_json")
+      .where("te.session_id", "=", resolved.sessionId)
+      .where("ti.event_type", "=", "message")
+      .orderBy("te.seq", "desc"),
+  );
+  for (const row of rows) {
     const latest = parseLatestAssistantMessageEvent(row.event_json, options);
     if (!latest) {
       continue;
@@ -1022,17 +1026,20 @@ export function loadLatestSqliteAssistantMessage(
 ): LatestTranscriptAssistantMessage | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const statement = database.db.prepare(`
-    SELECT te.event_json AS event_json
-    FROM transcript_events te
-    INNER JOIN transcript_event_identities ti
-      ON ti.session_id = te.session_id
-      AND ti.seq = te.seq
-    WHERE te.session_id = ?
-      AND ti.event_type = 'message'
-    ORDER BY te.seq DESC
-  `);
-  for (const row of statement.iterate(resolved.sessionId) as Iterable<{ event_json: string }>) {
+  const db = getSessionKysely(database.db);
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events as te")
+      .innerJoin("transcript_event_identities as ti", (join) =>
+        join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
+      )
+      .select("te.event_json as event_json")
+      .where("te.session_id", "=", resolved.sessionId)
+      .where("ti.event_type", "=", "message")
+      .orderBy("te.seq", "desc"),
+  );
+  for (const row of rows) {
     const latest = parseLatestAssistantMessageEvent(row.event_json, options);
     if (latest) {
       return latest;
@@ -1048,18 +1055,20 @@ export function loadLatestSqliteMessage(
 ): LatestTranscriptMessage | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const statement = database.db.prepare(`
-    SELECT te.event_json AS event_json
-    FROM transcript_events te
-    INNER JOIN transcript_event_identities ti
-      ON ti.session_id = te.session_id
-      AND ti.seq = te.seq
-    WHERE te.session_id = ?
-      AND ti.event_type = 'message'
-    ORDER BY te.seq DESC
-    LIMIT 1
-  `);
-  const row = statement.get(resolved.sessionId) as { event_json: string } | undefined;
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events as te")
+      .innerJoin("transcript_event_identities as ti", (join) =>
+        join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
+      )
+      .select("te.event_json as event_json")
+      .where("te.session_id", "=", resolved.sessionId)
+      .where("ti.event_type", "=", "message")
+      .orderBy("te.seq", "desc")
+      .limit(1),
+  );
   return row ? parseLatestMessageEvent(row.event_json, options) : undefined;
 }
 
