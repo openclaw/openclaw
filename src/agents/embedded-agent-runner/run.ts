@@ -1101,10 +1101,9 @@ async function runEmbeddedAgentInternal(
             {
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
-              // allowBundledStaticCatalogFallback enables resolution of
-              // plugin-provided models (e.g. opencode-go/deepseek-v4-flash)
-              // that are in the bundled static catalog but not discoverable
-              // via agent model discovery alone. (#95500)
+              // Enable bundled static catalog fallback so plugin-provided
+              // models that are not discoverable via agent model discovery
+              // can still be resolved from the static catalog.
               allowBundledStaticCatalogFallback: true,
             },
           );
