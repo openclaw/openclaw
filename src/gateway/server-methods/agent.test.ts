@@ -1,6 +1,7 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -33,6 +34,15 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+async function createSymlinkOrSkip(targetPath: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(targetPath, linkPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -5543,6 +5553,107 @@ describe("gateway agent handler", () => {
       avatarReason: "outside_workspace",
     });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("returns workspace-relative avatars as data URLs in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-identity-avatar-" }, async (workspace) => {
+      await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "avatars", "main.png"), "avatar", "utf8");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        {
+          sessionKey: "agent:main:main",
+        },
+        { reqId: "5-avatar-data-url" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+        avatarSource: "avatars/main.png",
+        avatarStatus: "local",
+      });
+      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+    });
+  });
+
+  it("does not inline unsupported workspace avatar files in agent.identity.get", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-agent-identity-avatar-unsupported-" },
+      async (workspace) => {
+        await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "avatars", "notes.txt"), "secret", "utf8");
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: { workspace },
+            list: [{ id: "main", identity: { avatar: "avatars/notes.txt" } }],
+          },
+        };
+
+        const respond = await invokeAgentIdentityGet(
+          {
+            sessionKey: "agent:main:main",
+          },
+          { reqId: "5-avatar-unsupported" },
+        );
+
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatarSource: "avatars/notes.txt",
+          avatarStatus: "none",
+          avatarReason: "unsupported_extension",
+        });
+        expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBeUndefined();
+        expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+      },
+    );
+  });
+
+  it("does not inline workspace avatar symlinks that escape the workspace", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-agent-identity-avatar-symlink-escape-" },
+      async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+        const outsideFile = path.join(root, "outside.png");
+        await fs.writeFile(outsideFile, "secret", "utf8");
+        const linkPath = path.join(workspace, "avatar-link.png");
+        if (!(await createSymlinkOrSkip(outsideFile, linkPath))) {
+          return;
+        }
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: { workspace },
+            list: [{ id: "main", identity: { avatar: "avatar-link.png" } }],
+          },
+        };
+
+        const respond = await invokeAgentIdentityGet(
+          {
+            sessionKey: "agent:main:main",
+          },
+          { reqId: "5-avatar-symlink-escape" },
+        );
+
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatarSource: "avatar-link.png",
+          avatarStatus: "none",
+          avatarReason: "outside_workspace",
+        });
+        expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBeUndefined();
+        expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+      },
+    );
   });
 
   it("allows non-delivery agent invocations when sendPolicy is deny", async () => {

@@ -296,6 +296,57 @@ describe("renderApp assistant avatar routing", () => {
     );
   });
 
+  it("keeps identity data URLs renderable when the avatar status is local", () => {
+    const dataUrl = "data:image/png;base64,cmVtb3RlLWlkZW50aXR5";
+
+    renderApp(
+      createState({
+        assistantAvatar: dataUrl,
+        assistantAvatarSource: "avatars/main.png",
+        assistantAvatarStatus: "local",
+        assistantAvatarReason: null,
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatar).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBe(dataUrl);
+    expect(quickSettingsProps.current?.assistantAvatarSource).toBe("avatars/main.png");
+    expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("local");
+  });
+
+  it("does not render stale route avatars when identity resolution rejects the source", () => {
+    renderApp(
+      createState({
+        assistantAvatar: "/avatar/main",
+        assistantAvatarSource: "avatars/notes.txt",
+        assistantAvatarStatus: "none",
+        assistantAvatarReason: "unsupported_extension",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatar).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarSource).toBe("avatars/notes.txt");
+    expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("none");
+    expect(quickSettingsProps.current?.assistantAvatarReason).toBe("unsupported_extension");
+  });
+
+  it("preserves short text avatars when image resolution has no renderable URL", () => {
+    renderApp(
+      createState({
+        assistantAvatar: "PS",
+        assistantAvatarSource: "PS",
+        assistantAvatarStatus: "none",
+        assistantAvatarReason: "missing",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatar).toBe("PS");
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("none");
+    expect(quickSettingsProps.current?.assistantAvatarReason).toBe("missing");
+  });
+
   it("reloads the default agent identity after clearing its override from a bare main session", async () => {
     const loadAssistantIdentity = vi.fn(async () => undefined);
     saveLocalAssistantIdentity({

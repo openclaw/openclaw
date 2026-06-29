@@ -36,6 +36,7 @@ import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
+  resolveAgentAvatarDisplayValue,
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
@@ -139,7 +140,6 @@ import {
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
 } from "../chat-attachments.js";
-import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   emitGatewaySessionEndPluginHook,
@@ -2831,13 +2831,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const cfg = context.getRuntimeConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
-    const avatarValue =
-      resolveAssistantAvatarUrl({
-        avatar: identity.avatar,
-        agentId: identity.agentId,
-        basePath: cfg.gateway?.controlUi?.basePath,
-      }) ?? identity.avatar;
     const avatarResolution = resolveAgentAvatar(cfg, identity.agentId, { includeUiOverride: true });
+    const avatarValue = resolveAgentAvatarDisplayValue(avatarResolution, identity.avatar);
     respond(
       true,
       {

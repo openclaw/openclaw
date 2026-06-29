@@ -310,6 +310,31 @@ describe("renderQuickSettings", () => {
     ).toBe(true);
   });
 
+  it("does not render rejected assistant avatar routes", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: "assets/avatars/notes.txt",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "unsupported_extension",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
+      "/apple-touch-icon.png",
+    );
+    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+      "Unsupported image type",
+    );
+  });
+
   it("reads assistant image imports into an override", () => {
     const onAssistantAvatarOverrideChange = vi.fn();
     const readAsDataURL = vi.fn(function (this: FileReader) {

@@ -198,7 +198,7 @@ function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | n
       },
     });
   }
-  if (props.assistantAvatarStatus === "none" && props.assistantAvatarReason === "missing") {
+  if (props.assistantAvatarStatus === "none") {
     return null;
   }
   return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
