@@ -1,4 +1,5 @@
 // Matrix tests cover transport plugin behavior.
+import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
@@ -363,6 +364,66 @@ describe("performMatrixRequest", () => {
     });
 
     expect(result.buffer).toEqual(Buffer.from(payload));
+  });
+
+  it("real HTTP server: rejects with MatrixMediaSizeLimitError when server declares over-cap Content-Length and maxBytes is omitted", async () => {
+    // MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024 (64 MiB) — must match transport.ts constant
+    const overCapBytes = 64 * 1024 * 1024 + 1; // 67108865 bytes
+
+    const server = http.createServer((_req, res) => {
+      // Declare a body larger than the default cap but do not send it —
+      // enforceDeclaredResponseSize will abort before any bytes are read.
+      res.writeHead(200, { "content-length": String(overCapBytes) });
+      res.write(Buffer.alloc(1)); // one sentinel byte; transport cancels before reading more
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+
+    try {
+      // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here
+      await expect(
+        performMatrixRequest({
+          homeserver: `http://127.0.0.1:${port}`,
+          accessToken: "token",
+          method: "GET",
+          endpoint: "/_matrix/media/v3/download/example/id",
+          timeoutMs: 10_000,
+          raw: true,
+          // intentionally omitting maxBytes — fix applies MATRIX_SDK_RESPONSE_MAX_BYTES as default
+          ssrfPolicy: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("real HTTP server: returns raw Buffer when server response is under the default cap and maxBytes is omitted", async () => {
+    const payload = Buffer.from("matrix media payload — under cap");
+
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-length": String(payload.length) });
+      res.end(payload);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+
+    try {
+      // Do NOT call stubRuntimeFetch — real undici path
+      const result = await performMatrixRequest({
+        homeserver: `http://127.0.0.1:${port}`,
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 10_000,
+        raw: true,
+        // intentionally omitting maxBytes — small body passes through default cap
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      expect(result.buffer).toEqual(payload);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("returns full JSON bodies that stay under the byte limit", async () => {
