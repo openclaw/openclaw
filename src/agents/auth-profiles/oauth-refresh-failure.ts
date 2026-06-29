@@ -40,7 +40,14 @@ function isOAuthRefreshFailureMessage(message: string): boolean {
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
-    lower.includes("authentication session could not be refreshed automatically")
+    lower.includes("authentication session could not be refreshed automatically") ||
+    // External CLI subprocesses (e.g. the `claude` CLI spawned under
+    // CLAUDE_CLI_CLEAR_ENV, which strips the API key so the subprocess can only
+    // authenticate via its stored OAuth token) emit their own 401 message on
+    // token expiry. Recognise it so the re-auth hint fires instead of a generic
+    // "something went wrong" error. Requires both the authenticate and 401
+    // signals together to avoid matching unrelated network 401 responses.
+    (lower.includes("failed to authenticate") && lower.includes("401"))
   );
 }
 
@@ -74,6 +81,14 @@ export function classifyOAuthRefreshFailureReason(
     return "invalid_refresh_token";
   }
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
+    return "revoked";
+  }
+  // An external CLI subprocess 401 (e.g. `claude` CLI under CLAUDE_CLI_CLEAR_ENV)
+  // means its stored OAuth token is no longer valid — treat as revoked/expired so
+  // the consumer surfaces the "login expired" re-auth hint rather than a generic
+  // failure. Mirrors the isOAuthRefreshFailureMessage gating: requires both
+  // "failed to authenticate" and 401 together.
+  if (lower.includes("failed to authenticate") && lower.includes("401")) {
     return "revoked";
   }
   return null;
