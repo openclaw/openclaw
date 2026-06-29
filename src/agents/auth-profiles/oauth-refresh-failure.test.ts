@@ -4,6 +4,7 @@
  * generation.
  */
 import { describe, expect, it } from "vitest";
+import { FailoverError } from "../failover-error.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -50,6 +51,23 @@ describe("oauth refresh failure hints", () => {
     expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
       "openclaw models auth login --provider anthropic --method cli",
     );
+  });
+
+  it("classifies structured claude-cli 401 failures even when the display message omits the provider", () => {
+    const error = new FailoverError(
+      "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      {
+        reason: "auth",
+        provider: "claude-cli",
+        model: "claude-sonnet-4-20250514",
+        status: 401,
+      },
+    );
+
+    expect(classifyOAuthRefreshFailureError(error)).toEqual({
+      provider: "claude-cli",
+      reason: "revoked",
+    });
   });
 
   it("does not classify a 401 auth failure without claude-cli prefix as a refresh failure", () => {
