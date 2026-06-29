@@ -28,6 +28,6 @@ describe("silmaril-firewall manifest", () => {
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as SilmarilFirewallPluginManifest;
 
-    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["pi", "codex"]);
+    expect(manifest.contracts?.agentToolResultMiddleware).toEqual(["openclaw", "codex"]);
   });
 });

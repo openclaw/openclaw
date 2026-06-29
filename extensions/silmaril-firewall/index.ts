@@ -10,7 +10,7 @@ export default definePluginEntry({
     api.registerAgentToolResultMiddleware(
       createSilmarilFirewallAgentToolResultMiddleware(api.pluginConfig, api.logger),
       {
-        runtimes: ["pi", "codex"],
+        runtimes: ["openclaw", "codex"],
       },
     );
   },
@@ -18,5 +18,5 @@ export default definePluginEntry({
 
 export {
   createSilmarilFirewallAgentToolResultMiddleware,
-  __testInternals,
+  testInternals,
 } from "./tool-result-middleware.js";

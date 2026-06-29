@@ -441,7 +441,7 @@ function readCwd(event: AgentToolResultMiddlewareEvent): string {
   return process.cwd();
 }
 
-export const __testInternals = {
+export const testInternals = {
   resolveRuntimeConfig,
   sameRuntimeConfig,
   readRecord,

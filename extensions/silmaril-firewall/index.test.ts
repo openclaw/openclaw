@@ -2,8 +2,8 @@ import type { AgentToolResultMiddlewareEvent } from "openclaw/plugin-sdk/agent-h
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, {
-  __testInternals,
   createSilmarilFirewallAgentToolResultMiddleware,
+  testInternals,
 } from "./index.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -53,7 +53,7 @@ describe("silmaril-firewall bundled plugin", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
-  it("registers tool result middleware for Pi and Codex runtimes", () => {
+  it("registers tool result middleware for OpenClaw and Codex runtimes", () => {
     const registerAgentToolResultMiddleware = vi.fn();
 
     plugin.register(
@@ -71,7 +71,7 @@ describe("silmaril-firewall bundled plugin", () => {
     );
 
     expect(registerAgentToolResultMiddleware).toHaveBeenCalledWith(expect.any(Function), {
-      runtimes: ["pi", "codex"],
+      runtimes: ["openclaw", "codex"],
     });
   });
 
@@ -154,7 +154,7 @@ describe("silmaril-firewall bundled plugin", () => {
           details: { raw: "raw malicious detail" },
         },
       }),
-      { runtime: "pi", agentId: "agent-1", sessionId: "session-1" },
+      { runtime: "openclaw", agentId: "agent-1", sessionId: "session-1" },
     );
 
     expect(result?.result.content).toHaveLength(1);
@@ -165,7 +165,7 @@ describe("silmaril-firewall bundled plugin", () => {
         blocked: true,
         hook: "tool_response",
         openClawHookEvent: "agent_tool_result_middleware",
-        runtime: "pi",
+        runtime: "openclaw",
         toolName: "exec",
         toolCallId: "call-1",
         reason: "malicious tool output withheld before model reuse",
@@ -184,7 +184,7 @@ describe("silmaril-firewall bundled plugin", () => {
         blocked: true,
         hook: "tool_response",
         openClawHookEvent: "agent_tool_result_middleware",
-        runtime: "pi",
+        runtime: "openclaw",
         toolName: "exec",
         toolCallId: "call-1",
         reason: "malicious tool output withheld before model reuse",
@@ -208,7 +208,7 @@ describe("silmaril-firewall bundled plugin", () => {
     };
 
     expect(
-      __testInternals.shouldBlockClassification(config, {
+      testInternals.shouldBlockClassification(config, {
         prediction: "MALICIOUS",
         score: 0.99,
         threshold: 0.5,
@@ -216,7 +216,7 @@ describe("silmaril-firewall bundled plugin", () => {
       }),
     ).toBe(false);
     expect(
-      __testInternals.shouldBlockClassification(config, {
+      testInternals.shouldBlockClassification(config, {
         prediction: "BENIGN",
         score: 0.99,
         threshold: 0.5,
@@ -224,7 +224,7 @@ describe("silmaril-firewall bundled plugin", () => {
       }),
     ).toBe(false);
     expect(
-      __testInternals.shouldBlockClassification(config, {
+      testInternals.shouldBlockClassification(config, {
         prediction: "MALICIOUS",
         score: 0.1,
         threshold: 0.5,
@@ -232,7 +232,7 @@ describe("silmaril-firewall bundled plugin", () => {
       }),
     ).toBe(false);
     expect(
-      __testInternals.shouldBlockClassification(
+      testInternals.shouldBlockClassification(
         { ...config, shadowMode: true },
         {
           prediction: "MALICIOUS",
@@ -299,7 +299,7 @@ describe("silmaril-firewall bundled plugin", () => {
             details: {},
           },
         }),
-        { runtime: "pi" },
+        { runtime: "openclaw" },
       ),
     ).resolves.toBeUndefined();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();

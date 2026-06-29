@@ -6,7 +6,7 @@
   "name": "Silmaril Firewall",
   "description": "Classifies and optionally replaces malicious agent tool results before model reuse.",
   "contracts": {
-    "agentToolResultMiddleware": ["pi", "codex"]
+    "agentToolResultMiddleware": ["openclaw", "codex"]
   },
   "configSchema": {
     "type": "object",
