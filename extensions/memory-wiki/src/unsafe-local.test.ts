@@ -77,7 +77,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
   it("prunes stale unsafe-local pages when configured files disappear", async () => {
     const privateDir = await createPrivateDir("private-prune");
 
-    const secretPath = path.join(privateDir, "secret.md");
+    const secretPath = path.join(privateDir, "..notes.md");
     await fs.writeFile(secretPath, "# private\n", "utf8");
 
     const { rootDir: vaultDir, config } = await createVault({
@@ -106,6 +106,48 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       "code",
       "ENOENT",
     );
+  });
+
+  it("does not prune imported directory pages when a configured source root is unavailable", async () => {
+    const privateDir = await createPrivateDir("private-unavailable");
+
+    const secretPath = path.join(privateDir, "..notes.md");
+    await fs.writeFile(secretPath, "# private\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("unavailable-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const firstPagePath = first.pagePaths[0] ?? "";
+    const firstPageAbsPath = path.join(vaultDir, firstPagePath);
+    const userNote = "Keep this human note across transient source outages.";
+    const edited = (await fs.readFile(firstPageAbsPath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    );
+    await fs.writeFile(firstPageAbsPath, edited, "utf8");
+
+    await fs.rename(privateDir, `${privateDir}.offline`);
+    const second = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(second.artifactCount).toBe(0);
+    expect(second.removedCount).toBe(0);
+    await expect(fs.readFile(firstPageAbsPath, "utf8")).resolves.toContain(userNote);
+
+    await fs.rename(`${privateDir}.offline`, privateDir);
+    const third = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(third.artifactCount).toBe(1);
+    expect(third.removedCount).toBe(0);
+    await expect(fs.readFile(firstPageAbsPath, "utf8")).resolves.toContain(userNote);
   });
 
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
