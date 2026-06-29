@@ -80,6 +80,7 @@ import {
   isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
+  isServerErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,
   pickFallbackThinkingLevel,
@@ -3361,8 +3362,13 @@ async function runEmbeddedAgentInternal(
             assistantFailoverReason === "timeout" &&
             isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
             Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+          const serverSideSilentErrorReason =
+            assistantFailoverReason === "server_error" ||
+            (assistantFailoverReason === "timeout" &&
+              isServerErrorMessage(assistantForFailover?.errorMessage ?? ""));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
+            serverSideSilentErrorReason ||
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||

@@ -136,11 +136,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -153,7 +150,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "LLM request timed out.",
       ),
     );
 
@@ -161,10 +158,30 @@ describe("runEmbeddedAgent silent-error retry", () => {
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-timeout",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries classified server_error empty turns before assistant failover", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("openrouter", "minimax/minimax-m3", 0, [], "Internal Server Error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("openrouter", "minimax/minimax-m3"),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      runId: "run-empty-error-retry-server-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {

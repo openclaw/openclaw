@@ -231,6 +231,9 @@ export const mockedIsFailoverErrorMessage = vi.fn(() => false);
 export const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
   /^\s*an unknown error occurred\.?\s*$/i.test(raw),
 );
+export const mockedIsServerErrorMessage = vi.fn((raw: string) =>
+  /\b(?:internal server error|server_error|http\s+5\d\d|bad gateway|gateway timeout)\b/i.test(raw),
+);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
@@ -424,6 +427,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsGenericUnknownStreamErrorMessage.mockReset();
   mockedIsGenericUnknownStreamErrorMessage.mockImplementation((raw: string) =>
     /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+  );
+  mockedIsServerErrorMessage.mockReset();
+  mockedIsServerErrorMessage.mockImplementation((raw: string) =>
+    /\b(?:internal server error|server_error|http\s+5\d\d|bad gateway|gateway timeout)\b/i.test(
+      raw,
+    ),
   );
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
@@ -659,6 +668,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
+    isServerErrorMessage: mockedIsServerErrorMessage,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
     sanitizeUserFacingText: vi.fn((text: unknown) => (typeof text === "string" ? text : "")),
