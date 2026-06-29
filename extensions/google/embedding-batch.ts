@@ -12,6 +12,7 @@ import {
 import {
   createProviderHttpError,
   readProviderJsonResponse,
+  readProviderTextResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
@@ -220,7 +221,7 @@ async function fetchGeminiFileContent(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch file content failed");
       }
-      return await res.text();
+      return await readProviderTextResponse(res, "gemini.batch-file-content");
     },
   });
 }

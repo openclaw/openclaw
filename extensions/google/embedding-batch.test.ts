@@ -1,5 +1,8 @@
 // Google tests cover embedding batch bounded JSON response reads.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
@@ -242,5 +245,104 @@ describe("Google embedding-batch bounded JSON reads", () => {
     });
 
     expect(result.get("r0")).toEqual([1, 0, 0]);
+  });
+});
+
+describe("Google embedding-batch file-content download bound (real HTTP server)", () => {
+  // Uses a real node:http server that streams 20 MiB without Content-Length to
+  // exercise the readProviderTextResponse 16 MiB cap on the :download path.
+
+  let server: ReturnType<typeof createServer>;
+  let port: number;
+
+  beforeEach(async () => {
+    server = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.includes("/upload/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ name: "files/f-ok" }));
+      } else if (url.includes(":asyncBatchEmbedContent")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            name: "batches/b-real",
+            state: "SUCCEEDED",
+            outputConfig: { file: "files/out-real" },
+          }),
+        );
+      } else if (url.includes(":download")) {
+        // Stream 20 MiB — deliberately no Content-Length header
+        res.writeHead(200, { "Content-Type": "application/octet-stream" });
+        const chunkSize = 1024 * 1024;
+        const totalChunks = 20;
+        let sent = 0;
+        const sendChunk = () => {
+          if (sent >= totalChunks) {
+            res.end();
+            return;
+          }
+          sent += 1;
+          const ok = res.write(Buffer.alloc(chunkSize));
+          if (ok) {
+            setImmediate(sendChunk);
+          } else {
+            res.once("drain", sendChunk);
+          }
+        };
+        sendChunk();
+      } else {
+        res.writeHead(500);
+        res.end("unexpected");
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it("rejects with gemini.batch-file-content label when download exceeds 16 MiB cap", async () => {
+    // Point the Gemini client at the local server so the real fetch reaches it.
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    await expect(
+      runGeminiEmbeddingBatches({
+        gemini,
+        agentId: "main",
+        requests: singleRequest(),
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 50,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(/gemini\.batch-file-content/);
+  });
+
+  it("mutation: res.text() does not bound large downloads — proves the fix is load-bearing", async () => {
+    // Build a 17 MiB ReadableStream (over the 16 MiB cap) and confirm:
+    //   • raw res.text() resolves without error  → pre-fix behaviour
+    //   • readProviderTextResponse rejects        → post-fix behaviour
+
+    const makeBigStream = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(17 * 1024 * 1024));
+          controller.close();
+        },
+      });
+
+    // Pre-fix: no bound — resolves
+    const r1 = new Response(makeBigStream(), { status: 200 });
+    await expect(r1.text()).resolves.toBeDefined();
+
+    // Post-fix: bound — rejects with the label we set
+    const r2 = new Response(makeBigStream(), { status: 200 });
+    await expect(readProviderTextResponse(r2, "gemini.batch-file-content")).rejects.toThrow(
+      /gemini\.batch-file-content/,
+    );
   });
 });
