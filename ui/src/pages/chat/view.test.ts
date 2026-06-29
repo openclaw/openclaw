@@ -14,7 +14,7 @@ import {
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
-} from "../../ui/chat/code-block-copy-payload.ts";
+} from "../../components/markdown.ts";
 import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
@@ -173,14 +173,6 @@ vi.mock("./grouped-render.ts", () => ({
     return group;
   },
 }));
-
-vi.mock("../../ui/markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../ui/markdown.ts")>();
-  return {
-    ...actual,
-    toSanitizedMarkdownHtml: (value: string) => value,
-  };
-});
 
 vi.mock("./tool-expansion-state.ts", () => ({
   getExpandedToolCards: () => new Map<string, boolean>(),

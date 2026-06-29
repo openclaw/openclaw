@@ -6,8 +6,6 @@ import { renderMarkdownSidebar } from "../ui/views/markdown-sidebar.ts";
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   decodeCodeBlockCopyPayload,
-} from "./chat/code-block-copy-payload.ts";
-import {
   md,
   toSanitizedMarkdownHtml,
   toStreamingMarkdownHtml,
