@@ -273,7 +273,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     authStores,
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
-    webToolsFromFastPath: true,
+    webToolsProvenance: "canonical-fast-path",
   };
   return {
     snapshot,

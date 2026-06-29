@@ -7,6 +7,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime.js";
 import { createEmptyRuntimeWebToolsMetadata } from "./runtime-fast-path.js";
+import type { WebToolsMetadataProvenance } from "./runtime-state.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   getActiveRuntimeWebToolsMetadata,
@@ -42,7 +43,7 @@ function populatedSearchMetadata(provider: string): RuntimeWebToolsMetadata {
 function preparedSnapshot(params: {
   sourceConfig: OpenClawConfig;
   webTools?: RuntimeWebToolsMetadata;
-  webToolsFromFastPath: boolean;
+  webToolsProvenance: WebToolsMetadataProvenance;
 }): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: params.sourceConfig,
@@ -50,7 +51,7 @@ function preparedSnapshot(params: {
     authStores: [],
     warnings: [],
     webTools: params.webTools ?? createEmptyRuntimeWebToolsMetadata(),
-    webToolsFromFastPath: params.webToolsFromFastPath,
+    webToolsProvenance: params.webToolsProvenance,
   };
 }
 
@@ -94,7 +95,7 @@ describe("runtime web tools state", () => {
     expect(second.search.selectedProvider).toBe("gemini");
   });
 
-  it("preserves populated web metadata across repeated stripped fast-path refreshes", () => {
+  function activateResolvedBraveSearch(): void {
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({
@@ -105,95 +106,95 @@ describe("runtime web tools state", () => {
           },
         }),
         webTools: populatedSearchMetadata("brave"),
-        webToolsFromFastPath: false,
+        webToolsProvenance: "resolved",
       }),
     );
+  }
 
+  it("preserves populated web metadata across repeated stripped fast-path refreshes", () => {
+    activateResolvedBraveSearch();
+
+    // A writer's stripped refresh re-prepares the active snapshot from a partial
+    // config view; provenance marks it stripped so prior metadata survives.
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({}),
-        webToolsFromFastPath: true,
+        webToolsProvenance: "stripped-refresh",
       }),
     );
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({}),
-        webToolsFromFastPath: true,
+        webToolsProvenance: "stripped-refresh",
       }),
     );
 
     expect(activeSearchProvider()).toBe("brave");
   });
 
-  it.each([
-    {
-      name: "tools.web",
-      sourceConfig: asConfig({
-        tools: {
-          web: {},
-        },
-      }),
-    },
-    {
-      name: "plugins.entries",
-      sourceConfig: asConfig({
-        plugins: {
-          entries: {},
-        },
-      }),
-    },
-  ])("clears web metadata when a fast-path refresh includes an explicit empty $name", ({
-    sourceConfig,
-  }) => {
-    activateSecretsRuntimeSnapshot(
-      preparedSnapshot({
-        sourceConfig: asConfig({
-          tools: {
-            web: {
-              search: { provider: "brave" },
-            },
-          },
-        }),
-        webTools: populatedSearchMetadata("brave"),
-        webToolsFromFastPath: false,
-      }),
-    );
+  it("clears web metadata when a canonical fast-path config deletes web surfaces", () => {
+    activateResolvedBraveSearch();
 
-    activateSecretsRuntimeSnapshot(
-      preparedSnapshot({
-        sourceConfig,
-        webToolsFromFastPath: true,
-      }),
-    );
+    // P1: a genuine web-config deletion fast-paths to an empty no-container config
+    // identical in shape to a stripped refresh. Provenance keeps it authoritative
+    // so the deleted web tools clear instead of leaving stale `web_search` active.
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({}),
-        webToolsFromFastPath: true,
+        webToolsProvenance: "canonical-fast-path",
       }),
     );
 
     expect(activeSearchProvider()).toBeUndefined();
   });
 
-  it("clears web metadata when the full resolver returns empty metadata", () => {
+  it("clears web metadata when a real canonical prepare of an empty config runs", async () => {
+    activateResolvedBraveSearch();
+
+    // P1 end-to-end: the real prepare path must assign `canonical-fast-path` to a
+    // fresh empty config so deleting web config clears active web metadata.
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+    const deleted = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-web-tools-state"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+    expect(deleted.webToolsProvenance).toBe("canonical-fast-path");
+
+    activateSecretsRuntimeSnapshot(deleted);
+    expect(activeSearchProvider()).toBeUndefined();
+  });
+
+  it("preserves web metadata when a stripped refresh carries an unrelated plugin entry", () => {
+    activateResolvedBraveSearch();
+
+    // P1: an unrelated `plugins.entries` write must not clear web tools. Preservation
+    // is provenance-gated, not container-gated, so a stripped refresh whose config
+    // only touches an unrelated plugin entry still keeps the active web metadata.
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({
-          tools: {
-            web: {
-              search: { provider: "brave" },
+          plugins: {
+            entries: {
+              "unrelated-plugin": { config: { someUnrelatedSetting: true } },
             },
           },
         }),
-        webTools: populatedSearchMetadata("brave"),
-        webToolsFromFastPath: false,
+        webToolsProvenance: "stripped-refresh",
       }),
     );
+
+    expect(activeSearchProvider()).toBe("brave");
+  });
+
+  it("clears web metadata when the full resolver returns empty metadata", () => {
+    activateResolvedBraveSearch();
 
     activateSecretsRuntimeSnapshot(
       preparedSnapshot({
         sourceConfig: asConfig({}),
-        webToolsFromFastPath: false,
+        webToolsProvenance: "resolved",
       }),
     );
 

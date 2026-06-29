@@ -111,7 +111,7 @@ describe("secrets runtime fast path", () => {
         store: emptyAuthStore(),
       },
     ]);
-    expect(snapshot.webToolsFromFastPath).toBe(true);
+    expect(snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it("uses the fast path when web fetch only configures runtime limits", async () => {
@@ -141,7 +141,7 @@ describe("secrets runtime fast path", () => {
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
     expect(snapshot.webTools.fetch.providerSource).toBe("none");
-    expect(snapshot.webToolsFromFastPath).toBe(true);
+    expect(snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it("uses the fast path when web fetch is explicitly disabled", async () => {
@@ -186,7 +186,7 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
-    expect(snapshot.webToolsFromFastPath).toBe(false);
+    expect(snapshot.webToolsProvenance).toBe("resolved");
   });
 
   it("keeps explicit web fetch provider config on the resolver path", async () => {
@@ -208,7 +208,7 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
-    expect(snapshot.webToolsFromFastPath).toBe(false);
+    expect(snapshot.webToolsProvenance).toBe("resolved");
   });
 
   it("marks startup-only fast-path snapshots as fast-path web metadata", async () => {
@@ -221,7 +221,7 @@ describe("secrets runtime fast path", () => {
       loadAuthStore: emptyAuthStore,
     });
 
-    expect(result?.snapshot.webToolsFromFastPath).toBe(true);
+    expect(result?.snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it.each([

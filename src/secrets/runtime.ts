@@ -39,15 +39,11 @@ import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 export type { SecretResolverWarning } from "./runtime-shared.js";
 export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
-// Resolver-backed source config is the only proof that active web metadata
-// belongs to a prior full pass; stripped fast-path writes may preserve it.
-let lastFullResolverSourceConfig: OpenClawConfig | null = null;
 let runtimeManifestPromise: Promise<typeof import("./runtime-manifest.runtime.js")> | null = null;
 let runtimePreparePromise: Promise<typeof import("./runtime-prepare.runtime.js")> | null = null;
 
 function clearSecretsRuntimeActivationAuxState(): void {
   clearRuntimeAuthProfileStoreSnapshots();
-  lastFullResolverSourceConfig = null;
 }
 
 registerSecretsRuntimeStateClearHook(clearSecretsRuntimeActivationAuxState);
@@ -124,20 +120,6 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   );
 }
 
-function hasRuntimeWebToolMetadataContainer(config: OpenClawConfig): boolean {
-  const tools = config.tools;
-  if (tools && typeof tools === "object" && !Array.isArray(tools) && "web" in tools) {
-    return true;
-  }
-  const plugins = config.plugins;
-  return (
-    Boolean(plugins) &&
-    typeof plugins === "object" &&
-    !Array.isArray(plugins) &&
-    "entries" in plugins
-  );
-}
-
 function hasResolvedRuntimeWebToolsMetadata(metadata: RuntimeWebToolsMetadata): boolean {
   return (
     metadata.search.providerSource !== "none" ||
@@ -156,11 +138,14 @@ function shouldPreserveActiveRuntimeWebToolsMetadata(
   snapshot: PreparedSecretsRuntimeSnapshot,
   activeWebTools: RuntimeWebToolsMetadata | null,
 ): activeWebTools is RuntimeWebToolsMetadata {
+  // Only a stripped fast-path refresh of an already-active snapshot may keep the
+  // prior metadata. A `canonical-fast-path` prepare (initial activation or a real
+  // web-config deletion) is authoritative and must clear, so deleted web surfaces
+  // do not leave stale `web_search`/`web_fetch` tools active. Provenance, not the
+  // incoming config shape, drives this: an unrelated plugin-entry stripped refresh
+  // still preserves because the decision never inspects the incoming containers.
   return (
-    snapshot.webToolsFromFastPath &&
-    !hasRuntimeWebToolMetadataContainer(snapshot.sourceConfig) &&
-    lastFullResolverSourceConfig !== null &&
-    hasRuntimeWebToolMetadataContainer(lastFullResolverSourceConfig) &&
+    snapshot.webToolsProvenance === "stripped-refresh" &&
     activeWebTools !== null &&
     hasResolvedRuntimeWebToolsMetadata(activeWebTools)
   );
@@ -190,6 +175,12 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  /**
+   * Set only by the refresh path re-preparing an already-active snapshot. Marks
+   * a resulting fast-path snapshot as a stripped refresh so activation may keep
+   * prior web metadata; fresh (canonical) prepares omit it and clear instead.
+   */
+  refreshOrigin?: boolean;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
@@ -217,7 +208,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       authStores,
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
-      webToolsFromFastPath: true,
+      webToolsProvenance: params.refreshOrigin
+        ? ("stripped-refresh" as const)
+        : ("canonical-fast-path" as const),
     };
     setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
@@ -304,7 +297,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       resolvedConfig,
       context,
     }),
-    webToolsFromFastPath: false,
+    webToolsProvenance: "resolved" as const,
   };
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
@@ -357,6 +350,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
           agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
           includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
           loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+          refreshOrigin: true,
           ...(activeRefreshContext.manifestRegistry
             ? { manifestRegistry: activeRefreshContext.manifestRegistry }
             : {}),
@@ -381,6 +375,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
             agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
             includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
             loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+            refreshOrigin: true,
             ...(activeRefreshContext.manifestRegistry
               ? { manifestRegistry: activeRefreshContext.manifestRegistry }
               : {}),
@@ -397,11 +392,6 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       },
     },
   });
-  if (!snapshotToActivate.webToolsFromFastPath) {
-    lastFullResolverSourceConfig = structuredClone(snapshotToActivate.sourceConfig);
-  } else if (hasRuntimeWebToolMetadataContainer(snapshotToActivate.sourceConfig)) {
-    lastFullResolverSourceConfig = null;
-  }
 }
 
 export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
@@ -416,6 +406,7 @@ export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
     agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
     includeAuthStoreRefs: activeRefreshContext.includeAuthStoreRefs,
     loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+    refreshOrigin: true,
     ...(activeRefreshContext.manifestRegistry
       ? { manifestRegistry: activeRefreshContext.manifestRegistry }
       : {}),

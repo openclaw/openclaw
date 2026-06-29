@@ -21,6 +21,22 @@ import {
 } from "./runtime-web-tools-state.js";
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
+/**
+ * Provenance of a snapshot's web-tool metadata. Only a stripped fast-path
+ * refresh of an already-active snapshot may preserve prior active metadata;
+ * `resolved` and `canonical-fast-path` snapshots are authoritative and clear it.
+ *
+ * - `resolved`: full SecretRef/web-tool resolver ran; metadata is authoritative.
+ * - `canonical-fast-path`: fresh fast-path prepare from a full config (initial
+ *   activation or a genuine web-config deletion); empty metadata is authoritative.
+ * - `stripped-refresh`: fast-path prepare produced while refreshing an active
+ *   snapshot, so the incoming config may be a writer's partial/stripped view.
+ */
+export type WebToolsMetadataProvenance =
+  | "resolved"
+  | "canonical-fast-path"
+  | "stripped-refresh";
+
 /** Prepared secrets runtime snapshot activated for fast secret resolution. */
 export type PreparedSecretsRuntimeSnapshot = {
   sourceConfig: OpenClawConfig;
@@ -28,7 +44,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
-  webToolsFromFastPath: boolean;
+  webToolsProvenance: WebToolsMetadataProvenance;
 };
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
@@ -80,7 +96,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
-    webToolsFromFastPath: snapshot.webToolsFromFastPath,
+    webToolsProvenance: snapshot.webToolsProvenance,
   };
 }
 

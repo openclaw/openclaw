@@ -44,7 +44,7 @@ function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot 
       fetch: { providerSource: "none", diagnostics: [] },
       diagnostics: [],
     },
-    webToolsFromFastPath: false,
+    webToolsProvenance: "resolved",
   };
 }
 
