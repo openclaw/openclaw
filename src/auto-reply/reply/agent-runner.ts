@@ -2622,7 +2622,7 @@ export async function runReplyAgent(params: {
             `"${assistantFinalText}"\n\n` +
             `Please deliver this reply now by calling message(action=send). ` +
             `Do not add any extra commentary — just deliver the original reply.`;
-          enqueueFollowupRun(
+          const retryEnqueued = enqueueFollowupRun(
             queueKey,
             {
               ...followupRun,
@@ -2649,8 +2649,26 @@ export async function runReplyAgent(params: {
             resolvedQueue,
             "none",
             queuedRunFollowupTurn,
-            true,
+            false,
           );
+          // #85714: Mirror the normal enqueue-followup path: keep the queue
+          // dormant while the active reply operation still owns the lane.
+          // Restarting the drain here (restartIfIdle=true) could kick the
+          // followup while this run's reply operation has not cleared, racing
+          // the owner-clear handoff. Route the drain through the owner-clear
+          // helper so the retry only runs once this operation releases.
+          if (retryEnqueued) {
+            const activeReplyOperation = replyRunRegistry.get(queueKey);
+            if (activeReplyOperation) {
+              scheduleFollowupDrainAfterReplyOperationClear({
+                operation: activeReplyOperation,
+                queueKey,
+                runFollowup: queuedRunFollowupTurn,
+              });
+            } else {
+              scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
+            }
+          }
         }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;

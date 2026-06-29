@@ -3454,6 +3454,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     transcriptPrompt?: string;
     summaryLine?: string;
     strandedReplyRecovery?: boolean;
+    replyOperation?: ReturnType<typeof createReplyOperation>;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3548,6 +3549,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      ...(params.replyOperation ? { replyOperation: params.replyOperation } : {}),
     });
     return { storePath, tmp, sessionKey, result };
   }
@@ -3649,5 +3651,51 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     await runPrivateFinalCase({ strandedReplyRecovery: true, summaryLine: "stranded-reply-retry" });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("schedules the stranded-reply retry drain only after the active reply operation clears", async () => {
+    // #85714: The stranded-reply retry must not kick the followup drain while the
+    // active reply operation still owns the lane. Mirror the normal enqueue path:
+    // enqueue with restartIfIdle=false, then route the drain through
+    // scheduleFollowupDrainAfterReplyOperationClear so it stays dormant until the
+    // owning operation clears.
+    const sessionKey = "stranded";
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    // The enqueue must report success so the drain-scheduling branch runs; the
+    // default mock returns undefined, which would skip it.
+    vi.mocked(enqueueFollowupRun).mockReturnValue(true);
+
+    const drainOrder: string[] = [];
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+      expect(key).toBe(sessionKey);
+      // The drain only runs once the operation has released the lane.
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      drainOrder.push("drain");
+    });
+
+    await runPrivateFinalCase({ strandedReplyRecovery: true, replyOperation });
+
+    // The retry was enqueued through the dormant path: collect mode "none" and
+    // restartIfIdle=false (last positional arg), not the immediate restart.
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const enqueueCall = vi.mocked(enqueueFollowupRun).mock.calls[0];
+    expect(enqueueCall?.[3]).toBe("none");
+    expect(enqueueCall?.[5]).toBe(false);
+
+    // While the provided reply operation still owns the lane, the drain stays
+    // dormant — the retry must not restart it underneath the active operation.
+    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+
+    // Clearing the active reply operation releases the deferred drain.
+    drainOrder.push("clear");
+    replyOperation.complete();
+
+    expect(drainOrder[0]).toBe("clear");
+    expect(scheduleFollowupDrain).toHaveBeenCalled();
   });
 });
