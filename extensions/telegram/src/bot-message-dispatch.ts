@@ -130,6 +130,7 @@ import {
 } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { consumeTelegramSilentNotificationMarker } from "./silent-marker.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import {
   beginTelegramReplyFence,
@@ -1785,6 +1786,7 @@ export const dispatchTelegramMessage = async ({
         });
       },
       resolveFinalTextCandidate: () => resolveCurrentTurnTranscriptFinalText(),
+      prepareFinalText: ({ text }) => consumeTelegramSilentNotificationMarker(text),
       log: logVerbose,
       markDelivered: () => {
         deliveryState.markDelivered();

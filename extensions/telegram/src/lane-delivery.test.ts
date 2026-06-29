@@ -10,6 +10,13 @@ import {
 } from "./lane-delivery.js";
 
 const HELLO_FINAL = "Hello final";
+const TRAILING_MARKER = "\nnotify=false";
+
+function consumeTestSilentMarker(text: string): { text: string; silent?: boolean } {
+  return text.endsWith(TRAILING_MARKER)
+    ? { text: text.slice(0, -TRAILING_MARKER.length), silent: true }
+    : { text };
+}
 
 function createHarness(params?: {
   answerMessageId?: number;
@@ -20,6 +27,10 @@ function createHarness(params?: {
     finalText: string;
     laneName: LaneName;
   }) => string | undefined;
+  prepareFinalText?: (params: { text: string; laneName: LaneName }) => {
+    text: string;
+    silent?: boolean;
+  };
 }) {
   const answer =
     params?.answerStream === null
@@ -67,6 +78,7 @@ function createHarness(params?: {
     clearDraftLane,
     editStreamMessage,
     resolveFinalTextCandidate: params?.resolveFinalTextCandidate,
+    prepareFinalText: params?.prepareFinalText,
     log,
     markDelivered,
   });
@@ -177,6 +189,39 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).toHaveBeenCalledWith({ text: "done" }, { durable: true });
     expect(harness.markDelivered).not.toHaveBeenCalled();
     expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("sends trailing marker finals silently instead of finalizing the preview", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      prepareFinalText: ({ text }) => consumeTestSilentMarker(text),
+    });
+
+    const result = await deliverFinalAnswer(harness, "No interruption needed.\nnotify=false");
+
+    expect(result.kind).toBe("sent");
+    expect(harness.answer?.update).not.toHaveBeenCalled();
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: "No interruption needed." },
+      { durable: true, silent: true },
+    );
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("keeps inline marker text on preview-finalized finals", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      prepareFinalText: ({ text }) => consumeTestSilentMarker(text),
+    });
+
+    const text = "The config line is notify=false when notifications are disabled.";
+    const result = await deliverFinalAnswer(harness, text);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(text);
+    expect(harness.answer?.update).toHaveBeenCalledWith(text);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("keeps media fallback non-durable when materializing an intermediate preview", async () => {
