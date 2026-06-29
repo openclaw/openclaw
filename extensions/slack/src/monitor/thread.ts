@@ -54,6 +54,14 @@ function cleanSlackTextCandidate(value: string | undefined): string | undefined 
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function readPrimarySlackText(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function pushUniqueText(parts: string[], value: string | undefined): void {
   const text = cleanSlackTextCandidate(value);
   if (text && !parts.includes(text)) {
@@ -79,6 +87,7 @@ function resolveSlackAttachmentFallbackText(attachments: SlackAttachment[] | und
     pushUniqueText(parts, attachment.title);
     pushUniqueText(parts, attachment.text);
     pushUniqueText(parts, attachment.fallback);
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.blocks));
     pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
@@ -90,7 +99,7 @@ function resolveSlackMessageText(message: {
   attachments?: SlackAttachment[];
 }): string | undefined {
   return (
-    cleanSlackTextCandidate(message.text) ??
+    readPrimarySlackText(message.text) ??
     resolveSlackAttachmentFallbackText(message.attachments) ??
     resolveSlackBlocksFallbackText(message.blocks)
   );
