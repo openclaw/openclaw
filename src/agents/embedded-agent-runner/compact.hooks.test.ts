@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   applyExtraParamsToAgentMock,
+  acquireSessionWriteLockMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
@@ -272,6 +273,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionKey: "agent:main:telegram:default:direct:12345",
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("acquires the session write lock with allowReentrant for nested compaction", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/session.jsonl",
+        allowReentrant: true,
+      }),
+    );
   });
 
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {

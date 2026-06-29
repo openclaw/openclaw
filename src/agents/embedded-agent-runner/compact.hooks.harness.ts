@@ -99,6 +99,11 @@ function createDefaultSessionMessages(): unknown[] {
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+export const acquireSessionWriteLockMock: Mock<
+  (params?: { sessionFile?: string; allowReentrant?: boolean; timeoutMs?: number }) => Promise<{
+    release: Mock<() => Promise<void>>;
+  }>
+> = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
 function createMockCompactionSession() {
   const session = {
     sessionId: "session-1",
@@ -398,6 +403,8 @@ export function resetCompactHooksHarnessMocks(): void {
   });
 
   triggerInternalHook.mockReset();
+  acquireSessionWriteLockMock.mockReset();
+  acquireSessionWriteLockMock.mockResolvedValue({ release: vi.fn(async () => {}) });
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -560,7 +567,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({

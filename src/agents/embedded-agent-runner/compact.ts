@@ -1180,6 +1180,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      // Compaction can be invoked from within an embedded attempt that already
+      // holds this session's write lock (e.g. overflow-recovery auto-compaction).
+      // Treat the nested acquire as re-entrant so it returns immediately instead
+      // of deadlocking against the outer lock.
+      allowReentrant: true,
       ...resolveSessionWriteLockOptions(params.config, {
         maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
           timeoutMs: compactionTimeoutMs,
