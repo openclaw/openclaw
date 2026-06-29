@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { listSessionEntries, loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -32,10 +33,19 @@ async function createStore(entries: Record<string, SessionEntry>): Promise<strin
   return storePath;
 }
 
+function resolveRequiredSqlitePath(storePath: string): string {
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  if (!sqlitePath) {
+    throw new Error(`Expected a SQLite target for ${storePath}`);
+  }
+  return sqlitePath;
+}
+
 describe("runSessionRegistryMaintenanceForStore", () => {
   it("summarizes a missing store without creating it", async () => {
     const dir = await fixtureSuite.createCaseDir("missing-store");
     const storePath = path.join(dir, "sessions.json");
+    const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
       apply: true,
@@ -51,7 +61,28 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       pruned: 0,
     });
     await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(listSessionEntries({ storePath })).toEqual([]);
+    await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("previews a missing store without creating SQLite state", async () => {
+    const dir = await fixtureSuite.createCaseDir("missing-store-preview");
+    const storePath = path.join(dir, "sessions.json");
+    const sqlitePath = resolveRequiredSqlitePath(storePath);
+
+    const result = await runSessionRegistryMaintenanceForStore({
+      apply: false,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    });
+
+    expect(result).toEqual({
+      beforeCount: 0,
+      afterCount: 0,
+      preservedRunning: 0,
+      pruned: 0,
+    });
+    await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("previews stale cron-run pruning without mutating the store", async () => {
