@@ -13,6 +13,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-startup-import",
       "after-doctor-inspect",
       "after-doctor-validate",
+      "after-rollback-restore",
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
@@ -76,6 +77,23 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         (artifact) =>
           artifact.path.includes("old-orphan.deleted.jsonl") &&
           artifact.textTail?.includes("old-orphan") === true,
+      ),
+    ).toBe(true);
+    expect(report.rollbackRestore).toMatchObject({
+      archivedBeforeRestore: true,
+      failedManifestIssueCode: "e2e_forced_post_archive_failure",
+      sourceRestored: true,
+      sqliteStillExists: true,
+    });
+    expect(report.rollbackRestore?.manifestPath).toContain("session-sqlite-migration-runs");
+    expect(
+      report.rollbackRestore?.restoredFiles.some((filePath) =>
+        filePath.endsWith("/sqlite-rollback-restore.jsonl"),
+      ),
+    ).toBe(true);
+    expect(
+      report.rollbackRestore?.idempotentRestoreSkippedFiles.some((filePath) =>
+        filePath.endsWith("/sqlite-rollback-restore.jsonl"),
       ),
     ).toBe(true);
     expect(
