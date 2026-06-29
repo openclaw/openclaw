@@ -52,6 +52,16 @@ function requestHeader(init: RequestInit | undefined, name: string): string | nu
   return new Headers(init?.headers).get(name);
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
 describe("Google Meet API bounded reads through the real fetch guard", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -59,7 +69,7 @@ describe("Google Meet API bounded reads through the real fetch guard", () => {
 
   it("lists Calendar events through fetchWithSsrFGuard and parses under-cap JSON", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
+      const url = requestUrl(input);
       expect(url).toMatch(
         /^https:\/\/www\.googleapis\.com\/calendar\/v3\/calendars\/primary\/events\?/,
       );
@@ -94,7 +104,7 @@ describe("Google Meet API bounded reads through the real fetch guard", () => {
     const overCap = 17 * 1024 * 1024;
     const { response, state } = oversizedJsonResponse(overCap);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      expect(String(input)).toBe("https://meet.googleapis.com/v2/spaces/abc123");
+      expect(requestUrl(input)).toBe("https://meet.googleapis.com/v2/spaces/abc123");
       expect(requestHeader(init, "authorization")).toBe("Bearer tok-meet");
       return response;
     });
