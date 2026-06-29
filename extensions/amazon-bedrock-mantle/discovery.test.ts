@@ -1,6 +1,21 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Bridge readProviderJsonResponse → response.json() for existing mock objects
+// so tests written with plain { json: async () => ... } mocks continue to work
+// without rewriting every mock to new Response().
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual("openclaw/plugin-sdk/provider-http");
+  return {
+    ...actual,
+    readProviderJsonResponse: async <T>(res: Response | Record<string, unknown>, _label?: string) => {
+      if (res instanceof Response) return (await res.json()) as T;
+      const json = await (res as Record<string, unknown>).json?.();
+      return (json ?? {}) as T;
+    },
+  };
+});
+
 const {
   discoverMantleModels,
   generateBearerTokenFromIam,
@@ -376,7 +391,67 @@ describe("bedrock mantle discovery", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Discovery caching
+  // Bounded model-discovery response reads
+  // ---------------------------------------------------------------------------
+
+  describe("bounded model-discovery response", () => {
+    it("parses a valid model-discovery JSON response through the bounded reader", async () => {
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [{ id: "openai.gpt-oss-120b", object: "model" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      const models = await discoverMantleModels({
+        region: "us-east-1",
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(models).toHaveLength(1);
+      expect(models[0]?.id).toBe("openai.gpt-oss-120b");
+    });
+
+    it("returns empty array when response body exceeds the provider JSON cap", async () => {
+      const largeBody = new Uint8Array(17 * 1024 * 1024);
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response(largeBody, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const models = await discoverMantleModels({
+        region: "us-east-1",
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      // Outer catch returns [] on any fetch error including overflow.
+      expect(models).toStrictEqual([]);
+    });
+
+    it("returns empty array on malformed JSON response body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response("NOT JSON {{{", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const models = await discoverMantleModels({
+        region: "us-east-1",
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(models).toStrictEqual([]);
+    });
+  });
+
   // ---------------------------------------------------------------------------
 
   it("returns cached models on subsequent calls within refresh interval", async () => {

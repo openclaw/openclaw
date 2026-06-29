@@ -12,6 +12,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
@@ -302,7 +303,10 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = await readProviderJsonResponse<OpenAIModelsResponse>(
+      response,
+      "bedrock-mantle-model-discovery",
+    );
     const rawModels = body.data ?? [];
 
     const models = rawModels
