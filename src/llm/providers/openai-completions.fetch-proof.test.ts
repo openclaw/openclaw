@@ -36,21 +36,18 @@ describe("OpenAI Completions guard-specific SSRF blocking proof", () => {
   });
 
   it("blocks a private-IP request before globalThis.fetch is called (guard-specific behavior)", async () => {
-    // Stub globalThis.fetch to count calls — if the guard is active, the
-    // SSRF check intercepts before this stub is ever reached.
-    let globalFetchCalled = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        globalFetchCalled++;
-        return new Response(null, { status: 500 });
-      }),
-    );
+    // If the provider fails to inject buildGuardedModelFetch, the OpenAI SDK
+    // falls back to globalThis.fetch and this test fails through the call count.
+    const unguardedFetch = vi.fn<typeof fetch>(async () => {
+      throw new Error("unguarded OpenAI SDK fetch reached globalThis.fetch");
+    });
+    vi.stubGlobal("fetch", unguardedFetch);
 
     // Dynamic import so the module evaluates after the stub is installed.
     const { streamOpenAICompletions } = await import("./openai-completions.js");
     const stream = streamOpenAICompletions(SSRF_BLOCKED_MODEL, context, {
       apiKey: "sk-test",
+      maxRetries: 0,
     });
     const result = await stream.result();
 
@@ -62,6 +59,6 @@ describe("OpenAI Completions guard-specific SSRF blocking proof", () => {
     // request before globalThis.fetch was ever called. Without the guard, the
     // raw openai SDK default fetch would have called globalThis.fetch with the
     // same URL.
-    expect(globalFetchCalled).toBe(0);
+    expect(unguardedFetch).not.toHaveBeenCalled();
   });
 });
