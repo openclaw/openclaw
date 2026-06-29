@@ -1138,3 +1138,60 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
     },
   };
 }
+
+describe("tool turn outcome annotation (#89683)", () => {
+  function failedTool(timestamp: number) {
+    return {
+      role: "toolResult",
+      toolName: "shell",
+      content: JSON.stringify({ status: "failed", exitCode: 1 }),
+      isError: true,
+      timestamp,
+    };
+  }
+  function userMsg(text: string, timestamp: number) {
+    return { role: "user", content: text, timestamp };
+  }
+  function assistantReply(text: string, timestamp: number) {
+    return { role: "assistant", content: [{ type: "text", text }], timestamp };
+  }
+  function toolGroups(messages: unknown[]): MessageGroup[] {
+    return messageGroups({ messages }).filter((group) => group.role === "tool");
+  }
+
+  it("marks a failed tool followed by an assistant reply as turnSucceeded", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      assistantReply("No matches found.", 3),
+    ]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it("leaves a terminal failed tool (no assistant reply) as not-succeeded", () => {
+    const tools = toolGroups([userMsg("search foo", 1), failedTool(2)]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("does not count an assistant group without reply text as success", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      { role: "assistant", content: [], timestamp: 3 },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("scopes the outcome per turn at user boundaries", () => {
+    const tools = toolGroups([
+      userMsg("first", 1),
+      failedTool(2),
+      assistantReply("done", 3),
+      userMsg("second", 4),
+      failedTool(5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+});
