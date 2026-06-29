@@ -18,4 +18,11 @@ describe("maskApiKey", () => {
   it("masks long values with first and last 8 chars", () => {
     expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop"); // pragma: allowlist secret
   });
+
+  it("strips control characters before masking diagnostic output", () => {
+    expect(maskApiKey("abcd\nefghijklmnop")).toBe("ab...op");
+    expect(maskApiKey("abcd\u0000efghijklmnop")).toBe("ab...op");
+    expect(maskApiKey("abcd\u007f\u0085efghijklmnop")).toBe("ab...op");
+    expect(maskApiKey("\u0000\n")).toBe("missing");
+  });
 });
