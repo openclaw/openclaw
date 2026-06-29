@@ -29,7 +29,6 @@ const {
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.loadConfig(),
-  getRuntimeConfigSourceSnapshot: () => mocks.loadConfig(),
   loadConfig: () => mocks.loadConfig(),
 }));
 
