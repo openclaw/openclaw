@@ -1064,7 +1064,7 @@ describe("createTelegramBot", () => {
     await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
   });
 
-  it("lets stop cancel pending same-chat forwarded debounce", async () => {
+  it("lets stop cancel pending same-chat forwarded debounce using configured inbound timing", async () => {
     const DEBOUNCE_MS = 4321;
     loadConfig.mockReturnValue({
       agents: {
@@ -1094,7 +1094,9 @@ describe("createTelegramBot", () => {
     });
 
     const extractLatestForwardDebounceFlush = () => {
-      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 80);
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
       expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
       clearTimeout(
         setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
