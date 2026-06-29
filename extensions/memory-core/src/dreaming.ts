@@ -563,15 +563,20 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       repairShortTermPromotionArtifacts,
       rankShortTermPromotionCandidates,
     },
+    { snapshotMemoryDirFiles, diffMissingMemoryFiles },
   ] = await Promise.all([
     import("./dreaming-markdown.js"),
     import("./dreaming-narrative.js"),
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
+    import("./dreaming-integrity-guard.js"),
   ]);
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();
+      // Diagnostic for #84882 (daily memory files silently disappearing): snapshot
+      // before this run touches anything so we can tell if files vanished during it.
+      const integrityBeforeSnapshot = await snapshotMemoryDirFiles(workspaceDir);
       await runDreamingSweepPhases({
         workspaceDir,
         pluginConfig,
@@ -687,6 +692,25 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             model: params.config.execution?.model,
             logger: params.logger,
           });
+        }
+      }
+      const integrityAfterSnapshot = await snapshotMemoryDirFiles(workspaceDir);
+      if (!integrityAfterSnapshot.ok) {
+        params.logger.warn(
+          `memory-core: dreaming integrity check could not verify memory/ after this run [workspace=${workspaceDir}]: ${integrityAfterSnapshot.reason}`,
+        );
+      } else {
+        const missing = diffMissingMemoryFiles(integrityBeforeSnapshot, integrityAfterSnapshot);
+        if (missing.length > 0) {
+          const missingSummary = missing
+            .map(
+              (file) =>
+                `${file.name} (${file.sizeBytes}B, mtime=${new Date(file.mtimeMs).toISOString()})`,
+            )
+            .join(", ");
+          params.logger.error(
+            `memory-core: dreaming integrity check found ${missing.length} memory file(s) disappeared during this run [workspace=${workspaceDir}]: ${missingSummary}`,
+          );
         }
       }
     } catch (err) {
