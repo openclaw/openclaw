@@ -48,12 +48,31 @@ function saveMediaStreamCall(): unknown[] {
   return call;
 }
 
-function detectMockContentType(buffer: Buffer, contentType?: string): string | undefined {
+function detectMockContentType(
+  buffer: Buffer,
+  contentType?: string,
+  originalFilename?: string,
+): string | undefined {
   if (buffer[0] === 0xff && buffer[1] === 0xd8) {
     return "image/jpeg";
   }
   if (buffer.toString("ascii", 4, 8) === "ftyp") {
     return buffer.toString("ascii", 8, 12) === "M4A " ? "audio/x-m4a" : "video/mp4";
+  }
+  if (originalFilename) {
+    const lower = originalFilename.toLowerCase();
+    if (lower.endsWith(".mp3")) {
+      return "audio/mpeg";
+    }
+    if (lower.endsWith(".m4a")) {
+      return "audio/x-m4a";
+    }
+    if (lower.endsWith(".wav")) {
+      return "audio/wav";
+    }
+    if (lower.endsWith(".ogg")) {
+      return "audio/ogg";
+    }
   }
   return contentType;
 }
@@ -75,7 +94,13 @@ describe("downloadLineMedia", () => {
     getMessageContentMock.mockReset();
     saveMediaStreamMock.mockReset();
     saveMediaStreamMock.mockImplementation(
-      async (stream: AsyncIterable<Buffer>, contentType?: string, subdir?: string) => {
+      async (
+        stream: AsyncIterable<Buffer>,
+        contentType?: string,
+        subdir?: string,
+        _maxBytes?: number,
+        originalFilename?: string,
+      ) => {
         const chunksLocal: Buffer[] = [];
         for await (const chunk of stream) {
           chunksLocal.push(Buffer.from(chunk));
@@ -83,7 +108,7 @@ describe("downloadLineMedia", () => {
         const buffer = Buffer.concat(chunksLocal);
         return {
           path: `/home/user/.openclaw/media/${subdir ?? "unknown"}/saved-media`,
-          contentType: detectMockContentType(buffer, contentType),
+          contentType: detectMockContentType(buffer, contentType, originalFilename),
           size: buffer.length,
         };
       },
@@ -161,5 +186,26 @@ describe("downloadLineMedia", () => {
     saveMediaStreamMock.mockRejectedValueOnce(new Error("Media exceeds 0MB limit"));
 
     await expect(downloadLineMedia("mid-bad", "token")).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("passes a LINE file message filename to saveMediaStream", async () => {
+    const data = Buffer.from([0x00, 0x01, 0x02, 0x03]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([data]));
+
+    await downloadLineMedia("mid-file", "token", 10 * 1024 * 1024, "report.pdf");
+
+    expect(saveMediaStreamMock).toHaveBeenCalledTimes(1);
+    const call = saveMediaStreamCall();
+    expect(call[4]).toBe("report.pdf");
+  });
+
+  it("uses the file message filename to detect audio content type", async () => {
+    // No audio magic bytes; only the .mp3 filename hint can classify this as audio.
+    const data = Buffer.from([0x00, 0x01, 0x02, 0x03]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([data]));
+
+    const result = await downloadLineMedia("mid-file", "token", 10 * 1024 * 1024, "voice.mp3");
+
+    expect(result.contentType).toBe("audio/mpeg");
   });
 });
