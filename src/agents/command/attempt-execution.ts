@@ -830,6 +830,7 @@ export function runAgentAttempt(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+            disableTools: params.disableTools === true,
             ...(mutableCliSessionStore && !forkCliSessionOnResume
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
