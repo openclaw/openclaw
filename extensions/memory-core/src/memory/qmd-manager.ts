@@ -3319,7 +3319,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const isGeneratedQmdServer = isGeneratedMcporterQmdStdioServer(stdioServer);
       const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(server);
-      const hasContextPathFields = rawEntry !== null && hasMcporterStdioContextPath(rawEntry);
+      const contextPathSource = rawEntry ?? server;
+      const hasContextPathFields = hasMcporterStdioContextPath(contextPathSource);
       if (!isGeneratedQmdServer || hasUserOwnedMaterial || hasContextPathFields) {
         return { mode: "external" };
       }
