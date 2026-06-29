@@ -7,8 +7,26 @@ type Lane = {
 };
 
 const lanes: Record<string, Lane> = {
+  "agent-bundle-mcp-tools": {
+    script: "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+  },
+  "agents-delete-shared-workspace": {
+    script: "scripts/e2e/agents-delete-shared-workspace-docker.sh",
+  },
+  "crestodian-first-run": {
+    script: "scripts/e2e/crestodian-first-run-docker.sh",
+  },
+  "gateway-network": {
+    script: "scripts/e2e/gateway-network-docker.sh",
+  },
+  "npm-onboard-channel-agent": {
+    script: "scripts/e2e/npm-onboard-channel-agent-docker.sh",
+  },
   "release-upgrade-user-journey": {
     script: "scripts/e2e/release-upgrade-user-journey-docker.sh",
+  },
+  "release-plugin-marketplace": {
+    script: "scripts/e2e/release-plugin-marketplace-docker.sh",
   },
   "release-user-journey": {
     script: "scripts/e2e/release-user-journey-docker.sh",
