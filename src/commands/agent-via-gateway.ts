@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import type { AgentCommandOpts } from "../agents/command/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -322,6 +323,51 @@ function isTransientGatewayAgentConnectClose(err: unknown): boolean {
   const code = typeof err.code === "number" ? err.code : undefined;
   const reason = normalizeOptionalString(err.reason);
   return code === 1000 && (!reason || reason === "no close reason");
+}
+
+/**
+ * Raised when the gateway already accepted (and detached) a run but the
+ * CLI↔gateway connection closed non-transiently before the final frame. The
+ * detached gateway run still owns the original session, so the CLI fallback
+ * must re-run on a FRESH session (matching the gateway-timeout path) instead of
+ * re-executing the same message on the original session and colliding with the
+ * in-flight gateway run. Carries the accepted run identity for diagnostics.
+ */
+class GatewayAgentAcceptedRunDisconnectError extends Error {
+  readonly acceptedRunId: string | undefined;
+  readonly acceptedSessionKey: string | undefined;
+  constructor(params: {
+    acceptedRunId: string | undefined;
+    acceptedSessionKey: string | undefined;
+    cause: unknown;
+  }) {
+    super("gateway accepted the run but the connection closed before completion", {
+      cause: params.cause,
+    });
+    this.name = "GatewayAgentAcceptedRunDisconnectError";
+    this.acceptedRunId = params.acceptedRunId;
+    this.acceptedSessionKey = params.acceptedSessionKey;
+  }
+}
+
+function isGatewayAgentAcceptedRunDisconnectError(
+  err: unknown,
+): err is GatewayAgentAcceptedRunDisconnectError {
+  return err instanceof GatewayAgentAcceptedRunDisconnectError;
+}
+
+/**
+ * A non-transient gateway transport close: a closed transport error that is
+ * neither a timeout (handled by its own fresh-session path) nor a transient
+ * normal close (handled by the connect-retry loop). The accepted-run gating
+ * lives at the call site, so this predicate stays purely about the close shape.
+ */
+function isNonTransientGatewayAgentClose(err: unknown): boolean {
+  return (
+    isGatewayAgentEmbeddedFallbackError(err) &&
+    !isGatewayAgentTimeoutError(err) &&
+    !isTransientGatewayAgentConnectClose(err)
+  );
 }
 
 function validateExplicitSessionKeyForDispatch(
@@ -684,6 +730,45 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
     : "Agent run is already in flight; not starting a duplicate run.";
 }
 
+/**
+ * Runs the embedded agent on a brand-new `gateway-fallback-<uuid>` session. Both
+ * the gateway-timeout and accepted-then-disconnected paths use this so the
+ * fallback never reuses a session a still-running gateway run may own. The
+ * fresh session id doubles as the embedded run id and is reported via
+ * `fallbackReason` metadata.
+ */
+async function runGatewayEmbeddedFallbackOnFreshSession(params: {
+  dispatchOpts: AgentDispatchOpts;
+  localOpts: AgentCommandOpts;
+  runtime: RuntimeEnv;
+  deps: AgentCliDeps | undefined;
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>;
+  fallbackReason: "gateway_timeout" | "gateway_connection_lost";
+  describeFailure: (fallbackSessionId: string) => string;
+}) {
+  const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(params.dispatchOpts);
+  const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
+  params.runtime.error?.(params.describeFailure(fallbackSession.sessionId));
+  const agentCommand = await loadEmbeddedAgentCommand();
+  const result = await agentCommand(
+    {
+      ...params.localOpts,
+      sessionId: fallbackSession.sessionId,
+      sessionKey: fallbackSession.sessionKey,
+      runId: fallbackSession.sessionId,
+      resultMetaOverrides: {
+        ...EMBEDDED_FALLBACK_META,
+        fallbackReason: params.fallbackReason,
+        fallbackSessionId: fallbackSession.sessionId,
+        fallbackSessionKey: fallbackSession.sessionKey,
+      },
+    },
+    params.runtime,
+    params.deps,
+  );
+  return returnAfterSignalExit(result, params.signalBridge.getReceivedSignal(), params.runtime);
+}
+
 async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
@@ -831,6 +916,16 @@ async function agentViaGatewayCommand(
           config: cfg,
         });
       }
+      // Once the gateway accepted (and detached) the run, surface the accepted
+      // identity so the CLI fallback re-runs on a fresh session instead of
+      // colliding with the still-running gateway run on the original session.
+      if (acceptedGatewayRun && isNonTransientGatewayAgentClose(err)) {
+        throw new GatewayAgentAcceptedRunDisconnectError({
+          acceptedRunId,
+          acceptedSessionKey,
+          cause: err,
+        });
+      }
       throw err;
     }
   }
@@ -951,29 +1046,33 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
-        const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
-        const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
-        runtime.error?.(
-          `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
-        );
-        const agentCommand = await loadEmbeddedAgentCommand();
-        const result = await agentCommand(
-          {
-            ...localOpts,
-            sessionId: fallbackSession.sessionId,
-            sessionKey: fallbackSession.sessionKey,
-            runId: fallbackSession.sessionId,
-            resultMetaOverrides: {
-              ...EMBEDDED_FALLBACK_META,
-              fallbackReason: "gateway_timeout",
-              fallbackSessionId: fallbackSession.sessionId,
-              fallbackSessionKey: fallbackSession.sessionKey,
-            },
-          },
+        return await runGatewayEmbeddedFallbackOnFreshSession({
+          dispatchOpts,
+          localOpts,
           runtime,
           deps,
-        );
-        return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+          signalBridge,
+          fallbackReason: "gateway_timeout",
+          describeFailure: (fallbackSessionId) =>
+            `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSessionId}: ${String(err)}`,
+        });
+      }
+
+      // The gateway accepted (and detached) the run before the connection
+      // dropped, so it still owns the original session. Fall back on a fresh
+      // session to avoid re-running the same message there and duplicating the
+      // in-flight gateway run's turn.
+      if (isGatewayAgentAcceptedRunDisconnectError(err)) {
+        return await runGatewayEmbeddedFallbackOnFreshSession({
+          dispatchOpts,
+          localOpts,
+          runtime,
+          deps,
+          signalBridge,
+          fallbackReason: "gateway_connection_lost",
+          describeFailure: (fallbackSessionId) =>
+            `EMBEDDED FALLBACK: Gateway connection closed after the run was accepted; running embedded agent with fresh session ${fallbackSessionId} to avoid duplicating the in-flight gateway run${err.acceptedRunId ? ` ${err.acceptedRunId}` : ""} on ${err.acceptedSessionKey ?? "the original session"}: ${String(err)}`,
+        });
       }
 
       if (!isGatewayAgentEmbeddedFallbackError(err)) {
