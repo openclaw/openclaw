@@ -555,7 +555,7 @@ export function createWorkboardTools(params: {
           );
         }
 
-        return await store.complete(id, record, scope);
+        return redactedRawCardResult(await store.complete(id, record, scope));
       },
     },
     {
@@ -604,8 +604,7 @@ export function createWorkboardTools(params: {
         const actionItems = Array.isArray(record.action_items)
           ? (record.action_items as string[])
           : undefined;
-        const explicitRound =
-          typeof record.round === "number" ? (record.round as number) : undefined;
+        const explicitRound = typeof record.round === "number" ? record.round : undefined;
 
         // Validate verdict
         const validVerdicts = new Set(["approved", "changes_requested", "blocked"]);
@@ -620,7 +619,7 @@ export function createWorkboardTools(params: {
         for (const [key, value] of Object.entries(checks ?? {})) {
           if (typeof value !== "string" || !validCheckValues.has(value)) {
             throw new Error(
-              `Invalid check value for "${key}": "${value}". Must be pass, warn, or fail.`,
+              `Invalid check value for "${key}": "${String(value)}". Must be pass, warn, or fail.`,
             );
           }
         }
@@ -639,23 +638,24 @@ export function createWorkboardTools(params: {
         // --- ESCALATION: Max 3 review rounds before blocking for human ---
         if (round >= 3 && verdict !== "approved") {
           const escalationMsg =
-            `Review round ${round} of 3 reached without approval. ` +
+            `Review round ${String(round)} of 3 reached without approval. ` +
             `Card is blocked for human intervention. Escalate to the user immediately.`;
           await store.addWorkerLog(
             id,
             {
               level: "error",
-              message: `review-round-${round}: ${verdict} — ${escalationMsg}`,
+              message: `review-round-${String(round)}: ${verdict} — ${escalationMsg}`,
             },
             { ownerId, token },
           );
           await store.block(id, { reason: escalationMsg }, { ownerId, token });
-          return redactedRawCardResult(await store.get(id));
+          const blockedCard = await store.get(id);
+          return redactedRawCardResult(blockedCard!);
         }
 
         // Record review as proof
         const proofStatus = verdict === "approved" ? "passed" : "failed";
-        const proofLabel = `review-round-${round}`;
+        const proofLabel = `review-round-${String(round)}`;
         const checksSummary = checks
           ? Object.entries(checks)
               .map(([k, v]) => `${k}=${v}`)
@@ -679,7 +679,7 @@ export function createWorkboardTools(params: {
           id,
           {
             level: verdict === "approved" ? "info" : "warning",
-            message: `review-round-${round}: verdict=${verdict}, summary="${summary}", checks=[${checksSummary}]`,
+            message: `review-round-${String(round)}: verdict=${verdict}, summary="${summary}", checks=[${checksSummary}]`,
           },
           { ownerId, token },
         );
@@ -689,15 +689,15 @@ export function createWorkboardTools(params: {
           return redactedRawCardResult(
             await store.releaseClaim(id, { ...scope, status: "ready_to_merge" }),
           );
-        } else if (verdict === "changes_requested") {
+        }
+        if (verdict === "changes_requested") {
           return redactedRawCardResult(
             await store.releaseClaim(id, { ...scope, status: "running" }),
           );
-        } else {
-          return redactedRawCardResult(
-            await store.block(id, { reason: `Review blocked: ${summary}` }, { ownerId, token }),
-          );
         }
+        return redactedRawCardResult(
+          await store.block(id, { reason: `Review blocked: ${summary}` }, { ownerId, token }),
+        );
       },
     },
     {
