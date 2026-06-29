@@ -43,6 +43,7 @@ function makeToolRuntime(
     sessionId: "session-collision",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
+    callerContextKey: "",
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
