@@ -921,6 +921,7 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+          "OPENCLAW_WHATSAPP_WEB_SOCKET_URL",
           "EXAMPLE_API_HOST",
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
