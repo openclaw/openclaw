@@ -34,7 +34,9 @@ export function limitHistoryTurns(
   let conversationStart = 0;
   while (conversationStart < messages.length) {
     const role = messages[conversationStart].role;
-    if (role === "user" || role === "assistant") break;
+    if (role === "user" || role === "assistant") {
+      break;
+    }
     conversationStart++;
   }
 
