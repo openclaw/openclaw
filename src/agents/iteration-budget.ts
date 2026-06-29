@@ -58,7 +58,7 @@ export function resolveIterationBudgetConfig(
  */
 export class IterationBudget {
   public readonly maxTotal: number;
-  private _used = 0;
+  private usedCount = 0;
 
   constructor(maxTotal: number) {
     if (maxTotal < 0) {
@@ -69,27 +69,27 @@ export class IterationBudget {
 
   /** Try to consume one iteration. Returns `true` if allowed. */
   consume(): boolean {
-    if (this._used >= this.maxTotal) {
+    if (this.usedCount >= this.maxTotal) {
       return false;
     }
-    this._used += 1;
+    this.usedCount += 1;
     return true;
   }
 
   /** Give back one iteration (e.g. for compaction restarts). */
   refund(): void {
-    if (this._used > 0) {
-      this._used -= 1;
+    if (this.usedCount > 0) {
+      this.usedCount -= 1;
     }
   }
 
   /** Number of iterations consumed so far. */
   get used(): number {
-    return this._used;
+    return this.usedCount;
   }
 
   /** Number of iterations remaining before exhaustion. */
   get remaining(): number {
-    return Math.max(0, this.maxTotal - this._used);
+    return Math.max(0, this.maxTotal - this.usedCount);
   }
 }
