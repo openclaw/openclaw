@@ -183,17 +183,31 @@ function createNoProxyAwareEnvDispatcher(
       }
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
         return (...args: unknown[]) => {
-          // Clean up both the proxy dispatcher and the bypass agent
-          // so callers can safely observe the settled state after
-          // close/destroy. Fire the bypass callbacks stripped of
-          // trailing functions to avoid double-callback when both
-          // dispatchers receive the same args (#97234).
+          // Clean up both the proxy dispatcher and the bypass agent.
+          // The last argument may be a callback; wrap it so the caller's
+          // callback fires only after both dispatchers have settled.
+          const cbIdx = args.length - 1;
+          const originalCallback = typeof args[cbIdx] === "function" ? args[cbIdx] : undefined;
+          let settledCount = 0;
+          const onSettled = originalCallback
+            ? (...cbArgs: unknown[]) => {
+                settledCount++;
+                if (settledCount >= 2) {
+                  Reflect.apply(originalCallback, undefined, cbArgs);
+                }
+              }
+            : undefined;
+          // Build args for the bypass agent (use wrapped callback).
+          const bypassArgs = originalCallback
+            ? [...args.slice(0, cbIdx), onSettled]
+            : args.filter((a) => typeof a !== "function");
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
-            const bypassArgs = args.filter((a) => typeof a !== "function");
             Reflect.apply(bypassValue, bypassAgent, bypassArgs);
           }
-          return Reflect.apply(value, target, args);
+          // Build args for the proxy dispatcher.
+          const proxyArgs = originalCallback ? [...args.slice(0, cbIdx), onSettled] : args;
+          return Reflect.apply(value, target, proxyArgs);
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
@@ -472,6 +486,7 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
         createHttp1EnvHttpProxyAgent(proxyOptions),
         createDirectBypassAgent({
           timeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+          connect: proxyOptions?.connect as Record<string, unknown> | undefined,
         }),
       ),
     );
