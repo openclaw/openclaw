@@ -15,8 +15,8 @@ import {
   upsertSessionEntry,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendTranscriptEvent } from "../../../src/config/sessions/session-accessor.js";
 import {
   appendNarrativeEntry,
   buildBackfillDiaryEntry,
@@ -114,19 +114,17 @@ async function seedDreamingTranscriptEvent(params: {
   timestampMs: number;
   runId?: string;
 }): Promise<void> {
-  await appendTranscriptEvent(
-    {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
-      storePath: params.storePath,
-    },
-    {
+  await appendSqliteSessionTranscriptEventForTest({
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
+    storePath: params.storePath,
+    event: {
       type: "metadata",
       timestamp: params.timestampMs,
       runId: params.runId ?? `dreaming-narrative-${params.sessionId}`,
     },
-  );
+  });
 }
 
 async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> {

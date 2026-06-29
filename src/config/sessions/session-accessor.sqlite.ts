@@ -69,7 +69,7 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
-} from "./session-accessor.js";
+} from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";

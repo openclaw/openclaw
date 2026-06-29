@@ -83,13 +83,14 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
 export async function writeStore(
   data: Record<string, SessionEntry>,
   prefix = "sessions",
+  options: { agentId?: string } = {},
 ): Promise<string> {
   const dirName = [prefix, Date.now(), randomUUID()].join("-");
   const storeDir = path.join(os.tmpdir(), dirName);
   fs.mkdirSync(storeDir, { recursive: true });
   const storePath = path.join(storeDir, "sessions.json");
   for (const [sessionKey, entry] of Object.entries(data)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    await replaceSessionEntry({ agentId: options.agentId ?? "main", sessionKey, storePath }, entry);
   }
   return storePath;
 }

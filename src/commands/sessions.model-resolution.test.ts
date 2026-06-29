@@ -59,7 +59,7 @@ async function withSqliteStore<T>(
   try {
     await Promise.all(
       Object.entries(entries).map(([sessionKey, entry]) =>
-        replaceSessionEntry({ sessionKey, storePath }, entry),
+        replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry),
       ),
     );
     return await run(storePath);

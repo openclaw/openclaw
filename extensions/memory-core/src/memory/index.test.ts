@@ -7,6 +7,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -14,10 +16,6 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  persistSessionTranscriptTurn,
-  upsertSessionEntry,
-} from "../../../../src/config/sessions/session-accessor.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -430,24 +428,25 @@ describe("memory index", () => {
       .filter((timestamp) => Number.isFinite(timestamp));
     const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
     await fs.mkdir(sessionsDir, { recursive: true });
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: params.sessionId, updatedAt },
-    );
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId: params.sessionId, sessionKey, storePath },
-      {
-        messages: params.messages.map((message) => ({
-          message: {
-            role: message.role,
-            timestamp: message.timestamp,
-            content: [{ type: "text", text: message.content }],
-          },
-        })),
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: { sessionId: params.sessionId, updatedAt },
+    });
+    for (const message of params.messages) {
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey,
+        storePath,
+        message: {
+          role: message.role,
+          timestamp: message.timestamp,
+          content: [{ type: "text", text: message.content }],
+        },
+      });
+    }
   }
 
   function requireManager(

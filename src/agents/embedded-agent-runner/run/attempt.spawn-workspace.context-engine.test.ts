@@ -2267,7 +2267,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {
       events.push("afterTurn");
     });
-    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+    hoisted.sessionManager.replacePersistedTranscript.mockImplementation(() => {
       events.push("flush");
     });
 

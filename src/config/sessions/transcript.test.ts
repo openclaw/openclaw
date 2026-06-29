@@ -21,7 +21,7 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
-} from "./transcript-append.js";
+} from "./transcript-append.test-support.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,

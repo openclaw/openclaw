@@ -673,9 +673,9 @@ export async function purgeAgentSessionStoreEntries(
     const normalizedAgentId = normalizeAgentId(agentId);
     const storeConfig = cfg.session?.store;
     const storeAgentId =
-      typeof storeConfig === "string" && storeConfig.includes("{agentId}")
-        ? normalizedAgentId
-        : normalizeAgentId(resolveDefaultAgentId(cfg));
+      typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
+        ? normalizeAgentId(resolveDefaultAgentId(cfg))
+        : normalizedAgentId;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: normalizedAgentId });
     await purgeDeletedAgentSessionEntries({
       cfg,

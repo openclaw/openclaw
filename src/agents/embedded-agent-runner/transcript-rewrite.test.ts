@@ -392,7 +392,6 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       expect(acquireSessionWriteLockReleaseMock).not.toHaveBeenCalled();
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionFile,
         sessionId,
         sessionKey: "agent:main:test",
         target: {

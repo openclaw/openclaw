@@ -13,7 +13,7 @@ import {
 import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
-} from "../../../config/sessions/transcript-append.js";
+} from "../../../config/sessions/transcript-append.test-support.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
   runWithOwnedSessionTranscriptWritePublication,

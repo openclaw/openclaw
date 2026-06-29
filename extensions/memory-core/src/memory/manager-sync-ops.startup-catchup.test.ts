@@ -17,13 +17,13 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  appendTranscriptMessage,
-  upsertSessionEntry,
-} from "../../../../src/config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../../../src/config/sessions/sqlite-marker.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+  closeOpenClawAgentDatabasesForTest,
+  formatSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -356,24 +356,27 @@ describe("session startup catch-up", () => {
       storePath,
     });
     await configureTestSessionStore(storePath);
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: {
         sessionFile: marker,
         sessionId,
         updatedAt: params.updatedAt ?? 10,
       },
-    );
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        cwd: stateDir,
-        message: {
-          role: params.role ?? "user",
-          content: params.content ?? "startup catchup",
-        },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+      cwd: stateDir,
+      message: {
+        role: params.role ?? "user",
+        content: params.content ?? "startup catchup",
       },
-    );
+    });
     return {
       marker,
       storePath,
@@ -628,21 +631,24 @@ describe("session startup catch-up", () => {
       sessionId,
       storePath,
     });
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: {
         sessionFile: marker,
         sessionId,
         updatedAt: 10,
       },
-    );
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        cwd: stateDir,
-        message: { role: "user", content: "sqlite targeted memory content" },
-      },
-    );
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+      cwd: stateDir,
+      message: { role: "user", content: "sqlite targeted memory content" },
+    });
     await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();

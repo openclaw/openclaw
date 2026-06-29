@@ -10,12 +10,11 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot } from "../../../src/config/config.js";
-import {
-  persistSessionTranscriptTurn,
-  upsertSessionEntry,
-} from "../../../src/config/sessions/session-accessor.js";
 import {
   testing,
   filterRecallEntriesWithinLookback,
@@ -168,25 +167,36 @@ async function seedDreamingSessionTranscript(params: {
     .filter((timestamp) => Number.isFinite(timestamp));
   const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
   await fs.mkdir(sessionsDir, { recursive: true });
-  await upsertSessionEntry(
-    { agentId, sessionKey, storePath },
-    { sessionId: params.sessionId, updatedAt },
-  );
-  await persistSessionTranscriptTurn(
-    { agentId, sessionId: params.sessionId, sessionKey, storePath },
-    {
-      messages: params.messages.map((message) => ({
-        message: {
-          role: message.role,
-          content: message.content,
-          timestamp: message.timestamp,
-        },
-      })),
-      touchSessionEntry: true,
-      updateMode: "none",
-    },
-  );
-  await upsertSessionEntry({ agentId, sessionKey, storePath }, { updatedAt });
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: params.sessionId,
+    storePath,
+  });
+  await upsertSessionEntry({
+    agentId,
+    sessionKey,
+    storePath,
+    entry: { sessionId: params.sessionId, sessionFile, updatedAt },
+  });
+  for (const message of params.messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId,
+      sessionId: params.sessionId,
+      sessionKey,
+      storePath,
+      message: {
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+      },
+    });
+  }
+  await upsertSessionEntry({
+    agentId,
+    sessionKey,
+    storePath,
+    entry: { sessionId: params.sessionId, sessionFile, updatedAt },
+  });
 }
 
 function createHarness(
