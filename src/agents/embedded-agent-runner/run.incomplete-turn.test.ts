@@ -2776,10 +2776,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           assistantTexts: [],
           clientToolCalls: [
             {
-              id: "call_prior",
               name: "read",
-              arguments: { path: "README.md" },
-              outcome: { kind: "success", summary: "ok" },
+              params: { path: "README.md" },
             },
           ],
           lastAssistant: assistant,
