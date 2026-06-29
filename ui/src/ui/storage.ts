@@ -138,7 +138,7 @@ function getSessionStorage(): Storage | null {
 
 function parseGatewayScopeParts(
   gatewayUrl: string,
-): { scope: string; origin: string; pathname: string } | null {
+): { scope: string; origin: string; host: string; pathname: string } | null {
   try {
     const base =
       typeof location !== "undefined"
@@ -148,7 +148,7 @@ function parseGatewayScopeParts(
     const pathname =
       parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
     const origin = `${parsed.protocol}//${parsed.host}`;
-    return { scope: `${origin}${pathname}`, origin, pathname };
+    return { scope: `${origin}${pathname}`, origin, host: parsed.host, pathname };
   } catch {
     return null;
   }
@@ -173,20 +173,8 @@ function resolvePersistedGatewayUrl(params: {
   return params.parsedGatewayUrl;
 }
 
-function isRootRelativeGatewayUrl(gatewayUrl: string): boolean {
-  const trimmed = gatewayUrl.trim();
-  return trimmed.startsWith("/") && !trimmed.startsWith("//");
-}
-
-function isWebSocketEndpointPath(pathname: string): boolean {
-  const segments = pathname.split("/");
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const segment = segments[index];
-    if (segment) {
-      return segment.toLowerCase() === "ws";
-    }
-  }
-  return false;
+function isRootWebSocketEndpointPath(pathname: string): boolean {
+  return pathname.toLowerCase() === "/ws";
 }
 
 function shouldIgnoreLegacySettingsForPage(params: {
@@ -199,16 +187,13 @@ function shouldIgnoreLegacySettingsForPage(params: {
   }
   const parsed = parseGatewayScopeParts(params.parsedGatewayUrl);
   const page = parseGatewayScopeParts(params.pageDerivedUrl);
-  if (!parsed || !page || !page.pathname || parsed.origin !== page.origin) {
+  if (!parsed || !page || !page.pathname || parsed.host !== page.host) {
     return false;
   }
   if (parsed.pathname === page.pathname) {
     return false;
   }
-  if (
-    isRootRelativeGatewayUrl(params.parsedGatewayUrl) ||
-    isWebSocketEndpointPath(parsed.pathname)
-  ) {
+  if (isRootWebSocketEndpointPath(parsed.pathname)) {
     return false;
   }
   return true;

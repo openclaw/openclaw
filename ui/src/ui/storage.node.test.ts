@@ -198,6 +198,34 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.theme).toBe("dash");
   });
 
+  it("does not keep legacy sibling base-path WebSocket endpoint URLs", () => {
+    for (const legacyGatewayUrl of ["/gateway-a/ws", "wss://example.com/gateway-a/ws"]) {
+      localStorage.clear();
+      sessionStorage.clear();
+      setTestLocation({
+        protocol: "https:",
+        host: "example.com",
+        pathname: "/gateway-b/chat",
+      });
+      setControlUiBasePath("/gateway-b");
+      localStorage.setItem(
+        "openclaw.control.settings.v1",
+        JSON.stringify({
+          gatewayUrl: legacyGatewayUrl,
+          theme: "dash",
+          sessionKey: "agent:gateway-a:main",
+          lastActiveSessionKey: "agent:gateway-a:main",
+        }),
+      );
+
+      const settings = loadSettings();
+      expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+      expect(settings.theme).toBe("claw");
+      expect(settings.sessionKey).toBe("main");
+      expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+    }
+  });
+
   it("persists a same-origin custom gateway URL under the current page scope", () => {
     setTestLocation({
       protocol: "https:",
