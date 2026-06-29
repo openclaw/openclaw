@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 
-function createSelection(channel: "slack" | "telegram" = "telegram") {
+function createSelection(channel: "slack" | "telegram" | "whatsapp" = "telegram") {
   return {
     capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
     channel,
@@ -153,6 +153,91 @@ describe("crabline transport", () => {
           },
           direction: "outbound",
           text: "assistant via fake slack",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("configures OpenClaw's WhatsApp plugin against a Crabline Baileys WebSocket server", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("whatsapp"),
+        state: createQaBusState(),
+      });
+
+      try {
+        expect(transport.id).toBe("crabline");
+        expect(transport.requiredPluginIds).toEqual(["whatsapp"]);
+        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+              dmPolicy: "open",
+              enabled: true,
+              groupAllowFrom: ["*"],
+              groupPolicy: "open",
+            },
+          },
+        });
+        expect(transport.buildAgentDelivery({ target: "15551234567@s.whatsapp.net" })).toEqual({
+          channel: "whatsapp",
+          to: "15551234567@s.whatsapp.net",
+          replyChannel: "whatsapp",
+          replyTo: "15551234567@s.whatsapp.net",
+        });
+        const env = transport.createRuntimeEnvPatch?.() ?? {};
+        expect(env).toMatchObject({
+          CRABLINE_WHATSAPP_ADMIN_TOKEN: expect.any(String),
+          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
+          CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
+          OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
+            /^ws:\/\/127\.0\.0\.1:\d+\/crabline\/whatsapp\/ws\/chat\?access_token=/u,
+          ),
+        });
+        expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
+        expect(env.CRABLINE_WHATSAPP_API_ROOT).toBeUndefined();
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          provider?: string;
+        };
+        expect(manifest.provider).toBe("whatsapp");
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("injects WhatsApp inbound messages through Crabline into normalized state", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("whatsapp"),
+        state: createQaBusState(),
+      });
+
+      try {
+        const message = await transport.state.addInboundMessage({
+          conversation: {
+            id: "15551234567@s.whatsapp.net",
+            kind: "direct",
+          },
+          senderId: "15557654321@s.whatsapp.net",
+          senderName: "Alice",
+          text: "WhatsApp baseline marker check.",
+        });
+        expect(message).toMatchObject({
+          conversation: {
+            id: "15551234567@s.whatsapp.net",
+            kind: "direct",
+          },
+          direction: "inbound",
+          senderId: "15557654321@s.whatsapp.net",
+          text: "WhatsApp baseline marker check.",
         });
       } finally {
         await transport.cleanup?.();
