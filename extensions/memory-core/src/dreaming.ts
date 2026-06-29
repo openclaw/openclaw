@@ -700,15 +700,23 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       );
       // Record the failure in the structured event log so downstream consumers
       // can distinguish failed from successful dreaming runs without parsing logs.
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.dream.completed",
-        timestamp: resolveMemoryCoreTimestamp(Date.now()),
-        phase: "deep",
-        outcome: "failed" as MemoryDreamOutcome,
-        error: errorText,
-        lineCount: 0,
-        storageMode: params.config.storage?.mode ?? "separate",
-      });
+      // Guarded: diagnostic event-log writes must not turn a caught workspace
+      // failure into a rejected trigger that skips later workspaces.
+      try {
+        await appendMemoryHostEvent(workspaceDir, {
+          type: "memory.dream.completed",
+          timestamp: resolveMemoryCoreTimestamp(Date.now()),
+          phase: "deep",
+          outcome: "failed" as MemoryDreamOutcome,
+          error: errorText,
+          lineCount: 0,
+          storageMode: params.config.storage?.mode ?? "separate",
+        });
+      } catch (diagnosticErr) {
+        params.logger.warn(
+          `memory-core: failed to write dreaming outcome event for workspace ${workspaceDir}: ${formatErrorMessage(diagnosticErr)}`,
+        );
+      }
     }
   }
   params.logger.info(
