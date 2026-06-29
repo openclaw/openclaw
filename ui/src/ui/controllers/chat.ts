@@ -757,11 +757,14 @@ async function loadChatHistoryUncached(
         : typeof res.sessionId === "string" && res.sessionId.trim()
           ? res.sessionId
           : null;
-    if (
-      state.reconnectResumeSessionId &&
-      state.reconnectResumeSessionId !== state.currentSessionId
-    ) {
-      state.reconnectResumeSessionId = null;
+    // After loading a session from disk, mark it for one-shot resume so the
+    // first chat.send preserves context.  Without this a fresh page load after
+    // gateway restart (or after crossing the daily reset boundary) will display
+    // full history from chat.history (which reads the transcript directly from
+    // disk) but chat.send will independently evaluate session freshness, mark
+    // the session stale, and mint a new empty session (#96331).
+    if (state.currentSessionId) {
+      state.reconnectResumeSessionId = state.currentSessionId;
     }
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     state.chatVerboseLevel = res.verboseLevel ?? null;

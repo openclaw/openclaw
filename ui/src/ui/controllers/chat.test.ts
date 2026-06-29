@@ -1881,7 +1881,7 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
-  it("passes the backing session id from history without resume for ordinary sends", async () => {
+  it("resumes the loaded session on the first send after chat.history", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1906,9 +1906,10 @@ describe("sendChatMessage", () => {
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
-    expect(sendParams.resumeSession).toBeUndefined();
-    expect(sendParams).not.toHaveProperty("__controlUiReconnectResume");
+    expect(sendParams.__controlUiReconnectResume).toBe(true);
     expect(sendParams.message).toBe("continue");
+    // One-shot: cleared after the first send.
+    expect(state.reconnectResumeSessionId).toBeNull();
   });
 
   it("sends reconnect resume once when the current session matches the reconnect marker", async () => {
