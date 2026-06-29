@@ -195,6 +195,42 @@ describe("session transcript runtime SDK", () => {
     expect(assistantMessages).toHaveLength(3);
   });
 
+  it("does not dedupe unkeyed assistant mirrors across a later user turn", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "user-turn-mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const firstAssistant = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "repeatable answer" }],
+      },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "next question" },
+    });
+
+    const result = await appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      text: "repeatable answer",
+    });
+
+    expect(firstAssistant).toMatchObject({ messageId: expect.any(String) });
+    expect(result).toMatchObject({ ok: true, messageId: expect.any(String) });
+    expect(result.ok ? result.messageId : undefined).not.toBe(firstAssistant?.messageId);
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
+    });
+    expect(assistantMessages).toHaveLength(2);
+  });
+
   it("publishes assistant mirror updates only for newly appended notified rows", async () => {
     const scope = {
       agentId: "main",
