@@ -156,7 +156,7 @@ describe("exec foreground failures", () => {
       wait: vi.fn(async () => ({
         reason: "overall-timeout" as const,
         exitCode: null,
-        exitSignal: null,
+        exitSignal: "SIGKILL" as NodeJS.Signals,
         durationMs: input.timeoutMs ?? 50,
         stdout: "",
         stderr: "",
@@ -178,7 +178,11 @@ describe("exec foreground failures", () => {
     expect(text).toMatch(/re-run with a higher timeout/i);
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
+    expect(details.exitSignal).toBe("SIGKILL");
+    expect(details.failureKind).toBe("overall-timeout");
+    expect(details.exitReason).toBe("overall-timeout");
     expect(details.timedOut).toBe(true);
+    expect(details.noOutputTimedOut).toBe(false);
     expect(details.aggregated).toBe("");
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);

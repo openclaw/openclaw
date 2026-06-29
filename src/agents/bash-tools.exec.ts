@@ -250,17 +250,24 @@ function buildExecForegroundResult(params: {
     return failedTextResult(`${warningText}${params.outcome.reason}`, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
+      exitSignal: params.outcome.exitSignal,
+      failureKind: params.outcome.failureKind,
+      exitReason: params.outcome.exitReason,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
       timedOut: params.outcome.timedOut,
+      noOutputTimedOut: params.outcome.noOutputTimedOut,
       cwd: params.cwd,
     });
   }
   return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
     status: "completed",
     exitCode: params.outcome.exitCode,
+    exitSignal: params.outcome.exitSignal,
+    exitReason: params.outcome.exitReason,
     durationMs: params.outcome.durationMs,
     aggregated: params.outcome.aggregated,
+    noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
   });
 }
