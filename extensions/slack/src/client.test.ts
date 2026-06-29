@@ -2,7 +2,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebClientOptions } from "@slack/web-api";
+import { afterEach, beforeAll, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 vi.mock("@slack/web-api", () => {
   const WebClient = vi.fn(function WebClientMock(
@@ -255,16 +256,20 @@ describe("slack web client config", () => {
     expect(WebClient).toHaveBeenCalledTimes(2);
   });
 
+  it("only exposes API-root options on cached write clients", () => {
+    expectTypeOf<NonNullable<Parameters<typeof getSlackWriteClient>[1]>>().toEqualTypeOf<
+      Pick<WebClientOptions, "slackApiUrl">
+    >();
+  });
+
   it("keeps write clients separated by Slack API URL client options", () => {
     clearProxyEnvForTest();
     try {
       const firstOptions = {
         slackApiUrl: "http://127.0.0.1:49152/api/",
-        timeout: 1000,
       };
       const secondOptions = {
         slackApiUrl: "http://127.0.0.1:49153/api/",
-        timeout: 1000,
       };
       const first = getSlackWriteClient("xoxb-test", firstOptions);
       const second = getSlackWriteClient("xoxb-test", secondOptions);
