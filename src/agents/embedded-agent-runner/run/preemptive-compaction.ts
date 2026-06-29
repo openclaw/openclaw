@@ -9,7 +9,14 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
+import {
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  bashExecutionToText,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -155,6 +162,30 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   if (isToolResultMessage(message)) {
     tokens += estimateToolResultContentTokenPressure(record.content);
     tokens += estimateIdentifierTokenPressure(record.toolName ?? record.tool_name);
+    return tokens;
+  }
+
+  if (record.role === "bashExecution") {
+    if (record.excludeFromContext === true) {
+      return 0;
+    }
+    tokens += estimateStringTokenPressure(
+      bashExecutionToText(record as unknown as BashExecutionMessage),
+    );
+    return tokens;
+  }
+
+  if (record.role === "branchSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX);
+    return tokens;
+  }
+
+  if (record.role === "compactionSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(
+      COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX,
+    );
     return tokens;
   }
 
