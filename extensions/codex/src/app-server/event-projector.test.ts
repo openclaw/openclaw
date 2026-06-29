@@ -836,6 +836,19 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolMediaUrls).toStrictEqual([]);
   });
 
+  it("propagates message-tool-only source reply delivery telemetry", async () => {
+    const projector = await createProjector();
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  });
+
   it("does not promote repeated tool progress text to the final assistant reply", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

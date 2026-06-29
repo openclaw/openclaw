@@ -28,6 +28,10 @@ import { truncateUtf16Safe } from "../utils.js";
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
@@ -286,7 +290,17 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+/**
+ * @deprecated Use appendSessionTranscriptMessageByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
+ * session identity instead of an active JSONL transcript file.
+ */
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+/**
+ * @deprecated Use publishSessionTranscriptUpdateByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
+ * a session identity instead of an active JSONL transcript file.
+ */
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,

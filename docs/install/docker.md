@@ -40,9 +40,22 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ./scripts/docker/setup.sh
     ```
 
-    Pre-built images are published at the
+    Pre-built images are published first to the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
-    Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
+    GHCR is the primary registry for release automation, pinned deployments,
+    and provenance checks. The same release workflow also publishes an official
+    Docker Hub mirror at `openclaw/openclaw` for hosts that prefer Docker Hub:
+
+    ```bash
+    export OPENCLAW_IMAGE="openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh
+    ```
+
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw`. Avoid community
+    Docker Hub mirrors because OpenClaw does not control their release timing,
+    rebuilds, or retention policy. Common official tags: `main`, `latest`,
+    `<version>` (e.g. `2026.2.26`), and beta versions such as
+    `2026.2.26-beta.1`. Beta tags do not move `latest` or `main`.
 
   </Step>
 
