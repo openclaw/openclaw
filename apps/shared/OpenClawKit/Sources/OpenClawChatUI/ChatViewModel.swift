@@ -56,7 +56,7 @@ public final class OpenClawChatViewModel {
 
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
-    private let pendingRunTimeoutMs: UInt64 = 120_000
+    private let pendingRunTimeoutMs: UInt64 = 300_000
     private static let postSendRefreshDelaysMs: [UInt64] = [
         1500,
         4000,

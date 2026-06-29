@@ -224,6 +224,53 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(params?["thinking"] == nil)
     }
 
+    @Test func `chat send defaults to first-run sized agent timeout`() async throws {
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                recorder.append(message)
+                guard sendIndex > 0,
+                      let data = Self.messageData(message),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = json["id"] as? String
+                else { return }
+                task.emitReceiveSuccess(.data(Self.chatSendOkResponseData(id: id)))
+            })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        _ = try await connection.chatSend(
+            sessionKey: "main",
+            message: "hello",
+            thinking: nil,
+            idempotencyKey: "chat-1",
+            attachments: [])
+        await connection.shutdown()
+
+        guard let chatMessage = recorder.snapshot().reversed().first(where: { message in
+            guard let data = Self.messageData(message),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return json["method"] as? String == "chat.send"
+        }) else {
+            Issue.record("expected chat.send websocket payload")
+            return
+        }
+
+        guard let payloadData = Self.messageData(chatMessage) else {
+            Issue.record("unexpected chat.send websocket message type")
+            return
+        }
+
+        let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        let params = json?["params"] as? [String: Any]
+        #expect(params?["timeoutMs"] as? Int == 300_000)
+    }
+
     private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
         switch message {
         case let .string(text):

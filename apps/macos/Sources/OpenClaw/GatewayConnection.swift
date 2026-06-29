@@ -5,6 +5,8 @@ import OpenClawProtocol
 import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
+private let defaultChatSendAgentTimeoutMs = 300_000
+private let defaultChatSendRequestTimeoutMs = 30_000
 
 enum GatewayAgentChannel: String, Codable, CaseIterable {
     case last
@@ -671,7 +673,7 @@ extension GatewayConnection {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
-        timeoutMs: Int = 30000) async throws -> OpenClawChatSendResponse
+        timeoutMs: Int = defaultChatSendAgentTimeoutMs) async throws -> OpenClawChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = [
@@ -701,7 +703,7 @@ extension GatewayConnection {
         return try await self.requestDecoded(
             method: .chatSend,
             params: params,
-            timeoutMs: Double(timeoutMs))
+            timeoutMs: Double(defaultChatSendRequestTimeoutMs))
     }
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {

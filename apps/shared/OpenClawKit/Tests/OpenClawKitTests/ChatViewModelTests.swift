@@ -342,6 +342,7 @@ private actor TestChatTransportState {
     var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
     var waitCompletionRunIds: [String] = []
+    var waitCompletionTimeoutsMs: [Int] = []
     var patchedModels: [String?] = []
     var patchedThinkingLevels: [String] = []
 }
@@ -518,6 +519,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool {
         await self.state.waitCompletionRunIdsAppend(runId)
+        await self.state.waitCompletionTimeoutsMsAppend(timeoutMs)
         return await self.waitForRunCompletionHook?(runId, timeoutMs) ?? false
     }
 
@@ -571,6 +573,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.waitCompletionRunIds
     }
 
+    func waitCompletionTimeoutsMs() async -> [Int] {
+        await self.state.waitCompletionTimeoutsMs
+    }
+
     func createdSessionKeys() async -> [String] {
         await self.state.createdSessionKeys
     }
@@ -615,6 +621,10 @@ extension TestChatTransportState {
 
     fileprivate func waitCompletionRunIdsAppend(_ v: String) {
         self.waitCompletionRunIds.append(v)
+    }
+
+    fileprivate func waitCompletionTimeoutsMsAppend(_ v: Int) {
+        self.waitCompletionTimeoutsMs.append(v)
     }
 
     fileprivate func sentThinkingLevelsAppend(_ v: String) {
@@ -833,6 +843,20 @@ struct ChatViewModelTests {
                     }
             }
         }
+    }
+
+    @Test func `completion wait uses first-run sized timeout`() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("agent wait called") {
+            await !(transport.waitCompletionTimeoutsMs()).isEmpty
+        }
+
+        #expect(await transport.waitCompletionTimeoutsMs() == [300_000])
     }
 
     @Test func `agent lifecycle end refreshes history and clears pending run`() async throws {
