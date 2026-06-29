@@ -1,5 +1,6 @@
 // Codex Supervisor tests cover supervisor plugin behavior.
 import * as fs from "node:fs/promises";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -800,6 +801,34 @@ async function waitForFile(filePath: string): Promise<string> {
 }
 
 describe("connectCodexAppServerEndpoint", () => {
+  it("does not offer websocket compression to Unix socket app-server endpoints", async () => {
+    const socketDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-supervisor-uds-"));
+    const socketPath = path.join(socketDir, "app-server.sock");
+    let requestText = "";
+    const server = net.createServer((socket) => {
+      socket.once("data", (chunk) => {
+        requestText = chunk.toString("utf8");
+        socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    try {
+      await expect(
+        connectCodexAppServerEndpoint({
+          id: "local",
+          transport: "websocket",
+          url: `unix://${socketPath}`,
+        }),
+      ).rejects.toThrow();
+      expect(requestText.toLowerCase()).toContain("upgrade: websocket");
+      expect(requestText.toLowerCase()).not.toContain("sec-websocket-extensions");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.rm(socketDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects pending websocket requests when the supervisor closes intentionally", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     const port = await new Promise<number>((resolve) => {
