@@ -2506,7 +2506,9 @@ describe("agent event handler", () => {
       startedAt: 1_000,
       abortedLastRun: false,
     });
-    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("disk full"));
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(
+      new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"),
+    );
     const markTrackedRunTerminalPersisted = vi.fn();
     const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
@@ -2539,7 +2541,7 @@ describe("agent event handler", () => {
       abortedLastRun: false,
     });
     expect(logErrorMock).toHaveBeenCalledWith(
-      "gateway: failed to persist terminal session lifecycle event for run run-failed-write: Error: disk full",
+      "gateway: failed to persist terminal session lifecycle event for run run-failed-write: Error: disk full sk-abc…3456",
     );
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
   });

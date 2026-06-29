@@ -719,7 +719,7 @@ export function createAgentEventHandler({
           })
           .catch((err: unknown) => {
             logError(
-              `gateway: failed to persist terminal session lifecycle event for run ${evt.runId}: ${String(err)}`,
+              `gateway: failed to persist terminal session lifecycle event for run ${evt.runId}: ${formatForLog(err)}`,
             );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
