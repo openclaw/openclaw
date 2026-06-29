@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+} from "../../../src/config/sessions/session-accessor.js";
 import { saveSessionStore } from "../../../src/config/sessions/store.js";
 import type { SessionEntry } from "../../../src/config/sessions/types.js";
 import {
@@ -443,6 +447,17 @@ describe("Feishu doctor state repair", () => {
         updatedAt: Date.now(),
       },
     });
+    await appendTranscriptMessage(
+      {
+        agentId: "support",
+        sessionId: "sess-support-bad",
+        sessionKey,
+        storePath: customStorePath,
+      },
+      {
+        message: { role: "user", content: "unhealthy migrated Feishu session" },
+      },
+    );
 
     expect(fs.existsSync(customStorePath)).toBe(false);
     expect(fs.existsSync(customSqlitePath)).toBe(true);
@@ -473,6 +488,13 @@ describe("Feishu doctor state repair", () => {
     ).toBe(true);
 
     expect(readStoreEntries(customStorePath, "support")[sessionKey]).toBeUndefined();
+    await expect(
+      loadTranscriptEvents({
+        agentId: "support",
+        sessionId: "sess-support-bad",
+        storePath: customStorePath,
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("archives unhealthy default-scope sessions when metadata identifies Feishu", async () => {
