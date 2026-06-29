@@ -15,6 +15,7 @@ import {
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
+import { jsonResult } from "./tools/common.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
@@ -515,26 +516,25 @@ describe("buildEmbeddedExtensionFactories", () => {
       },
     } as never);
     const handler = handlers.get("tool_result");
-    const content = [{ type: "text", text: "spawned watcher" }];
-    const details = {
+    const acceptedResult = jsonResult({
       status: "accepted",
       childSessionKey: "agent:watcher:subagent:abc",
       runId: "run-123",
       mode: "run",
-    };
+    });
 
     const result = await handler?.(
       {
         toolName: "sessions_spawn",
         toolCallId: "call-spawn",
-        content,
-        details,
+        content: acceptedResult.content,
+        details: acceptedResult.details,
         isError: true,
       },
       { cwd: "/tmp" },
     );
 
-    expect(result).toEqual({ content, details });
+    expect(result).toEqual(acceptedResult);
   });
 
   it("still marks a forbidden sessions_spawn as a model-visible failure", async () => {
@@ -628,11 +628,11 @@ describe("buildEmbeddedExtensionFactories", () => {
     } as never);
     const handler = handlers.get("tool_result");
     const content = [{ type: "text", text: "boom" }];
-    const details = {
+    const details = jsonResult({
       status: "accepted",
       childSessionKey: "agent:watcher:subagent:abc",
       runId: "run-123",
-    };
+    }).details;
 
     const result = await handler?.(
       {
