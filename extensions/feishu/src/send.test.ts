@@ -163,6 +163,26 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("keeps original post text when materialized line breaks would exceed a fixed max", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "abcd\nefgh",
+      maxMarkdownTextLength: 6,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "abcd\nefgh",
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
@@ -349,6 +369,55 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("splits materialized post markdown before sending to Feishu", async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_part_1" } })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_part_2" } });
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { textChunkLimit: 6 },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "abcd\nefgh",
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_target", user_name: "Target User" },
+            { tag: "md", text: "abcd" },
+          ],
+        ],
+      },
+    });
+    expect(JSON.parse(create.mock.calls[1][0].data.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "md", text: "efgh" }]],
+      },
+    });
+    expect(result.messageId).toBe("om_part_2");
+    expect(result.receipt.platformMessageIds).toEqual(["om_part_1", "om_part_2"]);
   });
 
   it("extracts text content from interactive card elements", async () => {

@@ -281,30 +281,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
-  it("re-chunks post text after materializing markdown line breaks", async () => {
-    const cfg: ClawdbotConfig = {
-      channels: {
-        feishu: {
-          textChunkLimit: 6,
-        },
-      },
-    };
-
-    await sendText({
-      cfg,
-      to: "chat_1",
-      text: "abcd\nefgh",
-      replyToId: "om_reply_1",
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageCall(0)?.text).toBe("abcd");
-    expect(sendMessageCall(0)?.replyToMessageId).toBe("om_reply_1");
-    expect(sendMessageCall(1)?.text).toBe("efgh");
-    expect(sendMessageCall(1)?.replyToMessageId).toBeUndefined();
-  });
-
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);

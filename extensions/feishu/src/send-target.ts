@@ -3,9 +3,11 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuSendTarget = {
   client: ReturnType<typeof createFeishuClient>;
+  account: ResolvedFeishuAccount;
   receiveId: string;
   receiveIdType: ReturnType<typeof resolveReceiveIdType>;
 };
@@ -30,6 +32,7 @@ export function resolveFeishuSendTarget(params: {
   const withoutProviderPrefix = target.replace(/^(feishu|lark):/i, "");
   return {
     client,
+    account,
     receiveId,
     receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
   };
