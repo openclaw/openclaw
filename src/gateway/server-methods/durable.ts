@@ -2,7 +2,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isDurableWorkflowsEnabled } from "../../durable/config.js";
 import { buildDurableCoordinationProjection } from "../../durable/coordination-projection.js";
-import { openDurableWorkflowSqliteStore } from "../../durable/sqlite-store.js";
+import { openDurableWorkflowStore } from "../../durable/store-factory.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function readWorkflowRunId(params: unknown): string | undefined {
@@ -32,7 +32,7 @@ export const durableHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const store = openDurableWorkflowSqliteStore();
+    const store = openDurableWorkflowStore();
     try {
       const run = store.getRun(workflowRunId);
       if (!run) {

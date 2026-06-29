@@ -11,7 +11,7 @@ import {
   type DurableExecutorRunOnceResult,
 } from "./executor.js";
 import type { DurableWorkflowRegistry } from "./registry.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import { openDurableWorkflowStore } from "./store-factory.js";
 import type { DurableWorkflowStepType, DurableWorkflowStore } from "./types.js";
 
 const log = createSubsystemLogger("durable/worker");
@@ -240,7 +240,7 @@ export function startDurableWorkflowWorkerFromEnv(
     };
   }
 
-  const store = openDurableWorkflowSqliteStore({ env });
+  const store = openDurableWorkflowStore({ env });
   const worker = startDurableWorkflowWorker({
     store,
     registry: options.registry,

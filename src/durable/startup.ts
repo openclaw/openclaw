@@ -2,7 +2,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 // Gateway startup integration for the durable workflow control plane.
 import { isDurableWorkflowsEnabled } from "./config.js";
 import { reconcileDurableAgentTurnsOnGatewayStartup } from "./recovery.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import { openDurableWorkflowStore } from "./store-factory.js";
 
 const log = createSubsystemLogger("durable/workflows");
 
@@ -16,9 +16,9 @@ export async function maybeRecordDurableGatewayStartup(params: {
   if (!isDurableWorkflowsEnabled(env)) {
     return;
   }
-  let store: ReturnType<typeof openDurableWorkflowSqliteStore> | null = null;
+  let store: ReturnType<typeof openDurableWorkflowStore> | null = null;
   try {
-    store = openDurableWorkflowSqliteStore({ env });
+    store = openDurableWorkflowStore({ env });
     const recovery = reconcileDurableAgentTurnsOnGatewayStartup({
       store,
       processInstanceId: params.processInstanceId,

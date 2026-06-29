@@ -1,7 +1,7 @@
 // Durable workflow lifecycle helpers for one agent turn.
 import { createHash } from "node:crypto";
 import { isDurableWorkflowsEnabled } from "./config.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import { openDurableWorkflowStore } from "./store-factory.js";
 import type {
   DurableRecoveryState,
   DurableWorkflowRun,
@@ -96,7 +96,7 @@ export function startDurableAgentTurnLifecycle(params: {
   };
 
   try {
-    store = openDurableWorkflowSqliteStore({ env });
+    store = openDurableWorkflowStore({ env });
     run = store.createRun({
       workflowId: DURABLE_AGENT_TURN_WORKFLOW_ID,
       workflowVersion: "1",

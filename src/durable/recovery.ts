@@ -1,7 +1,7 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 // Recovery reconciliation for durable workflow runs.
 import { isDurableWorkflowsEnabled } from "./config.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import { openDurableWorkflowStore } from "./store-factory.js";
 import type { DurableWorkflowRun, DurableWorkflowStep, DurableWorkflowStore } from "./types.js";
 import { DURABLE_AGENT_TURN_WORKFLOW_ID } from "./workflow-ids.js";
 
@@ -426,7 +426,7 @@ export function startDurableRecoveryWorker(params: {
     running = true;
     let store: DurableWorkflowStore | null = null;
     try {
-      store = openDurableWorkflowSqliteStore({ env });
+      store = openDurableWorkflowStore({ env });
       const result = reconcileStaleDurableAgentTurns({
         store,
         processInstanceId: params.processInstanceId,

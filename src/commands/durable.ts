@@ -1,5 +1,5 @@
 import { buildDurableCoordinationProjection } from "../durable/coordination-projection.js";
-import { openDurableWorkflowSqliteStore } from "../durable/sqlite-store.js";
+import { openDurableWorkflowStore } from "../durable/store-factory.js";
 import type {
   DurableWorkflowEvent,
   DurableWorkflowLink,
@@ -248,7 +248,7 @@ function renderDetails(details: DurableRunDetails): string {
 }
 
 export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEnv): Promise<void> {
-  const store = openDurableWorkflowSqliteStore({ env: opts.env });
+  const store = openDurableWorkflowStore({ env: opts.env });
   try {
     if (opts.action === "stats") {
       const stats = store.getStats();

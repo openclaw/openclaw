@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDurableWorkflowsEnabled } from "./config.js";
 import { reconcileDurableFanIn, type DurableFanInPolicy } from "./fan-in.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import { openDurableWorkflowStore } from "./store-factory.js";
 import type {
   DurableWorkflowLinkStatus,
   DurableWorkflowRun,
@@ -110,7 +110,7 @@ export function recordDurableSubagentRegistered(params: {
   }
   safeCall(() => {
     const now = Date.now();
-    const store = openDurableWorkflowSqliteStore({ env });
+    const store = openDurableWorkflowStore({ env });
     try {
       const parent = findLatestOpenParentRun({
         store,
@@ -225,7 +225,7 @@ export function recordDurableSubagentTerminal(params: {
   }
   safeCall(() => {
     const now = Date.now();
-    const store = openDurableWorkflowSqliteStore({ env });
+    const store = openDurableWorkflowStore({ env });
     try {
       const child = store.createRun({
         workflowId: DURABLE_SUBAGENT_RUN_WORKFLOW_ID,
