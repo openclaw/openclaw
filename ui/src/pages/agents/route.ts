@@ -11,12 +11,7 @@ import {
   resolveModelPrimary,
 } from "../../ui/views/agents-utils.ts";
 import { loadChannels } from "../channels/data.ts";
-import {
-  loadConfig,
-  removeConfigFormValue,
-  stageDefaultAgentConfigEntry,
-  updateConfigFormValue,
-} from "../config/data.ts";
+import { loadConfig, removeConfigFormValue, updateConfigFormValue } from "../config/data.ts";
 import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../config/data.ts";
 import { runCronJob } from "../cron/data.ts";
 import {
@@ -28,6 +23,7 @@ import {
   resetToolsEffectiveState,
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
+  setDefaultAgent,
 } from "./data.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./identity.ts";
@@ -384,7 +380,7 @@ export const page = definePage({
               }
             },
             onSetDefault: (id) => {
-              stageDefaultAgentConfigEntry(state, id);
+              void setDefaultAgent(state, id);
             },
           })}
         `;
