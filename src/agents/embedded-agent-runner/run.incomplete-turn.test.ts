@@ -2816,6 +2816,35 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("does not retry errored thinking-only turns when the current turn ran a replay-unsafe sync tool (#97877)", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          // exec is not in UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES, so the
+          // fixture marks replaySafe=false. The current turn is therefore
+          // terminal even without clientToolCalls or async-started activity.
+          toolMetas: [{ toolName: "exec" }],
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llamacpp",

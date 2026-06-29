@@ -535,6 +535,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "toolTrustedLocalMedia"
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
+    | "toolMetas"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -542,6 +543,14 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     return false;
   }
   if (hasAttemptTerminalState(params.attempt)) {
+    return false;
+  }
+  // Current-attempt sync tools with declared side effects (replaySafe !== true)
+  // make a retry unsafe — resubmitting would duplicate the tool's effects even
+  // though the attempt produced no visible assistant output. Mirrors
+  // buildAttemptReplayMetadata's hadUnsafeTools gate. Prior-session side effects
+  // already live in replayMetadata and do not block retry of a clean turn (#97877).
+  if ((params.attempt.toolMetas ?? []).some((entry) => entry.replaySafe !== true)) {
     return false;
   }
 
