@@ -494,6 +494,77 @@ describe("cron service timer regressions", () => {
     expect(job.state.nextRunAtMs).toBeUndefined();
   });
 
+  it("does not apply cron.minInterval to one-shot transient retries", () => {
+    const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
+    const endedAt = scheduledAt + 250;
+    const retryBackoffMs = 1_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-rate-limit-min-interval",
+      name: "one-shot retry",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "retry me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-one-shot-min-interval-exempt.json",
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      jobs: [cronJob],
+    });
+    state.deps.cronConfig = {
+      minInterval: "5m",
+      retry: { maxAttempts: 1, backoffMs: [retryBackoffMs], retryOn: ["rate_limit"] },
+    };
+
+    applyJobResult(state, cronJob, {
+      status: "error",
+      error: "429 rate limit exceeded",
+      startedAt: scheduledAt,
+      endedAt,
+    });
+
+    expect(cronJob.state.nextRunAtMs).toBe(endedAt + retryBackoffMs);
+  });
+
+  it("applies cron.minInterval before recurring transient retry re-arm", () => {
+    const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
+    const endedAt = scheduledAt + 250;
+    const retryBackoffMs = 1_000;
+    const minIntervalMs = 5 * 60_000;
+    const expectedFloorAtMs = scheduledAt + minIntervalMs - 2_000;
+    const everySixHoursMs = 6 * 60 * 60 * 1_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-rate-limit-min-interval",
+      name: "recurring retry",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "retry me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-recurring-min-interval-retry.json",
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      jobs: [cronJob],
+    });
+    state.deps.cronConfig = {
+      minInterval: minIntervalMs,
+      retry: { maxAttempts: 1, backoffMs: [retryBackoffMs], retryOn: ["rate_limit"] },
+    };
+
+    applyJobResult(state, cronJob, {
+      status: "error",
+      error: "429 rate limit exceeded",
+      startedAt: scheduledAt,
+      endedAt,
+    });
+
+    expect(cronJob.state.nextRunAtMs).toBe(expectedFloorAtMs);
+    expect(cronJob.state.nextRunAtMs).toBeGreaterThan(endedAt + retryBackoffMs);
+    expect(cronJob.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
+  });
+
   it("retries recurring jobs after transient model rate limits before the next scheduled slot", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
@@ -3499,6 +3570,7 @@ describe("cron service timer regressions", () => {
       nowMs: () => nowMs,
       jobs: [job],
     });
+    state.deps.cronConfig = { minInterval: everyMs };
 
     const startedAt = nowMs;
     const endedAt = nowMs + 2_000;

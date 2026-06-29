@@ -221,6 +221,10 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 
 `cron list` and run history surface the denial reason instead of reporting a blocked command as `ok`.
 
+## Minimum interval
+
+`cron.minInterval` (default unset / no limit) is an optional guardrail that bounds how often recurring jobs may fire. Set it to a duration (`30s`, `5m`, `1h`) or a number of milliseconds: `cron add`/`cron update` reject recurring `every` or `cron` schedules below the floor, and the scheduler also paces fires at run time so consecutive fires stay at least the floor apart (within a small ~2s dispatch tolerance for timer jitter) — including for jobs created before the limit was set, and recurring transient-error retries. One-shot `at` jobs are exempt. This protects against accidental or wasteful high-frequency schedules from agents or scripts.
+
 ## Retention
 
 Retention and pruning are controlled in config:

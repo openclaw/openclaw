@@ -1,5 +1,6 @@
 /** Public cron service operations for lifecycle, CRUD, listing, and manual runs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveCronMinIntervalMs } from "../../config/cron-limits.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -23,12 +24,14 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
   applyJobPatch,
+  assertScheduleMeetsMinInterval,
   assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
+  minIntervalFloorAtMs,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -540,20 +543,40 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const scheduleChanged = patch.schedule !== undefined;
     const enabledChanged = patch.enabled !== undefined;
 
+    // Re-validate against the configured floor only when the schedule itself
+    // changes, so unrelated edits to a pre-existing fast job are not blocked.
+    if (scheduleChanged) {
+      assertScheduleMeetsMinInterval(
+        nextJob.schedule,
+        resolveCronMinIntervalMs(state.deps.cronConfig),
+        now,
+      );
+    }
+
     if (scheduleChanged && nextJob.schedule.kind === "cron" && !isJobEnabled(nextJob)) {
       computeJobNextRunAtMs({ ...nextJob, enabled: true }, now);
     }
 
     nextJob.updatedAtMs = now;
+    // Update re-arms keep the cron.minInterval fire-time floor: without it, a
+    // bare {enabled: true} update would reset a floor-deferred next fire back
+    // to the natural (too fast) slot, defeating the operator limit.
+    const rearmedNextRunAtMs = () => {
+      const naturalNext = computeJobNextRunAtMs(nextJob, now);
+      if (naturalNext === undefined) {
+        return undefined;
+      }
+      return Math.max(naturalNext, minIntervalFloorAtMs(state.deps.cronConfig, nextJob));
+    };
     if (scheduleChanged || enabledChanged) {
       if (isJobEnabled(nextJob)) {
-        nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+        nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
       } else {
         nextJob.state.nextRunAtMs = undefined;
         nextJob.state.runningAtMs = undefined;
       }
     } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
-      nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+      nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
     }
 
     if (state.store) {

@@ -467,7 +467,8 @@ function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron completion destination webhook requires") ||
     message.includes("cron failure destination webhook requires") ||
     message.includes("cron channel delivery config is only supported") ||
-    message.includes("cron delivery.failureDestination is only supported")
+    message.includes("cron delivery.failureDestination is only supported") ||
+    message.includes("below the minimum interval")
   );
 }
 

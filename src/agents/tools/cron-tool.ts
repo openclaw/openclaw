@@ -912,6 +912,7 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - Webhook: delivery.mode="webhook" and delivery.to URL.
+- Operators may set a minimum interval; add/update is rejected if a recurring every/cron schedule fires too frequently. On that error, increase the interval rather than retrying.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:

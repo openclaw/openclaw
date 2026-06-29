@@ -894,6 +894,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        minInterval: z.union([z.string(), z.number().int().nonnegative()]).optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),
@@ -938,6 +939,17 @@ export const OpenClawSchema = z
       })
       .strict()
       .superRefine((val, ctx) => {
+        if (typeof val.minInterval === "string" && val.minInterval.trim()) {
+          try {
+            parseDurationMs(val.minInterval, { defaultUnit: "ms" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["minInterval"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
         if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
           try {
             parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
