@@ -1531,10 +1531,7 @@ describe("package artifact reuse", () => {
 
     for (const item of cases) {
       const label = `${item.workflowPath} ${item.jobName}`;
-      const uploadStep = workflowStep(
-        workflowJob(item.workflowPath, item.jobName),
-        item.stepName,
-      );
+      const uploadStep = workflowStep(workflowJob(item.workflowPath, item.jobName), item.stepName);
 
       expect(uploadStep.if, label).toContain("always()");
       expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
@@ -2137,7 +2134,7 @@ describe("package artifact reuse", () => {
       "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
     );
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@28409ee6ce9d088c9ddf0d6913cde6597f83f362",
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
