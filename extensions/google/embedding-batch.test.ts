@@ -1,8 +1,7 @@
 // Google tests cover embedding batch bounded JSON response reads.
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
@@ -71,6 +70,17 @@ function singleRequest(): GeminiBatchRequest[] {
       },
     },
   ];
+}
+
+function makeRequests(count: number): GeminiBatchRequest[] {
+  return Array.from({ length: count }, (_, index) => ({
+    custom_id: `r${index}`,
+    request: {
+      model: "models/text-embedding-004",
+      content: { parts: [{ text: `hello ${index}` }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+    },
+  }));
 }
 
 function makeOversizedResponse(): {
@@ -248,17 +258,38 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 });
 
-describe("Google embedding-batch file-content download bound (real HTTP server)", () => {
-  // Uses a real node:http server that streams 20 MiB without Content-Length to
-  // exercise the readProviderTextResponse 16 MiB cap on the :download path.
-
+describe("Google embedding-batch file-content streaming (real HTTP server)", () => {
   let server: ReturnType<typeof createServer>;
   let port: number;
+  let writeDownload: (res: ServerResponse) => void;
+
+  function writeJsonl(res: ServerResponse, lines: Iterable<string>) {
+    const iterator = lines[Symbol.iterator]();
+    const writeNext = () => {
+      while (true) {
+        const next = iterator.next();
+        if (next.done) {
+          res.end();
+          return;
+        }
+        if (!res.write(`${next.value}\n`)) {
+          res.once("drain", writeNext);
+          return;
+        }
+      }
+    };
+    writeNext();
+  }
 
   beforeEach(async () => {
+    writeDownload = (res) => {
+      res.writeHead(500);
+      res.end("missing download writer");
+    };
     server = createServer((req, res) => {
       const url = req.url ?? "";
       if (url.includes("/upload/")) {
+        req.resume();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ name: "files/f-ok" }));
       } else if (url.includes(":asyncBatchEmbedContent")) {
@@ -271,31 +302,16 @@ describe("Google embedding-batch file-content download bound (real HTTP server)"
           }),
         );
       } else if (url.includes(":download")) {
-        // Stream 20 MiB — deliberately no Content-Length header
-        res.writeHead(200, { "Content-Type": "application/octet-stream" });
-        const chunkSize = 1024 * 1024;
-        const totalChunks = 20;
-        let sent = 0;
-        const sendChunk = () => {
-          if (sent >= totalChunks) {
-            res.end();
-            return;
-          }
-          sent += 1;
-          const ok = res.write(Buffer.alloc(chunkSize));
-          if (ok) {
-            setImmediate(sendChunk);
-          } else {
-            res.once("drain", sendChunk);
-          }
-        };
-        sendChunk();
+        res.writeHead(200, { "Content-Type": "application/jsonl" });
+        writeDownload(res);
       } else {
         res.writeHead(500);
         res.end("unexpected");
       }
     });
-    await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     port = (server.address() as AddressInfo).port;
   });
 
@@ -305,8 +321,48 @@ describe("Google embedding-batch file-content download bound (real HTTP server)"
     });
   });
 
-  it("rejects with gemini.batch-file-content label when download exceeds 16 MiB cap", async () => {
-    // Point the Gemini client at the local server so the real fetch reaches it.
+  it("streams valid output files larger than the generic 16 MiB text cap", async () => {
+    const requests = makeRequests(16_500);
+    const padding = "x".repeat(1_024);
+    writeDownload = (res) => {
+      writeJsonl(
+        res,
+        requests.map((request) =>
+          JSON.stringify({
+            key: request.custom_id,
+            embedding: { values: [1, 0, 0] },
+            padding,
+          }),
+        ),
+      );
+    };
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    const result = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.size).toBe(requests.length);
+    expect(result.get("r0")).toEqual([1, 0, 0]);
+    expect(result.get(`r${requests.length - 1}`)).toEqual([1, 0, 0]);
+  });
+
+  it("rejects a single oversized JSONL output line", async () => {
+    writeDownload = (res) => {
+      res.end(
+        `${JSON.stringify({
+          key: "r0",
+          embedding: { values: [1, 0, 0] },
+          padding: "x".repeat(17 * 1024 * 1024),
+        })}\n`,
+      );
+    };
     const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
 
     await expect(
@@ -319,30 +375,6 @@ describe("Google embedding-batch file-content download bound (real HTTP server)"
         pollIntervalMs: 50,
         timeoutMs: 10_000,
       }),
-    ).rejects.toThrow(/gemini\.batch-file-content/);
-  });
-
-  it("mutation: res.text() does not bound large downloads — proves the fix is load-bearing", async () => {
-    // Build a 17 MiB ReadableStream (over the 16 MiB cap) and confirm:
-    //   • raw res.text() resolves without error  → pre-fix behaviour
-    //   • readProviderTextResponse rejects        → post-fix behaviour
-
-    const makeBigStream = () =>
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(17 * 1024 * 1024));
-          controller.close();
-        },
-      });
-
-    // Pre-fix: no bound — resolves
-    const r1 = new Response(makeBigStream(), { status: 200 });
-    await expect(r1.text()).resolves.toBeDefined();
-
-    // Post-fix: bound — rejects with the label we set
-    const r2 = new Response(makeBigStream(), { status: 200 });
-    await expect(readProviderTextResponse(r2, "gemini.batch-file-content")).rejects.toThrow(
-      /gemini\.batch-file-content/,
-    );
+    ).rejects.toThrow(/gemini\.batch-file-content: JSONL line exceeds/);
   });
 });
