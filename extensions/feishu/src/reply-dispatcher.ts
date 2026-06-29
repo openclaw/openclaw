@@ -56,8 +56,17 @@ function mergeStreamingFinalText(
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
-const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
+function formatNoVisibleReplyFallback(reason: string): string {
+  const reasonCode = reason.replace(/^dispatch-complete-/, "").replace(/^broadcast-/, "");
+  return (
+    `⚠️ This reply completed without visible content (${reasonCode}). ` +
+    `The turn may have been interrupted. ` +
+    `Send \`/status\` to check the current session status.\n\n` +
+    `⚠️ 此回复完成时无可见内容 (${reasonCode})。` +
+    `本轮对话可能已被中断。` +
+    `发送 \`/status\` 查看当前会话状态。`
+  );
+}
 const streamingStartBackoffUntilByAccount = new Map<string, number>();
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
@@ -589,7 +598,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     await sendMessageFeishu({
       cfg,
       to: chatId,
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoVisibleReplyFallback(reason),
       replyToMessageId: sendReplyToMessageId,
       replyInThread: effectiveReplyInThread,
       allowTopLevelReplyFallback,
