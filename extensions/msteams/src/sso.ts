@@ -24,6 +24,7 @@
  * that ack; these helpers encapsulate token exchange and persistence.
  */
 
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { readMSTeamsHttpErrorDetail } from "./http-error.js";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
@@ -34,6 +35,9 @@ const BOT_FRAMEWORK_TOKEN_SCOPE = "https://api.botframework.com/.default";
 
 /** Bot Framework User Token service base URL. */
 const BOT_FRAMEWORK_USER_TOKEN_BASE_URL = "https://token.botframework.com";
+
+/** Maximum response body size for Bot Framework User Token service calls. */
+const SSO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * Response shape returned by the Bot Framework User Token service for
@@ -128,9 +132,20 @@ async function callUserTokenService(
     const error = await readMSTeamsHttpErrorDetail(response, `HTTP ${response.status}`);
     return { error, status: response.status };
   }
+  let buf: Buffer;
+  try {
+    buf = await readResponseWithLimit(response, SSO_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`msteams.sso: User Token service response exceeds ${maxBytes} bytes`),
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "msteams.sso: failed to read User Token service response";
+    return { error: message, status: response.status };
+  }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    parsed = JSON.parse(buf.toString("utf8")) as unknown;
   } catch {
     return { error: "invalid JSON from User Token service", status: response.status };
   }
