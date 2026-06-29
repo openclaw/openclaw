@@ -1537,8 +1537,18 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
     dedupeByMessageIdempotency: options.idempotencyLookup !== "caller-checked",
   });
-  if (!appended && idempotencyKey && options.idempotencyLookup === "scan") {
+  if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
+    if (existing) {
+      return {
+        appended: false,
+        message: existing.message as TMessage,
+        messageId: existing.messageId,
+      };
+    }
+  }
+  if (!appended) {
+    const existing = readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
       return {
         appended: false,
@@ -3548,6 +3558,26 @@ function readTranscriptMessageByIdempotencyKey(
   if (!identity) {
     return undefined;
   }
+  return readTranscriptMessageByIdentity(database, scope, identity);
+}
+
+function readTranscriptMessageByEventId(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  eventId: string,
+): { messageId: string; message: unknown } | undefined {
+  const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
+  if (!identity) {
+    return undefined;
+  }
+  return readTranscriptMessageByIdentity(database, scope, identity);
+}
+
+function readTranscriptMessageByIdentity(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  identity: { eventId: string; seq: number },
+): { messageId: string; message: unknown } | undefined {
   const db = getSessionKysely(database.db);
   const eventRow = executeSqliteQueryTakeFirstSync(
     database.db,

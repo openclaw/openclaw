@@ -775,7 +775,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ).rejects.toThrow(/use append(?:Sqlite)?TranscriptMessage instead/);
     });
 
-    it("does not report success for unchecked duplicate SQLite transcript keys", async () => {
+    it("returns existing SQLite transcript messages after default idempotency dedupe", async () => {
       const scope = sqliteAdapter.transcriptScope(paths, "session-unchecked-dedupe");
       const message = {
         role: "assistant",
@@ -783,8 +783,13 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         idempotencyKey: "unchecked-once",
       };
 
-      await appendSqliteTranscriptMessage(scope, { message });
-      await expect(appendSqliteTranscriptMessage(scope, { message })).rejects.toThrow();
+      const appended = await appendSqliteTranscriptMessage(scope, { message });
+      const replayed = await appendSqliteTranscriptMessage(scope, {
+        message: {
+          ...message,
+          content: "unchecked replay",
+        },
+      });
 
       const events = await loadSqliteTranscriptEvents(scope);
       const keyedEvents = events.filter((event): event is { message: typeof message } => {
@@ -796,7 +801,51 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
             "unchecked-once"
         );
       });
+      expect(appended).toMatchObject({ appended: true });
+      expect(replayed).toMatchObject({
+        appended: false,
+        message: expect.objectContaining({ content: "unchecked" }),
+        messageId: appended?.messageId,
+      });
       expect(keyedEvents).toHaveLength(1);
+    });
+
+    it("treats replayed SQLite transcript message ids as existing appends", async () => {
+      const scope = sqliteAdapter.transcriptScope(paths, "session-event-id-dedupe");
+      const eventId = "message-retry-event-id";
+
+      const appended = await appendSqliteTranscriptMessage(scope, {
+        eventId,
+        message: {
+          role: "assistant",
+          content: "first attempt",
+        },
+      });
+      const replayed = await appendSqliteTranscriptMessage(scope, {
+        eventId,
+        message: {
+          role: "assistant",
+          content: "retry attempt",
+        },
+      });
+
+      expect(appended).toMatchObject({
+        appended: true,
+        messageId: eventId,
+      });
+      expect(replayed).toMatchObject({
+        appended: false,
+        message: expect.objectContaining({ content: "first attempt" }),
+        messageId: eventId,
+      });
+      await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session" }),
+        expect.objectContaining({
+          id: eventId,
+          message: expect.objectContaining({ content: "first attempt" }),
+          type: "message",
+        }),
+      ]);
     });
 
     it("conforms for transcript message append, idempotency, and update publication", async () => {
