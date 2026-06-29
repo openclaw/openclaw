@@ -303,7 +303,7 @@ describe("diagnostic-events", () => {
     // model.call.* are async-queued (see ASYNC_DIAGNOSTIC_EVENT_TYPES) so
     // their delivery is interleaved with sync model.usage/model.failover.
     // Order is not load-bearing here — assert membership.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(seen.toSorted()).toEqual([
       "model.call.completed",
       "model.call.error",
@@ -343,7 +343,7 @@ describe("diagnostic-events", () => {
       usage: { total: 1 },
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(seen).toEqual(["model.usage"]);
   });
 
@@ -368,7 +368,7 @@ describe("diagnostic-events", () => {
       source: "plugin",
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(seen).toEqual(["message.queued"]);
   });
 
