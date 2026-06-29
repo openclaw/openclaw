@@ -188,26 +188,37 @@ function createNoProxyAwareEnvDispatcher(
           // callback fires only after both dispatchers have settled.
           const cbIdx = args.length - 1;
           const originalCallback = typeof args[cbIdx] === "function" ? args[cbIdx] : undefined;
-          let settledCount = 0;
-          const onSettled = originalCallback
-            ? (...cbArgs: unknown[]) => {
-                settledCount++;
-                if (settledCount >= 2) {
-                  Reflect.apply(originalCallback, undefined, cbArgs);
-                }
+          const settled: Promise<unknown>[] = [];
+
+          if (originalCallback) {
+            let settledCount = 0;
+            const onSettled = (...cbArgs: unknown[]) => {
+              settledCount++;
+              if (settledCount >= 2) {
+                Reflect.apply(originalCallback, undefined, cbArgs);
               }
-            : undefined;
-          // Build args for the bypass agent (use wrapped callback).
-          const bypassArgs = originalCallback
-            ? [...args.slice(0, cbIdx), onSettled]
-            : args.filter((a) => typeof a !== "function");
+            };
+            // Build args for the bypass agent (use wrapped callback).
+            const bypassArgs = [...args.slice(0, cbIdx), onSettled];
+            const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
+            if (typeof bypassValue === "function") {
+              Reflect.apply(bypassValue, bypassAgent, bypassArgs);
+            }
+            // Build args for the proxy dispatcher.
+            const proxyArgs = [...args.slice(0, cbIdx), onSettled];
+            return Reflect.apply(value, target, proxyArgs);
+          }
+
+          // Promise-style: invoke both, return a single promise that settles
+          // when both the bypass agent and the proxy dispatcher are done.
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
-            Reflect.apply(bypassValue, bypassAgent, bypassArgs);
+            settled.push(Promise.resolve(Reflect.apply(bypassValue, bypassAgent, [])));
           }
-          // Build args for the proxy dispatcher.
-          const proxyArgs = originalCallback ? [...args.slice(0, cbIdx), onSettled] : args;
-          return Reflect.apply(value, target, proxyArgs);
+          settled.push(Promise.resolve(Reflect.apply(value, target, [])));
+          return settled.length === 2
+            ? Promise.all(settled).then(() => undefined)
+            : settled[0];
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
