@@ -232,7 +232,7 @@ class QQBotMarkdownChunkingState {
     const rowMessage = [this.activeTable!.header, this.activeTable!.separator, line].join("\n");
     if (utf8ByteLength(rowMessage) > limit) {
       this.dropHeaderOnlyTableChunk();
-      this.flushTable(chunks);
+      this.flushTable(chunks, limit);
       this.pushOversizedTableRow(line, limit, chunks);
       return;
     }
@@ -244,7 +244,7 @@ class QQBotMarkdownChunkingState {
       return;
     }
 
-    this.flushTable(chunks);
+    this.flushTable(chunks, limit);
     this.ensureTableHeader();
     this.tableLines.push(line);
   }
