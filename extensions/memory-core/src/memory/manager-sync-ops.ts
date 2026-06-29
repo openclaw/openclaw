@@ -1496,6 +1496,10 @@ export abstract class MemoryManagerSyncOps {
     });
   }
 
+  protected async refreshSessionStartupCatchupDirtyFilesForStatus(): Promise<string[]> {
+    return await this.markSessionStartupCatchupDirtyFiles();
+  }
+
   protected async markSessionStartupCatchupDirtyFiles(): Promise<string[]> {
     if (!this.sources.has("sessions") || this.closed) {
       return [];

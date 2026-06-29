@@ -435,6 +435,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();
+      } else if (this.purpose === "status") {
+        void this.refreshSessionStartupCatchupDirtyFilesForStatus().catch((err: unknown) => {
+          log.warn("memory session status catch-up check failed: " + String(err));
+        });
       }
     } catch (err) {
       closeMemoryDatabase(this.db);
