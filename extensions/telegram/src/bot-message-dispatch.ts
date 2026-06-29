@@ -959,7 +959,7 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? replyQuoteTargetsBotMessage
-        ? msg.message_id
+        ? (msg.reply_to_message?.message_id ?? msg.message_id)
         : (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
@@ -969,7 +969,7 @@ export const dispatchTelegramMessage = async ({
   // Auto-forward the original message when replying in a group chat
   if (
     draftReplyToMessageId != null &&
-    msg.chat?.type === "supergroup" &&
+    (msg.chat?.type === "supergroup" || msg.chat?.type === "group") &&
     typeof msg.message_id === "number" &&
     msg.message_id !== draftReplyToMessageId
   ) {

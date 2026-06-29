@@ -287,11 +287,15 @@ export function hydrateSessionStoreSkillPromptRefs(params: {
     const { promptRef: _promptRef, ...rest } = snapshot as typeof snapshot & {
       promptRef?: SessionSkillPromptRef;
     };
+    // Put prompt first so the key order matches the original in-memory entry.
+    // JSON.stringify is order-sensitive; mismatched key order causes a
+    // revision mismatch in commitReplySessionInitialization when comparing
+    // the hydrated disk entry against the mutable cache entry.
     params.store[key] = {
       ...entry,
       skillsSnapshot: {
-        ...rest,
         prompt,
+        ...rest,
       },
     };
     changed = true;
