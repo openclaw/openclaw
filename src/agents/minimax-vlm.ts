@@ -15,6 +15,7 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
+const MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
@@ -146,7 +147,9 @@ export async function minimaxUnderstandImage(params: {
   const responseLabel = traceId
     ? `MiniMax VLM response [Trace-Id=${traceId}]`
     : "MiniMax VLM response";
-  const json = await readProviderJsonResponse<unknown>(res, responseLabel);
+  const json = await readProviderJsonResponse<unknown>(res, responseLabel, {
+    maxBytes: MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES,
+  });
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);

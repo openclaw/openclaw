@@ -378,6 +378,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
+    add("boundary safety guard", ["check:boundary-safety"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
@@ -469,6 +470,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
+    add("boundary safety guard", ["check:boundary-safety"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
   if (lanes.core) {

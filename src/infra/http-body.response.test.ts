@@ -247,6 +247,16 @@ describe("readResponseTextSnippet", () => {
     ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
   });
 
+  it("truncates snippets without dangling surrogate halves", async () => {
+    const response = new Response(makeStream([new TextEncoder().encode(`${"x".repeat(2)}🙂tail`)]));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "xx…",
+    });
+  });
+
   it.each([
     {
       name: "applies the idle timeout while reading snippets",

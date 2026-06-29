@@ -8,6 +8,7 @@ import {
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { isAcpTurnActive } from "./active-turns.js";
+import { appendBackgroundTaskProgressSummary } from "./manager.background-task.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -279,6 +280,12 @@ describe("AcpSessionManager", () => {
       });
     });
   }, 300_000);
+
+  it("truncates parented task progress without dangling surrogate halves", () => {
+    const summary = appendBackgroundTaskProgressSummary("", `${"x".repeat(238)}🙂tail`);
+
+    expect(summary).toBe(`${"x".repeat(238)}…`);
+  });
 
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
