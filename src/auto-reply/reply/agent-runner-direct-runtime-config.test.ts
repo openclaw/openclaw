@@ -132,6 +132,8 @@ function createReplyOperation(): ReplyOperation {
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
+    terminalRecovery: false,
+    markTerminalRecovery: vi.fn(),
   };
 }
 
