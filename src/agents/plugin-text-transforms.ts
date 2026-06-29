@@ -79,6 +79,38 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
   return next;
 }
 
+function transformToolCallArgumentText(
+  value: unknown,
+  replacements?: PluginTextReplacement[],
+): unknown {
+  if (typeof value === "string") {
+    return applyPluginTextReplacements(value, replacements);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      transformToolCallArgumentText(entry, replacements),
+    ]),
+  );
+}
+
+function transformToolCallText(toolCall: unknown, replacements?: PluginTextReplacement[]): unknown {
+  if (!isRecord(toolCall)) {
+    return toolCall;
+  }
+  const next = { ...toolCall };
+  if (Object.hasOwn(next, "arguments")) {
+    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+  }
+  return next;
+}
+
 /** Apply input text replacements to a stream context. */
 function transformStreamContextText(
   context: Parameters<StreamFn>[1],
@@ -113,6 +145,12 @@ function transformAssistantEventText(
   }
   if (next.type === "text_end" && typeof next.content === "string") {
     next.content = applyPluginTextReplacements(next.content, replacements);
+  }
+  if (next.type === "toolcall_delta" && typeof next.delta === "string") {
+    next.delta = applyPluginTextReplacements(next.delta, replacements);
+  }
+  if (next.type === "toolcall_end" && Object.hasOwn(next, "toolCall")) {
+    next.toolCall = transformToolCallText(next.toolCall, replacements);
   }
   if (Object.hasOwn(next, "partial")) {
     next.partial = transformMessageText(next.partial, replacements);

@@ -139,6 +139,27 @@ describe("plugin text transforms", () => {
           partial,
         });
         stream.push({
+          type: "toolcall_delta",
+          contentIndex: 1,
+          delta: '{"query":"blue basket on the right shelf"}',
+          partial,
+        });
+        stream.push({
+          type: "toolcall_end",
+          contentIndex: 1,
+          toolCall: {
+            type: "toolCall",
+            id: "tool-1",
+            name: "search",
+            arguments: {
+              query: "blue basket on the right shelf",
+              nested: { note: "blue basket" },
+              entries: ["right shelf", 7],
+            },
+          },
+          partial,
+        });
+        stream.push({
           type: "done",
           reason: "stop",
           message: makeAssistantMessage("final blue basket on the right shelf"),
@@ -178,6 +199,22 @@ describe("plugin text transforms", () => {
     const firstEvent = events[0] as { type?: string; delta?: string } | undefined;
     expect(firstEvent?.type).toBe("text_delta");
     expect(firstEvent?.delta).toBe("red basket on the left shelf");
+    const toolDeltaEvent = events[1] as { type?: string; delta?: string } | undefined;
+    expect(toolDeltaEvent?.type).toBe("toolcall_delta");
+    expect(toolDeltaEvent?.delta).toBe('{"query":"red basket on the left shelf"}');
+    const toolEndEvent = events[2] as
+      | {
+          type?: string;
+          toolCall?: { name?: string; arguments?: Record<string, unknown> };
+        }
+      | undefined;
+    expect(toolEndEvent?.type).toBe("toolcall_end");
+    expect(toolEndEvent?.toolCall?.name).toBe("search");
+    expect(toolEndEvent?.toolCall?.arguments).toEqual({
+      query: "red basket on the left shelf",
+      nested: { note: "red basket" },
+      entries: ["left shelf", 7],
+    });
     expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   });
 });
