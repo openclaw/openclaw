@@ -1032,12 +1032,15 @@ describe("redactSensitiveText", () => {
     ).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
-  it("masks app passwords in generic fields when another secret is present (context sweep)", () => {
-    // If the value already contains a known secret (like an OpenAI key),
-    // the secret-context sweep fires and masks ALL 4x4 kebab tokens
-    // regardless of wordlist or Apple context.
+  it("applies wordlist precision in secret-context sweep (dictionary tokens survive)", () => {
+    // When a value contains a known secret, the secret-context sweep fires.
+    // Dictionary-word tokens like "help-desk-team-page" still survive
+    // because wordlist precision applies. Non-dictionary 4x4 tokens would
+    // still be masked even without Apple context.
     const value = "sk-ant-api03-aaaa and help-desk-team-page too";
-    expect(redactSensitiveFieldValue("text", value)).not.toContain("help-desk-team-page");
+    const result = redactSensitiveFieldValue("text", value);
+    expect(result).toContain("help-desk-team-page");
+    expect(result).not.toContain("sk-ant-api03-aaaa");
   });
 
   it("masks all-word app passwords in explicit Apple fields (fail-closed)", () => {

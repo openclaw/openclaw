@@ -1277,10 +1277,10 @@ function redactSensitiveFieldValueWithOptions(
     }
   }
   if (redacted !== value) {
-    // Secret-context sweep: mask all 4x4 tokens fail-closed.
-    const appRedacted = replacePatternBounded(redacted, APP_SPECIFIC_PASSWORD_RE, (match) =>
-      redactMatch(match, [match], APP_SPECIFIC_PASSWORD_RE),
-    );
+    // Secret-context sweep: also check for Apple passwords. Uses wordlist
+    // precision so dictionary-word identifiers still survive even when a
+    // value contains another secret (e.g., JWT + kebab identifier).
+    const appRedacted = redactAppSpecificPasswords(redacted);
     if (appRedacted !== value) {
       return appRedacted;
     }
