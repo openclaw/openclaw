@@ -43,6 +43,18 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface MemoryAssociations {
+  association_id: string;
+  created_at: number;
+  entity_id: string | null;
+  salience: number | null;
+  session_key: string;
+  source: string;
+  tag_id: string | null;
+  target_id: string;
+  target_type: string;
+}
+
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -50,6 +62,16 @@ export interface MemoryEmbeddingCache {
   model: string;
   provider: string;
   provider_key: string;
+  updated_at: number;
+}
+
+export interface MemoryEntities {
+  created_at: number;
+  entity_id: string;
+  entity_type: string;
+  label: string;
+  local_only: Generated<number>;
+  normalized_label: string;
   updated_at: number;
 }
 
@@ -82,6 +104,21 @@ export interface MemoryIndexSources {
 export interface MemoryIndexState {
   id: Generated<number>;
   revision: number;
+}
+
+export interface MemoryTagEdges {
+  child_tag_id: string;
+  created_at: number;
+  parent_tag_id: string;
+  relation: Generated<string>;
+}
+
+export interface MemoryTags {
+  created_at: number;
+  label: string;
+  normalized_label: string;
+  tag_id: string;
+  updated_at: number;
 }
 
 export interface SchemaMeta {
@@ -122,11 +159,15 @@ export interface DB {
   auth_profile_store: AuthProfileStore;
   boxes: Boxes;
   cache_entries: CacheEntries;
+  memory_associations: MemoryAssociations;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_entities: MemoryEntities;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_tag_edges: MemoryTagEdges;
+  memory_tags: MemoryTags;
   schema_meta: SchemaMeta;
   spans: Spans;
   turns: Turns;

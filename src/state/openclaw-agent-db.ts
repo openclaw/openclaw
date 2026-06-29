@@ -34,9 +34,10 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
+// v3: added associative-memory tags/entities/associations tables (Phase 3).
 // v2: added conversational-memory turns/spans/boxes tables (Phase 2). Additive,
 // CREATE TABLE IF NOT EXISTS — existing v1 DBs gain the tables on next open.
-const OPENCLAW_AGENT_SCHEMA_VERSION = 2;
+const OPENCLAW_AGENT_SCHEMA_VERSION = 3;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 

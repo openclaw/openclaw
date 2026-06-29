@@ -191,4 +191,73 @@ CREATE TABLE IF NOT EXISTS boxes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_boxes_session
-  ON boxes(session_key);\n`;
+  ON boxes(session_key);
+
+-- Phase 3 associative layer foundation. These tables keep local tag/entity
+-- vocabulary and lightweight associations to durable turns, spans, and boxes.
+CREATE TABLE IF NOT EXISTS memory_tags (
+  tag_id TEXT NOT NULL PRIMARY KEY,
+  label TEXT NOT NULL,
+  normalized_label TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_tags_normalized_label
+  ON memory_tags(normalized_label);
+
+-- Multi-parent tag DAG edge. Cycle prevention lives in the store API.
+CREATE TABLE IF NOT EXISTS memory_tag_edges (
+  child_tag_id TEXT NOT NULL,
+  parent_tag_id TEXT NOT NULL,
+  relation TEXT NOT NULL DEFAULT 'is_a',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (child_tag_id, parent_tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_tag_edges_parent
+  ON memory_tag_edges(parent_tag_id);
+
+CREATE TABLE IF NOT EXISTS memory_entities (
+  entity_id TEXT NOT NULL PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  label TEXT NOT NULL,
+  normalized_label TEXT NOT NULL,
+  local_only INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entities_type_label
+  ON memory_entities(entity_type, normalized_label);
+
+CREATE TABLE IF NOT EXISTS memory_associations (
+  association_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  tag_id TEXT,
+  entity_id TEXT,
+  salience REAL,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_associations_unique_tag
+  ON memory_associations(session_key, target_type, target_id, tag_id)
+  WHERE tag_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_associations_unique_entity
+  ON memory_associations(session_key, target_type, target_id, entity_id)
+  WHERE entity_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memory_associations_target
+  ON memory_associations(session_key, target_type, target_id);
+
+CREATE INDEX IF NOT EXISTS idx_memory_associations_tag
+  ON memory_associations(tag_id)
+  WHERE tag_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memory_associations_entity
+  ON memory_associations(entity_id)
+  WHERE entity_id IS NOT NULL;\n`;
