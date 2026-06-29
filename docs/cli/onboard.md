@@ -208,6 +208,34 @@ openclaw onboard --non-interactive \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
+## Additional non-interactive flags
+
+Token-based model auth (non-interactive; used with `--auth-choice token`):
+
+- `--token-provider <id>` — Token provider id. Identifies which provider issues the token.
+- `--token <token>` — Token value for model authentication.
+- `--token-profile-id <id>` — Auth profile id (default: `<provider>:manual`).
+- `--token-expires-in <duration>` — Optional token expiry duration (e.g. `365d`, `12h`).
+
+Cloudflare AI Gateway (non-interactive):
+
+- `--cloudflare-ai-gateway-account-id <id>` — Cloudflare Account ID for routing through Cloudflare AI Gateway.
+- `--cloudflare-ai-gateway-gateway-id <id>` — Cloudflare AI Gateway ID.
+
+Daemon install control:
+
+- `--no-install-daemon` — Explicitly skip gateway service installation.
+- `--skip-daemon` — Alias for `--no-install-daemon`.
+
+UI and hook setup control:
+
+- `--skip-ui` — Skip Control UI / TUI prompts during onboarding.
+- `--skip-hooks` — Skip webhook / hook setup prompts during onboarding.
+
+Output suppression:
+
+- `--suppress-gateway-token-output` — Suppress token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch). Useful in shared terminal and CI environments.
+
 ## Flow notes
 
 <AccordionGroup>
