@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { buildPairingQrReplyChannelData } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -834,10 +835,9 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            let qrDataUrl: string;
             try {
               const { renderQrPngDataUrl } = await loadDevicePairApiModule();
-              qrDataUrl = await renderQrPngDataUrl(setupCode);
+              await renderQrPngDataUrl(setupCode);
             } catch (err) {
               const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
               api.logger.warn?.(
@@ -862,7 +862,10 @@ export default definePluginEntry({
                   expiresAtMs: payload.expiresAtMs,
                 }),
               ].join("\n"),
-              mediaUrl: qrDataUrl,
+              channelData: buildPairingQrReplyChannelData({
+                setupCode,
+                expiresAtMs: payload.expiresAtMs,
+              }),
               sensitiveMedia: true,
             };
           }
