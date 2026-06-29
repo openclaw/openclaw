@@ -3,8 +3,6 @@ import type { Agent } from "node:http";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 
-export type SlackClientOptions = Omit<WebClientOptions, "slackApiUrl">;
-
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
   factor: 2,
@@ -49,7 +47,7 @@ function resolveSlackApiUrlFromEnv(): string | undefined {
 }
 
 function resolveSlackClientOptions(
-  options: SlackClientOptions,
+  options: WebClientOptions,
   defaults: {
     retryConfig: RetryOptions;
     maxRequestConcurrency?: number;
@@ -71,11 +69,11 @@ function resolveSlackClientOptions(
   return resolved;
 }
 
-export function resolveSlackWebClientOptions(options: SlackClientOptions = {}): WebClientOptions {
+export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
   return resolveSlackClientOptions(options, { retryConfig: SLACK_DEFAULT_RETRY_OPTIONS });
 }
 
-export function resolveSlackWriteClientOptions(options: SlackClientOptions = {}): WebClientOptions {
+export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
   return resolveSlackClientOptions(options, {
     retryConfig: SLACK_WRITE_RETRY_OPTIONS,
     maxRequestConcurrency: 1,
