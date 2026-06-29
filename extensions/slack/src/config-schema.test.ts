@@ -38,6 +38,22 @@ describe("slack config schema", () => {
     }
   });
 
+  it("rejects Slack Web API URL config overrides", () => {
+    const res = SlackConfigSchema.safeParse({
+      apiUrl: "http://127.0.0.1:49152/api/",
+      accounts: { ops: { apiUrl: "http://127.0.0.1:49153/api/" } },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some(
+          (issue) => issue.code === "unrecognized_keys" && issue.keys.includes("apiUrl"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("accepts unfurl controls at root and account level", () => {
     const res = SlackConfigSchema.safeParse({
       unfurlLinks: false,
@@ -109,6 +125,36 @@ describe("slack config schema", () => {
         },
       },
     });
+  });
+
+  it("accepts relay mode with a SecretInput auth token", () => {
+    expectSlackConfigValid({
+      mode: "relay",
+      botToken: "xoxb-any",
+      relay: {
+        url: "wss://router.example.com/gateway/ws",
+        authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
+        gatewayId: "team-gateway",
+      },
+    });
+  });
+
+  it("requires every relay connection field", () => {
+    expectSlackConfigIssue({ mode: "relay" }, "relay.url");
+    expectSlackConfigIssue(
+      { mode: "relay", relay: { url: "wss://router.example.com/gateway/ws" } },
+      "relay.authToken",
+    );
+    expectSlackConfigIssue(
+      {
+        mode: "relay",
+        relay: {
+          url: "wss://router.example.com/gateway/ws",
+          authToken: "secret",
+        },
+      },
+      "relay.gatewayId",
+    );
   });
 
   it("rejects invalid Socket Mode ping/pong transport tuning", () => {

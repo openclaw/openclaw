@@ -17,7 +17,7 @@ the standard reply-audio pipeline.
 | Property      | Value                                                           |
 | ------------- | --------------------------------------------------------------- |
 | Provider id   | `inworld`                                                       |
-| Plugin        | bundled, `enabledByDefault: true`                               |
+| Plugin        | official external package                                       |
 | Contract      | `speechProviders` (TTS only)                                    |
 | Auth env var  | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)     |
 | Base URL      | `https://api.inworld.ai`                                        |
@@ -26,6 +26,15 @@ the standard reply-audio pipeline.
 | Output        | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
 | Website       | [inworld.ai](https://inworld.ai)                                |
 | Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)      |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/inworld-speech
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -112,7 +121,7 @@ the standard reply-audio pipeline.
     Full config reference including `messages.tts` settings.
   </Card>
   <Card title="Providers" href="/providers" icon="grid">
-    All bundled OpenClaw providers.
+    All supported OpenClaw providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     Common issues and debugging steps.

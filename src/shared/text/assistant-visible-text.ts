@@ -1,11 +1,12 @@
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripPlainTextToolCallBlocks } from "./plain-text-tool-call-blocks.js";
 import {
   stripReasoningTagsFromText,
   type ReasoningTagMode,
+  type ReasoningTagScope,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
 
@@ -801,6 +802,7 @@ export function stripAssistantInternalTraceLines(text: string): string {
 
 export type AssistantVisibleTextSanitizerProfile =
   | "delivery"
+  | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
   | "tool-progress";
@@ -813,6 +815,7 @@ type AssistantVisibleTextPipelineOptions = {
   stripFunctionResponseAfterPluralToolCalls?: boolean;
   stripInternalTraceLines?: boolean;
   reasoningMode: ReasoningTagMode;
+  reasoningScope?: ReasoningTagScope;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
 };
@@ -825,6 +828,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     finalTrim: "both",
     stripFunctionResponseAfterPluralToolCalls: true,
     reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
+  "final-answer-delivery": {
+    finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
+    reasoningMode: "strict",
+    reasoningScope: "leading",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
   },
@@ -863,6 +874,7 @@ function applyAssistantVisibleTextStagePipeline(
   const stripReasoning = (value: string) =>
     stripReasoningTagsFromText(value, {
       mode: options.reasoningMode,
+      scope: options.reasoningScope,
       trim: options.reasoningTrim,
     });
   const applyFinalTrim = (value: string) => {
@@ -923,6 +935,11 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+/** Sanitizes text already marked as final-answer prose by the agent runtime. */
+export function sanitizeAssistantFinalAnswerText(text: string): string {
+  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

@@ -14,7 +14,46 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const checkOnly = process.argv.includes("--check");
+function usage() {
+  return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
+
+Reports plugin SDK export surface metadata.
+
+Options:
+  --check     Fail when SDK surface budgets are exceeded.
+  -h, --help  Show this help.
+`;
+}
+
+function parseArgs(argv) {
+  const args = { check: false, help: false };
+  for (const arg of argv) {
+    if (arg === "--check") {
+      args.check = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+      continue;
+    }
+    throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+  }
+  return args;
+}
+
+let cliArgs;
+try {
+  cliArgs = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+if (cliArgs.help) {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+
+const checkOnly = cliArgs.check;
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
@@ -64,6 +103,7 @@ function readEntrypointBudgetEnv(name, fallback) {
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
+  health: 1,
   lmstudio: 1,
   "provider-setup": 1,
   "self-hosted-provider-setup": 14,
@@ -76,7 +116,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 415,
+  "config-types": 420,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -87,18 +127,18 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 577,
+  "infra-runtime": 584,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
-  "text-runtime": 188,
+  "text-runtime": 191,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
   "secret-file-runtime": 1,
   "security-runtime": 7,
   "agent-harness": 7,
-  "agent-harness-runtime": 7,
+  "agent-harness-runtime": 11,
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
@@ -124,6 +164,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-policy": 8,
   "channel-route": 5,
   "session-store-runtime": 1,
+  "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
   "music-generation-core": 20,
@@ -144,7 +185,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth-login": 3,
   "provider-model-shared": 29,
   "provider-stream-family": 40,
-  "provider-stream-shared": 28,
+  "provider-stream-shared": 29,
   "provider-stream": 40,
   "provider-web-search": 1,
   "provider-zai-endpoint": 3,
@@ -160,16 +201,16 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 319),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10284),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5163),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10398),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5219),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3237,
+      3255,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      215,
+      214,
     ),
   };
   publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
@@ -201,9 +242,25 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
+const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
+
+function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
+  if (!generatedLlmCoreValidatorExports.has(exportName)) {
+    return false;
+  }
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  // Build artifacts can make agent-core's package-name validator reexports look
+  // newly callable. Keep this source report independent of generated dist state.
+  return relativePath.includes("llm-core/dist/validation.d.");
+}
+
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
+  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+    return false;
+  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }

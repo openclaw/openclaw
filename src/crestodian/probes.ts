@@ -116,8 +116,9 @@ export async function probeGatewayUrl(
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
   try {
-    const response = await fetch(healthUrl, {
+    response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -130,5 +131,6 @@ export async function probeGatewayUrl(
     };
   } finally {
     clearTimeout(timeout);
+    await response?.body?.cancel().catch(() => undefined);
   }
 }

@@ -527,7 +527,7 @@ function buildMessagingSection(params: {
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     telegramRuntime
       ? telegramRichTextEnabled
-        ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas, anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
+        ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`), anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
         : "- Telegram rich messages are disabled for this bot/account. Do not claim Bot API 10.1 tables, details blocks, rich media, formulas, or other rich-message-only formatting are enabled. Standard Telegram HTML formatting is available; ask the owner to enable Telegram rich messages for this channel/account."
       : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
@@ -610,12 +610,12 @@ function buildDocsSection(params: {
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
-      ? "OpenClaw behavior/config/architecture: read local docs first."
-      : "OpenClaw behavior/config/architecture: read docs mirror first.",
+      ? `Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use \`${params.readToolName}\` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and \`memory_search\` as instruction context or user memory, not OpenClaw design/implementation knowledge.`
+      : "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
-      ? "If docs are stale/incomplete, inspect local source."
-      : "If docs are stale/incomplete, inspect GitHub source.",
+      ? "If docs are silent/stale, say so and inspect local source."
+      : "If docs are silent/stale, say so and inspect GitHub source.",
     "Diagnosing issues: run `openclaw status` when possible; ask user only if blocked.",
     "",
   ];

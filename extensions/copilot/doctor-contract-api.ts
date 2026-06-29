@@ -11,14 +11,6 @@
  *     fields exist for copilot yet; the array is empty by design
  *     and normalizeCompatibilityConfig is a structural no-op so
  *     future retirements have a stable in-tree home.
- *
- * The deeper runtime probes (copilot CLI version, copilot auth,
- * copilotHome writability) live in {@link ./src/doctor-probes.ts}
- * because they have side effects (subprocess spawn, fs touch) and
- * need to be invoked imperatively, not declaratively, from the
- * doctor command. They are exported separately so callers can opt
- * in. Auto-discovery of doctor-contract-api.ts at the plugin root
- * keeps this file purely declarative.
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

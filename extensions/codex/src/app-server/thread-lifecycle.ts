@@ -27,6 +27,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
@@ -78,10 +79,6 @@ class CodexThreadStartRequestError extends Error {
     super(formatErrorMessage(cause), { cause });
     this.name = "CodexThreadStartRequestError";
   }
-}
-
-export function isCodexThreadStartRequestError(error: unknown): boolean {
-  return error instanceof CodexThreadStartRequestError;
 }
 
 export type CodexThreadFinalConfigPatchDecision =
@@ -311,6 +308,7 @@ export async function startOrResumeThread(params: {
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   environmentSelection?: CodexTurnEnvironmentParams[];
+  appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
@@ -359,6 +357,21 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
+  if (
+    binding?.threadId &&
+    shouldRotateCodexAppServerBindingForRuntime({
+      connectionClass: params.appServer.connectionClass,
+      current: params.appServerRuntimeFingerprint,
+      binding: binding.appServerRuntimeFingerprint,
+    })
+  ) {
+    embeddedAgentLog.debug("codex app-server runtime identity changed; starting a new thread", {
+      threadId: binding.threadId,
+      connectionClass: params.appServer.connectionClass,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   const startModelSelection = resolveCodexAppServerThreadModelSelection({
     provider: params.params.provider,
     model: params.params.modelId,
@@ -618,9 +631,16 @@ export async function startOrResumeThread(params: {
           configPatch: params.finalConfigPatch,
           nativeHookRelayGeneration: params.nativeHookRelayGeneration,
         };
+        // Codex rebuilds effective config on thread/resume, so replay the app
+        // allowlist persisted at thread/start or plugin tools disappear after one turn.
+        const pluginAppsConfigPatch =
+          params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
+            ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
+            : undefined;
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
+          pluginAppsConfigPatch,
           finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
@@ -673,6 +693,7 @@ export async function startOrResumeThread(params: {
               nativeHookRelayGeneration:
                 finalConfigPatch.nativeHookRelayGeneration ??
                 resumeBinding.nativeHookRelayGeneration,
+              appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
               pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
@@ -723,6 +744,7 @@ export async function startOrResumeThread(params: {
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration:
             finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
+          appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
           pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
@@ -824,6 +846,7 @@ export async function startOrResumeThread(params: {
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+          appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -874,6 +897,7 @@ export async function startOrResumeThread(params: {
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
     networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+    appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -886,6 +910,20 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+export function shouldRotateCodexAppServerBindingForRuntime(params: {
+  connectionClass: CodexAppServerRuntimeOptions["connectionClass"];
+  current?: string;
+  binding?: string;
+}): boolean {
+  if (!params.current) {
+    return false;
+  }
+  if (params.binding === params.current) {
+    return false;
+  }
+  return params.connectionClass === "remote" || Boolean(params.binding);
 }
 
 function isTransientWebSearchRestriction(
@@ -1081,9 +1119,11 @@ export function buildThreadStartParams(
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
@@ -1161,9 +1201,11 @@ export function buildThreadResumeParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
@@ -1398,7 +1440,9 @@ export function buildTurnStartParams(
         }),
     model: modelSelection.model,
     personality: CODEX_NATIVE_PERSONALITY_NONE,
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
@@ -1409,6 +1453,13 @@ export function buildTurnStartParams(
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function resolveCodexThreadApprovalsReviewer(
+  appServer: CodexAppServerRuntimeOptions,
+  config?: JsonObject,
+): CodexAppServerRuntimeOptions["approvalsReviewer"] {
+  return config?.approvals_reviewer === "user" ? "user" : appServer.approvalsReviewer;
 }
 
 function codexThreadSandboxOrPermissions(

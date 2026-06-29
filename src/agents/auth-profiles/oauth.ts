@@ -23,11 +23,14 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
+import {
+  evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
+} from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import {
+  readExternalCliBootstrapCredential,
   readExternalCliFallbackCredential,
-  readManagedExternalCliCredential,
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
@@ -232,7 +235,7 @@ const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
   readBootstrapCredential: ({ profileId, credential }) =>
-    readManagedExternalCliCredential({
+    readExternalCliBootstrapCredential({
       profileId,
       credential,
     }),
@@ -376,6 +379,9 @@ export async function resolveApiKeyForProfile(
   });
 
   if (cred.type === "api_key") {
+    if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
+      return null;
+    }
     const key = await resolveProfileSecretString({
       profileId,
       provider: cred.provider,

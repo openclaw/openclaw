@@ -5,9 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionEntry,
-  listSessionFilesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
+  listSessionTranscriptCorpusEntriesForAgent,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -34,12 +32,14 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_SEEN_HASHES_PER_CHUNK,
+  normalizeMemoryCoreWorkspaceKey,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
+  filterFreshLightDreamingEntries,
   readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -542,11 +542,6 @@ type SessionIngestionCollectionResult = {
   changed: boolean;
 };
 
-function normalizeWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
@@ -749,7 +744,7 @@ function resolveSessionAgentsForWorkspace(params: {
   if (!cfg) {
     return [];
   }
-  const target = normalizeWorkspaceKey(workspaceDir);
+  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
     {
@@ -757,7 +752,9 @@ function resolveSessionAgentsForWorkspace(params: {
       primaryAgentId: "main",
     },
   );
-  const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
+  const match = workspaces.find(
+    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
+  );
   if (!match) {
     return [];
   }
@@ -850,25 +847,21 @@ async function collectSessionIngestionBatches(params: {
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
-    const files = await listSessionFilesForAgent(agentId);
-    const transcriptClassification =
-      files.length > 0
-        ? loadSessionTranscriptClassificationForAgent(agentId)
-        : {
-            dreamingNarrativeTranscriptPaths: new Set<string>(),
-            cronRunTranscriptPaths: new Set<string>(),
-          };
-    for (const absolutePath of files) {
-      if (isCheckpointSessionTranscriptPath(absolutePath)) {
+    for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId)) {
+      const absolutePath = entry.sessionFile;
+      if (
+        // Dreaming learns only from the live corpus. Retained reset/delete
+        // archives stay in the shared corpus for QMD and memory_search.
+        entry.artifactKind === "archive-artifact" ||
+        isCheckpointSessionTranscriptPath(absolutePath)
+      ) {
         continue;
       }
-      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative:
-          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
-        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+        generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+        generatedByCronRun: entry.generatedByCronRun === true,
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -1697,10 +1690,14 @@ async function runLightDreaming(params: {
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+    entries: await filterFreshLightDreamingEntries({
+      workspaceDir: params.workspaceDir,
       nowMs,
-      lookbackDays: params.config.lookbackDays,
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
     }),
   });
   const rankedEntries = dedupeEntries(

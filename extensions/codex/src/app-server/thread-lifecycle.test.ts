@@ -159,6 +159,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -368,12 +370,24 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.hooks": true,
         apps: { _default: { enabled: false } },
+        mcp_servers: {
+          local_docs: {
+            command: "node",
+            args: ["/opt/local-docs-mcp/dist/index.js"],
+          },
+        },
       },
     });
 
     expect(request.config).toEqual({
       "features.hooks": true,
       apps: { _default: { enabled: false } },
+      mcp_servers: {
+        local_docs: {
+          command: "node",
+          args: ["/opt/local-docs-mcp/dist/index.js"],
+        },
+      },
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
@@ -545,6 +559,44 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.personality).toBe("none");
+  });
+
+  it("honors an explicit top-level reviewer on thread start and resume", () => {
+    const appServer = {
+      ...createAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
+    const config = { approvals_reviewer: "user" };
+
+    const started = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+
+    expect(started.approvalsReviewer).toBe("user");
+    expect(resumed.approvalsReviewer).toBe("user");
+  });
+
+  it("keeps the configured runtime reviewer on turn start", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        approvalsReviewer: "auto_review",
+      } as never,
+    });
+
+    expect(request.approvalsReviewer).toBe("auto_review");
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {
@@ -830,6 +882,8 @@ describe("Codex app-server turn params", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
       serviceTier: "flex" as const,
     };
 

@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { confirm, isCancel } from "@clack/prompts";
+import { confirm, isCancel, text } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   checkShellCompletionStatus,
@@ -49,6 +51,7 @@ import {
   resolveGatewayService,
   type GatewayService,
 } from "../../daemon/service.js";
+import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
@@ -64,6 +67,7 @@ import {
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
+  UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
@@ -94,7 +98,12 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
+import {
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  type PreUpdateConfigRestoreInput,
+} from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -107,6 +116,7 @@ import {
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/official-external-install-records.js";
 import {
+  isClawHubTrustSkippedOutcome,
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -166,7 +176,6 @@ const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
-const POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH";
 const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -221,11 +230,6 @@ type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
 
-type PreUpdateConfigRestoreInput = {
-  sourceConfig: OpenClawConfig;
-  authoredConfig: OpenClawConfig;
-};
-
 type MissingPluginInstallPayload = {
   pluginId: string;
   installPath?: string;
@@ -233,6 +237,66 @@ type MissingPluginInstallPayload = {
 };
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
+
+function isClawHubTrustNotice(message: string): boolean {
+  const trimmed = stripAnsi(message).trimStart();
+  return (
+    trimmed.startsWith("ClawHub trust warning ") ||
+    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ") ||
+    trimmed.startsWith("╭─ WARNING - ClawHub found security risks ") ||
+    trimmed.startsWith("╭─ BLOCKED - ClawHub ")
+  );
+}
+
+function isNonBlockingClawHubTrustNotice(message: string): boolean {
+  const trimmed = stripAnsi(message).trimStart();
+  return (
+    trimmed.startsWith("ClawHub trust warning ") ||
+    trimmed.startsWith("╭─ REVIEW RECOMMENDED - ClawHub ")
+  );
+}
+
+function formatPluginUpdateWarning(message: string): string {
+  return message.includes("╭─") ? message : theme.warn(message);
+}
+
+function resolveUpdateClawHubRiskAcknowledgementOptions(
+  opts: UpdateCommandOptions,
+  params: {
+    renderWarningBeforePrompt?: (warning: string) => void;
+  } = {},
+): {
+  acknowledgeClawHubRisk?: boolean;
+  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => Promise<boolean>;
+} {
+  if (opts.acknowledgeClawHubRisk) {
+    return { acknowledgeClawHubRisk: true };
+  }
+  if (opts.dryRun || opts.yes || opts.json || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return {};
+  }
+  return {
+    onClawHubRisk: async (request) => {
+      params.renderWarningBeforePrompt?.(request.warning);
+      const packageName = sanitizeTerminalText(request.packageName);
+      const releaseLabel = `${packageName}@${sanitizeTerminalText(request.version)}`;
+      if (request.acknowledgementKind === "type-package") {
+        const answer = await text({
+          message: stylePromptMessage(`type: '${packageName}' to update anyway`),
+          placeholder: packageName,
+        });
+        return !isCancel(answer) && answer.trim() === packageName;
+      }
+      const ok = await confirm({
+        message: stylePromptMessage(
+          `Update ClawHub package "${releaseLabel}" after reviewing the warning above?`,
+        ),
+        initialValue: false,
+      });
+      return !isCancel(ok) && ok;
+    },
+  };
+}
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
@@ -551,16 +615,24 @@ function createPostUpdatePluginWarning(params: {
   };
 }
 
-function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
+function createGuidedPostUpdatePluginOutcome(
+  outcome: PluginUpdateOutcome,
+  options: { includeWarningInReason?: boolean } = {},
+): {
   outcome: PluginUpdateOutcome;
   warning?: PostUpdatePluginWarning;
 } {
-  if (outcome.status !== "error" && !isDisabledAfterFailureOutcome(outcome)) {
+  if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
     return { outcome };
   }
+  const includeWarningInReason = options.includeWarningInReason ?? true;
+  const warningReason =
+    outcome.warning && includeWarningInReason
+      ? `${outcome.warning}\n${outcome.message}`
+      : outcome.message;
   const warning = createPostUpdatePluginWarning({
     ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
-    reason: outcome.message,
+    reason: warningReason,
   });
   return {
     outcome: {
@@ -587,6 +659,10 @@ function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOut
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
   return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
+}
+
+function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boolean {
+  return isDisabledAfterFailureOutcome(outcome) || isClawHubTrustSkippedOutcome(outcome);
 }
 
 /**
@@ -1767,13 +1843,41 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return invalid.result;
   }
 
-  const pluginLogger = params.opts.json
-    ? {}
-    : {
-        info: (msg: string) => defaultRuntime.log(msg),
-        warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
-        error: (msg: string) => defaultRuntime.log(theme.error(msg)),
-      };
+  const clawHubTrustNotices = new Set<string>();
+  const loggedPluginWarnings = new Set<string>();
+  const hasLoggedPluginWarning = (message: string): boolean =>
+    loggedPluginWarnings.has(stripAnsi(message));
+  const recordLoggedPluginWarning = (message: string): void => {
+    loggedPluginWarnings.add(stripAnsi(message));
+  };
+  const recordClawHubTrustNotice = (message: string): void => {
+    const shouldRecord = params.opts.json
+      ? isClawHubTrustNotice(message)
+      : isNonBlockingClawHubTrustNotice(message);
+    if (shouldRecord) {
+      clawHubTrustNotices.add(stripAnsi(message));
+    }
+  };
+  const pluginLogger = {
+    ...(params.opts.json ? { terminalLinks: false } : {}),
+    info: (msg: string) => {
+      if (!params.opts.json) {
+        defaultRuntime.log(msg);
+      }
+    },
+    warn: (msg: string) => {
+      recordLoggedPluginWarning(msg);
+      recordClawHubTrustNotice(msg);
+      if (!params.opts.json) {
+        defaultRuntime.log(formatPluginUpdateWarning(msg));
+      }
+    },
+    error: (msg: string) => {
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.error(msg));
+      }
+    },
+  };
 
   if (!params.opts.json) {
     defaultRuntime.log("");
@@ -1781,6 +1885,21 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
+  const clawHubRiskAcknowledgementOptions = resolveUpdateClawHubRiskAcknowledgementOptions(
+    params.opts,
+    {
+      renderWarningBeforePrompt: (warning) => {
+        if (hasLoggedPluginWarning(warning)) {
+          return;
+        }
+        recordLoggedPluginWarning(warning);
+        recordClawHubTrustNotice(warning);
+        if (!params.opts.json) {
+          defaultRuntime.log(formatPluginUpdateWarning(warning));
+        }
+      },
+    },
+  );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   const syncConfig = withPluginInstallRecords(
@@ -1794,6 +1913,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
+    ...clawHubRiskAcknowledgementOptions,
     logger: pluginLogger,
   });
   for (const error of syncResult.summary.errors) {
@@ -1867,6 +1987,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
+      ...clawHubRiskAcknowledgementOptions,
     });
     pluginConfig = repairResult.config;
     pluginsChanged ||= repairResult.changed;
@@ -1875,24 +1996,27 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return missingIds;
   };
 
-  const missingPayloadIds = await collectMissingPayloadWarnings(pluginInstallRecords);
+  const missingPayloadIdSet = new Set(await collectMissingPayloadWarnings(pluginInstallRecords));
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: params.channel,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
+    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
+    ...clawHubRiskAcknowledgementOptions,
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
   npmPluginsChanged ||= npmResult.changed;
   for (const rawOutcome of npmResult.outcomes) {
-    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome);
+    const includeWarningInReason =
+      params.opts.json || !rawOutcome.warning || !hasLoggedPluginWarning(rawOutcome.warning);
+    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome, { includeWarningInReason });
     pluginUpdateOutcomes.push(guided.outcome);
     if (guided.warning) {
       warnings.push(guided.warning);
@@ -1907,7 +2031,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   });
   pluginUpdateOutcomes.push(
     ...remainingMissingPayloads
-      .filter((entry) => !missingPayloadIds.includes(entry.pluginId))
+      .filter((entry) => !missingPayloadIdSet.has(entry.pluginId))
       .map((entry): PluginUpdateOutcome => {
         const warning = createPostUpdatePluginWarning({
           pluginId: entry.pluginId,
@@ -1938,6 +2062,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     cfg: pluginConfig,
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
+    ...clawHubRiskAcknowledgementOptions,
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
@@ -1992,6 +2117,17 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  for (const notice of clawHubTrustNotices) {
+    if (warnings.some((warning) => warning.reason.includes(notice))) {
+      continue;
+    }
+    warnings.push({
+      reason: notice,
+      message: notice,
+      guidance: [],
+    });
+  }
+
   if (params.opts.json) {
     return {
       status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
@@ -2032,7 +2168,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
     );
   }
   for (const warning of syncResult.summary.warnings) {
-    defaultRuntime.log(theme.warn(warning));
+    if (!hasLoggedPluginWarning(warning)) {
+      defaultRuntime.log(formatPluginUpdateWarning(warning));
+    }
   }
   for (const error of syncResult.summary.errors) {
     defaultRuntime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
@@ -2061,7 +2199,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   for (const outcome of pluginUpdateOutcomes) {
-    if (outcome.status !== "error") {
+    if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
       continue;
     }
     defaultRuntime.log(theme.warn(outcome.message));
@@ -2469,14 +2607,19 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const root = await resolveUpdateRoot();
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-  const preFinalizeConfig = configSnapshot.valid
-    ? {
-        sourceConfig: configSnapshot.sourceConfig,
-        authoredConfig: isRecord(configSnapshot.parsed)
-          ? (configSnapshot.parsed as OpenClawConfig)
-          : configSnapshot.sourceConfig,
-      }
-    : undefined;
+  const preFinalizeConfig =
+    (await readPostCorePreUpdateSourceConfig({
+      sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
+      currentSnapshot: configSnapshot,
+    })) ??
+    (configSnapshot.valid
+      ? {
+          sourceConfig: configSnapshot.sourceConfig,
+          authoredConfig: isRecord(configSnapshot.parsed)
+            ? (configSnapshot.parsed as OpenClawConfig)
+            : configSnapshot.sourceConfig,
+        }
+      : undefined);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
@@ -2486,7 +2629,14 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   const storedChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
-  const channel = requestedChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+  // Effective channel the core update actually ran on (e.g. git/dev for an
+  // unconfigured source update), passed by the caller via env. Used only as a
+  // convergence fallback; it is never persisted (that stays gated on
+  // `requestedChannel`), so a default source update does not write update.channel.
+  const effectiveChannel = normalizeUpdateChannel(
+    process.env[UPDATE_EFFECTIVE_CHANNEL_ENV]?.trim(),
+  );
+  const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     configSnapshot = await persistRequestedUpdateChannel({
       configSnapshot,
@@ -2514,7 +2664,11 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
       : null;
     const postDoctorChannel =
-      requestedChannel ?? postDoctorStoredChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+      requestedChannel ??
+      postDoctorStoredChannel ??
+      storedChannel ??
+      effectiveChannel ??
+      DEFAULT_PACKAGE_CHANNEL;
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
     return await runPostCorePluginUpdate({
       root,
@@ -2527,6 +2681,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         timeout: opts.timeout,
         yes: opts.yes,
         restart: false,
+        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
       },
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
       pluginInstallRecords,
@@ -2862,10 +3017,14 @@ async function readPostCorePluginUpdateResultFile(
 function stopPostCoreUpdateChild(child: ChildProcess): void {
   if (process.platform === "win32" && child.pid) {
     try {
-      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const killer = spawn(
+        getWindowsSystem32ExePath("taskkill.exe"),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       killer.once("error", () => {
         child.kill();
       });
@@ -2947,6 +3106,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   }
   if (params.opts.yes) {
     argv.push("--yes");
+  }
+  if (params.opts.acknowledgeClawHubRisk) {
+    argv.push("--acknowledge-clawhub-risk");
   }
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);

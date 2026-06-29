@@ -49,6 +49,8 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 

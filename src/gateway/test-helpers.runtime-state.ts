@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
@@ -20,7 +20,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
  */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  opts?: InternalGetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;

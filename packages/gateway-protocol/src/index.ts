@@ -1,5 +1,13 @@
 // Public gateway protocol entrypoint. Keep this barrel aligned with schema.ts
 // so clients can import wire types, JSON schemas, and validators from one place.
+export {
+  buildClawHubTrustErrorDetails,
+  ClawHubTrustErrorCodes,
+  isClawHubTrustErrorCode,
+  readClawHubTrustErrorDetails,
+  type ClawHubTrustErrorCode,
+  type ClawHubTrustErrorDetails,
+} from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import {
   type AgentEvent,
@@ -210,7 +218,9 @@ import {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
+  type PluginsUiDescriptorsResult,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -880,6 +890,9 @@ export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsUiDescriptorsResult = lazyCompile<PluginsUiDescriptorsResult>(
+  PluginsUiDescriptorsResultSchema,
+);
 export const validatePluginsSessionActionParams = lazyCompile<PluginsSessionActionParams>(
   PluginsSessionActionParamsSchema,
 );
@@ -1133,6 +1146,7 @@ export {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,

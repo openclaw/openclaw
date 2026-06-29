@@ -1,6 +1,7 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -12,8 +13,10 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  shouldRotateCodexAppServerBindingForRuntime,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -31,6 +34,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -143,7 +148,7 @@ function createDeferredNamedDynamicTool(
   };
 }
 
-function createPluginAppConfigPatch() {
+function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
   return {
     apps: {
       _default: {
@@ -156,6 +161,7 @@ function createPluginAppConfigPatch() {
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
+        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -169,7 +175,7 @@ function createPluginAppPolicyContext() {
         configKey: "google-calendar",
         marketplaceName: "openai-curated" as const,
         pluginName: "google-calendar",
-        allowDestructiveActions: false,
+        allowDestructiveActions: true,
         mcpServerNames: ["google-calendar"],
       },
     },
@@ -249,6 +255,35 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v0",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "local-loopback",
+        current: "local-runtime-v1",
+      }),
+    ).toBe(false);
+  });
+
   it("does not write a binding when thread start resolves after abort", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1691,7 +1726,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it("revalidates compatible plugin app bindings without resending app config", async () => {
+  it("replays compatible plugin app bindings on thread resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -1702,10 +1737,21 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const basePolicyContext = createPluginAppPolicyContext();
+    const pluginAppPolicyContext = {
+      ...basePolicyContext,
+      apps: {
+        ...basePolicyContext.apps,
+        "google-calendar-app": {
+          ...basePolicyContext.apps["google-calendar-app"],
+          destructiveApprovalMode: "always" as const,
+        },
+      },
+    };
+    const alwaysApprovalConfigPatch = createPluginAppConfigPatch({ approvalsReviewer: "user" });
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
-      configPatch: createPluginAppConfigPatch(),
+      configPatch: alwaysApprovalConfigPatch,
       fingerprint: "plugin-apps-config-1",
       inputFingerprint: "plugin-apps-input-1",
       policyContext: pluginAppPolicyContext,
@@ -1747,11 +1793,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      ...createPluginAppConfigPatch(),
+      ...alwaysApprovalConfigPatch,
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      ...alwaysApprovalConfigPatch,
     });
   });
 
@@ -1870,6 +1917,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      ...createPluginAppConfigPatch(),
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -1992,6 +2040,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
     });
   });
 
@@ -2239,6 +2294,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",
+        connectionClass: "local-loopback",
+        remoteAppsSubstrate: "preconfigured",
       },
     });
 

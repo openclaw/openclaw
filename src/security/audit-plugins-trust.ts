@@ -22,7 +22,7 @@ type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
 
 type PluginTrustPolicyDeps = {
   isToolAllowedByPolicies: typeof import("../agents/tool-policy-match.js").isToolAllowedByPolicies;
-  pickSandboxToolPolicy: typeof import("./audit-tool-policy.js").pickSandboxToolPolicy;
+  pickSandboxToolPolicy: typeof import("../agents/sandbox-tool-policy.js").pickSandboxToolPolicy;
   resolveSandboxConfigForAgent: typeof import("../agents/sandbox/config.js").resolveSandboxConfigForAgent;
   resolveSandboxToolPolicyForAgent: typeof import("../agents/sandbox/tool-policy.js").resolveSandboxToolPolicyForAgent;
   resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
@@ -37,7 +37,7 @@ async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
     import("../agents/sandbox/tool-policy.js"),
     import("../agents/tool-policy-match.js"),
     import("../agents/tool-policy.js"),
-    import("./audit-tool-policy.js"),
+    import("../agents/sandbox-tool-policy.js"),
   ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
     isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
     pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,

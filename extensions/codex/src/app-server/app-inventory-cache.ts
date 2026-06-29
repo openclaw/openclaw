@@ -25,6 +25,7 @@ export type CodexAppInventoryRequest = (
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
+  runtimeIdentity?: Record<string, string | undefined>;
   authProfileId?: string;
   accountId?: string;
   envApiKeyFingerprint?: string;
@@ -70,6 +71,7 @@ type RefreshParams = {
   nowMs?: number;
   forceRefetch?: boolean;
   suppressRefresh?: boolean;
+  targetAppIds?: readonly string[];
 };
 
 /** In-memory app inventory cache with coalesced refreshes per key. */
@@ -189,7 +191,11 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const apps = await listAllApps(params.request, params.forceRefetch ?? false);
+      const apps = await listAllApps(
+        params.request,
+        params.forceRefetch ?? false,
+        params.targetAppIds,
+      );
       this.revision += 1;
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
@@ -246,11 +252,18 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
 /** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
-/** Builds a stable cache key from runtime identity fields. */
-export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyInput): string {
+/** Builds a stable cache key from build versions and runtime identity fields. */
+export function buildCodexAppInventoryCacheKey(
+  input: CodexAppInventoryCacheKeyInput,
+  openClawVersion: string,
+  codexPluginVersion: string,
+): string {
   return JSON.stringify({
+    openClawVersion,
+    codexPluginVersion,
     codexHome: input.codexHome ?? null,
     endpoint: input.endpoint ?? null,
+    runtimeIdentity: normalizeRuntimeIdentityForCacheKey(input.runtimeIdentity),
     authProfileId: input.authProfileId ?? null,
     accountId: input.accountId ?? null,
     envApiKeyFingerprint: input.envApiKeyFingerprint ?? null,
@@ -258,11 +271,29 @@ export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyI
   });
 }
 
+function normalizeRuntimeIdentityForCacheKey(
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string> | null {
+  if (!value) {
+    return null;
+  }
+  const entries = Object.entries(value)
+    .flatMap(([key, rawValue]) => {
+      const normalized = rawValue?.trim();
+      return normalized ? ([[key, normalized]] as const) : [];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 async function listAllApps(
   request: CodexAppInventoryRequest,
   forceRefetch: boolean,
+  targetAppIds: readonly string[] = [],
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const foundTargetIds = new Set<string>();
   let cursor: string | null | undefined;
   do {
     const response = await request("app/list", {
@@ -271,7 +302,15 @@ async function listAllApps(
       forceRefetch,
     });
     apps.push(...response.data);
+    for (const app of response.data) {
+      if (targetIds.has(app.id)) {
+        foundTargetIds.add(app.id);
+      }
+    }
     cursor = response.nextCursor;
+    if (targetIds.size > 0 && foundTargetIds.size === targetIds.size) {
+      break;
+    }
   } while (cursor);
   return apps;
 }

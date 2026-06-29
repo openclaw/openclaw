@@ -1,4 +1,5 @@
 // Gh Read tests cover gh read script behavior.
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
@@ -14,6 +15,22 @@ import {
 describe("gh-read helpers", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("prints wrapper usage before reading auth env", () => {
+    let stderr = "";
+    try {
+      execFileSync("bash", ["scripts/gh-read"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      stderr = String((error as { stderr?: unknown }).stderr ?? error);
+    }
+
+    expect(stderr).toContain("usage: scripts/gh-read <gh args...>");
+    expect(stderr).toContain("OPENCLAW_GH_READ_APP_ID");
   });
 
   it("finds repo from gh args", () => {
@@ -85,8 +102,19 @@ describe("gh-read helpers", () => {
   });
 
   it("times out stalled GitHub API response body reads", async () => {
+    let canceled = false;
     vi.useFakeTimers();
-    const response = new Response(new ReadableStream({}), { status: 200 });
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200 },
+    );
     const request = githubJson("/app/installations", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
@@ -98,6 +126,8 @@ describe("gh-read helpers", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     await rejection;
+    await Promise.resolve();
+    expect(canceled).toBe(true);
   });
 
   it("bounds GitHub API error response bodies", async () => {
