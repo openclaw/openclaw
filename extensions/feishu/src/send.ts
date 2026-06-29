@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound, convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -17,7 +17,6 @@ import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
-  createFeishuSendReceiptFromMessageIds,
   resolveFeishuReceiptKind,
   toFeishuSendResult,
 } from "./send-result.js";
@@ -583,46 +582,6 @@ function resolveFeishuPostTextChunkLimit(params: {
     : FEISHU_TEXT_CHUNK_LIMIT;
 }
 
-function chunkFeishuPostMessageText(messageText: string, limit: number): string[] {
-  const materializedText = materializeFeishuPostMarkdownLineBreaks(messageText);
-  if (materializedText.length <= limit) {
-    return [messageText];
-  }
-  const chunks = chunkTextForOutbound(materializedText, limit).filter((chunk) => chunk.length > 0);
-  return chunks.length ? chunks : [messageText];
-}
-
-function buildFeishuMultiMessageSendResult(params: {
-  results: readonly FeishuSendResult[];
-  chatId: string;
-  msgType: string;
-}): FeishuSendResult {
-  const lastResult = params.results.at(-1);
-  if (!lastResult) {
-    return {
-      messageId: "unknown",
-      chatId: params.chatId,
-      receipt: createFeishuSendReceiptFromMessageIds({
-        messageIds: [],
-        chatId: params.chatId,
-        kind: resolveFeishuReceiptKind(params.msgType),
-      }),
-    };
-  }
-  if (params.results.length === 1) {
-    return lastResult;
-  }
-  return {
-    messageId: lastResult.messageId,
-    chatId: params.chatId,
-    receipt: createFeishuSendReceiptFromMessageIds({
-      messageIds: params.results.map((result) => result.messageId),
-      chatId: params.chatId,
-      kind: resolveFeishuReceiptKind(params.msgType),
-    }),
-  };
-}
-
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
@@ -679,32 +638,22 @@ export async function sendMessageFeishu(
 
   const messageText = convertMarkdownTables(text ?? "", tableMode);
   const textChunkLimit = resolveFeishuPostTextChunkLimit({ account });
-  const chunks = chunkFeishuPostMessageText(messageText, textChunkLimit);
-  const results: FeishuSendResult[] = [];
-  for (const [index, chunk] of chunks.entries()) {
-    const { content, msgType } = buildFeishuPostMessagePayload({
-      messageText: chunk,
-      ...(index === 0 ? { mentions } : {}),
-      maxMarkdownTextLength: textChunkLimit,
-    });
-    const directParams = { receiveId, receiveIdType, content, msgType };
-    results.push(
-      await sendReplyOrFallbackDirect(client, {
-        replyToMessageId,
-        replyInThread,
-        allowTopLevelReplyFallback,
-        content,
-        msgType,
-        directParams,
-        directErrorPrefix: "Feishu send failed",
-        replyErrorPrefix: "Feishu reply failed",
-      }),
-    );
-  }
-  return buildFeishuMultiMessageSendResult({
-    results,
-    chatId: receiveId,
-    msgType: "post",
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions,
+    maxMarkdownTextLength: textChunkLimit,
+  });
+
+  const directParams = { receiveId, receiveIdType, content, msgType };
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    content,
+    msgType,
+    directParams,
+    directErrorPrefix: "Feishu send failed",
+    replyErrorPrefix: "Feishu reply failed",
   });
 }
 

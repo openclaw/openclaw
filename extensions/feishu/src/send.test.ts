@@ -371,11 +371,8 @@ describe("getMessageFeishu", () => {
     });
   });
 
-  it("splits materialized post markdown before sending to Feishu", async () => {
-    const create = vi
-      .fn()
-      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_part_1" } })
-      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_part_2" } });
+  it("does not expand post markdown past the resolved send limit", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_limited" } });
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -400,24 +397,19 @@ describe("getMessageFeishu", () => {
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
 
-    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(1);
     expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
       zh_cn: {
         content: [
           [
             { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: "abcd" },
+            { tag: "md", text: "abcd\nefgh" },
           ],
         ],
       },
     });
-    expect(JSON.parse(create.mock.calls[1][0].data.content)).toEqual({
-      zh_cn: {
-        content: [[{ tag: "md", text: "efgh" }]],
-      },
-    });
-    expect(result.messageId).toBe("om_part_2");
-    expect(result.receipt.platformMessageIds).toEqual(["om_part_1", "om_part_2"]);
+    expect(result.messageId).toBe("om_limited");
+    expect(result.receipt.platformMessageIds).toEqual(["om_limited"]);
   });
 
   it("extracts text content from interactive card elements", async () => {

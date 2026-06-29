@@ -54,27 +54,6 @@ export function createFeishuSendReceipt(params: {
   });
 }
 
-export function createFeishuSendReceiptFromMessageIds(params: {
-  messageIds: readonly string[];
-  chatId: string;
-  kind?: MessageReceiptPartKind;
-}): MessageReceipt {
-  const chatId = params.chatId.trim();
-  return createMessageReceiptFromOutboundResults({
-    results: params.messageIds
-      .map((messageId) => messageId.trim())
-      .filter((messageId) => messageId.length > 0)
-      .map((messageId) => ({
-        channel: "feishu",
-        messageId,
-        chatId,
-        conversationId: chatId,
-      })),
-    ...(chatId ? { threadId: chatId } : {}),
-    kind: params.kind ?? "unknown",
-  });
-}
-
 export function assertFeishuMessageApiSuccess(
   response: FeishuMessageApiResponse,
   errorPrefix: string,
