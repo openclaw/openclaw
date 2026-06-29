@@ -2824,30 +2824,36 @@ async function resolveTranscriptTurnTarget(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
+  const storePath =
+    scope.storePath ??
+    resolveStorePath(getRuntimeConfig().session?.store, {
+      agentId,
+      env: scope.env,
+    });
   const store =
     scope.sessionStore ??
-    (scope.storePath
-      ? Object.fromEntries(
-          listSessionEntries({
-            storePath: scope.storePath,
-            ...(agentId ? { agentId } : {}),
-          }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
-        )
-      : undefined);
+    Object.fromEntries(
+      listSessionEntries({
+        agentId,
+        storePath,
+      }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+    );
   const resolved = store ? resolveSessionStoreEntry({ store, sessionKey }) : undefined;
   const sessionEntry =
-    resolved?.existing ?? scope.sessionEntry ?? loadSessionEntry({ ...scope, sessionKey });
+    resolved?.existing ??
+    scope.sessionEntry ??
+    loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
   const sessionFile = formatSqliteSessionFileMarker({
     agentId,
     sessionId: scope.sessionId,
-    storePath: scope.storePath ?? "",
+    storePath,
   });
   return {
     agentId,
     sessionFile,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+    storePath,
     sessionEntry,
   };
 }
@@ -2882,7 +2888,7 @@ async function touchTranscriptTurnSessionEntry(params: {
 }): Promise<SessionEntry | undefined> {
   if (
     !params.shouldTouch ||
-    !params.scope.storePath ||
+    !params.target.storePath ||
     !params.target.sessionKey ||
     !params.target.sessionId
   ) {
@@ -2892,7 +2898,7 @@ async function touchTranscriptTurnSessionEntry(params: {
   const updated = await updateSessionEntry(
     {
       sessionKey: params.target.sessionKey,
-      storePath: params.scope.storePath,
+      storePath: params.target.storePath,
       ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
     },
     (current) =>
