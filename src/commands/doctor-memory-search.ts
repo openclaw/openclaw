@@ -10,7 +10,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { hasAnyAuthProfileStoreSource } from "../agents/auth-profiles.js";
+import {
+  hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
+} from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProvider,
@@ -674,7 +677,10 @@ async function hasApiKeyForProvider(
     return true;
   }
   if (opts?.skipProfileResolution === true) {
-    return authProviderId !== "amazon-bedrock" && hasAnyAuthProfileStoreSource(agentDir);
+    return (
+      authProviderId !== "amazon-bedrock" &&
+      hasAuthProfileStoreSourceForProvider(authProviderId, agentDir)
+    );
   }
   if (authProviderId !== "amazon-bedrock" && !hasAnyAuthProfileStoreSource(agentDir)) {
     return false;

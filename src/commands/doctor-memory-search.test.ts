@@ -10,6 +10,7 @@ const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-defaul
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
+const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -45,6 +46,7 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -172,6 +174,8 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     hasAnyAuthProfileStoreSource.mockReset();
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    hasAuthProfileStoreSourceForProvider.mockReset();
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockImplementation(
@@ -963,11 +967,41 @@ describe("noteMemorySearchHealth", () => {
     });
 
     expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+    );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns for empty auth profile sources when lint skips profile resolution", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    const message = firstNoteMessage();
+    expect(message).toContain('provider is set to "openai"');
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+    );
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("warns without resolving auth profiles when lint skips profile resolution and no auth store exists", async () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
     resolveMemorySearchConfig.mockReturnValue({
       provider: "openai",
       model: "text-embedding-3-small",
