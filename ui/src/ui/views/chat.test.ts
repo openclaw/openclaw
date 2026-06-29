@@ -4474,3 +4474,188 @@ describe("chat session controls", () => {
     expect(thinkingSelect.title).toContain("Adaptive");
   });
 });
+
+describe("right-click Reply", () => {
+  it("opens context menu and calls onSetReply when Reply is selected", () => {
+    const onSetReply = vi.fn();
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    // Create a real chat bubble inside a group with the data-message-text attribute
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "msg-stable-1";
+    bubble.dataset.messageText = "hello world";
+    const sender = document.createElement("span");
+    sender.className = "chat-sender-name";
+    sender.textContent = "User";
+    group.appendChild(sender);
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(evt);
+
+    const menu = document.querySelector(".chat-reply-context-menu");
+    expect(menu).not.toBeNull();
+    menu!.querySelector("button")!.click();
+
+    expect(onSetReply).toHaveBeenCalledTimes(1);
+    const target = onSetReply.mock.calls[0][0];
+    expect(target.messageId).toBe("msg-stable-1");
+    expect(target.text).toBe("hello world");
+    expect(target.senderLabel).toBe("User");
+  });
+
+  it("keeps the native context menu when Reply is unavailable", () => {
+    const container = renderChatView();
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble streaming";
+    bubble.dataset.messageText = "still streaming";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("dismisses the reply context menu with Escape after delayed listeners register", () => {
+    const onSetReply = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "hello world";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+
+    const menu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+    expect(menu).not.toBeNull();
+    expect(menu!.getAttribute("role")).toBe("menu");
+    expect(menu!.getAttribute("aria-label")).toBe("Message actions");
+    const button = menu!.querySelector<HTMLButtonElement>("button");
+    expect(button?.getAttribute("role")).toBe("menuitem");
+    expect(document.activeElement).toBe(button);
+
+    const evt = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("renders reply preview bar with quote text and dismiss button", () => {
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted message",
+        senderLabel: "User",
+      },
+    });
+
+    const preview = container.querySelector(".chat-reply-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toContain("quoted message");
+    expect(preview!.textContent).toContain("User");
+
+    const dismiss = preview!.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss");
+    expect(dismiss).not.toBeNull();
+  });
+
+  it("calls onClearReply when dismiss button is clicked", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    container.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss")!.click();
+    expect(onClearReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears reply target on Escape when no other handler intercepted", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const evt = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    section!.dispatchEvent(evt);
+
+    expect(onClearReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear reply target when Escape is already defaultPrevented", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const evt = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(evt, "defaultPrevented", { value: true });
+    section!.dispatchEvent(evt);
+
+    expect(onClearReply).not.toHaveBeenCalled();
+  });
+
+  it("does not open Reply menu when onSetReply is absent", () => {
+    renderChatView({
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    });
+
+    // Without onSetReply, the handler returns early and no menu is created
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+});
