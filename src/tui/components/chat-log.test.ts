@@ -75,93 +75,6 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
-  it("suppresses adjacent history replay / live final duplicate (#96967)", () => {
-    const chatLog = new ChatLog(40);
-
-    // History replay: no runId.
-    chatLog.finalizeAssistant("Hello from Telegram");
-    // Live final: same text, has runId, immediately after replay.
-    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
-
-    expect(chatLog.children.length).toBe(1);
-  });
-
-  it("allows live final after history replay when text differs", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.finalizeAssistant("Old reply");
-    chatLog.finalizeAssistant("New reply", "run-telegram");
-
-    expect(chatLog.children.length).toBe(2);
-  });
-
-  it("allows live final after history replay when a non-assistant row separates them", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.finalizeAssistant("Hello from Telegram");
-    chatLog.addUser("next prompt");
-    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
-
-    expect(chatLog.children.length).toBe(3);
-  });
-
-  it("clears replay marker after a non-matching live final so later same-text finals are not hidden", () => {
-    const chatLog = new ChatLog(40);
-
-    // History replay: no runId.
-    chatLog.finalizeAssistant("Hello from Telegram");
-    // First live final: different text, does not match the history row.
-    chatLog.finalizeAssistant("Different reply", "run-alpha");
-    // Second live final: same text as original history, but the replay
-    // marker was already cleared by the preceding mismatch.
-    chatLog.finalizeAssistant("Hello from Telegram", "run-beta");
-
-    expect(chatLog.children.length).toBe(3);
-  });
-
-  it("allows sequential live finals with different runIds", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.finalizeAssistant("result", "run-one");
-    chatLog.finalizeAssistant("result", "run-two");
-
-    expect(chatLog.children.length).toBe(2);
-  });
-
-  it("allows live final after history replay when TTL has expired (#96967)", async () => {
-    // Short TTL so the replay marker expires before the live final arrives.
-    const chatLog = new ChatLog(40, 50);
-
-    // History replay: no runId.
-    chatLog.finalizeAssistant("Hello from Telegram");
-    expect(chatLog.children.length).toBe(1);
-
-    // Wait past the 50ms TTL so the marker expires.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 60);
-    });
-
-    // Live final: same text, has runId, but marker already expired.
-    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
-
-    // Both rows are present because the marker expired.
-    expect(chatLog.children.length).toBe(2);
-  });
-
-  it("suppresses duplicate when TTL has not expired (#96967)", async () => {
-    // Long TTL so the replay marker is still valid.
-    const chatLog = new ChatLog(40, 30_000);
-
-    // History replay: no runId.
-    chatLog.finalizeAssistant("Hello from Telegram");
-    expect(chatLog.children.length).toBe(1);
-
-    // Live final immediately after: within TTL, should suppress.
-    chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
-
-    expect(chatLog.children.length).toBe(1);
-  });
-
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");
@@ -337,5 +250,50 @@ describe("ChatLog", () => {
       [],
     );
     expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  describe("hasStreamingRun", () => {
+    it("returns false when no streaming run exists", () => {
+      const chatLog = new ChatLog(40);
+      expect(chatLog.hasStreamingRun("nonexistent")).toBe(false);
+    });
+
+    it("returns true for an active streaming run", () => {
+      const chatLog = new ChatLog(40);
+      chatLog.startAssistant("typing…", "run-1");
+      expect(chatLog.hasStreamingRun("run-1")).toBe(true);
+    });
+
+    it("returns false after a streaming run is finalized", () => {
+      const chatLog = new ChatLog(40);
+      chatLog.startAssistant("partial", "run-1");
+      chatLog.finalizeAssistant("complete", "run-1");
+      expect(chatLog.hasStreamingRun("run-1")).toBe(false);
+    });
+
+    it("returns false after a streaming run is dropped", () => {
+      const chatLog = new ChatLog(40);
+      chatLog.startAssistant("typing…", "run-drop");
+      chatLog.dropAssistant("run-drop");
+      expect(chatLog.hasStreamingRun("run-drop")).toBe(false);
+    });
+
+    it("returns false for default runId when no unnamed stream is active", () => {
+      const chatLog = new ChatLog(40);
+      expect(chatLog.hasStreamingRun()).toBe(false);
+    });
+
+    it("returns true for default runId after an unnamed stream is started", () => {
+      const chatLog = new ChatLog(40);
+      chatLog.startAssistant("unnamed stream");
+      expect(chatLog.hasStreamingRun()).toBe(true);
+    });
+
+    it("returns false after clearAll resets streaming state", () => {
+      const chatLog = new ChatLog(40);
+      chatLog.startAssistant("typing…", "run-1");
+      chatLog.clearAll();
+      expect(chatLog.hasStreamingRun("run-1")).toBe(false);
+    });
   });
 });

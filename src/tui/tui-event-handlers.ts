@@ -26,6 +26,7 @@ type EventHandlerChatLog = {
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
+  hasStreamingRun: (runId: string) => boolean;
 };
 
 type EventHandlerTui = {
@@ -91,6 +92,10 @@ export function createEventHandlers(context: EventHandlerContext) {
   // assistant row — prior display is not proof of current visibility.
   const chatFinalizedRuns = new Map<string, number>();
   const chatFinalizedRunsWithDisplay = new Map<string, number>();
+  // Tracks runIds that were active (in sessionRuns) at the time sessions.changed
+  // "new" fired. Late events for surrendered runs are suppressed unless loadHistory
+  // restored them as in-flight streaming components (#96979).
+  const surrenderedToHistoryRunIds = new Set<string>();
   const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
@@ -628,6 +633,48 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
     }
+    // Surrender check: runId-based dedupe for sessions.changed "new" reload.
+    // Late events for surrendered runs are suppressed unless loadHistory
+    // restored them as in-flight streaming components. More precise than the
+    // ChatLog text heuristic — only suppresses specific runIds (#96979).
+    if (surrenderedToHistoryRunIds.has(evt.runId)) {
+      if (chatLog.hasStreamingRun(evt.runId)) {
+        // loadHistory restored this run as an in-flight streaming component.
+        surrenderedToHistoryRunIds.delete(evt.runId);
+        // Fall through to normal event handling below.
+      } else if (evt.state === "delta") {
+        surrenderedToHistoryRunIds.delete(evt.runId);
+        return;
+      } else if (evt.state === "final") {
+        surrenderedToHistoryRunIds.delete(evt.runId);
+        clearPendingTerminalLifecycleError(evt.runId);
+        chatLog.dismissPendingSystem(evt.runId);
+        // Mark as finalized with display so future late events
+        // (errors, deltas) are also suppressed by the existing
+        // finalizedRuns / chatFinalizedRuns guard.
+        chatFinalizedRuns.set(evt.runId, Date.now());
+        chatFinalizedRunsWithDisplay.set(evt.runId, Date.now());
+        finalizedRuns.set(evt.runId, Date.now());
+        finalizedRunsWithDisplay.set(evt.runId, Date.now());
+        pruneRunMap(chatFinalizedRuns);
+        pruneRunMap(chatFinalizedRunsWithDisplay);
+        pruneRunMap(finalizedRuns);
+        pruneRunMap(finalizedRunsWithDisplay);
+        clearActiveRunIfMatch(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
+        tui.requestRender();
+        return;
+      } else {
+        // Late aborted/error for surrendered run — suppress.
+        surrenderedToHistoryRunIds.delete(evt.runId);
+        clearPendingTerminalLifecycleError(evt.runId);
+        chatLog.dismissPendingSystem(evt.runId);
+        clearActiveRunIfMatch(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
+        tui.requestRender();
+        return;
+      }
+    }
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
@@ -762,6 +809,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.reason !== "new" && evt.reason !== "reset") {
       return;
+    }
+
+    // Surrender active runs before clearTrackedRunState clears sessionRuns.
+    // Late events for these surrendered runIds are suppressed at the event
+    // handler level by runId rather than by ChatLog text heuristics (#96979).
+    if (evt.reason === "new") {
+      for (const [runId] of sessionRuns) {
+        surrenderedToHistoryRunIds.add(runId);
+      }
     }
 
     clearTrackedRunState();
@@ -970,6 +1026,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const dispose = () => {
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
+    surrenderedToHistoryRunIds.clear();
   };
 
   const consumeCompletedRunForPendingSend = (runId: string) => {
