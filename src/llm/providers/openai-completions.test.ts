@@ -357,6 +357,33 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
 
+  it("treats minimal Z.ai reasoning effort as disabled thinking", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const zaiModel = {
+      ...reasoningModel,
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+    } satisfies Model<"openai-completions">;
+    const stream = streamOpenAICompletions(zaiModel, context, {
+      apiKey: "zai-test",
+      reasoningEffort: "minimal",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+  });
+
   it("does not add reasoning_effort for binary Z.ai thinking models", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const zaiModel = {

@@ -49,6 +49,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { resolveZaiOpenAICompletionsThinkingParams } from "./openai-completions-zai-thinking.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -102,21 +103,6 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 export interface OpenAICompletionsOptions extends StreamOptions {
   toolChoice?: OpenAICompletionsToolChoice;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-}
-
-function resolveZaiReasoningEffort(
-  model: Model<"openai-completions">,
-  effort: NonNullable<OpenAICompletionsOptions["reasoningEffort"]>,
-): string {
-  const mapped = model.thinkingLevelMap?.[effort];
-  if (typeof mapped === "string") {
-    return mapped;
-  }
-  return effort === "xhigh" ? "max" : "high";
-}
-
-function shouldSendZaiReasoningEffort(model: Model<"openai-completions">): boolean {
-  return model.id.toLowerCase().startsWith("glm-5.2") || model.thinkingLevelMap !== undefined;
 }
 
 interface OpenAICompatCacheControl {
@@ -739,9 +725,13 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
-    if (options?.reasoningEffort && shouldSendZaiReasoningEffort(model)) {
-      params.reasoning_effort = resolveZaiReasoningEffort(model, options.reasoningEffort);
+    const zaiThinking = resolveZaiOpenAICompletionsThinkingParams({
+      model,
+      requestedEffort: options?.reasoningEffort,
+    });
+    params.thinking = zaiThinking.thinking;
+    if (zaiThinking.reasoningEffort) {
+      params.reasoning_effort = zaiThinking.reasoningEffort;
     }
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);

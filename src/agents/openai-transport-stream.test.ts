@@ -6910,6 +6910,87 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
+  it("maps Z.ai thinking format to thinking.type and GLM-5.2 effort values", () => {
+    const baseModel = {
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        thinkingFormat: "zai",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "low",
+    } as never) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
+    const strongest = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "xhigh",
+    } as never) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
+    const minimal = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "minimal",
+    } as never) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
+    const none = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "none",
+    } as never) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
+
+    expect(enabled.thinking).toEqual({ type: "enabled" });
+    expect(enabled.reasoning_effort).toBe("high");
+    expect(enabled).not.toHaveProperty("enable_thinking");
+    expect(strongest.thinking).toEqual({ type: "enabled" });
+    expect(strongest.reasoning_effort).toBe("max");
+    expect(strongest).not.toHaveProperty("enable_thinking");
+    expect(minimal.thinking).toEqual({ type: "disabled" });
+    expect(minimal).not.toHaveProperty("reasoning_effort");
+    expect(minimal).not.toHaveProperty("enable_thinking");
+    expect(none.thinking).toEqual({ type: "disabled" });
+    expect(none).not.toHaveProperty("reasoning_effort");
+    expect(none).not.toHaveProperty("enable_thinking");
+  });
+
+  it("omits reasoning_effort for binary Z.ai thinking models in completions transport", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "glm-5.1",
+        name: "GLM-5.1",
+        api: "openai-completions",
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "zai",
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "low",
+      } as never,
+    ) as { thinking?: unknown; reasoning_effort?: unknown; enable_thinking?: unknown };
+
+    expect(params.thinking).toEqual({ type: "enabled" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params).not.toHaveProperty("enable_thinking");
+  });
+
   it("maps together thinking format to reasoning enabled", () => {
     const baseModel = {
       id: "moonshotai/Kimi-K2.5",

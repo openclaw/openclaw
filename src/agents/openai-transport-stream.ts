@@ -24,6 +24,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
+import { resolveZaiOpenAICompletionsThinkingParams } from "../llm/providers/openai-completions-zai-thinking.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
@@ -4426,6 +4427,16 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
+  if (compat.thinkingFormat === "zai" && model.reasoning) {
+    const zaiThinking = resolveZaiOpenAICompletionsThinkingParams({
+      model,
+      requestedEffort: completionsReasoningEffort,
+    });
+    params.thinking = zaiThinking.thinking;
+    if (zaiThinking.reasoningEffort) {
+      params.reasoning_effort = zaiThinking.reasoningEffort;
+    }
+  }
   applyTogetherOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4445,6 +4456,7 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
+    compat.thinkingFormat !== "zai" &&
     !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
