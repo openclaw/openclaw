@@ -302,6 +302,69 @@ describe("performMatrixRequest", () => {
     }
   }, 5_000);
 
+  it("rejects oversized raw responses when maxBytes is not provided (default MATRIX_SDK_RESPONSE_MAX_BYTES)", async () => {
+    // MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024; declare a Content-Length above that
+    const overCapBytes = 64 * 1024 * 1024 + 1;
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: {
+              "content-length": String(overCapBytes),
+            },
+          }),
+      ),
+    );
+
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 5000,
+        raw: true,
+        // intentionally omitting maxBytes — fix should apply MATRIX_SDK_RESPONSE_MAX_BYTES
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("returns raw buffer bodies that stay under the default MATRIX_SDK_RESPONSE_MAX_BYTES limit", async () => {
+    const payload = new Uint8Array([1, 2, 3, 4, 5]);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload);
+        controller.close();
+      },
+    });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+          }),
+      ),
+    );
+
+    const result = await performMatrixRequest({
+      homeserver: "http://127.0.0.1:8008",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "/_matrix/media/v3/download/example/id",
+      timeoutMs: 5000,
+      raw: true,
+      // intentionally omitting maxBytes — default cap allows small bodies through
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result.buffer).toEqual(Buffer.from(payload));
+  });
+
   it("returns full JSON bodies that stay under the byte limit", async () => {
     const payload = JSON.stringify({ ok: true, items: [1, 2, 3] });
     const stream = new ReadableStream<Uint8Array>({
