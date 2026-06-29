@@ -295,14 +295,14 @@ describe("Google embedding-batch file-content download bound (real HTTP server)"
         res.end("unexpected");
       }
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
     port = (server.address() as AddressInfo).port;
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
   });
 
   it("rejects with gemini.batch-file-content label when download exceeds 16 MiB cap", async () => {
