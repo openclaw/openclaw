@@ -500,6 +500,23 @@ describe("session accessor file-backed seam", () => {
       const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
 
       expect(snapshot.currentEntry?.skillsSnapshot?.prompt).toBe(prompt);
+      snapshot.currentEntry!.skillsSnapshot!.resolvedSkills = [
+        {
+          name: "reply-skill",
+          description: "runtime-only resolved skill body",
+          filePath: "/tmp/reply-skill/SKILL.md",
+          baseDir: "/tmp/reply-skill",
+          source: "test",
+          sourceInfo: {
+            path: "/tmp/reply-skill/SKILL.md",
+            source: "test",
+            scope: "temporary",
+            origin: "top-level",
+            baseDir: "/tmp/reply-skill",
+          },
+          disableModelInvocation: false,
+        },
+      ];
       const committed = await commitReplySessionInitialization({
         activeSessionKey: sessionKey,
         agentId: "main",

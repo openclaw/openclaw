@@ -38,6 +38,7 @@ import {
 } from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
+import { normalizeSessionStore } from "./store-load.js";
 import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
@@ -1166,12 +1167,16 @@ function createReplySessionInitializationRevision(params: {
     return "null";
   }
   // Reply-init guards compare the durable JSON shape. Skills promptRef hydration
-  // can turn the same persisted snapshot into a runtime-only prompt string.
+  // can turn the same persisted snapshot into a runtime-only prompt string, and
+  // writer caches may carry runtime-only fields such as resolvedSkills. Project
+  // through the full persisted-entry normalization before deriving the revision.
+  const normalizedStore = {
+    [REPLY_SESSION_INITIALIZATION_REVISION_KEY]: params.entry,
+  };
+  normalizeSessionStore(normalizedStore);
   const projected = projectSessionStoreForPersistence({
     storePath: params.storePath,
-    store: {
-      [REPLY_SESSION_INITIALIZATION_REVISION_KEY]: params.entry,
-    },
+    store: normalizedStore,
   });
   return JSON.stringify(projected.store[REPLY_SESSION_INITIALIZATION_REVISION_KEY] ?? null);
 }
