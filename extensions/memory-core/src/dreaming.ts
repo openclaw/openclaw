@@ -932,6 +932,17 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
+      const hasLegacyDreamingToken =
+        includesSystemEventToken(event.cleanedBody, LEGACY_LIGHT_SLEEP_EVENT_TEXT) ||
+        includesSystemEventToken(event.cleanedBody, LEGACY_REM_SLEEP_EVENT_TEXT);
+      // Legacy dreaming tokens (light_sleep / rem_sleep) were never recognized
+      // by the before_agent_reply hook, so they reached the LLM.  Without
+      // bootstrap context (lightContext: true), the LLM tried to exec the
+      // double-underscore-wrapped token as a shell command.  Intercept them
+      // here so the LLM is never invoked.
+      if (hasLegacyDreamingToken && ctx.trigger === "cron") {
+        return { handled: true, reason: "memory-core: legacy dreaming token intercepted" };
+      }
       const hasManagedDreamingToken = includesSystemEventToken(
         event.cleanedBody,
         DREAMING_SYSTEM_EVENT_TEXT,
