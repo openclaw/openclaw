@@ -2012,8 +2012,6 @@ export async function runEmbeddedAttempt(
             notifyToolActivity(params.runId);
             const result = await originalExecute(...args);
             return result;
-          } catch (error) {
-            throw error;
           } finally {
             clearInterval(interval);
             notifyToolActivity(params.runId);
