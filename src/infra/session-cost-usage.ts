@@ -76,7 +76,7 @@ export type {
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
 // caches written by older builds are rebuilt instead of served stale. Bumped to 5:
-// known-pricing zero provider totals are now recomputed, so a warm cache from a
+// DeepSeek V4 zero provider totals are now recomputed, so a warm cache from a
 // pre-change build would otherwise keep reporting the old complete-$0 totals.
 const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
@@ -1153,6 +1153,16 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const DEEPSEEK_V4_ZERO_COST_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+function isDeepSeekV4ZeroCostPlaceholder(entry: Pick<ParsedTranscriptEntry, "provider" | "model">) {
+  return (
+    entry.provider?.toLowerCase() === "deepseek" &&
+    entry.model !== undefined &&
+    DEEPSEEK_V4_ZERO_COST_MODEL_IDS.has(entry.model.toLowerCase())
+  );
+}
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1259,9 +1269,15 @@ async function scanTranscriptFile(params: {
         // instead of the stale flat-rate breakdown from the transport layer.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
-      } else if (isModelPricingKnown(cost) && entry.costTotal === 0 && usageHasTokens) {
-        // Some providers report usage.cost.total=0 for paid models. Known positive
-        // pricing is more trustworthy than a zero provider total on a token-burning turn.
+      } else if (
+        isModelPricingKnown(cost) &&
+        entry.costTotal === 0 &&
+        usageHasTokens &&
+        isDeepSeekV4ZeroCostPlaceholder(entry)
+      ) {
+        // DeepSeek V4 currently writes usage.cost.total=0 despite token usage.
+        // Keep this explicit so authoritative zero bills from providers such as
+        // OpenRouter are not replaced by local estimates.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (

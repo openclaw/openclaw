@@ -356,6 +356,58 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps authoritative provider-billed zero totals for known-priced models", async () => {
+    const root = await makeSessionCostRoot("cost-authoritative-zero-provider-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openrouter",
+        model: "moonshotai/kimi-k2.6",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                id: "moonshotai/kimi-k2.6",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
