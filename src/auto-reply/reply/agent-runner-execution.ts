@@ -50,6 +50,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import {
   isEmbeddedAttemptSessionTakeoverError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -3292,11 +3293,16 @@ export async function runAgentTurnWithFallback(params: {
       // budget timeouts (no-output stall / overall CLI turn budget) and Codex
       // app-server bridge failures: they are subprocess kills / bridge failures,
       // not transport timeouts, and have their own surfaced copy and replay
-      // handling that this gate would otherwise swallow.
+      // handling that this gate would otherwise swallow. Finally exclude local
+      // non-provider runtime coordination errors (e.g. session write-lock
+      // timeouts, whose message reads as "session file locked (timeout ...)"):
+      // retrying any model would hit the same local condition, so they must
+      // abort the fallback chain rather than re-run it as a transport timeout.
       const isTransientTimeout =
         isTimeoutErrorMessage(message) &&
         !isFallbackSummaryError(err) &&
-        !hasDedicatedNonTransportTimeoutCopy(message);
+        !hasDedicatedNonTransportTimeoutCopy(message) &&
+        !isNonProviderRuntimeCoordinationError(err);
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
