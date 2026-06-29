@@ -3368,6 +3368,73 @@ describe("runAgentTurnWithFallback", () => {
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
 
+  it("does not bridge CLI thinking agent events to onReasoningStream when silentExpected is set (/reasoning off — parity with embedded runtime)", async () => {
+    // The claude-cli reasoning bridge publishes raw thinking on the shared
+    // "thinking" agent event exactly like the embedded runtime
+    // (src/agents/embedded-agent-subscribe.ts emits stream: "thinking" the same
+    // way). Visibility is enforced downstream at this auto-reply seam, not at the
+    // emitter, so a silent turn (/reasoning off) must drop thinking deltas before
+    // they ever reach onReasoningStream — for the thinking stream too, not just
+    // the legacy assistant-text path.
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-7"),
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking about it", delta: " about it" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.silentExpected = true;
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onReasoningStream },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
   it("does not bridge non-Claude CLI assistant events to onReasoningStream", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
