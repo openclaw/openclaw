@@ -1033,6 +1033,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(telegramPrompt).toContain("pull quotes");
     expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
     expect(telegramPrompt).toContain("anchors/in-message links");
+    expect(telegramPrompt).toContain(
+      "formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`)",
+    );
     expect(telegramPrompt).toContain("maps/collages/slideshows");
     expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
     expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");

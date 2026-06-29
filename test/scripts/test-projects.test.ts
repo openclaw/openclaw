@@ -605,7 +605,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
           "src/cli/run-main.test.ts",
@@ -951,7 +951,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/openai-image-auth-docker-client.ts",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
         [
           "test/scripts/openai-image-auth-docker-client.test.ts",
           "extensions/openai/image-generation-provider.test.ts",
@@ -2433,15 +2433,16 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
-      "scripts/e2e/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+      "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
       "scripts/e2e/mcp-channels-seed.ts",
       "scripts/e2e/docker-openai-seed.ts",
-      "scripts/e2e/mcp-client-temp-state.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
       "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
@@ -2457,13 +2458,13 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-observability.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/docker-e2e-seeds.test.ts",
-        "test/scripts/mcp-channels-harness.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "src/gateway/server.cron.test.ts",
         "src/gateway/server-methods/agent.test.ts",
         "src/cron/isolated-agent/run.fast-mode.test.ts",
@@ -2475,7 +2476,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/openai-image-auth-docker.sh",
-      "scripts/e2e/openai-image-auth-docker-client.ts",
+      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2517,7 +2518,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/crestodian-first-run-docker.sh",
-      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
       "scripts/e2e/crestodian-planner-docker.sh",
       "scripts/e2e/crestodian-planner-docker-client.mjs",
