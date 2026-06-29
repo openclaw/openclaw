@@ -561,7 +561,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
-  it("routes plugin thread start and resume approvals to the user", () => {
+  it("honors an explicit top-level reviewer on thread start and resume", () => {
     const appServer = {
       ...createAppServerOptions(),
       approvalsReviewer: "auto_review" as const,
@@ -586,7 +586,7 @@ describe("Codex app-server native code mode config", () => {
     expect(resumed.approvalsReviewer).toBe("user");
   });
 
-  it("allows plugin turns to override the runtime approval reviewer", () => {
+  it("keeps the configured runtime reviewer on turn start", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
@@ -594,10 +594,9 @@ describe("Codex app-server native code mode config", () => {
         ...createAppServerOptions(),
         approvalsReviewer: "auto_review",
       } as never,
-      approvalsReviewer: "user",
     });
 
-    expect(request.approvalsReviewer).toBe("user");
+    expect(request.approvalsReviewer).toBe("auto_review");
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {

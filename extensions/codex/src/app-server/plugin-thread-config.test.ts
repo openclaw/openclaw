@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
 import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
   isCodexPluginThreadBindingStale,
@@ -54,23 +55,23 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
         "google-calendar-app": {
           enabled: true,
-          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
         },
       },
     });
+    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["_default"]).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toEqual({
       configKey: "google-calendar",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -103,12 +104,12 @@ describe("Codex plugin thread config", () => {
       | undefined;
     expect(disabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
-      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
     });
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
+    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
     expect(
       pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
@@ -136,11 +137,11 @@ describe("Codex plugin thread config", () => {
       | undefined;
     expect(enabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
-      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
     });
+    expect(enabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(
       pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
     ).toBe(true);
@@ -166,19 +167,138 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["google-calendar-app"]).toEqual({
       enabled: true,
-      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
       tools: {
-        create_event: { approval_mode: "prompt" },
+        "connector.create_event": { approval_mode: "prompt" },
       },
     });
+    expect(apps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
-      destructiveToolNames: ["create_event"],
+      destructiveToolNames: ["connector.create_event"],
     });
+  });
+
+  it("prompts tools Codex treats as approval-required when hints are incomplete", async () => {
+    const config = await buildReadyGoogleCalendarThreadConfig(
+      {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "auto",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      {
+        toolStatus: {
+          data: [
+            {
+              name: "codex_apps",
+              tools: [
+                {
+                  name: "connector.read_events",
+                  annotations: { readOnlyHint: true, openWorldHint: true },
+                  _meta: { connector_id: "google-calendar-app" },
+                },
+                {
+                  name: "connector.safe_local_action",
+                  annotations: {
+                    readOnlyHint: false,
+                    destructiveHint: false,
+                    openWorldHint: false,
+                  },
+                  _meta: { connector_id: "google-calendar-app" },
+                },
+                {
+                  name: "connector.unannotated_write",
+                  _meta: { connector_id: "google-calendar-app" },
+                },
+                {
+                  name: "connector.open_world_write",
+                  annotations: {
+                    readOnlyHint: false,
+                    destructiveHint: false,
+                    openWorldHint: true,
+                  },
+                  _meta: { connector_id: "google-calendar-app" },
+                },
+              ],
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+    );
+
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["google-calendar-app"]).toMatchObject({
+      tools: {
+        "connector.open_world_write": { approval_mode: "prompt" },
+        "connector.unannotated_write": { approval_mode: "prompt" },
+      },
+    });
+    expect(config.policyContext.apps["google-calendar-app"]?.destructiveToolNames).toEqual([
+      "connector.open_world_write",
+      "connector.unannotated_write",
+    ]);
+  });
+
+  it("ignores connector ownership spoofed by non-Codex app servers", async () => {
+    const config = await buildReadyGoogleCalendarThreadConfig(
+      {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "auto",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      {
+        toolStatus: {
+          data: [
+            {
+              name: "untrusted_server",
+              tools: [
+                {
+                  name: "connector.create_event",
+                  annotations: { destructiveHint: true },
+                  _meta: { connector_id: "google-calendar-app" },
+                },
+              ],
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+    );
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "destructive_tool_inventory_unavailable",
+        message: expect.stringContaining("contained no tools owned by google-calendar-app"),
+      }),
+    );
   });
 
   it("excludes auto policy apps when destructive tool inventory cannot be read", async () => {
@@ -199,11 +319,9 @@ describe("Codex plugin thread config", () => {
     );
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -315,14 +433,19 @@ describe("Codex plugin thread config", () => {
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
       tools: {
-        create_event: { approval_mode: "prompt" },
+        "connector.create_event": { approval_mode: "prompt" },
       },
     });
-    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
+    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "always",
-      destructiveToolNames: ["create_event"],
+      destructiveToolNames: ["connector.create_event"],
+    });
+    expect(request).toHaveBeenCalledWith("mcpServerStatus/list", {
+      cursor: undefined,
+      detail: "toolsAndAuthOnly",
+      limit: 100,
     });
     expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
@@ -341,6 +464,93 @@ describe("Codex plugin thread config", () => {
       value: null,
       mergeStrategy: "replace",
     });
+  });
+
+  it.each([
+    ["auto", "auto", undefined],
+    ["boolean true", true, undefined],
+    ["boolean false", false, undefined],
+    ["always", "always", "user"],
+  ] as const)(
+    "applies the resolved per-plugin %s reviewer policy over global always",
+    async (_name, pluginOverride, expectedReviewer) => {
+      const config = await buildReadyGoogleCalendarThreadConfig({
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+              allow_destructive_actions: pluginOverride,
+            },
+          },
+        },
+      });
+
+      const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+      const app = apps?.["google-calendar-app"] as Record<string, unknown> | undefined;
+      expect(app?.approvals_reviewer).toBe(expectedReviewer);
+      expect(config.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode).toBe(
+        pluginOverride === true ? "allow" : pluginOverride === false ? "deny" : pluginOverride,
+      );
+    },
+  );
+
+  it("rebuilds persisted app policy with the same reviewer precedence", () => {
+    const configPatch = buildCodexPluginAppsConfigPatchFromPolicyContext({
+      fingerprint: "policy",
+      apps: {
+        "always-app": {
+          configKey: "always",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "always",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+          destructiveToolNames: ["write"],
+          mcpServerNames: ["always"],
+        },
+        "auto-app": {
+          configKey: "auto",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "auto",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+          destructiveToolNames: ["write"],
+          mcpServerNames: ["auto"],
+        },
+      },
+      pluginAppIds: {
+        always: ["always-app"],
+        auto: ["auto-app"],
+      },
+    });
+
+    expect(configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+        "always-app": {
+          enabled: true,
+          approvals_reviewer: "user",
+          destructive_enabled: true,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+          tools: { write: { approval_mode: "prompt" } },
+        },
+        "auto-app": {
+          enabled: true,
+          destructive_enabled: true,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+          tools: { write: { approval_mode: "prompt" } },
+        },
+      },
+    });
+    expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
   it("omits always policy apps when cwd effective approval overrides remain after cleanup", async () => {
@@ -412,11 +622,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -511,11 +719,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -588,11 +794,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -636,7 +840,6 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -686,7 +889,6 @@ describe("Codex plugin thread config", () => {
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -730,17 +932,14 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
         "google-calendar-app": {
           enabled: true,
-          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
@@ -918,11 +1117,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -981,11 +1178,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1041,17 +1236,15 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
+    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
-        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
       "google-calendar-app": {
         enabled: true,
-        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -1136,17 +1329,15 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
+    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
-        approvals_reviewer: "user",
         destructive_enabled: false,
         open_world_enabled: false,
       },
       "google-calendar-app": {
         enabled: true,
-        approvals_reviewer: "user",
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
@@ -1295,11 +1486,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1344,11 +1533,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1402,11 +1589,9 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
-          approvals_reviewer: "user",
           destructive_enabled: false,
           open_world_enabled: false,
         },
@@ -1492,7 +1677,6 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["github-app"]).toEqual({
       enabled: true,
-      approvals_reviewer: "user",
       destructive_enabled: false,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
@@ -1656,7 +1840,7 @@ function mcpServerStatus(
 
 async function buildReadyGoogleCalendarThreadConfig(
   pluginConfig: unknown,
-  options: { toolInventoryError?: Error } = {},
+  options: { toolInventoryError?: Error; toolStatus?: unknown } = {},
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
   const appCache = new CodexAppInventoryCache();
   await appCache.refreshNow({
@@ -1684,7 +1868,10 @@ async function buildReadyGoogleCalendarThreadConfig(
         if (options.toolInventoryError) {
           throw options.toolInventoryError;
         }
-        return mcpServerStatus("google-calendar-app");
+        return options.toolStatus ?? mcpServerStatus("google-calendar-app");
+      }
+      if (method === "config/read") {
+        return { config: {} };
       }
       throw new Error(`unexpected request ${method}`);
     },
