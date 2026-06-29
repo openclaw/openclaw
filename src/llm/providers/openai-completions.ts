@@ -104,6 +104,21 @@ export interface OpenAICompletionsOptions extends StreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
+function resolveZaiReasoningEffort(
+  model: Model<"openai-completions">,
+  effort: NonNullable<OpenAICompletionsOptions["reasoningEffort"]>,
+): string {
+  const mapped = model.thinkingLevelMap?.[effort];
+  if (typeof mapped === "string") {
+    return mapped;
+  }
+  return effort === "xhigh" ? "max" : "high";
+}
+
+function shouldSendZaiReasoningEffort(model: Model<"openai-completions">): boolean {
+  return model.id.toLowerCase().startsWith("glm-5.2") || model.thinkingLevelMap !== undefined;
+}
+
 interface OpenAICompatCacheControl {
   type: "ephemeral";
   ttl?: string;
@@ -724,7 +739,10 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+    if (options?.reasoningEffort && shouldSendZaiReasoningEffort(model)) {
+      params.reasoning_effort = resolveZaiReasoningEffort(model, options.reasoningEffort);
+    }
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {

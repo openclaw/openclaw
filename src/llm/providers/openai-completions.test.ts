@@ -273,6 +273,117 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload?.tools).toEqual([]);
   });
 
+  it("sends current Z.ai thinking params instead of legacy enable_thinking", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const zaiModel = {
+      ...reasoningModel,
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+    } satisfies Model<"openai-completions">;
+    const stream = streamOpenAICompletions(zaiModel, context, {
+      apiKey: "zai-test",
+      reasoningEffort: "low",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
+  it("maps the strongest OpenClaw Z.ai thinking level to provider max effort", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const zaiModel = {
+      ...reasoningModel,
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+    } satisfies Model<"openai-completions">;
+    const stream = streamOpenAICompletions(zaiModel, context, {
+      apiKey: "zai-test",
+      reasoningEffort: "xhigh",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "max",
+    });
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
+  it("disables Z.ai thinking with the current thinking param when reasoning effort is off", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const zaiModel = {
+      ...reasoningModel,
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+    } satisfies Model<"openai-completions">;
+    const stream = streamOpenAICompletions(zaiModel, context, {
+      apiKey: "zai-test",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not add reasoning_effort for binary Z.ai thinking models", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const zaiModel = {
+      ...reasoningModel,
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      provider: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      compat: { thinkingFormat: "zai" },
+    } satisfies Model<"openai-completions">;
+    const stream = streamOpenAICompletions(zaiModel, context, {
+      apiKey: "zai-test",
+      reasoningEffort: "low",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).toMatchObject({ thinking: { type: "enabled" } });
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+  });
+
   it("replays update_plan-style empty non-image tool results as no output", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
