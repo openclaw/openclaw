@@ -90,6 +90,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
     return Object.assign(new TypeError("fetch failed"), { cause });
   }
 
+  function mattermostJsonResponse(status: number, payload: unknown): Response {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   async function resolveRetryRun<T>(run: Promise<T>): Promise<T> {
     await vi.runAllTimersAsync();
     return await run;
@@ -101,12 +108,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
   }
 
   it("succeeds on first attempt without retries", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 201,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: "dm-channel-123" }),
-    } as Response);
+    mockFetch.mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-123" }));
 
     const client = createMockClient();
     const onRetry = vi.fn();
@@ -131,12 +133,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         json: async () => ({ message: "Too many requests" }),
         text: async () => "Too many requests",
       } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-456" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-456" }));
 
     const client = createMockClient();
     const onRetry = vi.fn();
@@ -166,12 +163,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     // This tests that port numbers like :443 don't trigger false 4xx classification
     mockFetch
       .mockRejectedValueOnce(new Error("connect ECONNRESET 104.18.32.10:443"))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-port" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-port" }));
 
     const client = createMockClient();
 
@@ -228,12 +220,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         json: async () => ({ message: "Bad gateway" }),
         text: async () => "Bad gateway",
       } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-789" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-789" }));
 
     const client = createMockClient();
 
@@ -252,12 +239,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     mockFetch
       .mockRejectedValueOnce(new Error("Network error: connection refused"))
       .mockRejectedValueOnce(new Error("ECONNRESET"))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-abc" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-abc" }));
 
     const client = createMockClient();
 
@@ -280,12 +262,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
           code: "ECONNREFUSED",
         }),
       )
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-fetch-failed" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-fetch-failed" }));
 
     const client = createMockClient();
 
@@ -414,12 +391,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
       .spyOn(globalThis, "setTimeout")
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
     vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 201,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: "dm-channel-capped" }),
-    } as Response);
+    mockFetch.mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-capped" }));
 
     const client = createMockClient();
 
@@ -436,12 +408,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     mockFetch
       .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
       .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-delay" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-delay" }));
 
     const client = createMockClient();
 
@@ -472,12 +439,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
       .mockRejectedValueOnce(new Error("Mattermost API 503"))
       .mockRejectedValueOnce(new Error("Mattermost API 503"))
       .mockRejectedValueOnce(new Error("Mattermost API 503"))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-max" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-max" }));
 
     const client = createMockClient();
 
@@ -550,12 +512,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     let capturedSignal: AbortSignal | undefined;
     mockFetch.mockImplementationOnce((url, init) => {
       capturedSignal = init?.signal ?? undefined;
-      return Promise.resolve({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-signal" }),
-      } as Response);
+      return Promise.resolve(mattermostJsonResponse(201, { id: "dm-channel-signal" }));
     });
 
     const client = createMockClient();
@@ -573,12 +530,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     // This tests the fix for the ordering bug: 503 with "upstream 404" should be retried
     mockFetch
       .mockRejectedValueOnce(new Error("Mattermost API 503: upstream returned 404 Not Found"))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ id: "dm-channel-5xx-with-404" }),
-      } as Response);
+      .mockResolvedValueOnce(mattermostJsonResponse(201, { id: "dm-channel-5xx-with-404" }));
 
     const client = createMockClient();
 
