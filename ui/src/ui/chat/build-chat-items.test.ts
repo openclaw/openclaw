@@ -1140,13 +1140,14 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
 }
 
 describe("tool turn outcome annotation (#89683)", () => {
-  function failedTool(timestamp: number) {
+  function failedTool(timestamp: number, runId?: string) {
     return {
       role: "toolResult",
       toolName: "shell",
       content: JSON.stringify({ status: "failed", exitCode: 1 }),
       isError: true,
       timestamp,
+      ...(runId ? { runId } : {}),
     };
   }
   function userMsg(text: string, timestamp: number) {
@@ -1154,6 +1155,9 @@ describe("tool turn outcome annotation (#89683)", () => {
   }
   function assistantReply(text: string, timestamp: number) {
     return { role: "assistant", content: [{ type: "text", text }], timestamp };
+  }
+  function assistantRunReply(text: string, timestamp: number, runId: string) {
+    return { ...assistantReply(text, timestamp), runId };
   }
   function toolGroups(messages: unknown[]): MessageGroup[] {
     return messageGroups({ messages }).filter((group) => group.role === "tool");
@@ -1193,5 +1197,15 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("does not carry an agent-initiated reply across run boundaries", () => {
+    const tools = toolGroups([
+      failedTool(1, "run-terminal-failure"),
+      failedTool(2, "run-later-success"),
+      assistantRunReply("Recovered on the later turn.", 3, "run-later-success"),
+    ]);
+    expect(tools).toHaveLength(2);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
   });
 });

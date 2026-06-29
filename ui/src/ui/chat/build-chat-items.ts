@@ -89,6 +89,34 @@ function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   }
 }
 
+function messageTurnKey(message: unknown): string | null {
+  const record = asRecord(message);
+  if (!record) {
+    return null;
+  }
+  const metadata = asRecord(record.__openclaw);
+  const key = [
+    record.runId,
+    record.agentRunId,
+    record.turnId,
+    metadata?.runId,
+    metadata?.agentRunId,
+    metadata?.turnId,
+  ].find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return key?.trim() ?? null;
+}
+
+function groupTurnKey(group: MessageGroup): string | null {
+  const keys = new Set<string>();
+  for (const entry of group.messages) {
+    const key = messageTurnKey(entry.message);
+    if (key) {
+      keys.add(key);
+    }
+  }
+  return keys.size === 1 ? (keys.values().next().value ?? null) : null;
+}
+
 function extractChatMessagePreview(toolMessage: unknown): {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
@@ -193,17 +221,23 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
+    const roleKey = role.toLowerCase();
     const senderLabel =
-      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
-        ? (normalized.senderLabel ?? null)
-        : null;
+      roleKey === "user" || roleKey === "assistant" ? (normalized.senderLabel ?? null) : null;
+    const itemTurnKey = messageTurnKey(item.message);
     const timestamp = normalized.timestamp || Date.now();
-    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
+    const shouldSplitBySender = roleKey === "user" || roleKey === "assistant";
+    const currentTurnKey = currentGroup ? groupTurnKey(currentGroup) : null;
+    const shouldSplitByTurn =
+      (roleKey === "assistant" || roleKey === "tool") &&
+      currentGroup?.role === role &&
+      Boolean(itemTurnKey && currentTurnKey && itemTurnKey !== currentTurnKey);
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel) ||
+      shouldSplitByTurn
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -348,12 +382,14 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
 // failure (e.g. a no-match search) must not render as a primary error banner
 // once a clean reply exists. Backward pass: a user group ends the turn
 // downstream; an assistant reply marks success for earlier tool groups in the
-// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
-// preserving the existing error banner.
+// same turn. Explicit run/turn metadata scopes agent-initiated turns that have
+// no user boundary; legacy transcripts without that metadata still use the user
+// boundary fallback. Terminal or in-progress failures keep the error banner.
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
   let sawAssistantReply = false;
+  const successfulTurnKeys = new Set<string>();
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];
     if (item.kind !== "group") {
@@ -362,12 +398,19 @@ function annotateToolTurnOutcome(
     const role = item.role.toLowerCase();
     if (role === "user") {
       sawAssistantReply = false;
+      successfulTurnKeys.clear();
     } else if (role === "assistant") {
       if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
+        const turnKey = groupTurnKey(item);
+        if (turnKey) {
+          successfulTurnKeys.add(turnKey);
+        } else {
+          sawAssistantReply = true;
+        }
       }
     } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
+      const turnKey = groupTurnKey(item);
+      item.turnSucceeded = turnKey ? successfulTurnKeys.has(turnKey) : sawAssistantReply;
     }
   }
   return items;
