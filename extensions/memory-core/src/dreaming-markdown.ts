@@ -6,6 +6,7 @@ import {
   type MemoryDreamingPhaseName,
   type MemoryDreamingStorageConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { MemoryDreamOutcome } from "openclaw/plugin-sdk/memory-host-events";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   replaceManagedMarkdownBlock,
@@ -65,6 +66,8 @@ export async function writeDailyDreamingPhaseBlock(params: {
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
+  outcome?: MemoryDreamOutcome;
+  error?: string;
 }): Promise<{ inlinePath?: string; reportPath?: string }> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No notable updates.";
@@ -112,6 +115,8 @@ export async function writeDailyDreamingPhaseBlock(params: {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: params.phase,
+    ...(params.outcome ? { outcome: params.outcome } : {}),
+    ...(params.error ? { error: params.error } : {}),
     ...(inlinePath ? { inlinePath } : {}),
     ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
@@ -130,6 +135,8 @@ export async function writeDeepDreamingReport(params: {
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
+  outcome?: MemoryDreamOutcome;
+  error?: string;
 }): Promise<string | undefined> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
@@ -147,6 +154,8 @@ export async function writeDeepDreamingReport(params: {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: "deep",
+    ...(params.outcome ? { outcome: params.outcome } : {}),
+    ...(params.error ? { error: params.error } : {}),
     inlinePath,
     ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,

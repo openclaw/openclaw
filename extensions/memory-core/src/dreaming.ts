@@ -27,12 +27,15 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import type { MemoryDreamOutcome } from "openclaw/plugin-sdk/memory-host-events";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   includesSystemEventToken,
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
+import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
@@ -691,9 +694,21 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       }
     } catch (err) {
       failedWorkspaces += 1;
+      const errorText = formatErrorMessage(err);
       params.logger.error(
-        `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
+        `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${errorText}`,
       );
+      // Record the failure in the structured event log so downstream consumers
+      // can distinguish failed from successful dreaming runs without parsing logs.
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.dream.completed",
+        timestamp: resolveMemoryCoreTimestamp(sweepNowMs),
+        phase: "deep",
+        outcome: "failed" as MemoryDreamOutcome,
+        error: errorText,
+        lineCount: 0,
+        storageMode: params.config.storage?.mode ?? "separate",
+      });
     }
   }
   params.logger.info(

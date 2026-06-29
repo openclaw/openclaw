@@ -54,11 +54,19 @@ export type MemoryHostPromotionAppliedEvent = {
   }>;
 };
 
+/** Normalized outcome for a dreaming phase run. */
+export type MemoryDreamOutcome = "completed" | "partial" | "failed" | "timed_out";
+
 /** Event emitted after a dreaming phase writes inline memory and/or reports. */
 export type MemoryHostDreamCompletedEvent = {
   type: "memory.dream.completed";
   timestamp: string;
   phase: MemoryDreamingPhaseName;
+  /** Normalized outcome of the dreaming phase run. Absent on events written
+   *  before this field was added; treat missing as "completed". */
+  outcome?: MemoryDreamOutcome;
+  /** Error detail when outcome is not "completed". */
+  error?: string;
   inlinePath?: string;
   reportPath?: string;
   lineCount: number;
