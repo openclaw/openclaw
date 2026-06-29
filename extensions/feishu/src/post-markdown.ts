@@ -23,6 +23,11 @@ function isClosingMarkdownFence(line: string, activeFence: MarkdownFence): boole
   return Boolean(fence && fence[0] === activeFence.marker && fence.length >= activeFence.length);
 }
 
+function isRawMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.indexOf("|", 1) > 0;
+}
+
 export function materializeFeishuPostMarkdownLineBreaks(text: string): string {
   const parts = text.split(/(\r\n|\n|\r)/);
   let activeFence: MarkdownFence | undefined;
@@ -50,6 +55,7 @@ export function materializeFeishuPostMarkdownLineBreaks(text: string): string {
       wasInFence ||
       isFenceBoundary ||
       Boolean(readOpeningMarkdownFence(nextLine)) ||
+      (isRawMarkdownTableRow(line) && isRawMarkdownTableRow(nextLine)) ||
       line.trim().length === 0 ||
       nextLine.trim().length === 0;
     result += keepSingleBreak ? separator : `${separator}${separator}`;

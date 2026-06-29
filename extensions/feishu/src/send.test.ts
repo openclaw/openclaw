@@ -125,6 +125,26 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it("preserves single newlines between raw markdown table rows", () => {
+    const rawTable = "| Column |\n| --- |\n| Value |";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: rawTable,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: rawTable,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
   it("preserves single newlines inside markdown code fences", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
