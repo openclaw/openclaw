@@ -625,7 +625,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         surrenderedToHistoryRunIds.delete(evt.runId);
         // Fall through to normal event handling below.
       } else if (evt.state === "delta") {
-        surrenderedToHistoryRunIds.delete(evt.runId);
+        // In-flight: remove surrender marker so a later final is
+        // not permanently hidden. Finalized: keep the marker — a
+        // late delta cannot re-enable a duplicate later final (#96979).
+        if (source !== "finalized") {
+          surrenderedToHistoryRunIds.delete(evt.runId);
+        }
         return;
       } else if (evt.state === "final") {
         surrenderedToHistoryRunIds.delete(evt.runId);

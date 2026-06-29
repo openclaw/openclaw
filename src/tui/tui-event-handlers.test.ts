@@ -2028,6 +2028,51 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
     });
 
+    it("keeps surrendered finalized marker after late delta so later final is also suppressed (#96979 P2)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-done" } },
+      );
+
+      // First final: run is finalized with display.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+      chatLog.finalizeAssistant.mockClear();
+
+      // sessions.changed "new" surrenders the finalized run.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+
+      // Late delta for surrendered finalized run — suppressed.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "stale chunk" }] },
+      });
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+
+      // Late displayable final — also suppressed because the surrender
+      // marker was NOT cleared by the delta (#96979 P2).
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
     it("suppresses late aborted for surrendered run (#96979)", () => {
       const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
         {
