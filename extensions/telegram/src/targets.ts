@@ -126,16 +126,21 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     };
   }
 
-  // `[^:]+` prevents silent misparse of multi-colon targets; same invariant as
-  // the :topic: parser above. See comment there.
-  const colonMatch = /^([^:]+):(\d+)$/.exec(normalized);
+  // Keep (.+) so URL-form targets like "https://t.me/mychannel:9" still parse
+  // correctly (the scheme colon is not a thread-spec delimiter). But when the
+  // left side contains unusual colons not part of a known URL form, oversplit
+  // is likely — fall back to full-string.
+  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
-    const chatId = colonMatch[1];
-    const threadIdText = colonMatch[2];
-    if (chatId === undefined || threadIdText === undefined) {
-      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+    // If the left side has extra colons that are not part of a known URL form,
+    // oversplit is likely — the user typed a target with multiple colons.
+    if (colonMatch[1].includes(":") && !/^(?:https?:\/\/)?t\.me\//i.test(colonMatch[1])) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
     }
-    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
+    const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
     if (messageThreadId === undefined) {
       return {
         chatId: normalized,

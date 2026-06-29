@@ -109,28 +109,47 @@ describe("parseTelegramTarget", () => {
     });
   });
 
-  it("rejects multi-colon targets via fallback colon regex", () => {
-    // "chatId:topic:42:99" — 4 segments; topic regex doesn't match
-    // (doesn't end with :topic:N), and colon regex must not greedily
-    // swallow ":topic:42" into chatId.
+  it("rejects multi-colon targets via colon guard", () => {
+    // "chatId:topic:42:99" — topic regex doesn't match (doesn't end with
+    // :topic:N preceded by a colon-free chatId). Colon regex greedily
+    // splits as chatId="chatId:topic:42", threadId=99. The guard sees an
+    // unusual colon in the left side → full-string fallback.
     expect(parseTelegramTarget("chatId:topic:42:99")).toEqual({
       chatId: "chatId:topic:42:99",
       chatType: "unknown",
     });
   });
 
-  it("rejects multi-colon targets via :topic: parser", () => {
-    // "a:b:topic:42" — topic regex must not parse chatId "a:b" with
-    // thread "42". The entire input is malformed.
+  it("rejects multi-colon targets with :topic: embedded in chatId segment", () => {
+    // "a:b:topic:42" — topic regex [^:]+ only matches "a", so it fails.
+    // Colon regex would greedily split as chatId="a:b:topic", threadId=42,
+    // but the colon guard catches the unusual colon in the left side → fallback.
     expect(parseTelegramTarget("a:b:topic:42")).toEqual({
       chatId: "a:b:topic:42",
       chatType: "unknown",
     });
   });
 
-  it("rejects deeply nested multi-colon targets", () => {
+  it("rejects deeply nested multi-colon targets via colon guard", () => {
+    // "a:b:c:d:e:42" — the colon-regex left side "a:b:c:d:e" contains ":"
+    // and is not a valid t.me URL, so the guard falls back to full-string.
     expect(parseTelegramTarget("a:b:c:d:e:42")).toEqual({
       chatId: "a:b:c:d:e:42",
+      chatType: "unknown",
+    });
+  });
+
+  it("preserves t.me URL-form targets with thread suffixes", () => {
+    // URL-form targets like "https://t.me/mychannel:9" must keep working;
+    // the colon is part of the URL scheme, not a thread-spec delimiter.
+    expect(parseTelegramTarget("t.me/mychannel:99")).toEqual({
+      chatId: "t.me/mychannel",
+      messageThreadId: 99,
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("https://t.me/mychannel:77")).toEqual({
+      chatId: "https://t.me/mychannel",
+      messageThreadId: 77,
       chatType: "unknown",
     });
   });
