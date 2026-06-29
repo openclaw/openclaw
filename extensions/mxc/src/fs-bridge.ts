@@ -169,7 +169,7 @@ class MxcFsBridge implements SandboxFsBridge {
       relativePath,
       containerPath: hostPath,
       mountRoot: workspaceRoot,
-      writable: this.sandbox.workspaceAccess !== "ro",
+      writable: this.sandbox.workspaceAccess === "rw",
     };
   }
 

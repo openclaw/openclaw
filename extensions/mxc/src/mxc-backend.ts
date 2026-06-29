@@ -268,7 +268,7 @@ function applySandboxBaselineToConfig(
       tempEnv: context.hostEnv,
       additionalReadwritePaths: baseline.filesystem.additionalReadwritePaths,
     });
-    if (options.workspaceAccess !== "ro") {
+    if (options.workspaceAccess === "rw") {
       readwritePaths.push(...baselineReadwritePaths);
     } else {
       const projectDir = path.resolve(context.projectDir);
@@ -393,8 +393,8 @@ function buildContainerConfig(params: {
   } = params;
   const networkAllowed = config.network === "default";
 
-  const readwritePaths = workspaceAccess !== "ro" ? [path.resolve(workdir)] : [];
-  const readonlyPaths = workspaceAccess === "ro" ? [path.resolve(workdir)] : [];
+  const readwritePaths = workspaceAccess === "rw" ? [path.resolve(workdir)] : [];
+  const readonlyPaths = workspaceAccess !== "rw" ? [path.resolve(workdir)] : [];
   if (config.readwritePaths) {
     for (const p of config.readwritePaths) {
       const resolved = path.resolve(p);
@@ -723,6 +723,9 @@ export function createMxcSandboxBackendFactory(config: MxcConfig) {
   return async function createMxcSandboxBackend(
     params: CreateSandboxBackendParams,
   ): Promise<SandboxBackendHandle> {
+    if ((params.cfg.docker.binds?.length ?? 0) > 0) {
+      throw new Error("MXC sandbox backend does not support sandbox.docker.binds.");
+    }
     const runtimeId = sanitizeRuntimeId(params.scopeKey);
     return createMxcSandboxBackendHandle({
       config,

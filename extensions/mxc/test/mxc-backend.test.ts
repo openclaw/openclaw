@@ -11,10 +11,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { SandboxConfig } from "openclaw/plugin-sdk/sandbox";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveConfig, type MxcConfig } from "../src/config.js";
-import { createMxcSandboxBackendHandle, mxcSandboxBackendManager } from "../src/mxc-backend.js";
+import {
+  createMxcSandboxBackendFactory,
+  createMxcSandboxBackendHandle,
+  mxcSandboxBackendManager,
+} from "../src/mxc-backend.js";
 
 const { execFileMock, execFileSyncMock, mockedHomeDir, stdinEndMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
@@ -429,22 +434,8 @@ describe("createMxcSandboxBackendHandle", () => {
     }
   });
 
-  test("workspaceAccess ro maps the sandbox workdir to readonlyPaths", async () => {
-    const handle = createMxcSandboxBackendHandle({
-      ...baseParams,
-      workspaceAccess: "ro",
-    });
-    const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
-
-    const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
-    const readwrite = stringArrayField(filesystem, "readwritePaths");
-    const readonly = stringArrayField(filesystem, "readonlyPaths");
-    expect(readwrite).not.toContain(path.resolve(baseParams.workdir));
-    expect(readonly).toContain(path.resolve(baseParams.workdir));
-  });
-
-  test.each(["none", "rw"] as const)(
-    "workspaceAccess %s maps the sandbox workdir to readwritePaths",
+  test.each(["none", "ro"] as const)(
+    "workspaceAccess %s maps the sandbox workdir to readonlyPaths",
     async (workspaceAccess) => {
       const handle = createMxcSandboxBackendHandle({
         ...baseParams,
@@ -455,57 +446,89 @@ describe("createMxcSandboxBackendHandle", () => {
       const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
       const readwrite = stringArrayField(filesystem, "readwritePaths");
       const readonly = stringArrayField(filesystem, "readonlyPaths");
-      expect(readwrite).toContain(path.resolve(baseParams.workdir));
-      expect(readonly).not.toContain(path.resolve(baseParams.workdir));
+      expect(readwrite).not.toContain(path.resolve(baseParams.workdir));
+      expect(readonly).toContain(path.resolve(baseParams.workdir));
     },
   );
 
-  test.each(["none", "rw"] as const)(
-    "creates a Windows host-backed filesystem bridge with workspaceAccess %s",
-    async (workspaceAccess) => {
-      const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-"));
-      try {
-        const handle = createMxcSandboxBackendHandle({
-          ...baseParams,
-          workdir,
-        });
-        const bridge = handle.createFsBridge?.({
-          sandbox: {
-            workspaceDir: workdir,
-            agentWorkspaceDir: workdir,
-            workspaceAccess,
-            containerName: handle.runtimeId,
-            containerWorkdir: workdir,
-            docker: { binds: [] },
-            backend: handle,
-          },
-        });
-        expect(bridge).toBeDefined();
+  test("workspaceAccess rw maps the sandbox workdir to readwritePaths", async () => {
+    const handle = createMxcSandboxBackendHandle({
+      ...baseParams,
+      workspaceAccess: "rw",
+    });
+    const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-        await bridge?.writeFile({ filePath: "notes/one.txt", data: "hello mxc", cwd: workdir });
-        expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
-          Buffer.from("hello mxc"),
-        );
-        expect(await bridge?.stat({ filePath: "notes/one.txt", cwd: workdir })).toMatchObject({
-          type: "file",
-          size: "hello mxc".length,
-        });
-        await bridge?.rename({ from: "notes/one.txt", to: "notes/two.txt", cwd: workdir });
-        expect(readFileSync(path.join(workdir, "notes", "two.txt"), "utf-8")).toBe("hello mxc");
-        await bridge?.remove({ filePath: "notes/two.txt", cwd: workdir });
-        expect(existsSync(path.join(workdir, "notes", "two.txt"))).toBe(false);
-        await expect(
-          bridge?.writeFile({
-            filePath: path.join(workdir, "..", "escape.txt"),
-            data: "escape",
-            cwd: workdir,
-          }),
-        ).rejects.toThrow(/Path escapes sandbox root/u);
-      } finally {
-        rmSync(workdir, { recursive: true, force: true });
-      }
-    },
-  );
+    const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+    const readwrite = stringArrayField(filesystem, "readwritePaths");
+    const readonly = stringArrayField(filesystem, "readonlyPaths");
+    expect(readwrite).toContain(path.resolve(baseParams.workdir));
+    expect(readonly).not.toContain(path.resolve(baseParams.workdir));
+  });
+
+  test("explicit readwritePaths remain writable when workspaceAccess is none", async () => {
+    const extraPath = mkdtempSync(path.join(tmpdir(), "mxc-extra-rw-"));
+    try {
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        config: { ...baseConfig, readwritePaths: [extraPath] },
+        workspaceAccess: "none",
+      });
+      const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
+
+      const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+      const readwrite = stringArrayField(filesystem, "readwritePaths");
+      const readonly = stringArrayField(filesystem, "readonlyPaths");
+      expect(readwrite).not.toContain(path.resolve(baseParams.workdir));
+      expect(readwrite).toContain(path.resolve(extraPath));
+      expect(readonly).toContain(path.resolve(baseParams.workdir));
+    } finally {
+      rmSync(extraPath, { recursive: true, force: true });
+    }
+  });
+
+  test("creates a Windows host-backed filesystem bridge with workspaceAccess rw", async () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-"));
+    try {
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir,
+      });
+      const bridge = handle.createFsBridge?.({
+        sandbox: {
+          workspaceDir: workdir,
+          agentWorkspaceDir: workdir,
+          workspaceAccess: "rw",
+          containerName: handle.runtimeId,
+          containerWorkdir: workdir,
+          docker: { binds: [] },
+          backend: handle,
+        },
+      });
+      expect(bridge).toBeDefined();
+
+      await bridge?.writeFile({ filePath: "notes/one.txt", data: "hello mxc", cwd: workdir });
+      expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
+        Buffer.from("hello mxc"),
+      );
+      expect(await bridge?.stat({ filePath: "notes/one.txt", cwd: workdir })).toMatchObject({
+        type: "file",
+        size: "hello mxc".length,
+      });
+      await bridge?.rename({ from: "notes/one.txt", to: "notes/two.txt", cwd: workdir });
+      expect(readFileSync(path.join(workdir, "notes", "two.txt"), "utf-8")).toBe("hello mxc");
+      await bridge?.remove({ filePath: "notes/two.txt", cwd: workdir });
+      expect(existsSync(path.join(workdir, "notes", "two.txt"))).toBe(false);
+      await expect(
+        bridge?.writeFile({
+          filePath: path.join(workdir, "..", "escape.txt"),
+          data: "escape",
+          cwd: workdir,
+        }),
+      ).rejects.toThrow(/Path escapes sandbox root/u);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
 
   test("filesystem bridge stat rejects dangling symlinks before missing-file fallback", async () => {
     const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-stat-"));
@@ -546,32 +569,35 @@ describe("createMxcSandboxBackendHandle", () => {
     }
   });
 
-  test("filesystem bridge rejects writes when workspace access is read-only", async () => {
-    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-"));
-    try {
-      const handle = createMxcSandboxBackendHandle({
-        ...baseParams,
-        workdir,
-      });
-      const bridge = handle.createFsBridge?.({
-        sandbox: {
-          workspaceDir: workdir,
-          agentWorkspaceDir: workdir,
-          workspaceAccess: "ro",
-          containerName: handle.runtimeId,
-          containerWorkdir: workdir,
-          docker: { binds: [] },
-          backend: handle,
-        },
-      });
+  test.each(["none", "ro"] as const)(
+    "filesystem bridge rejects writes when workspace access is %s",
+    async (workspaceAccess) => {
+      const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-"));
+      try {
+        const handle = createMxcSandboxBackendHandle({
+          ...baseParams,
+          workdir,
+        });
+        const bridge = handle.createFsBridge?.({
+          sandbox: {
+            workspaceDir: workdir,
+            agentWorkspaceDir: workdir,
+            workspaceAccess,
+            containerName: handle.runtimeId,
+            containerWorkdir: workdir,
+            docker: { binds: [] },
+            backend: handle,
+          },
+        });
 
-      await expect(
-        bridge?.writeFile({ filePath: "notes.txt", data: "blocked", cwd: workdir }),
-      ).rejects.toThrow(/read-only/u);
-    } finally {
-      rmSync(workdir, { recursive: true, force: true });
-    }
-  });
+        await expect(
+          bridge?.writeFile({ filePath: "notes.txt", data: "blocked", cwd: workdir }),
+        ).rejects.toThrow(/read-only/u);
+      } finally {
+        rmSync(workdir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("Windows process containment preserves caller env overrides", async () => {
     const handle = createMxcSandboxBackendHandle({
@@ -958,6 +984,61 @@ describe("createMxcSandboxBackendHandle", () => {
     await expect(
       handle.runShellCommand({ script: "exit 7", stdin: "", allowFailure: true }),
     ).resolves.toEqual({ stdout: Buffer.from("out"), stderr: Buffer.from("err"), code: 7 });
+  });
+
+  test("factory rejects unsupported Docker bind mounts", async () => {
+    const createBackend = createMxcSandboxBackendFactory(baseConfig);
+    const cfg: SandboxConfig = {
+      mode: "all",
+      backend: "mxc",
+      scope: "session",
+      workspaceAccess: "none",
+      workspaceRoot: "/workspace-root",
+      docker: {
+        binds: ["/host/path:/workspace/path:ro"],
+        capDrop: [],
+        env: {},
+        image: "unused",
+        network: "none",
+        readOnlyRoot: true,
+        tmpfs: [],
+        workdir: "/workspace",
+      },
+      ssh: {
+        command: "ssh",
+        strictHostKeyChecking: true,
+        updateHostKeys: false,
+        workspaceRoot: "/tmp",
+      },
+      browser: {
+        allowHostControl: false,
+        autoStart: false,
+        autoStartTimeoutMs: 0,
+        binds: [],
+        cdpPort: 0,
+        cdpSourceRange: undefined,
+        enableNoVnc: false,
+        headless: true,
+        image: "",
+        network: "",
+        noVncPort: 0,
+        vncPort: 0,
+        containerPrefix: "",
+        enabled: false,
+      },
+      tools: {},
+      prune: { idleHours: 0, maxAgeDays: 0 },
+    };
+
+    await expect(
+      createBackend({
+        sessionKey: "agent:main:main",
+        scopeKey: "mxc-test",
+        workspaceDir: baseParams.workdir,
+        agentWorkspaceDir: baseParams.workdir,
+        cfg,
+      }),
+    ).rejects.toThrow(/does not support sandbox\.docker\.binds/u);
   });
 });
 
