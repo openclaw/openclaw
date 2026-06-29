@@ -5142,4 +5142,29 @@ describe("google-meet plugin", () => {
       handleGoogleMeetNodeHostCommand(JSON.stringify({ action: "stopByUrl" })),
     ).rejects.toThrow("url required");
   });
+
+  it("rejects oversized Calendar event list responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        // Produces enough chunks to exceed the 16 MiB readProviderJsonResponse cap.
+        const ONE_MIB = 1024 * 1024;
+        for (let i = 0; i < 18; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(
+      listGoogleMeetCalendarEvents({ accessToken: "tok", calendarId: "primary" }),
+    ).rejects.toThrow("Google Calendar events.list: JSON response exceeds");
+    // Proves the bounded reader cancelled the stream at the 16 MiB cap
+    // without buffering all 18 MiB.
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
