@@ -8,7 +8,7 @@ export { asFiniteNumber } from "../../packages/normalization-core/src/number-coe
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { truncateUtf16Safe } from "../shared/utf16-slice.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 

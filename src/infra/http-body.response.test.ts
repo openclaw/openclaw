@@ -257,6 +257,18 @@ describe("readResponseTextSnippet", () => {
     });
   });
 
+  it("cancels snippet streams when the byte budget is exactly filled", async () => {
+    const cancel = vi.fn();
+    const response = new Response(makeStallingStream([new TextEncoder().encode("1234")], cancel));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 4, maxChars: 50 },
+      expected: "1234…",
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "applies the idle timeout while reading snippets",

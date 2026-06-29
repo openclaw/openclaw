@@ -150,11 +150,13 @@ describe("describeImageWithModel", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockImplementation(async () =>
-      Response.json({
-        base_resp: { status_code: 0 },
-        content: "portal ok",
-      }),
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ base_resp: { status_code: 0 }, content: "portal ok" }), {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "application/json" },
+        }),
     );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

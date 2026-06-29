@@ -446,25 +446,26 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
   });
 }
 
+function minimaxVlmJsonResponse(
+  baseResp: { status_code: number; status_msg: string },
+  content = "ok",
+) {
+  return new Response(JSON.stringify({ content, base_resp: baseResp }), {
+    status: 200,
+    statusText: "OK",
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function stubMinimaxOkFetch() {
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content: "ok",
-      base_resp: { status_code: 0, status_msg: "" },
-    }),
-  );
+  const fetch = vi.fn(async () => minimaxVlmJsonResponse({ status_code: 0, status_msg: "" }, "ok"));
   global.fetch = withFetchPreconnect(fetch);
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   return fetch;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content,
-      base_resp: baseResp,
-    }),
-  );
+  const fetch = vi.fn(async () => minimaxVlmJsonResponse(baseResp, content));
   global.fetch = withFetchPreconnect(fetch);
   return fetch;
 }
