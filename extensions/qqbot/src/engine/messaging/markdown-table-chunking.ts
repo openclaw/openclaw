@@ -350,7 +350,7 @@ class QQBotMarkdownChunkingState {
     if (this.tableLines.length === 0) {
       return;
     }
-    chunks.push(this.tableLines.join("\n"));
+    this.enqueuePending(this.tableLines.join("\n"), "table", QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT);
     this.tableLines = [];
   }
 
