@@ -8,10 +8,11 @@ const loggingMocks = vi.hoisted(() => {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const isFileLogLevelEnabled = vi.fn((_level: string) => true);
   return {
     childLogger,
     getChildLogger: vi.fn(() => childLogger),
-    isFileLogLevelEnabled: vi.fn(() => true),
+    isFileLogLevelEnabled,
   };
 });
 
