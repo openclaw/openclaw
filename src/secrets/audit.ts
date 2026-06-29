@@ -221,6 +221,12 @@ function collectConfigSecrets(params: {
     ) {
       continue;
     }
+    if (
+      target.entry.id === "models.providers.*.request.headers.*" &&
+      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+    ) {
+      continue;
+    }
     if (!hasPlaintext) {
       continue;
     }
