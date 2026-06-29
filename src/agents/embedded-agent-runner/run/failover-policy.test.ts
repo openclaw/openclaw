@@ -32,6 +32,23 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates retry-limit model_not_found to fallback when fallbacks are configured", () => {
+    // model_not_found used to be excluded from retry-limit escalation, which
+    // silently defeated configured fallbacks when a primary model was
+    // decommissioned mid-life. A decommissioned model with a configured
+    // fallback chain should cascade to the next model.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
   it("prefers prompt-side profile rotation before fallback", () => {
     // Prompt construction can fail before any model output exists, so rotate
     // the current provider profile before spending the configured fallback.
