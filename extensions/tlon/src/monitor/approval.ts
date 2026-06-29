@@ -50,7 +50,8 @@ export function createPendingApproval(params: CreateApprovalParams): PendingAppr
     requestingShip: params.requestingShip,
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
-    messagePreview: params.messagePreview,
+    messagePreview:
+      params.messagePreview != null ? sliceUtf16Safe(params.messagePreview, 0, 100) : undefined,
     originalMessage: params.originalMessage,
     timestamp: Date.now(),
   };

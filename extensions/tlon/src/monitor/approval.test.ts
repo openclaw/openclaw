@@ -10,9 +10,12 @@ vi.mock("node:crypto", () => ({
 }));
 
 let generateApprovalId: typeof import("./approval.js").generateApprovalId;
+let createPendingApproval: typeof import("./approval.js").createPendingApproval;
+let formatApprovalRequest: typeof import("./approval.js").formatApprovalRequest;
 
 beforeAll(async () => {
-  ({ generateApprovalId } = await import("./approval.js"));
+  ({ generateApprovalId, createPendingApproval, formatApprovalRequest } =
+    await import("./approval.js"));
 });
 
 beforeEach(() => {
@@ -27,6 +30,64 @@ describe("generateApprovalId", () => {
     try {
       expect(generateApprovalId("dm")).toBe("dm-1717171717171-a1b2c3");
       expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(3);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
+
+describe("approval preview UTF-16 boundary safety", () => {
+  const LONE_SURROGATE = /[\uD800-\uDFFF]/;
+
+  // Emoji 😀 = U+1F600, two UTF-16 code units: 😀.
+  // Place it so the high surrogate lands exactly at the 100-unit cap.
+  // "a".repeat(99) = 99 units, then \uD83D at index 99 → cap splits the pair.
+  const textWithEmojiAtBoundary = "a".repeat(99) + "😀" + "tail";
+
+  it("DM path: messagePreview stored in PendingApproval is free of lone surrogates", () => {
+    cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
+    try {
+      const approval = createPendingApproval({
+        type: "dm",
+        requestingShip: "~sampel-palnet",
+        messagePreview: textWithEmojiAtBoundary,
+      });
+      expect(LONE_SURROGATE.test(approval.messagePreview ?? "")).toBe(false);
+      expect(approval.messagePreview).not.toContain("\uD83D");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("channel path: messagePreview stored in PendingApproval is free of lone surrogates", () => {
+    cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
+    try {
+      const approval = createPendingApproval({
+        type: "channel",
+        requestingShip: "~sampel-palnet",
+        channelNest: "chat/~sampel/test",
+        messagePreview: textWithEmojiAtBoundary,
+      });
+      expect(LONE_SURROGATE.test(approval.messagePreview ?? "")).toBe(false);
+      expect(approval.messagePreview).not.toContain("\uD83D");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("formatApprovalRequest renders well-formed UTF-16 in the owner notification", () => {
+    cryptoMocks.randomBytes.mockReturnValue(Buffer.from("aabbcc", "hex"));
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
+    try {
+      const approval = createPendingApproval({
+        type: "dm",
+        requestingShip: "~sampel-palnet",
+        messagePreview: textWithEmojiAtBoundary,
+      });
+      const rendered = formatApprovalRequest(approval);
+      expect(LONE_SURROGATE.test(rendered)).toBe(false);
     } finally {
       nowSpy.mockRestore();
     }
