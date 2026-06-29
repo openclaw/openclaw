@@ -360,8 +360,30 @@ function normalizeMcporterSerializedStdioServer(
   if (typeof command !== "string" || command.length === 0) {
     return null;
   }
-  const { executable: _executable, ...normalized } = server;
-  return { ...normalized, command };
+  const normalized: Record<string, unknown> = { command };
+  if (server.args !== undefined) {
+    normalized.args = server.args;
+  }
+  if (server.env !== undefined) {
+    normalized.env = server.env;
+  }
+  return normalized;
+}
+
+function normalizeMcporterSerializedRemoteServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const normalized: Record<string, unknown> = {};
+  for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
+    const value = server[key];
+    if (typeof value === "string" && value.length > 0) {
+      normalized[key] = value;
+    }
+  }
+  if (server.headers !== undefined) {
+    normalized.headers = server.headers;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 function isQmdExecutableCommand(command: unknown): boolean {
@@ -3289,7 +3311,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       ) {
         return { mode: "external" };
       }
-      return { mode: "generated", server };
+      const remoteServer = normalizeMcporterSerializedRemoteServer(server);
+      if (!remoteServer) {
+        return null;
+      }
+      return { mode: "generated", server: remoteServer };
     }
 
     return null;

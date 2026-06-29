@@ -5326,8 +5326,10 @@ describe("QmdMemoryManager", () => {
           JSON.stringify({
             name: "custom-qmd",
             source: "user",
+            transport: "stdio",
             command: "qmd",
             args: ["mcp"],
+            cwd: workspaceDir,
           }),
         );
         return child;
@@ -5352,12 +5354,20 @@ describe("QmdMemoryManager", () => {
     const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
       mcpServers?: Record<
         string,
-        { command?: string; args?: string[]; env?: Record<string, string> }
+        {
+          command?: string;
+          args?: string[];
+          cwd?: string;
+          env?: Record<string, string>;
+          transport?: string;
+        }
       >;
     };
     const generatedServer = config.mcpServers?.["custom-qmd"];
     expect(generatedServer?.command).toBe("qmd");
     expect(generatedServer?.args).toEqual(["mcp"]);
+    expect(generatedServer?.transport).toBeUndefined();
+    expect(generatedServer?.cwd).toBeUndefined();
     expect(generatedServer?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
       "/agents/main/qmd/xdg-config/qmd",
     );
@@ -6419,7 +6429,7 @@ describe("QmdMemoryManager", () => {
         }
       >;
     };
-    expect(config.mcpServers?.qmd?.baseUrl).toBe("https://qmd.example/mcp");
+    expect(config.mcpServers?.qmd?.baseUrl).toBeUndefined();
     expect(config.mcpServers?.qmd?.logging).toEqual({ daemon: { enabled: true } });
     expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
@@ -7115,7 +7125,7 @@ describe("QmdMemoryManager", () => {
       >;
     };
     const remote = config.mcpServers?.["remote-qmd"];
-    expect(remote?.transport).toBe("http");
+    expect(remote?.transport).toBeUndefined();
     expect(remote?.baseUrl).toBe("https://qmd.example.invalid/mcp");
     expect(remote?.headers).toEqual({ accept: "application/json, text/event-stream" });
     expect(remote?.env).toBeUndefined();
