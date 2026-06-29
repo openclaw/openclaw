@@ -3177,6 +3177,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       return;
     }
+    if (configMode === "external" && this.externalMcporterUsesAgentQmdEnv) {
+      log.warn(
+        "mcporter qmd bridge uses an external QMD server with agent-scoped QMD env; skipping daemon auto-start to avoid sharing warmed QMD state across agents.",
+      );
+      return;
+    }
     const daemonKey = this.mcporterDaemonKey(configMode);
     let daemonStart = state.daemonStarts.get(daemonKey);
     if (!daemonStart) {
