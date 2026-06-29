@@ -105,9 +105,16 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
 function createLazyCodeExecutionTool(ctx: {
   config?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
+  activeModel?: { provider?: string; modelId?: string; modelRef?: string };
   hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
   resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
 }) {
+  // Only expose xAI-billed server-side tools when the active model is from xAI.
+  // Non-xAI models calling a generically-named "code_execution" tool would silently
+  // bill the xAI account with no indication of cross-provider billing (#97621).
+  if (ctx.activeModel?.provider && ctx.activeModel.provider !== PROVIDER_ID) {
+    return null;
+  }
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
   if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
     return null;
@@ -132,9 +139,15 @@ function createLazyCodeExecutionTool(ctx: {
 function createLazyXSearchTool(ctx: {
   config?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
+  activeModel?: { provider?: string; modelId?: string; modelRef?: string };
   hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
   resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
 }) {
+  // Only expose xAI-billed server-side tools when the active model is from xAI
+  // (same rationale as createLazyCodeExecutionTool — see #97621).
+  if (ctx.activeModel?.provider && ctx.activeModel.provider !== PROVIDER_ID) {
+    return null;
+  }
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
   if (!isXSearchEnabled(effectiveConfig, ctx)) {
     return null;
