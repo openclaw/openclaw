@@ -1180,6 +1180,9 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
+  if (Object.hasOwn(patch, "error") && patch.error === undefined) {
+    delete next.error;
+  }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     next.cleanupAfter = resolveTaskCleanupAfter({
       ...next,
@@ -1553,11 +1556,10 @@ export function markTaskTerminalById(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
+  const patch: Partial<TaskRecord> = {
     status: params.status,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt ?? params.endedAt,
-    ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.terminalSummary !== undefined
       ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
       : {}),
@@ -1569,7 +1571,11 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
-  });
+  };
+  if (Object.hasOwn(params, "error")) {
+    patch.error = params.error;
+  }
+  return updateTask(params.taskId, patch);
 }
 
 export function markTaskLostById(params: {
