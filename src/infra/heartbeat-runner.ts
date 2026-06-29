@@ -1380,6 +1380,32 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   return preflight.pendingEventEntries;
 }
 
+// Recovery fields a completed heartbeat delivery must clear. Mirrors the
+// canonical clearPendingFinalDeliveryAfterSuccess in dispatch-from-config.ts so
+// the send-success and duplicate-skip paths drop the exact same set; leaving any
+// behind keeps the session stuck on a delivery that already happened.
+const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
+  pendingFinalDelivery: undefined,
+  pendingFinalDeliveryText: undefined,
+  pendingFinalDeliveryCreatedAt: undefined,
+  pendingFinalDeliveryLastAttemptAt: undefined,
+  pendingFinalDeliveryAttemptCount: undefined,
+  pendingFinalDeliveryLastError: undefined,
+  pendingFinalDeliveryContext: undefined,
+  pendingFinalDeliveryIntentId: undefined,
+} as const;
+
+// Clear pending-final only when this run produced it: the agent run stamps
+// createdAt during the run, so createdAt >= run start means we own it. An older
+// final (e.g. one a message_tool_only run never refreshed) must keep its recovery path.
+function heartbeatRunOwnsPendingFinalDelivery(
+  entry: SessionEntry | undefined,
+  runStartedAt: number,
+): boolean {
+  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  return typeof createdAt === "number" && createdAt >= runStartedAt;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1768,6 +1794,37 @@ export async function runHeartbeatOnce(opts: {
     });
   };
 
+  // The duplicate-suppression branch returns before any send, so it never hits
+  // the send-success clear. A duplicate means this run's own output was already
+  // delivered within the dedupe window, so this run's pending-final is satisfied
+  // and gets cleared the same way the send-success path does. We must not
+  // text-match the pending against the delivered text: agent-runner stores it
+  // pre-normalization (no responsePrefix), so a byte compare would leave
+  // prefixed agents permanently stuck. Ownership is gated on createdAt instead,
+  // so an older final this run did not produce is preserved, not erased.
+  const clearSatisfiedPendingFinalDelivery = async () => {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const resolved = resolveSessionStoreEntry({ store, sessionKey });
+        const current = resolved.existing;
+        if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+          return false;
+        }
+        if (!heartbeatRunOwnsPendingFinalDelivery(current, startedAt)) {
+          return false;
+        }
+        store[resolved.normalizedKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
+        return true;
+      },
+      // No pending to clear is the common case; avoid rewriting the store then.
+      { skipSaveWhenResult: (cleared) => !cleared },
+    );
+  };
+
   const consumeInspectedSystemEvents = () => {
     if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
@@ -2094,6 +2151,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await clearSatisfiedPendingFinalDelivery();
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -2227,10 +2285,18 @@ export async function runHeartbeatOnce(opts: {
         if (!current) {
           return;
         }
+        // A heartbeat-driven agent run can leave its own pendingFinalDelivery
+        // set; a successful send completes it, so clear the recovery fields.
+        // Only clear the pending-final this run owns — an older final the run
+        // did not produce keeps its own recovery path.
+        const clearedRecoveryFields = heartbeatRunOwnsPendingFinalDelivery(current, startedAt)
+          ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
+          : {};
         store[resolved.normalizedKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
+          ...clearedRecoveryFields,
         };
         for (const legacyKey of resolved.legacyKeys) {
           delete store[legacyKey];

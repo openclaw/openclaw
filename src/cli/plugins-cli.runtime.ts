@@ -13,11 +13,13 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import type {
+  PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
@@ -468,6 +470,115 @@ type MarketplaceRefreshPayload = {
   error?: string;
 };
 
+type MarketplaceEntryPayload = {
+  id?: string;
+  label: string;
+  kind?: string;
+  name?: string;
+  version?: string;
+  install?: {
+    defaultChoice?: string;
+    clawhubSpec?: string;
+    npmSpec?: string;
+    localPath?: string;
+    expectedIntegrity?: string;
+    minHostVersion?: string;
+  };
+};
+
+type MarketplaceFeedTelemetryOptions = {
+  expectedSha256?: string;
+  feedProfile?: string;
+  feedUrl?: string;
+  offline?: boolean;
+};
+
+function classifyMarketplaceFeedFallback(error: string | undefined): string | undefined {
+  const text = error?.toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  if (text.includes("offline mode")) {
+    return "offline";
+  }
+  if (text.includes("checksum mismatch")) {
+    return "checksum_mismatch";
+  }
+  if (text.includes("schema")) {
+    return "schema";
+  }
+  if (/http\s+304/u.test(text)) {
+    return "not_modified";
+  }
+  if (/http\s+\d{3}/u.test(text)) {
+    return "http_error";
+  }
+  if (text.includes("timed out") || text.includes("timeout")) {
+    return "timeout";
+  }
+  return "error";
+}
+
+function emitMarketplaceFeedTelemetry(params: {
+  command: "entries" | "refresh";
+  entryCount?: number;
+  failedPinnedRefresh?: boolean;
+  opts: MarketplaceFeedTelemetryOptions;
+  config?: OpenClawConfig;
+  payload: MarketplaceRefreshPayload;
+}): void {
+  const attributes: Record<string, string | number | boolean | null> = {
+    command: params.command,
+    entries: params.entryCount ?? params.payload.entries,
+    source: params.payload.source,
+  };
+  if (params.opts.feedProfile?.trim()) {
+    attributes.feedProfileProvided = true;
+  }
+  if (params.opts.feedUrl?.trim()) {
+    attributes.feedUrlOverride = true;
+  }
+  if (params.opts.offline === true) {
+    attributes.offline = true;
+  }
+  if (params.opts.expectedSha256?.trim()) {
+    attributes.expectedSha256Provided = true;
+  }
+  if (params.payload.feed) {
+    attributes.feedIdPresent = true;
+    attributes.feedSequence = params.payload.feed.sequence;
+  }
+  if (params.payload.metadata) {
+    attributes.httpStatus = params.payload.metadata.status;
+    if (params.payload.metadata.checksum) {
+      attributes.payloadChecksumPresent = true;
+    }
+    attributes.hasEtag = Boolean(params.payload.metadata.etag);
+    attributes.hasLastModified = Boolean(params.payload.metadata.lastModified);
+  }
+  if (params.payload.snapshot) {
+    attributes.snapshotUsed = true;
+  }
+  const fallbackCategory = classifyMarketplaceFeedFallback(params.payload.error);
+  if (fallbackCategory) {
+    attributes.fallbackCategory = fallbackCategory;
+  }
+  if (params.failedPinnedRefresh === true) {
+    attributes.pinnedRefreshFailed = true;
+  }
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: `plugins.marketplace.feed.${params.command}`,
+      phase: "plugin-marketplace",
+      attributes,
+    },
+    {
+      config: params.config,
+    },
+  );
+}
+
 function buildMarketplaceRefreshPayload(
   result: Awaited<
     ReturnType<
@@ -545,6 +656,21 @@ function sanitizeMarketplaceRefreshPayload(
   return sanitized;
 }
 
+function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
+  if (entry.install?.defaultChoice === "npm") {
+    return entry.install.npmSpec ?? entry.install.clawhubSpec ?? entry.install.localPath;
+  }
+  return entry.install?.clawhubSpec ?? entry.install?.npmSpec ?? entry.install?.localPath;
+}
+
+function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {
+  const id = entry.id ?? entry.name ?? entry.label;
+  const install = formatMarketplaceEntryInstall(entry);
+  const suffix = install ? " " + theme.muted(install) : "";
+  const label = entry.label !== id ? " " + theme.muted(entry.label) : "";
+  return theme.command(id) + label + suffix;
+}
+
 function formatMarketplaceRefreshSource(source: MarketplaceRefreshPayload["source"]): string {
   if (source === "hosted") {
     return theme.success("hosted");
@@ -581,6 +707,87 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
+/** List entries from the configured OpenClaw marketplace feed. */
+export async function runPluginMarketplaceEntriesCommand(
+  opts: PluginMarketplaceEntriesOptions,
+): Promise<void> {
+  const catalog = await import("../plugins/official-external-plugin-catalog.js");
+  const cfg = getRuntimeConfig();
+  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries(cfg, {
+    ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
+    ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
+    ...(opts.offline ? { offline: true } : {}),
+  });
+  const summary = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
+    feedUrl: opts.feedUrl,
+  });
+  const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
+    const id = catalog.resolveOfficialExternalPluginId(entry);
+    const install =
+      catalog.resolveOfficialExternalPluginInstall(entry, { catalogConfig: cfg.marketplaces }) ??
+      undefined;
+    const payload: MarketplaceEntryPayload = {
+      label: catalog.resolveOfficialExternalPluginLabel(entry),
+    };
+    if (id) {
+      payload.id = id;
+    }
+    if (entry.kind) {
+      payload.kind = entry.kind;
+    }
+    if (entry.name) {
+      payload.name = entry.name;
+    }
+    if (entry.version) {
+      payload.version = entry.version;
+    }
+    if (install) {
+      payload.install = install;
+    }
+    return payload;
+  });
+
+  emitMarketplaceFeedTelemetry({
+    command: "entries",
+    entryCount: entries.length,
+    opts,
+    config: cfg,
+    payload: summary,
+  });
+  if (opts.json) {
+    defaultRuntime.writeJson({ ...summary, entries, entryCount: entries.length });
+    return;
+  }
+
+  const lines = [
+    theme.muted("Source:") + " " + formatMarketplaceRefreshSource(summary.source),
+    theme.muted("Entries:") + " " + String(entries.length),
+  ];
+  if (summary.feed) {
+    lines.push(
+      theme.muted("Feed:") +
+        " " +
+        summary.feed.id +
+        " " +
+        theme.muted("sequence " + String(summary.feed.sequence)),
+    );
+  }
+  if (summary.metadata?.url) {
+    lines.push(theme.muted("URL:") + " " + summary.metadata.url);
+  }
+  if (summary.snapshot?.savedAt) {
+    lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
+  }
+  if (summary.error) {
+    lines.push(theme.muted("Fallback reason:") + " " + summary.error);
+  }
+  if (entries.length > 0) {
+    lines.push("");
+    lines.push(...entries.map(formatMarketplaceEntryLine));
+  }
+  defaultRuntime.log(lines.join("\n"));
+}
+
 /** Refresh the configured OpenClaw marketplace feed snapshot. */
 export async function runPluginMarketplaceRefreshCommand(
   opts: PluginMarketplaceRefreshOptions,
@@ -602,6 +809,13 @@ export async function runPluginMarketplaceRefreshCommand(
   const failedPinnedRefresh = shouldFailPinnedMarketplaceRefresh({
     expectedSha256,
     source: payload.source,
+  });
+  emitMarketplaceFeedTelemetry({
+    command: "refresh",
+    failedPinnedRefresh,
+    opts,
+    config: cfg,
+    payload,
   });
 
   if (opts.json) {

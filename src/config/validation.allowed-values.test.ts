@@ -148,6 +148,49 @@ describe("config validation allowed-values metadata", () => {
   });
 });
 
+describe("config validation legacy openai-codex api", () => {
+  it("names openai-chatgpt-responses for the removed openai-codex-responses api id", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const providerIssue = requireIssue(result.issues, "models.providers.openai-codex.api");
+      expect(providerIssue.message).toContain('"openai-codex-responses" is a removed api id');
+      expect(providerIssue.message).toContain('use "openai-chatgpt-responses"');
+      const modelIssue = requireIssue(result.issues, "models.providers.openai-codex.models.0.api");
+      expect(modelIssue.message).toContain('use "openai-chatgpt-responses"');
+    }
+  });
+
+  it("keeps the generic enum message for other invalid api ids", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex",
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "models.providers.openai-codex.api");
+      expect(issue.message).toContain("expected one of");
+      expect(issue.message).not.toContain("removed api id");
+    }
+  });
+});
+
 describe("config validation numeric bound hints", () => {
   it("appends maximum for inclusive too_big numeric bound", () => {
     const issue = mapFirstIssue(

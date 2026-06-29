@@ -1,5 +1,6 @@
 // Discord tests cover rest plugin behavior.
 import { createServer, type Server } from "node:http";
+import { gzipSync } from "node:zlib";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -762,6 +763,63 @@ describe("RequestClient", () => {
     const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
 
     await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
+  });
+
+  it("parses raw gzip-compressed JSON response bodies", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify([{ id: "m1", content: "hello" }])));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).resolves.toEqual([
+      { id: "m1", content: "hello" },
+    ]);
+  });
+
+  it("bounds gzip-compressed REST response bodies after decompression", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) })));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+  });
+
+  it("does not double-decompress responses fetch has already decoded", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ id: "m1", content: "hello" }), {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages/m1")).resolves.toEqual({
+      id: "m1",
+      content: "hello",
+    });
   });
 
   it("serializes message multipart uploads with payload_json", () => {
