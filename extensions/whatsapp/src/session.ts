@@ -68,6 +68,7 @@ const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+export const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
@@ -125,6 +126,13 @@ async function printTerminalQr(qr: string): Promise<void> {
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
+function resolveWaWebSocketUrl(value: string | URL | undefined): string | URL | undefined {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.trim() || undefined;
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -137,6 +145,7 @@ export async function createWaSocket(
     onQr?: (qr: string) => void;
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+    waWebSocketUrl?: string | URL;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -172,6 +181,9 @@ export async function createWaSocket(
     defaultQueryTimeoutMs:
       opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
   };
+  const waWebSocketUrl =
+    resolveWaWebSocketUrl(opts.waWebSocketUrl) ??
+    resolveWaWebSocketUrl(process.env[OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV]);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -188,6 +200,7 @@ export async function createWaSocket(
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
+    ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
