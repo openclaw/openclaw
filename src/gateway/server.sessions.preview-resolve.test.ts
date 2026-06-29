@@ -27,11 +27,13 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 async function replaceSessionEntries(
   storePath: string,
   entries: Record<string, Partial<SessionEntry>>,
+  agentId = "main",
 ): Promise<void> {
   clearSessionStoreCacheForTest();
   await applySessionEntryLifecycleMutation({
+    agentId,
     storePath,
-    removals: listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey })),
+    removals: listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({ sessionKey })),
     upserts: Object.entries(entries).map(([sessionKey, entry]) => ({
       sessionKey,
       entry: {
@@ -55,8 +57,8 @@ async function previewMainAliasFromStore(params: {
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
 
-  await writeSessionStore({ entries: {} });
-  await replaceSessionEntries(storePath, params.store);
+  await writeSessionStore({ agentId: "ops", entries: {} });
+  await replaceSessionEntries(storePath, params.store, "ops");
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     const content = params.transcripts[entry.sessionId];
     if (content) {
@@ -158,7 +160,7 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
   const sessionId = "sess-alias-cleanup";
-  await writeSessionStore({ entries: {} });
+  await writeSessionStore({ agentId: "ops", entries: {} });
   await seedLinearSessionTranscript({
     agentId: "ops",
     contents: Array.from({ length: 8 }, (_, index) => `line ${index}`),
@@ -168,9 +170,10 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   });
 
   const writeRawStore = async (store: Record<string, Partial<SessionEntry>>) => {
-    await replaceSessionEntries(storePath, store);
+    await replaceSessionEntries(storePath, store, "ops");
   };
-  const readStoreKeys = () => listSessionEntries({ storePath }).map(({ sessionKey }) => sessionKey);
+  const readStoreKeys = () =>
+    listSessionEntries({ agentId: "ops", storePath }).map(({ sessionKey }) => sessionKey);
   const readWorkEntry = () =>
     loadSessionEntry({
       agentId: "ops",

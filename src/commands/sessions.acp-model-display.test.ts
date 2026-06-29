@@ -180,6 +180,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-red",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -219,6 +220,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-fix-shape",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -244,6 +246,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [ACP_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-sqlite",
+      { agentId: "copilot" },
     );
     writeAcpRuntimeMeta(ACP_SESSION_KEY);
 
@@ -262,6 +265,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [rawStoreKey]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-canonical",
+      { agentId: "copilot" },
     );
     writeAcpRuntimeMeta(canonicalAcpKey);
 
@@ -282,6 +286,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [ACP_BRIDGE_SESSION_KEY]: buildAcpBridgeSessionEntry() },
       "sessions-acp-model-display-bridge-control",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
@@ -315,6 +320,7 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
     const store = await writeStore(
       { [NON_ACP_SESSION_KEY]: buildNonAcpSessionEntry() },
       "sessions-acp-model-display-green-control",
+      { agentId: "copilot" },
     );
 
     const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);

@@ -204,12 +204,10 @@ import {
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
-import {
-  persistSessionTranscriptTurn,
-  upsertSessionEntry,
-} from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -244,26 +242,23 @@ async function seedQmdSessionTranscript(params: {
       ? params.timestamp
       : Date.parse(params.timestamp ?? "2026-04-07T15:25:04.113Z");
   await fs.mkdir(sessionsDir, { recursive: true });
-  await upsertSessionEntry(
-    { agentId: params.agentId, sessionKey, storePath },
-    { sessionId: params.sessionId, updatedAt: timestamp },
-  );
-  await persistSessionTranscriptTurn(
-    { agentId: params.agentId, sessionId: params.sessionId, sessionKey, storePath },
-    {
-      messages: [
-        {
-          message: {
-            role: "user",
-            content: params.content,
-            timestamp,
-          },
-        },
-      ],
-      touchSessionEntry: true,
-      updateMode: "none",
+  await upsertSessionEntry({
+    agentId: params.agentId,
+    sessionKey,
+    storePath,
+    entry: { sessionId: params.sessionId, updatedAt: timestamp },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey,
+    storePath,
+    message: {
+      role: "user",
+      content: params.content,
+      timestamp,
     },
-  );
+  });
 }
 
 function restoreQmdStateDir(): void {

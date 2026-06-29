@@ -59,14 +59,12 @@ Extend the SQLite archive helper introduced by `clawdbot-d63.1` rather than
 adding a parallel path.
 
 1. Add a local collector near `deleteSqliteSessionStateIfUnreferenced`:
-
    - `collectSqliteSessionArtifactFamily(entry: SessionEntry): Set<string>`
    - Include `entry.sessionId`, checkpoint pre/post session ids, and
      `usageFamilySessionIds`.
    - Filter empty strings and dedupe deterministically.
 
 2. Add a reference collector for the post-removal store:
-
    - `readReferencedSqliteSessionArtifactFamilyIds(database): Set<string>`
    - Iterate current `session_entries`, parse each `entry_json`, and collect
      the same family ids from every surviving entry.
