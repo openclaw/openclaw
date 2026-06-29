@@ -103,7 +103,9 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
 
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
+  // `[^:]+` prevents silent misparse of multi-colon chatIds (e.g. "a:b:topic:42"
+  // should not parse as chatId "a:b" with thread 42 — the whole input is malformed).
+  const topicMatch = /^([^:]+):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
     const chatId = topicMatch[1];
     const threadIdText = topicMatch[2];
@@ -124,8 +126,8 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     };
   }
 
-  // `[^:]+` prevents greedy misparse of multi-colon targets like "chatId:topic:42:99"
-  // where the fallback would otherwise silently embed ":topic:42" into chatId.
+  // `[^:]+` prevents silent misparse of multi-colon targets; same invariant as
+  // the :topic: parser above. See comment there.
   const colonMatch = /^([^:]+):(\d+)$/.exec(normalized);
   if (colonMatch) {
     const chatId = colonMatch[1];

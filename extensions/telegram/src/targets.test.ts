@@ -119,6 +119,15 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("rejects multi-colon targets via :topic: parser", () => {
+    // "a:b:topic:42" — topic regex must not parse chatId "a:b" with
+    // thread "42". The entire input is malformed.
+    expect(parseTelegramTarget("a:b:topic:42")).toEqual({
+      chatId: "a:b:topic:42",
+      chatType: "unknown",
+    });
+  });
+
   it("rejects deeply nested multi-colon targets", () => {
     expect(parseTelegramTarget("a:b:c:d:e:42")).toEqual({
       chatId: "a:b:c:d:e:42",
