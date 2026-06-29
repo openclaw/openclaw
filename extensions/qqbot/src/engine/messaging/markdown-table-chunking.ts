@@ -21,6 +21,14 @@ export type QQBotMarkdownChunker = {
   flushPendingText: (limit: number) => string[];
 };
 
+type EmitUnitKind = "text" | "table" | "fence";
+
+interface EmitUnit {
+  content: string;
+  kind: EmitUnitKind;
+  bytes: number;
+}
+
 export function chunkQQBotMarkdownText(
   text: string,
   limit: number,
@@ -50,6 +58,9 @@ class QQBotMarkdownChunkingState {
   private activeFence: ActiveFence | null = null;
   private pendingTextFenceOpenLine: string | null = null;
   private pendingFenceLineFragment: string | null = null;
+  private pendingEmitBuffer: EmitUnit[] = [];
+  private pendingEmitBytes = 0;
+  private chunks: string[] = [];
 
   constructor(private readonly baseChunker: QQBotBaseMarkdownChunker) {}
 
