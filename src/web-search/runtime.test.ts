@@ -568,7 +568,7 @@ describe("web search runtime", () => {
     });
   });
 
-  it("does not auto-select keyless providers when no provider is configured", async () => {
+  it("auto-selects keyless providers when no credentialed provider is configured", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createDuckDuckGoSearchProvider({
         getCredentialValue: () => "duckduckgo-no-key-needed",
@@ -587,7 +587,10 @@ describe("web search runtime", () => {
         config: {},
         args: { query: "fallback" },
       }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
+    ).resolves.toEqual({
+      provider: "parallel-free",
+      result: { query: "fallback", provider: "parallel-free" },
+    });
   });
 
   it("uses a keyless provider when the user explicitly selects it", async () => {
@@ -680,7 +683,7 @@ describe("web search runtime", () => {
     });
   });
 
-  it("ignores auto-detected keyless runtime metadata when no provider is configured", async () => {
+  it("honors auto-detected keyless runtime metadata when no provider is configured", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createWebSearchTestProvider({
         pluginId: "parallel",
@@ -715,7 +718,10 @@ describe("web search runtime", () => {
         config: {},
         args: { query: "stale-keyless-runtime" },
       }),
-    ).rejects.toThrow("web_search is disabled or no provider is available.");
+    ).resolves.toEqual({
+      provider: "parallel-free",
+      result: { query: "stale-keyless-runtime", provider: "parallel-free" },
+    });
   });
 
   it("ignores auto-detected runtime metadata after config names an unknown provider", async () => {
