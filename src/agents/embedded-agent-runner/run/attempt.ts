@@ -15,9 +15,11 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
   resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -865,6 +867,43 @@ async function resolveAttemptTrajectorySessionFile(params: {
       storePath,
     })
   ).sessionFile;
+}
+
+async function hasExistingAttemptTranscriptState(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<boolean> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  if (storePath && params.sessionKey) {
+    try {
+      const hasSqliteEvents = await loadTranscriptEvents({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      if (hasSqliteEvents.length > 0) {
+        return true;
+      }
+      if (parseSqliteSessionFileMarker(params.sessionFile)) {
+        return false;
+      }
+    } catch {
+      if (parseSqliteSessionFileMarker(params.sessionFile)) {
+        return false;
+      }
+    }
+  }
+  return await fs
+    .stat(params.sessionFile)
+    .then(() => true)
+    .catch(() => false);
 }
 
 export async function runEmbeddedAttempt(
@@ -2193,10 +2232,14 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const hadSessionFile = await hasExistingAttemptTranscriptState({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
 
       const transcriptPolicy = resolveAttemptTranscriptPolicy({
         runtimePlan: params.runtimePlan,

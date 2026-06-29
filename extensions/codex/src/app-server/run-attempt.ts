@@ -48,7 +48,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -850,7 +849,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -861,6 +859,7 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -901,7 +900,7 @@ export async function runCodexAppServerAttempt(
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,

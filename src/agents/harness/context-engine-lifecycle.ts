@@ -109,6 +109,7 @@ export async function bootstrapHarnessContextEngine(params: {
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
         runtimeSettings,
+        runtimeContext: params.runtimeContext,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({

@@ -17,6 +17,7 @@ import {
   publishSessionTranscriptUpdateByIdentity,
   readLatestAssistantTextByIdentity,
   readSessionTranscriptEvents,
+  readVisibleSessionTranscriptMessageEntries,
   resolveSessionTranscriptIdentity,
   resolveSessionTranscriptTarget,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
@@ -76,6 +77,90 @@ describe("session transcript runtime SDK", () => {
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("projects only visible transcript message entries with read-order metadata", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "visible-projection-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const root = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "user",
+        content: "root prompt",
+        idempotencyKey: "root-user",
+      },
+      now: 1_000,
+    });
+    const inactive = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: "inactive answer",
+        idempotencyKey: "inactive-assistant",
+      },
+      parentId: root?.messageId,
+      now: 2_000,
+    });
+    const active = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: "active answer",
+        idempotencyKey: "active-assistant",
+      },
+      parentId: root?.messageId,
+      now: 3_000,
+    });
+    if (!root || !inactive || !active) {
+      throw new Error("expected projected transcript setup messages");
+    }
+    await appendTranscriptEvent(scope, {
+      type: "label",
+      id: "label-1",
+      parentId: active.messageId,
+      value: "non-message metadata",
+    });
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "select-active",
+      parentId: inactive.messageId,
+      targetId: active.messageId,
+    });
+
+    await expect(readVisibleSessionTranscriptMessageEntries(scope)).resolves.toEqual([
+      {
+        entryId: root.messageId,
+        parentId: null,
+        seq: 2,
+        message: expect.objectContaining({
+          role: "user",
+          content: "root prompt",
+          idempotencyKey: "root-user",
+        }),
+        role: "user",
+        createdAt: "1970-01-01T00:00:01.000Z",
+        idempotencyKey: "root-user",
+      },
+      {
+        entryId: active.messageId,
+        parentId: root.messageId,
+        seq: 4,
+        message: expect.objectContaining({
+          role: "assistant",
+          content: "active answer",
+          idempotencyKey: "active-assistant",
+        }),
+        role: "assistant",
+        createdAt: "1970-01-01T00:00:03.000Z",
+        idempotencyKey: "active-assistant",
+      },
+    ]);
   });
 
   it("appends assistant mirrors through the guarded session facade", async () => {

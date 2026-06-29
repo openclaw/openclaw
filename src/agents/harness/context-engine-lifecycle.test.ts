@@ -7,7 +7,11 @@ import {
 } from "../../context-engine/host-compat.js";
 import { registerContextEngine, resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
@@ -131,12 +135,24 @@ describe("harness context engine lifecycle", () => {
     const engineId = uniqueConfiguredProofEngineId();
     const captured: Array<{
       hook: "bootstrap" | "assemble" | "afterTurn" | "maintain" | "compact";
+      runtimeContext?: ContextEngineRuntimeContext;
       runtimeSettings?: ContextEngineRuntimeSettings;
     }> = [];
+    const bootstrapRuntimeContext = {
+      transcriptStorage: { kind: "sqlite" as const },
+      sessionTarget: {
+        sessionId: sessionParams.sessionId,
+        sessionKey: sessionParams.sessionKey,
+      },
+    };
     const engine = createContextEngine({
       info: { id: engineId, name: "Configured runtime settings proof engine" },
       bootstrap: vi.fn(async (params) => {
-        captured.push({ hook: "bootstrap", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "bootstrap",
+          runtimeContext: params.runtimeContext,
+          runtimeSettings: params.runtimeSettings,
+        });
         return { bootstrapped: true };
       }),
       assemble: vi.fn(async (params) => {
@@ -173,6 +189,7 @@ describe("harness context engine lifecycle", () => {
       requestedModelId: "openai/gpt-5.5",
       modelId: "anthropic/claude-sonnet-4-6",
       fallbackReason: "primary_provider_5xx",
+      runtimeContext: bootstrapRuntimeContext,
       warn: () => {},
     });
 
@@ -238,6 +255,9 @@ describe("harness context engine lifecycle", () => {
 
     expect(new Set(captured.map((entry) => entry.hook))).toEqual(
       new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
+    );
+    expect(captured.find((entry) => entry.hook === "bootstrap")?.runtimeContext).toEqual(
+      bootstrapRuntimeContext,
     );
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
