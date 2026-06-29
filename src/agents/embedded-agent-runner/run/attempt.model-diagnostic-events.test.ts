@@ -593,6 +593,96 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("private tool description");
   });
 
+  it("captures per-call usage from terminal error events", async () => {
+    // Aborted/error streams terminate with an `error` event carrying the final
+    // AssistantMessage and its usage. Iterating to completion without awaiting
+    // result() must still surface per-call usage, matching the `done` path and
+    // the usage field already emitted on model.call.error and its OTel span.
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "partial reply" }],
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 3,
+        cacheWrite: 2,
+        reasoningTokens: 5,
+        totalTokens: 28,
+      },
+      stopReason: "aborted",
+      timestamp: 1,
+    };
+    async function* stream() {
+      yield { type: "error", reason: "aborted", error: assistant };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-error-usage",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    // An in-band error event is data, not a throw, so iteration completes
+    // normally; the per-call usage rides on the terminal completion event.
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.usage).toEqual({
+      input: 11,
+      output: 7,
+      cacheRead: 3,
+      cacheWrite: 2,
+      reasoningTokens: 5,
+      total: 28,
+      promptTokens: 16,
+    });
+  });
+
+  it("skips prompt stat computation when diagnostics are disabled", async () => {
+    // Prompt stats are only attached to diagnostic events; when diagnostics are
+    // off those events are dropped, so the JSON.stringify of input messages and
+    // tool definitions must not run on the model-call hot path.
+    setDiagnosticsEnabledForProcess(false);
+    let promptInspected = false;
+    const streamContext = {
+      systemPrompt: "system",
+      get messages() {
+        promptInspected = true;
+        return [{ role: "user", content: "x", timestamp: 1 }];
+      },
+      get tools() {
+        promptInspected = true;
+        return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
+      },
+    };
+    async function* stream() {
+      yield { type: "text_delta", delta: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-disabled-prompt-stats",
+      },
+    );
+
+    await drain(
+      wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,
+    );
+
+    expect(promptInspected).toBe(false);
+  });
+
   it("captures output and completes when callers only await stream.result()", async () => {
     const assistant = {
       role: "assistant",
