@@ -5087,6 +5087,55 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("resolves workspace-relative qmd commands in generated mcporter config", async () => {
+    const relativeQmdCommand = "./node_modules/.bin/qmd";
+    delete process.env.MCPORTER_CONFIG;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: relativeQmdCommand,
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<string, { command?: string }>;
+    };
+    expect(config.mcpServers?.qmd?.command).toBe(path.resolve(workspaceDir, relativeQmdCommand));
+
+    await manager.close();
+  });
+
   it("uses the original mcporter config for configured stdio servers with env", async () => {
     const userXdgConfigHome = path.join(tmpRoot, "user-xdg-config");
     const userXdgCacheHome = path.join(tmpRoot, "user-xdg-cache");

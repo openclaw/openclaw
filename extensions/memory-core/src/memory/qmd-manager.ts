@@ -3218,7 +3218,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private buildDefaultMcporterQmdServer(): Record<string, unknown> {
     const server: Record<string, unknown> = {
-      command: this.qmd.command,
+      command: this.resolveGeneratedQmdCommand(this.qmd.command),
       args: ["mcp"],
       env: this.buildMcporterQmdEnv(),
     };
@@ -3227,6 +3227,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
     }
     return server;
+  }
+
+  private resolveGeneratedQmdCommand(command: string): string {
+    if (isRelativeMcporterCommandPath(command)) {
+      return path.resolve(this.workspaceDir, command);
+    }
+    return command;
   }
 
   private async resolveConfiguredMcporterServer(
