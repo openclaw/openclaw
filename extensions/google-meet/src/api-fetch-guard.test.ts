@@ -142,8 +142,8 @@ describe("google-meet bound reads — real HTTP server (no fetch mock)", () => {
           sent++;
           chunksWritten++;
           const ok = res.write(CHUNK);
-          if (ok) setImmediate(sendChunk);
-          else res.once("drain", sendChunk);
+          if (ok) { setImmediate(sendChunk); }
+          else { res.once("drain", sendChunk); }
         };
         sendChunk();
       });
@@ -152,7 +152,7 @@ describe("google-meet bound reads — real HTTP server (no fetch mock)", () => {
         const addr = server.address() as { port: number };
         resolve({
           port: addr.port,
-          stop: () => new Promise<void>((r, e) => server.close(err => (err ? e(err) : r()))),
+          stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }),
         });
       });
     });
@@ -184,7 +184,7 @@ describe("google-meet bound reads — real HTTP server (no fetch mock)", () => {
         const addr = server.address() as { port: number };
         resolve({
           port: addr.port,
-          stop: () => new Promise<void>((r, e) => server.close(err => (err ? e(err) : r()))),
+          stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }),
         });
       });
     });
