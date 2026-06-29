@@ -3,11 +3,11 @@ import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { buildPairingQrReplyChannelData } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
 
 type DevicePairApiModule = typeof import("./api.js");
 type NotifyModule = typeof import("./notify.js");
@@ -862,7 +862,7 @@ export default definePluginEntry({
                   expiresAtMs: payload.expiresAtMs,
                 }),
               ].join("\n"),
-              channelData: buildPairingQrReplyChannelData({
+              channelData: buildDevicePairPairingQrChannelData({
                 setupCode,
                 expiresAtMs: payload.expiresAtMs,
               }),

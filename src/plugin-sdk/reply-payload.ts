@@ -13,7 +13,6 @@ export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
-  buildPairingQrReplyChannelData,
   buildTtsSupplementMediaPayload,
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
@@ -21,10 +20,7 @@ export {
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
-  PAIRING_QR_REPLY_CHANNEL_DATA_KEY,
-  readPairingQrReplyChannelData,
 } from "../auto-reply/reply-payload.js";
-export type { PairingQrReplyChannelData } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */
 export type OutboundReplyPayload = {

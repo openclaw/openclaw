@@ -1,7 +1,6 @@
 // Reply payload tests cover reply target parsing, media payloads, and approval metadata.
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildPairingQrReplyChannelData,
   buildTtsSupplementMediaPayload,
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
@@ -16,7 +15,6 @@ import {
   markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
-  readPairingQrReplyChannelData,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendTextMediaPayload,
@@ -479,33 +477,6 @@ describe("hasOutboundReplyContent", () => {
     },
   ])("$name", ({ payload, options, expected }) => {
     expect(hasOutboundReplyContent(payload, options)).toBe(expected);
-  });
-});
-
-describe("pairing QR reply channel data", () => {
-  it("builds and reads the typed pairing QR payload metadata", () => {
-    const channelData = buildPairingQrReplyChannelData({
-      setupCode: "setup-code",
-      expiresAtMs: 1_800_000_000_000,
-    });
-
-    expect(readPairingQrReplyChannelData({ channelData })).toEqual({
-      setupCode: "setup-code",
-      expiresAtMs: 1_800_000_000_000,
-    });
-  });
-
-  it("ignores malformed pairing QR metadata", () => {
-    expect(
-      readPairingQrReplyChannelData({
-        channelData: {
-          openclawPairingQr: {
-            setupCode: "",
-            expiresAtMs: 0,
-          },
-        },
-      }),
-    ).toBeUndefined();
   });
 });
 
