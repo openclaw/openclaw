@@ -9,7 +9,7 @@ import type {
 } from "../app/exec-approval.ts";
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
-import { parseSessionKey } from "../lib/session-display.ts";
+import { formatSessionKeyForDisplay } from "../lib/session-display.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -42,7 +42,7 @@ function formatSessionKey(key?: string | null): string {
   if (!key) {
     return "";
   }
-  return parseSessionKey(key).fallbackName;
+  return formatSessionKeyForDisplay(key);
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {

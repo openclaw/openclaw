@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { parseSessionKey } from "../../lib/session-display.ts";
+import { formatSessionKeyForDisplay } from "../../lib/session-display.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
@@ -162,7 +162,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
           <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
           ${entry.sessionKey
             ? html`<span class="mono" title=${entry.sessionKey}
-                >${t("activity.session")}: ${parseSessionKey(entry.sessionKey).fallbackName}</span
+                >${t("activity.session")}: ${formatSessionKeyForDisplay(entry.sessionKey)}</span
               >`
             : nothing}
         </div>
