@@ -233,7 +233,6 @@ const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
   "extensions/whatsapp/api.ts",
-  "extensions/whatsapp/src/monitor-runtime-options.ts",
   "extensions/whatsapp/src/qa-driver.runtime.ts",
   "extensions/whatsapp/tsconfig.json",
 ];

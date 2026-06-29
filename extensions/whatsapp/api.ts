@@ -1,5 +1,10 @@
 // Whatsapp API module exposes the plugin public contract.
-export { whatsappPlugin } from "./src/channel.js";
+export {
+  setWhatsAppMonitorRuntimeOptions,
+  whatsappPlugin,
+  type WhatsAppCreateSocket,
+  type WhatsAppMonitorRuntimeOptions,
+} from "./src/channel.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {
   DEFAULT_WHATSAPP_MEDIA_MAX_MB,
@@ -64,12 +69,6 @@ export {
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
-export {
-  setWhatsAppMonitorRuntimeOptions,
-  type WhatsAppCreateSocket,
-  type WhatsAppMonitorRuntimeOptions,
-  type WhatsAppSocket,
-} from "./src/monitor-runtime-options.js";
 export { testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
 export {
   startWhatsAppQaDriverSession,

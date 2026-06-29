@@ -44,7 +44,6 @@ export const WHATSAPP_LOGGED_OUT_QR_MESSAGE =
 export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
-export type WhatsAppSocket = WASocket;
 
 export type WhatsAppCreateSocketOptions = {
   authDir?: string;
@@ -57,10 +56,10 @@ export type WhatsAppCreateSocket = (
   printQr: boolean,
   verbose: boolean,
   opts?: WhatsAppCreateSocketOptions,
-) => Promise<WhatsAppSocket>;
+) => Promise<WASocket>;
 
 export type WhatsAppWaitForConnection = (
-  sock: WhatsAppSocket,
+  sock: WASocket,
   options?: WhatsAppConnectionWaitOptions,
 ) => Promise<void>;
 
@@ -225,7 +224,7 @@ type WhatsAppLoginWaitResult =
   | {
       outcome: "connected";
       restarted: boolean;
-      sock: WhatsAppSocket;
+      sock: WASocket;
     }
   | {
       outcome: "logged-out";
@@ -241,7 +240,7 @@ type WhatsAppLoginWaitResult =
     };
 
 export async function waitForWhatsAppLoginResult(params: {
-  sock: WhatsAppSocket;
+  sock: WASocket;
   authDir: string;
   isLegacyAuthDir: boolean;
   verbose: boolean;
@@ -250,7 +249,7 @@ export async function waitForWhatsAppLoginResult(params: {
   createSocket?: WhatsAppCreateSocket;
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
-  onSocketReplaced?: (sock: WhatsAppSocket) => void;
+  onSocketReplaced?: (sock: WASocket) => void;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
@@ -560,7 +559,7 @@ export class WhatsAppConnectionController {
       await this.closeCurrentConnection();
     }
 
-    let sock: WhatsAppSocket | null = null;
+    let sock: WASocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
       sock = await this.createSocket(false, this.verbose, {

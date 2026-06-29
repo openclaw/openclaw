@@ -18,6 +18,7 @@ import {
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
+import type { WhatsAppCreateSocket } from "./connection-controller.js";
 import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
@@ -27,7 +28,6 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
-import { getWhatsAppMonitorRuntimeOptions } from "./monitor-runtime-options.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -47,6 +47,39 @@ import {
 } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
+
+export type { WhatsAppCreateSocket } from "./connection-controller.js";
+
+export type WhatsAppMonitorRuntimeOptions = {
+  createSocket?: WhatsAppCreateSocket;
+};
+
+type WhatsAppMonitorRuntimeOptionsState = {
+  options: WhatsAppMonitorRuntimeOptions;
+};
+
+const WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY = Symbol.for("openclaw.whatsapp.monitorRuntimeOptions");
+
+function getWhatsAppMonitorRuntimeOptionsState(): WhatsAppMonitorRuntimeOptionsState {
+  const globalState = globalThis as typeof globalThis & {
+    [WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY]?: WhatsAppMonitorRuntimeOptionsState;
+  };
+  const existing = globalState[WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created: WhatsAppMonitorRuntimeOptionsState = { options: {} };
+  globalState[WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY] = created;
+  return created;
+}
+
+export function setWhatsAppMonitorRuntimeOptions(options?: WhatsAppMonitorRuntimeOptions): void {
+  getWhatsAppMonitorRuntimeOptionsState().options = { createSocket: options?.createSocket };
+}
+
+function getWhatsAppMonitorRuntimeOptions(): WhatsAppMonitorRuntimeOptions {
+  return { ...getWhatsAppMonitorRuntimeOptionsState().options };
+}
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
