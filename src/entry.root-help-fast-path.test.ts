@@ -62,4 +62,25 @@ describe("entry root help fast paths", () => {
 
     expect(outputPrecomputedNodesHelpText).not.toHaveBeenCalled();
   });
+
+  it("terminates the process when rendering root help fails", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
+      outputPrecomputedRootHelpText: () => false,
+      outputRootHelp: async () => {
+        throw new Error("render failed");
+      },
+    });
+
+    expect(result).toBe(true);
+    expect(consoleErrorSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
 });
