@@ -129,6 +129,12 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
 /** Build the login command operators should run after OAuth refresh failure. */
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  if (sanitizedProvider === "claude-cli") {
+    // claude-cli is not a standalone provider id; it is the Anthropic provider
+    // accessed via the CLI auth method.  The correct re-auth command must
+    // specify both --provider and --method flags.
+    return formatCliCommand("openclaw models auth login --provider anthropic --method cli");
+  }
   return sanitizedProvider
     ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
     : formatCliCommand("openclaw models auth login");
