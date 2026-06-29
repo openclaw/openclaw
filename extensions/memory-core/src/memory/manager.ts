@@ -435,6 +435,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();
+      } else if (params.purpose === "status" && this.sources.has("sessions")) {
+        // Lightweight detection for status mode: check for unindexed session
+        // files on disk without triggering a full sync. If found, sessionsDirty
+        // is set to true so memory status reports dirty=true instead of a false
+        // clean state. The full catchup + sync runs on the next non-transient
+        // manager cycle (CLI sync or normal runtime init).
+        void this.markSessionStartupCatchupDirtyFiles().catch((err: unknown) => {
+          log.warn("memory status session dirty detection failed: " + String(err));
+        });
       }
     } catch (err) {
       closeMemoryDatabase(this.db);
