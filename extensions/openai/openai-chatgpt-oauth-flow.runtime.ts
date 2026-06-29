@@ -10,6 +10,8 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -36,6 +38,7 @@ const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
+const OPENAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const SCOPE = "openid profile email offline_access";
 
@@ -216,7 +219,12 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const text = await readResponseWithLimit(response, OPENAI_OAUTH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI OAuth token response exceeds ${maxBytes} bytes`),
+    })
+      .then((buf) => new TextDecoder().decode(buf))
+      .catch(() => "");
     return {
       type: "failed",
       status: response.status,
@@ -224,7 +232,10 @@ async function exchangeAuthorizationCode(
     };
   }
 
-  const json = (await response.json()) as TokenResponseJson;
+  const json = await readProviderJsonResponse<TokenResponseJson>(
+    response,
+    "OpenAI Codex token exchange",
+  );
 
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
@@ -258,7 +269,12 @@ async function refreshAccessToken(
     );
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseWithLimit(response, OPENAI_OAUTH_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`OpenAI OAuth token response exceeds ${maxBytes} bytes`),
+      })
+        .then((buf) => new TextDecoder().decode(buf))
+        .catch(() => "");
       return {
         type: "failed",
         status: response.status,
@@ -266,7 +282,10 @@ async function refreshAccessToken(
       };
     }
 
-    const json = (await response.json()) as TokenResponseJson;
+    const json = await readProviderJsonResponse<TokenResponseJson>(
+      response,
+      "OpenAI Codex token refresh",
+    );
 
     const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {
