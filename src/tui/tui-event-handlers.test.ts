@@ -957,12 +957,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
-  it("allows late displayable final after sessions.changed clears display state (#96967)", () => {
+  it("suppresses late displayable final for surrendered finalized run after sessions.changed (#96979)", () => {
     const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-telegram" },
     });
 
-    // First final populates both finalizedRunsWithDisplay and chatFinalizedRunsWithDisplay.
+    // First final populates chatFinalizedRuns and chatFinalizedRunsWithDisplay.
     handleChatEvent({
       runId: "run-telegram",
       sessionKey: state.currentSessionKey,
@@ -971,12 +971,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
     chatLog.finalizeAssistant.mockClear();
-    chatLog.dropAssistant.mockClear();
 
-    // sessions.changed reload clears both display-state maps.
-    // chatFinalizedRuns persists for delta dedup but chatFinalizedRunsWithDisplay
-    // is cleared because prior display is not proof of current visibility after
-    // the chat log was cleared and loadHistory() may not have replayed the row.
+    // sessions.changed "new" surrenders the finalized run.
     handleSessionsChangedEvent({
       sessionKey: state.currentSessionKey,
       reason: "new",
@@ -984,9 +980,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       updatedAt: 200,
     } satisfies SessionChangedEvent);
 
-    // Late displayable final for the same runId — allowed through because
-    // chatFinalizedRunsWithDisplay was cleared and the TUI may have no
-    // visible assistant reply after the reload (#96980 review feedback).
+    // Late displayable final for the surrendered finalized run — suppressed
+    // because the run was already displayed before the reload and the
+    // history-replay static row covers the visible content (#96979 rank-up).
+    chatLog.hasStreamingRun.mockReturnValue(false);
     handleChatEvent({
       runId: "run-telegram",
       sessionKey: state.currentSessionKey,
@@ -994,7 +991,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "Recovery attempt" }] },
     });
 
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 
   it("deduplicates late chat delta after sessions.changed clears finalizedRuns (#96967)", () => {
@@ -2137,6 +2134,79 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
 
       expect(chatLog.updateAssistant).toHaveBeenCalledWith("stale stream", "run-active");
+    });
+
+    it("suppresses late displayable final for surrendered finalized run — history-replayed-visible (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-done" } },
+      );
+
+      // First final: run is finalized with display.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+      chatLog.finalizeAssistant.mockClear();
+
+      // sessions.changed "new" surrenders the finalized run as "finalized".
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+
+      // Late displayable final — should be suppressed because the run was
+      // already finalized and displayed; history replay covers it.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("renders late displayable final for surrendered in-flight run — history-replay-missing (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-streaming" } },
+      );
+
+      // Delta populates sessionRuns but does NOT finalize the run.
+      handleChatEvent({
+        runId: "run-streaming",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing…" }] },
+      });
+
+      // sessions.changed "new" surrenders the in-flight run.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late displayable final — should render because the in-flight run
+      // may not have been visible, and history replay may not include it.
+      handleChatEvent({
+        runId: "run-streaming",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "result" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
     });
   });
 });

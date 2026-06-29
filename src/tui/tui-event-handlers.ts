@@ -92,10 +92,13 @@ export function createEventHandlers(context: EventHandlerContext) {
   // assistant row — prior display is not proof of current visibility.
   const chatFinalizedRuns = new Map<string, number>();
   const chatFinalizedRunsWithDisplay = new Map<string, number>();
-  // Tracks runIds that were active (in sessionRuns) at the time sessions.changed
-  // "new" fired. Late events for surrendered runs are suppressed unless loadHistory
-  // restored them as in-flight streaming components (#96979).
-  const surrenderedToHistoryRunIds = new Set<string>();
+  // Tracks runIds surrendered to loadHistory() on sessions.changed "new".
+  // Value is the source: "in-flight" (from sessionRuns, still streaming) or
+  // "finalized" (from chatFinalizedRuns, already finished). The source
+  // determines suppression policy — finalized runs suppress displayable finals
+  // (were already displayed; history replay likely showed a static row) while
+  // in-flight runs render them (may not have been displayed yet) (#96979).
+  const surrenderedToHistoryRunIds = new Map<string, "in-flight" | "finalized">();
   const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
@@ -612,32 +615,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
-    if (finalizedRuns.has(evt.runId) || chatFinalizedRuns.has(evt.runId)) {
-      if (evt.state === "delta") {
-        return;
-      }
-      if (
-        evt.state === "error" &&
-        (finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId))
-      ) {
-        clearStaleStreamingIfNoTrackedRunRemains();
-        return;
-      }
-      if (evt.state === "final") {
-        const hasLateDisplayableFinal =
-          hasDisplayableFinalEvent(evt) &&
-          !(finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId));
-        if (!hasLateDisplayableFinal) {
-          clearStaleStreamingIfNoTrackedRunRemains();
-          return;
-        }
-      }
-    }
-    // Surrender check: runId-based dedupe for sessions.changed "new" reload.
-    // Late events for surrendered runs are suppressed unless loadHistory
-    // restored them as in-flight streaming components. More precise than the
-    // ChatLog text heuristic — only suppresses specific runIds (#96979).
+    // Surrender check must come before the finalizedRuns / chatFinalizedRuns
+    // guard so surrendered finalized runs are routed to the surrender check
+    // rather than the permissive late-displayable-final path (#96979).
     if (surrenderedToHistoryRunIds.has(evt.runId)) {
+      const source = surrenderedToHistoryRunIds.get(evt.runId);
       if (chatLog.hasStreamingRun(evt.runId)) {
         // loadHistory restored this run as an in-flight streaming component.
         surrenderedToHistoryRunIds.delete(evt.runId);
@@ -649,10 +631,11 @@ export function createEventHandlers(context: EventHandlerContext) {
         surrenderedToHistoryRunIds.delete(evt.runId);
         clearPendingTerminalLifecycleError(evt.runId);
         chatLog.dismissPendingSystem(evt.runId);
-        // Render the late final when loadHistory did not restore this run
-        // as streaming AND the event has displayable content — otherwise
-        // the user would never see the assistant reply (#96979 rank-up).
-        if (hasDisplayableFinalEvent(evt)) {
+        // In-flight runs: render displayable finals — the user may not have
+        // seen the streaming text before the reload. Finalized runs: suppress
+        // ALL finals — they were already displayed; the history-replay static
+        // row covers the visible content, and a late final would duplicate it.
+        if (source === "in-flight" && hasDisplayableFinalEvent(evt)) {
           const finalText = streamAssembler.finalize(
             evt.runId,
             evt.message,
@@ -685,6 +668,27 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender();
         return;
+      }
+    }
+    if (finalizedRuns.has(evt.runId) || chatFinalizedRuns.has(evt.runId)) {
+      if (evt.state === "delta") {
+        return;
+      }
+      if (
+        evt.state === "error" &&
+        (finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId))
+      ) {
+        clearStaleStreamingIfNoTrackedRunRemains();
+        return;
+      }
+      if (evt.state === "final") {
+        const hasLateDisplayableFinal =
+          hasDisplayableFinalEvent(evt) &&
+          !(finalizedRunsWithDisplay.has(evt.runId) || chatFinalizedRunsWithDisplay.has(evt.runId));
+        if (!hasLateDisplayableFinal) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+          return;
+        }
       }
     }
     if (reconnectPendingRunId === evt.runId) {
@@ -823,12 +827,19 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
-    // Surrender active runs before clearTrackedRunState clears sessionRuns.
-    // Late events for these surrendered runIds are suppressed at the event
-    // handler level by runId rather than by ChatLog text heuristics (#96979).
+    // Surrender active and finalized runs before clearTrackedRunState
+    // clears sessionRuns and finalizedRuns. In-flight runs are surrendered
+    // so late deltas/finals-after-replay are suppressed, while displayable
+    // finals still render (the user may not have seen the streaming text).
+    // Finalized runs are surrendered so the history-replay static row is
+    // not duplicated — for finalized runs, displayable finals are also
+    // suppressed (they were already displayed before the reload) (#96979).
     if (evt.reason === "new") {
       for (const [runId] of sessionRuns) {
-        surrenderedToHistoryRunIds.add(runId);
+        surrenderedToHistoryRunIds.set(runId, "in-flight");
+      }
+      for (const [runId] of chatFinalizedRuns) {
+        surrenderedToHistoryRunIds.set(runId, "finalized");
       }
     }
 
