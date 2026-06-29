@@ -1225,6 +1225,36 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("does not apply the JSON synthesis byte cap after recognizing mislabeled SSE", async () => {
+    const oversizedSse = `data: {"ok": true}\n\n: ${"x".repeat(16 * 1024 * 1024 + 1)}\n\ndata: [DONE]\n\n`;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(oversizedSse, {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+
+    const body = await response.text();
+
+    expect(body).toBe(oversizedSse);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({

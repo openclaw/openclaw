@@ -192,13 +192,6 @@ function sanitizeOpenAISdkSseResponse(
               controller.close();
               return;
             }
-            const nextTotalBytes = totalBytes + chunk.value.byteLength;
-            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
-              throw new Error(
-                `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
-              );
-            }
-            totalBytes = nextTotalBytes;
             const text = decoder.decode(chunk.value, { stream: true });
             if (bodyKind === "sse") {
               controller.enqueue(encoder.encode(text));
@@ -211,6 +204,13 @@ function sanitizeOpenAISdkSseResponse(
               buffer = "";
               return;
             }
+            const nextTotalBytes = totalBytes + chunk.value.byteLength;
+            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
+              throw new Error(
+                `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
+              );
+            }
+            totalBytes = nextTotalBytes;
           }
         } catch (error) {
           await reader?.cancel(error).catch(() => {});
