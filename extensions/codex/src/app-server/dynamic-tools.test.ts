@@ -853,7 +853,7 @@ describe("createCodexDynamicToolBridge", () => {
       tools: [
         createTool({
           name: "raw_lookup",
-          execute: vi.fn(async () => ({ answer: 42, status: "ok" })),
+          execute: vi.fn(async () => ({ answer: 42, status: "ok" }) as any),
         }),
       ],
       signal: new AbortController().signal,

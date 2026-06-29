@@ -751,7 +751,7 @@ function normalizePluginToolResult(result: unknown): AgentToolResult<unknown> {
   const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
   return {
     content: [{ type: "text", text }],
-    details: result as unknown,
+    details: result,
   };
 }
 
