@@ -1600,13 +1600,21 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
-      return projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([payload], {
+      const keepReasoningLane =
+        payload.isReasoning === true &&
+        (resolvedReasoningLevel === "on" || Boolean(reasoningLane.stream));
+      const payloadForPlan = keepReasoningLane ? { ...payload } : payload;
+      if (keepReasoningLane) {
+        delete payloadForPlan.isReasoning;
+      }
+      const normalized = projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([payloadForPlan], {
           cfg,
           sessionKey: ctxPayload.SessionKey,
           surface: "telegram",
         }),
       )[0];
+      return normalized;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {

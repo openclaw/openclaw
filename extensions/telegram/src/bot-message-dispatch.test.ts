@@ -3652,6 +3652,67 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("routes typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_hidden_");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
+    const delivered = expectDeliverRepliesParams().replies as Array<ReplyPayload>;
+    expect(delivered[0]?.isReasoning).toBeUndefined();
+  });
+
+  it("does not persist typed reasoning-only finals in progress stream mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+  });
+
   it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
     const { answerDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
