@@ -442,11 +442,13 @@ describe("buildInboundUserContextPrefix", () => {
       ChatType: "direct",
       SenderName: "Tyler",
       SenderId: "+15551234567",
+      SenderIsBot: true,
     } as TemplateContext);
 
     const senderInfo = parseSenderInfoPayload(text);
     expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
     expect(senderInfo["id"]).toBe("+15551234567");
+    expect(senderInfo["is_bot"]).toBe(true);
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {

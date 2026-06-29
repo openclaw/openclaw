@@ -102,23 +102,28 @@ const buildChatItemsMock = vi.hoisted(() =>
   }),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
+  vi.fn(
+    (
+      group: { messages: Array<{ message: unknown }> },
+      _opts?: { onAssistantAttachmentLoaded?: () => void },
+    ) => {
+      const element = document.createElement("div");
+      element.className = "chat-group";
+      element.textContent = group.messages
+        .map(({ message }) => {
+          if (typeof message === "object" && message !== null && "content" in message) {
+            const content = (message as { content?: unknown }).content;
+            if (typeof content === "string") {
+              return content;
+            }
+            return content == null ? "" : JSON.stringify(content);
           }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  }),
+          return String(message);
+        })
+        .join("\n");
+      return element;
+    },
+  ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
@@ -1145,6 +1150,20 @@ describe("chat transcript rendering cache", () => {
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
   });
 
+  it("passes assistant attachment load callbacks to transcript groups", () => {
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    renderChatView({
+      messages: [{ role: "assistant", content: "MEDIA:https://example.com/voice.ogg" }],
+      onAssistantAttachmentLoaded,
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      onAssistantAttachmentLoaded,
+    });
+  });
+
   it("rebuilds transcript items when the transcript reference changes", () => {
     const toolMessages: unknown[] = [];
     const streamSegments: Array<{ text: string; ts: number }> = [];
@@ -1477,11 +1496,12 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const sensitivityLabel = requireElement(
-      container,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "Talk sensitivity selected label",
+    const sensitivitySelect = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
+    if (sensitivitySelect === null) {
+      throw new Error("expected Talk sensitivity select");
+    }
 
     expect(getTalkSelectOptionValues(container, "voice")).toEqual([
       "",
@@ -1496,7 +1516,7 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(sensitivityLabel.textContent).toBe("Custom");
+    expect(sensitivitySelect.value).toBe("__custom");
     expect(getTalkSelectOptionValues(container, "sensitivity")).toEqual([
       "",
       "0.65",
@@ -1543,12 +1563,13 @@ describe("chat voice controls", () => {
       },
       onRealtimeTalkOptionsChange,
     });
-    const defaultSensitivityLabel = requireElement(
-      defaultContainer,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "default Talk sensitivity selected label",
+    const defaultSensitivitySelect = defaultContainer.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
-    expect(defaultSensitivityLabel.textContent).toBe("Default");
+    if (defaultSensitivitySelect === null) {
+      throw new Error("expected default Talk sensitivity select");
+    }
+    expect(defaultSensitivitySelect.value).toBe("");
     expect(getTalkSelectOptionValues(defaultContainer, "sensitivity")).toEqual([
       "",
       "0.65",

@@ -161,13 +161,34 @@ function stripThreadTitleWrappers(raw: string): string {
   while (current && current !== previous) {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
-    current = current.replace(/^\*\*(.+)\*\*$/u, "$1").trim();
-    current = current.replace(/^__(.+)__$/u, "$1").trim();
-    current = current.replace(/^\*(.+)\*$/u, "$1").trim();
-    current = current.replace(/^_(.+)_$/u, "$1").trim();
-    current = current.replace(/^~~(.+)~~$/u, "$1").trim();
+    // Unwrap only a title that is a SINGLE wrapped span. The inner content
+    // must not contain the same marker, so a title with two separate spans
+    // (e.g. "*Plan* for *project*") is left intact instead of having its
+    // outer markers stripped and stray ones left mid-string. For two-char
+    // bold markers (`**`, `__`), a single nested emphasis marker is allowed
+    // inside (e.g. `**Release *plan***` -> `Release *plan*`), because bold
+    // legitimately wraps italic/underscore but never itself.
+    current = stripBalancedWrapper(current, "**");
+    current = stripBalancedWrapper(current, "__");
+    current = stripBalancedWrapper(current, "*");
+    current = stripBalancedWrapper(current, "_");
+    current = stripBalancedWrapper(current, "~~");
   }
   return current;
+}
+
+function stripBalancedWrapper(text: string, marker: string): string {
+  if (text.length < marker.length * 2 + 1) {
+    return text;
+  }
+  if (!text.startsWith(marker) || !text.endsWith(marker)) {
+    return text;
+  }
+  const inner = text.slice(marker.length, text.length - marker.length);
+  if (!inner || inner.includes(marker)) {
+    return text;
+  }
+  return inner;
 }
 
 function normalizeTitleContextField(raw: string | undefined, maxChars: number): string | undefined {

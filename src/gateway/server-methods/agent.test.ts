@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
+  readAcpSessionMeta: vi.fn<typeof readAcpSessionMeta>(() => undefined),
   listAgentIds: vi.fn(() => ["main"]),
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
@@ -100,6 +102,16 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
 }));
+
+vi.mock("../../acp/runtime/session-meta.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
+    "../../acp/runtime/session-meta.js",
+  );
+  return {
+    ...actual,
+    readAcpSessionMeta: mocks.readAcpSessionMeta,
+  };
+});
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -483,6 +495,25 @@ function backendGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+// Operator-write client that is NOT the in-process backend ACP spawn caller:
+// a control-UI connection with the same operator.write scope. It can set
+// acpTurnSource but owns no replacement `acp` task row, so CLI tracking stays on.
+function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "ui",
+      },
+      scopes: ["operator.write"],
+    },
+  } as AgentHandlerArgs["client"];
+}
+
 async function waitForAgentCommandCall<
   T extends AgentCommandCall = AgentCommandCall,
 >(): Promise<T> {
@@ -576,6 +607,7 @@ describe("gateway agent handler", () => {
     mocks.emitGatewaySessionEndPluginHook.mockReset();
     mocks.emitGatewaySessionStartPluginHook.mockReset();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    mocks.readAcpSessionMeta.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.getChannelPlugin.mockReset();
     mocks.sendDurableMessageBatch.mockReset();
@@ -4736,6 +4768,277 @@ describe("gateway agent handler", () => {
     });
   });
 
+  describe("ACP manual-spawn child turn task tracking", () => {
+    function mockAcpChildSessionEntry(childSessionKey: string) {
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "acp-child-session", updatedAt: Date.now() },
+        canonicalKey: childSessionKey,
+      });
+      mocks.updateSessionStore.mockResolvedValue(undefined);
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+    }
+
+    function spyDetachedCreateRunningTaskRun() {
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const createRunningTaskRunSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+          defaultRuntime.createRunningTaskRun(...args),
+      );
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        createRunningTaskRun: createRunningTaskRunSpy,
+      });
+      return createRunningTaskRunSpy;
+    }
+
+    const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>> = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime-1",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    };
+
+    it("suppresses the gateway CLI task row for confirmed ACP manual-spawn child turns", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-suppress-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-confirmed";
+        mockAcpChildSessionEntry(childSessionKey);
+        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "acp manual spawn child turn",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: "acp-manual-spawn-confirmed",
+          },
+          { reqId: "acp-manual-spawn-confirmed", client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(findTaskByRunId("acp-manual-spawn-confirmed")).toBeUndefined();
+      });
+    });
+
+    it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-operator-write";
+        mockAcpChildSessionEntry(childSessionKey);
+        // Persisted ACP metadata is present and the turn looks like a manual
+        // spawn, but the caller is an operator-write control-UI client, not the
+        // in-process backend ACP spawn path. That caller never creates a
+        // replacement `acp` row, so CLI tracking must stay on to avoid losing the
+        // run entirely.
+        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "operator-write acp manual spawn",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: "acp-operator-write",
+          },
+          { reqId: "acp-operator-write", client: operatorWriteGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId: "acp-operator-write",
+          childSessionKey,
+        });
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("acp-operator-write"), {
+            runtime: "cli",
+            childSessionKey,
+          });
+        });
+      });
+    });
+
+    it("keeps CLI tracking for ACP-shaped manual-spawn turns without persisted ACP metadata", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-no-meta-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-missing-meta";
+        mockAcpChildSessionEntry(childSessionKey);
+        mocks.readAcpSessionMeta.mockReturnValue(undefined);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "acp shaped turn without metadata",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: "acp-manual-spawn-no-meta",
+          },
+          { reqId: "acp-manual-spawn-no-meta", client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId: "acp-manual-spawn-no-meta",
+          childSessionKey,
+        });
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("acp-manual-spawn-no-meta"), {
+            runtime: "cli",
+            childSessionKey,
+          });
+        });
+      });
+    });
+
+    it("keeps dispatch and CLI tracking when ACP metadata read fails", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-meta-throw-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-meta-throw";
+        mockAcpChildSessionEntry(childSessionKey);
+        const metadataError = new Error("state db unavailable");
+        mocks.readAcpSessionMeta.mockImplementation(() => {
+          throw metadataError;
+        });
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+        const context = makeContext();
+
+        await invokeAgent(
+          {
+            message: "acp manual spawn metadata throw",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: "acp-manual-spawn-meta-throw",
+          },
+          { reqId: "acp-manual-spawn-meta-throw", context, client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId: "acp-manual-spawn-meta-throw",
+          childSessionKey,
+        });
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("acp-manual-spawn-meta-throw"), {
+            runtime: "cli",
+            childSessionKey,
+            status: "succeeded",
+            terminalSummary: "completed",
+          });
+        });
+        const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
+        expect(
+          warnMock.mock.calls.some(([message]) => {
+            return (
+              typeof message === "string" &&
+              message.includes("failed to read ACP session metadata") &&
+              message.includes("falling back to cli task tracking")
+            );
+          }),
+        ).toBe(true);
+      });
+    });
+
+    it("keeps CLI tracking for ACP-shaped turns that are not manual spawns", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-not-manual-spawn-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-not-spawn";
+        mockAcpChildSessionEntry(childSessionKey);
+        // Metadata is present but the turn lacks acpTurnSource, so the spawn
+        // control plane does not own this row; CLI tracking must stay on.
+        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "acp shaped non-spawn turn",
+            sessionKey: childSessionKey,
+            idempotencyKey: "acp-not-manual-spawn",
+          },
+          { reqId: "acp-not-manual-spawn", client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId: "acp-not-manual-spawn",
+          childSessionKey,
+        });
+      });
+    });
+
+    it("does not affect plugin-subagent tracking for confirmed ACP conditions", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-plugin-subagent-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:main:acp:plugin-child";
+        const runId = "acp-plugin-subagent-run";
+        mockAcpChildSessionEntry(childSessionKey);
+        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        const baseClient = requireValue(backendGatewayClient(), "expected backend client");
+        const pluginClient: AgentHandlerArgs["client"] = {
+          connect: baseClient.connect,
+          internal: {
+            ...baseClient.internal,
+            agentRunTracking: "plugin_subagent",
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        };
+
+        await invokeAgent(
+          {
+            message: "plugin subagent over acp child",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: runId,
+          },
+          { reqId: runId, client: pluginClient },
+        );
+        await waitForAgentCommandCall();
+
+        // plugin_subagent precedence means the run is tracked through the
+        // subagent registry as a `subagent` row, never a duplicate `cli` row.
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "subagent",
+          runId,
+        });
+        expect(
+          listTaskRecords().some((task) => task.runId === runId && task.runtime === "cli"),
+        ).toBe(false);
+        await waitForAssertion(() => {
+          expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+            runId,
+            childSessionKey,
+            label: "plugin:memory-core",
+          });
+        });
+      });
+    });
+  });
+
   it("logs a swallowed finalize error without blocking the background run", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
       useTestStateDir(root);
@@ -5722,6 +6025,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.getLatestSubagentRunByChildSessionKey.mockReset();
     mocks.replaceSubagentRunAfterSteer.mockReset();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    mocks.readAcpSessionMeta.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.getChannelPlugin.mockReset();
     mocks.sendDurableMessageBatch.mockReset();

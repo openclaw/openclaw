@@ -6,6 +6,7 @@ import type {
   ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   Button,
   Container,
@@ -884,8 +885,8 @@ function formatRecentsButtonLabel(modelRef: string, suffix?: string): string {
     return label;
   }
   const trimmed = suffix
-    ? `${modelRef.slice(0, maxLen - suffix.length - 2)}… ${suffix}`
-    : `${modelRef.slice(0, maxLen - 1)}…`;
+    ? `${sliceUtf16Safe(modelRef, 0, maxLen - suffix.length - 2)}… ${suffix}`
+    : `${sliceUtf16Safe(modelRef, 0, maxLen - 1)}…`;
   return trimmed;
 }
 
