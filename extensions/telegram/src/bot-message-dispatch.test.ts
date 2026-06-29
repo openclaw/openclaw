@@ -3623,6 +3623,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {
+    setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
@@ -3634,6 +3638,24 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyOptions?: { reasoningPayloadsEnabled?: boolean };
     };
     expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(true);
+  });
+
+  it("keeps shared durable reasoning payloads disabled in progress stream mode", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
   });
 
   it("suppresses typed reasoning-only finals without raw text fallback", async () => {
