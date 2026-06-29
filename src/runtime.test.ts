@@ -10,7 +10,7 @@ vi.mock("../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: vi.fn(),
 }));
 
-import { createNonExitingRuntime, writeRuntimeJson } from "./runtime.js";
+import { createNonExitingRuntime, ExitError, writeRuntimeJson } from "./runtime.js";
 
 describe("createNonExitingRuntime", () => {
   it("returns runtime with exit function", () => {
@@ -18,9 +18,36 @@ describe("createNonExitingRuntime", () => {
     expect(typeof runtime.exit).toBe("function");
   });
 
-  it("exit function throws error", () => {
+  it("exit function throws ExitError", () => {
     const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(1)).toThrow("exit 1");
+    expect(() => runtime.exit(1)).toThrow(ExitError);
+  });
+
+  it("exit function throws with correct exit code", () => {
+    const runtime = createNonExitingRuntime();
+    try {
+      runtime.exit(42);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExitError);
+      expect((err as ExitError).exitCode).toBe(42);
+      expect((err as ExitError).message).toBe("exit 42");
+      expect((err as ExitError).name).toBe("ExitError");
+    }
+  });
+
+  it("ExitError is distinguishable from generic Error", () => {
+    const runtime = createNonExitingRuntime();
+    try {
+      runtime.exit(1);
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(ExitError);
+    }
+
+    const genericError = new Error("exit 1");
+    expect(genericError).toBeInstanceOf(Error);
+    expect(genericError).not.toBeInstanceOf(ExitError);
   });
 
   it("exit function includes code in error message", () => {

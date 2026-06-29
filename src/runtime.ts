@@ -2,6 +2,18 @@
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
+/**
+ * Thrown by {@link createNonExitingRuntime} to simulate process exit.
+ * Upstream callers can use `instanceof ExitError` to distinguish
+ * controlled exit signals from real runtime crashes.
+ */
+export class ExitError extends Error {
+  constructor(public readonly exitCode: number) {
+    super(`exit ${exitCode}`);
+    this.name = "ExitError";
+  }
+}
+
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
@@ -99,7 +111,7 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new ExitError(code);
     },
   };
 }
