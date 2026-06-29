@@ -97,21 +97,17 @@ const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
 
 /** Apple/iCloud context keywords — when one of these appears in a generic field
  * value, the app-password sweep fires. Derived from Apple docs and common error
- * messages. */
+ * messages. All lowercase for case-insensitive matching. */
 const APP_PASSWORD_CONTEXT_KEYWORDS = [
   "app-specific password",
   "application password",
   "app-specific",
   "app specific",
-  "appSpecific",
+  "appspecific",
   "app password",
   "apppassword",
   "apple id",
   "appleid",
-  "apple ID",
-  "sign in",
-  "signin",
-  "iCloud",
   "icloud",
   "apple",
 ];
