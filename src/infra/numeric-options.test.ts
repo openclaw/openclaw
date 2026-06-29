@@ -20,7 +20,7 @@ describe("resolveNonNegativeIntegerOption", () => {
   });
 
   it("returns fallback when value is Infinity", () => {
-    expect(resolveNonNegativeIntegerOption(Infinity, 10)).toBe(10);
+    expect(resolveNonNegativeIntegerOption(Number.POSITIVE_INFINITY, 10)).toBe(10);
   });
 
   it("floors decimal values", () => {
@@ -46,7 +46,7 @@ describe("resolveIntegerOption", () => {
   });
 
   it("returns fallback when value is Infinity", () => {
-    expect(resolveIntegerOption(Infinity, 10, { min: 1 })).toBe(10);
+    expect(resolveIntegerOption(Number.POSITIVE_INFINITY, 10, { min: 1 })).toBe(10);
   });
 
   it("floors decimal values", () => {
