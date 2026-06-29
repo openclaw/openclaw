@@ -422,7 +422,6 @@ describe("mapZodIssueToConfigIssue", () => {
     });
 
     it("handles malformed input gracefully", () => {
-      // @ts-expect-error — testing runtime resilience
       const result = testing.mapZodIssueToConfigIssue(null);
       expect(result.path).toBe("");
       expect(result.message).toBe("Invalid input");
