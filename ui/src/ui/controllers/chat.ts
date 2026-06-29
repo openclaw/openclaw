@@ -699,6 +699,10 @@ function adoptInFlightRunFromChatHistory(
   // Reconcile overlap with the last committed assistant message: if the
   // cumulative in-flight buffer starts with text already persisted as an
   // assistant reply, only adopt the new suffix.
+  // Normalize whitespace on both sides before comparing so that small framing
+  // differences (e.g. leading newlines the gateway buffer includes but the
+  // committed message omits) do not silently defeat the dedup and cause
+  // duplicated text to render.
   if (text && visibleMessages.length > 0) {
     const lastVisible = visibleMessages[visibleMessages.length - 1];
     const lastRole =
@@ -707,17 +711,32 @@ function adoptInFlightRunFromChatHistory(
         : undefined;
     if (lastRole === "assistant") {
       const lastText = extractText(lastVisible);
-      if (lastText && text.startsWith(lastText)) {
-        text = text.slice(lastText.length);
+      if (lastText) {
+        const committedTrimmed = lastText.replace(/^[\s﻿]+|[\s﻿]+$/g, "");
+        const bufferTrimmed = text.replace(/^[\s﻿]+|[\s﻿]+$/g, "");
+        if (committedTrimmed && bufferTrimmed.startsWith(committedTrimmed)) {
+          // Extract only the suffix, preserving the original buffer framing.
+          const overlapIdx = text.indexOf(committedTrimmed);
+          if (overlapIdx >= 0) {
+            text = text.slice(overlapIdx + committedTrimmed.length);
+          } else {
+            // Normalized text matches but framing whitespace differs (e.g.
+            // leading \n in the buffer not present in the committed message).
+            text = text.slice(text.length - (bufferTrimmed.length - committedTrimmed.length));
+          }
+        }
       }
     }
   }
 
   // Adopt the run: track the run id so live deltas/finals continue, set the
   // stream text so partial content renders (empty string shows a reading
-  // indicator instead of an idle thread), and mark the stream start time.
+  // indicator instead of an idle thread), clear stale errors from the previous
+  // session view, and mark the stream start time.
   state.chatRunId = runId;
   state.chatStream = text;
+  state.chatError = null;
+  state.lastError = null;
   state.chatStreamStartedAt = Date.now();
 }
 

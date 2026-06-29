@@ -3748,4 +3748,87 @@ describe("loadChatHistory inFlightRun adoption (#90755)", () => {
     expect(state.chatRunId).toBe("run-fresh");
     expect(state.chatStream).toBe("fresh live text");
   });
+
+  it("reconciles overlap when the buffer has leading whitespace not present in the committed message", async () => {
+    // Normalize whitespace before comparison: if the buffer starts with \n but
+    // the committed assistant message does not, the dedup should still work.
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "go ahead" }] },
+      { role: "assistant", content: [{ type: "text", text: "Starting analysis..." }] },
+    ];
+    const request = vi.fn().mockResolvedValue({
+      messages,
+      inFlightRun: { runId: "run-ws", text: "\nStarting analysis...\nPhase 1 complete.\nPhase 2 in progress..." },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatError: "previous stale error",
+      lastError: "another stale error",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-ws");
+    // The leading \n from the buffer is preserved; only the overlapping text is deduped
+    expect(state.chatStream).toContain("Phase 1 complete");
+    expect(state.chatStream).toContain("Phase 2 in progress");
+    expect(state.chatStream).not.toContain("Starting analysis...");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+    // Stale errors cleared on adoption
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+  });
+
+  it("preserves full buffer when last visible message is not an assistant reply", async () => {
+    // Only assistant messages participate in reconciliation; user messages
+    // should not cause the buffer to be trimmed.
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "run lint" }] },
+    ];
+    const request = vi.fn().mockResolvedValue({
+      messages,
+      inFlightRun: { runId: "run-nonassist", text: "Lint output:\n35 errors found" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-nonassist");
+    // Full buffer adopted since last message is user, not assistant
+    expect(state.chatStream).toBe("Lint output:\n35 errors found");
+  });
+
+  it("clears stale errors when adopting an in-flight run", async () => {
+    const messages = [{ role: "user", content: [{ type: "text", text: "Hello" }] }];
+    const request = vi.fn().mockResolvedValue({
+      messages,
+      inFlightRun: { runId: "run-err", text: "fresh stream" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatError: "gateway timeout",
+      lastError: "request failed",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-err");
+    expect(state.chatStream).toBe("fresh stream");
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+  });
 });
