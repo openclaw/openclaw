@@ -90,6 +90,7 @@ type AttemptSpawnWorkspaceHoisted = {
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
+  prepareSessionManagerForRunMock: AsyncUnknownMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
@@ -188,6 +189,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
+  const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
     detectedRefs: [],
@@ -241,6 +243,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
+    prepareSessionManagerForRunMock,
     detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
@@ -487,7 +490,7 @@ vi.mock("../session-manager-cache.js", () => ({
 }));
 
 vi.mock("../session-manager-init.js", () => ({
-  prepareSessionManagerForRun: async () => {},
+  prepareSessionManagerForRun: (params: unknown) => hoisted.prepareSessionManagerForRunMock(params),
 }));
 
 vi.mock("../../session-write-lock.js", () => ({
@@ -1024,6 +1027,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+  hoisted.prepareSessionManagerForRunMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;

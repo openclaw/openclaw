@@ -5,6 +5,10 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import {
+  appendTranscriptMessage,
+  createSessionEntryWithTranscript,
+} from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
@@ -2503,6 +2507,69 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("uses SQLite transcript messages for bootstrap without treating the marker as a file", async () => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-sqlite-"));
+    tempPaths.push(storeDir);
+    const storePath = path.join(storeDir, "sessions.json");
+    const created = await createSessionEntryWithTranscript(
+      {
+        agentId: "main",
+        sessionKey,
+        storePath,
+      },
+      () => ({
+        ok: true,
+        entry: {
+          sessionId: embeddedSessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    if (!created.ok) {
+      throw new Error(`failed to create SQLite session entry: ${created.error}`);
+    }
+    await appendTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId: embeddedSessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        message: { role: "user", content: "persisted SQLite prompt" },
+        now: Date.now(),
+      },
+    );
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ bootstrap, assemble }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sessionFile: created.sessionFile,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: embeddedSessionId,
+          sessionKey,
+          storePath,
+        },
+      },
+    });
+
+    expect(bootstrap).toHaveBeenCalled();
+    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: created.sessionFile,
+        hadSessionFile: false,
+      }),
+    );
   });
 
   it("resolves bootstrap context before acquiring the session write lock", async () => {
