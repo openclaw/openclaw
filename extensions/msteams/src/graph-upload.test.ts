@@ -1,6 +1,5 @@
 // Msteams tests cover graph upload plugin behavior.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
@@ -265,7 +264,7 @@ async function listenLoopbackServer(server: Server): Promise<number> {
         reject(new Error("expected loopback TCP address"));
         return;
       }
-      resolve((address as AddressInfo).port);
+      resolve(address.port);
     });
   });
 }
@@ -410,6 +409,52 @@ describe("graph-upload readProviderJsonResponse loopback proof", () => {
       expect(String(error)).toContain("malformed JSON response");
       console.log(
         `[msteams graph-upload loopback proof] malformed JSON labelled: ${String(error)}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("uploadToOneDrive rejects an oversized success JSON body from a real loopback HTTP server", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const chunk = Buffer.alloc(64 * 1024, 0x20);
+      let remaining = 257; // >16 MiB when combined with the JSON prefix.
+      res.write('{"id":"item-big","webUrl":"https://example.com/big","name":"big.txt","padding":"');
+      const writeNext = () => {
+        if (remaining <= 0) {
+          res.end('"}');
+          return;
+        }
+        remaining -= 1;
+        if (res.write(chunk)) {
+          setImmediate(writeNext);
+        } else {
+          res.once("drain", writeNext);
+        }
+      };
+      writeNext();
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+          return realFetch(loopback, init);
+        }),
+      );
+
+      await expect(
+        uploadToOneDrive({ buffer: Buffer.from("x"), filename: "big.txt", tokenProvider }),
+      ).rejects.toThrow(
+        "msteams.graph-upload.uploadOneDriveFile: JSON response exceeds 16777216 bytes",
+      );
+      console.log(
+        "[msteams graph-upload loopback proof] oversized JSON rejected by bounded reader",
       );
     } finally {
       await closeServer(server);
