@@ -9,6 +9,9 @@ import {
   isPlainTextToolNameChar,
   isXmlishNameChar,
   matchesLiteralPrefix,
+  stripXmlishAttributeQuotes,
+  XMLISH_FUNCTION_CALLS_OPEN_RE,
+  XMLISH_INVOKE_OPEN_RE,
 } from "./grammar.js";
 
 export type PlainTextToolCallNameMatcher = {
@@ -61,6 +64,10 @@ function couldStillBeJsonPayload(text: string, start: number): boolean {
   return cursor >= text.length || text[cursor] === "{";
 }
 
+// Closed namespace allow-list for the attribute-dialect invoke recognizer; kept
+// in sync with the grammar regexes so partial streamed prefixes stay buffered.
+const XMLISH_INVOKE_NAMESPACES = ["", "antml:", "mm:"] as const;
+
 function couldStillBeXmlishParameterPayload(text: string, start: number): boolean {
   let cursor = start;
   while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
@@ -69,7 +76,75 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   if (cursor >= text.length) {
     return true;
   }
-  return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "<parameter=");
+  const rest = text.slice(cursor).toLowerCase();
+  // Parameter payload may arrive in the equals dialect (`<parameter=name>`) or
+  // the attribute dialect (`<parameter name="...">`), each optionally namespaced.
+  return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `<${ns}parameter`));
+}
+
+function isViableXmlishInvokeOpenPrefix(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    for (const quote of ['"', "'"]) {
+      const lead = `<${ns}invoke name=${quote}`;
+      if (lead.startsWith(text)) {
+        return true;
+      }
+      if (!text.startsWith(lead)) {
+        continue;
+      }
+      const afterLead = text.slice(lead.length);
+      const closeQuote = afterLead.indexOf(quote);
+      if (closeQuote === -1) {
+        return matcher.hasNamePrefix(afterLead);
+      }
+      const name = afterLead.slice(0, closeQuote);
+      if (!matcher.hasExactName(name)) {
+        return false;
+      }
+      // After the closing quote only optional whitespace and the `>` remain.
+      return /^\s*>?$/.test(afterLead.slice(closeQuote + 1));
+    }
+  }
+  return false;
+}
+
+function couldStillBeXmlishInvokeOpen(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  if (text.length === 0) {
+    return true;
+  }
+  const complete = XMLISH_INVOKE_OPEN_RE.exec(text);
+  if (complete?.[1]) {
+    if (!matcher.hasExactName(stripXmlishAttributeQuotes(complete[1]))) {
+      return false;
+    }
+    return couldStillBeXmlishParameterPayload(text, complete[0].length);
+  }
+  return isViableXmlishInvokeOpenPrefix(text, matcher);
+}
+
+function couldStillBeXmlishInvokeToolCall(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  // The attribute dialect may lead with an optional <function_calls> wrapper.
+  const wrapperComplete = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(text);
+  if (wrapperComplete) {
+    const afterWrapper = text.slice(wrapperComplete[0].length).replace(/^\s+/, "");
+    return afterWrapper.length === 0 || couldStillBeXmlishInvokeOpen(afterWrapper, matcher);
+  }
+  // Still streaming the wrapper open tag itself keeps the buffer alive.
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    if (`<${ns}function_calls>`.startsWith(text)) {
+      return true;
+    }
+  }
+  return couldStillBeXmlishInvokeOpen(text, matcher);
 }
 
 function couldStillBeBracketedStandaloneToolCall(
@@ -274,6 +349,16 @@ function couldStillBeHarmonyStandaloneToolCall(
   return text[cursor] === "{";
 }
 
+function matchXmlishInvokeOpenName(text: string): string | null {
+  let rest = text;
+  const wrapper = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(rest);
+  if (wrapper) {
+    rest = rest.slice(wrapper[0].length).replace(/^\s+/, "");
+  }
+  const invoke = XMLISH_INVOKE_OPEN_RE.exec(rest);
+  return invoke?.[1] ? stripXmlishAttributeQuotes(invoke[1]) : null;
+}
+
 function hasExactSerializedToolCallPrefix(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
@@ -285,6 +370,10 @@ function hasExactSerializedToolCallPrefix(
   const xmlish = /^<function=([A-Za-z0-9_.:-]+)>/i.exec(text);
   if (xmlish?.[1]) {
     return matcher.hasExactName(xmlish[1]);
+  }
+  const invokeName = matchXmlishInvokeOpenName(text);
+  if (invokeName !== null) {
+    return matcher.hasExactName(invokeName);
   }
   const harmony =
     /^(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=([A-Za-z0-9_-]+)\s+code\b/.exec(text);
@@ -347,6 +436,7 @@ function getPlainTextToolCallBufferState(
   const toolCallLike =
     couldStillBeBracketedStandaloneToolCall(trimmed, matcher) ||
     couldStillBeXmlishFunctionToolCall(trimmed, matcher) ||
+    couldStillBeXmlishInvokeToolCall(trimmed, matcher) ||
     couldStillBeHarmonyStandaloneToolCall(trimmed, matcher);
   if (!toolCallLike) {
     return "impossible";
@@ -383,13 +473,19 @@ function hasSuppressedToolCallClosingMarker(text: string): boolean {
     return false;
   }
   const lowerText = text.toLowerCase();
+  // Bare closes (`</invoke>`, `</function_calls>`) and namespaced closes are both
+  // accepted regardless of the open prefix; degraded proxies often drop the
+  // prefix on the close, so the mixed/absent pairing is intentional.
   return (
     lowerText.includes("</parameter>") ||
     lowerText.includes("</function>") ||
+    lowerText.includes("</invoke>") ||
+    lowerText.includes("</function_calls>") ||
     text.includes(END_TOOL_REQUEST) ||
     text.includes("<|call|>") ||
     text.includes("}") ||
-    /\[\/[A-Za-z0-9_.:-]+\]/.test(text)
+    /\[\/[A-Za-z0-9_.:-]+\]/.test(text) ||
+    /<\s*\/\s*(?:antml:|mm:)(?:parameter|invoke|function_calls|function)\s*>/i.test(text)
   );
 }
 

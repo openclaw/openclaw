@@ -250,6 +250,161 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
 
     expect(blocks).toBeNull();
   });
+
+  it("parses namespaced attribute-dialect invoke tool calls", () => {
+    const raw = [
+      '<mm:invoke name="exec">',
+      '<mm:parameter name="command">',
+      "pwd",
+      "</mm:parameter>",
+      "</mm:invoke>",
+    ].join("\n");
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { command: "pwd" }, start: 0, end: raw.length, raw },
+    ]);
+  });
+
+  it("parses function_calls-wrapped attribute-dialect invoke tool calls", () => {
+    const raw = [
+      "<function_calls>",
+      '<invoke name="read">',
+      '<parameter name="path">',
+      "src/index.ts",
+      "</parameter>",
+      "</invoke>",
+      "</function_calls>",
+    ].join("\n");
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["read"] })).toEqual([
+      { name: "read", arguments: { path: "src/index.ts" }, start: 0, end: raw.length, raw },
+    ]);
+  });
+
+  it("parses antml namespaced attribute-dialect invoke tool calls", () => {
+    const ns = "antml:";
+    const raw = [
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "whoami",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { command: "whoami" }, start: 0, end: raw.length, raw },
+    ]);
+  });
+
+  it("parses a bare attribute-dialect invoke with no namespace prefix", () => {
+    const raw = '<invoke name="exec"><parameter name="command">v</parameter></invoke>';
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { command: "v" }, start: 0, end: raw.length, raw },
+    ]);
+  });
+
+  it("parses an antml-prefixed open paired with bare closing tags", () => {
+    // Degraded proxies routinely drop the namespace on the close, so mixed
+    // open/close prefixes are accepted on purpose.
+    const ns = "antml:";
+    const raw = `<${ns}invoke name="exec"><${ns}parameter name="command">v</parameter></invoke>`;
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { command: "v" }, start: 0, end: raw.length, raw },
+    ]);
+  });
+
+  it("parses multiple invoke blocks inside one function_calls wrapper", () => {
+    const raw = [
+      "<function_calls>",
+      '<invoke name="read"><parameter name="path">a.ts</parameter></invoke>',
+      '<invoke name="exec"><parameter name="command">ls</parameter></invoke>',
+      "</function_calls>",
+    ].join("\n");
+
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw, {
+      allowedToolNames: ["read", "exec"],
+    });
+
+    expect(blocks?.map((block) => ({ name: block.name, arguments: block.arguments }))).toEqual([
+      { name: "read", arguments: { path: "a.ts" } },
+      { name: "exec", arguments: { command: "ls" } },
+    ]);
+  });
+
+  it("keeps attribute-dialect parameter values literal up to the first close", () => {
+    const value = '{"html":"<div></span>hi</div>","note":"a < b && c > d"}';
+    const raw = [
+      '<invoke name="write">',
+      '<parameter name="content">',
+      value,
+      "</parameter>",
+      "</invoke>",
+    ].join("\n");
+
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["write"] });
+
+    // Delimiter-based extraction keeps the raw text up to the first </parameter>;
+    // nested JSON and angle brackets stay a string with no JSON parsing.
+    expect(blocks?.[0]?.arguments).toEqual({ content: value });
+  });
+
+  it("does not parse parameterless or self-closing invoke blocks", () => {
+    expect(
+      parseStandalonePlainTextToolCallBlocks('<invoke name="exec"></invoke>', {
+        allowedToolNames: ["exec"],
+      }),
+    ).toBeNull();
+    expect(
+      parseStandalonePlainTextToolCallBlocks('<invoke name="exec"/>', {
+        allowedToolNames: ["exec"],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects attribute-dialect invoke calls with unknown tool names", () => {
+    const raw = '<invoke name="write"><parameter name="path">x</parameter></invoke>';
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["read"] })).toBeNull();
+  });
+
+  it("declines promotion for mixed prose and attribute-dialect invoke text", () => {
+    const raw = [
+      "Let me check that.",
+      '<invoke name="read"><parameter name="path">a.ts</parameter></invoke>',
+    ].join("\n");
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["read"] })).toBeNull();
+  });
+
+  it("does not promote an arbitrary namespace outside the closed allow-list", () => {
+    const raw = '<foo:invoke name="exec"><parameter name="command">x</parameter></foo:invoke>';
+
+    expect(parseStandalonePlainTextToolCallBlocks(raw, { allowedToolNames: ["exec"] })).toBeNull();
+  });
+
+  it("promotes bare and mixed-prefix invoke open/close pairings", () => {
+    // Open and close tags carry the namespace prefix independently. A bare
+    // open/bare close and a namespaced open paired with a bare close both
+    // promote, because degraded proxies routinely drop the prefix on the close.
+    const bare = '<invoke name="exec"><parameter name="p">v</parameter></invoke>';
+    expect(parseStandalonePlainTextToolCallBlocks(bare, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { p: "v" }, start: 0, end: bare.length, raw: bare },
+    ]);
+
+    const ns = "antml:";
+    const mixed = [
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "whoami",
+      "</parameter>",
+      "</invoke>",
+    ].join("\n");
+    expect(parseStandalonePlainTextToolCallBlocks(mixed, { allowedToolNames: ["exec"] })).toEqual([
+      { name: "exec", arguments: { command: "whoami" }, start: 0, end: mixed.length, raw: mixed },
+    ]);
+  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
@@ -360,5 +515,58 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(stripPlainTextToolCallBlocks(["before", block, "after"].join("\n"))).toBe(
       "before\nafter",
     );
+  });
+
+  it("strips namespaced attribute-dialect invoke blocks from visible text", () => {
+    const raw = [
+      "before",
+      '<mm:invoke name="exec">',
+      '<mm:parameter name="command">',
+      "pwd",
+      "</mm:parameter>",
+      "</mm:invoke>",
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("before\nafter");
+  });
+
+  it("strips function_calls-wrapped attribute-dialect invoke blocks from visible text", () => {
+    const raw = [
+      "before",
+      "<function_calls>",
+      '<invoke name="read">',
+      '<parameter name="path">',
+      "src/index.ts",
+      "</parameter>",
+      "</invoke>",
+      "</function_calls>",
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("before\nafter");
+  });
+
+  it("strips multiple invoke blocks sharing one function_calls wrapper from visible text", () => {
+    const raw = [
+      "before",
+      "<function_calls>",
+      '<invoke name="read"><parameter name="path">a.ts</parameter></invoke>',
+      '<invoke name="exec"><parameter name="command">ls</parameter></invoke>',
+      "</function_calls>",
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("before\nafter");
+  });
+
+  it("leaves an arbitrary namespace outside the closed allow-list as prose", () => {
+    const raw = [
+      "before",
+      '<foo:invoke name="exec"><parameter name="command">x</parameter></foo:invoke>',
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
 });

@@ -9,6 +9,14 @@ import {
   isPlainTextToolNameChar,
   skipHorizontalWhitespace,
   skipWhitespace,
+  stripXmlishAttributeQuotes,
+  XMLISH_FUNCTION_CALLS_CLOSE_RE,
+  XMLISH_FUNCTION_CALLS_OPEN_RE,
+  XMLISH_INVOKE_CLOSE_RE,
+  XMLISH_INVOKE_OPEN_RE,
+  XMLISH_PARAMETER_CLOSE_RE,
+  XMLISH_PARAMETER_OPEN_RE,
+  xmlishParameterName,
 } from "./grammar.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
@@ -37,6 +45,10 @@ const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 
 type PlainTextToolCallOpening = {
   allowsOptionalXmlishClose?: boolean;
+  // Attribute dialect (`<invoke name="..."><parameter name="...">`) closes with
+  // `</invoke>` plus an optional `</function_calls>` wrapper close instead of
+  // the equals-dialect `</function>`.
+  attributeDialectInvoke?: boolean;
   end: number;
   name: string;
   requiresClosing: boolean;
@@ -124,6 +136,26 @@ function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolC
     return null;
   }
   return { end: start + match[0].length, name: match[1], requiresClosing: false };
+}
+
+function parseXmlishInvokeOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  let cursor = start;
+  // The attribute dialect may bracket the invoke in an optional <function_calls>
+  // wrapper. Consume it so a bare invoke and a wrapped invoke parse identically.
+  const wrapperMatch = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(text.slice(cursor));
+  if (wrapperMatch) {
+    cursor = skipWhitespace(text, cursor + wrapperMatch[0].length);
+  }
+  const invokeMatch = XMLISH_INVOKE_OPEN_RE.exec(text.slice(cursor));
+  if (!invokeMatch?.[1]) {
+    return null;
+  }
+  return {
+    attributeDialectInvoke: true,
+    end: cursor + invokeMatch[0].length,
+    name: stripXmlishAttributeQuotes(invokeMatch[1]),
+    requiresClosing: false,
+  };
 }
 
 function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -223,12 +255,16 @@ type XmlishParameterBlockBounds = {
 
 function findXmlishParameterBlock(text: string, start: number): XmlishParameterBlockBounds | null {
   const cursor = skipWhitespace(text, start);
-  const openMatch = /^<parameter=([A-Za-z0-9_.:-]{1,120})>/i.exec(text.slice(cursor));
-  if (!openMatch?.[1]) {
+  const openMatch = XMLISH_PARAMETER_OPEN_RE.exec(text.slice(cursor));
+  if (!openMatch) {
+    return null;
+  }
+  const name = xmlishParameterName(openMatch);
+  if (!name) {
     return null;
   }
   const payloadStart = cursor + openMatch[0].length;
-  const closeMatch = /<\/parameter>/i.exec(text.slice(payloadStart));
+  const closeMatch = XMLISH_PARAMETER_CLOSE_RE.exec(text.slice(payloadStart));
   if (!closeMatch) {
     return null;
   }
@@ -237,7 +273,7 @@ function findXmlishParameterBlock(text: string, start: number): XmlishParameterB
   return {
     closeStart,
     end: closeEnd,
-    name: openMatch[1],
+    name,
     payloadStart,
     start: cursor,
   };
@@ -291,6 +327,36 @@ function consumeOptionalXmlishFunctionClose(text: string, start: number): number
   return consumeXmlishFunctionClose(text, start) ?? start;
 }
 
+function consumeOptionalXmlishWrapperClose(text: string, start: number): number {
+  const cursor = skipWhitespace(text, start);
+  const wrapperClose = XMLISH_FUNCTION_CALLS_CLOSE_RE.exec(text.slice(cursor));
+  return wrapperClose ? cursor + wrapperClose[0].length : start;
+}
+
+// Attribute-dialect invokes require their `</invoke>` close; the enclosing
+// `</function_calls>` wrapper close is optional so multiple invokes can share it.
+function consumeXmlishInvokeClose(text: string, start: number): number | null {
+  const cursor = skipWhitespace(text, start);
+  const invokeClose = XMLISH_INVOKE_CLOSE_RE.exec(text.slice(cursor));
+  if (!invokeClose) {
+    return null;
+  }
+  return consumeOptionalXmlishWrapperClose(text, cursor + invokeClose[0].length);
+}
+
+function consumeXmlishToolCallClose(
+  text: string,
+  start: number,
+  opening: PlainTextToolCallOpening,
+): number | null {
+  if (opening.attributeDialectInvoke) {
+    return consumeXmlishInvokeClose(text, start);
+  }
+  return opening.allowsOptionalXmlishClose
+    ? consumeOptionalXmlishFunctionClose(text, start)
+    : consumeXmlishFunctionClose(text, start);
+}
+
 function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): number | null {
   const opening = parseXmlishOpening(text, start);
   if (!opening) {
@@ -310,13 +376,15 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
   if (parameterCount === 0) {
     return null;
   }
-  return opening.allowsOptionalXmlishClose
-    ? consumeOptionalXmlishFunctionClose(text, cursor)
-    : consumeXmlishFunctionClose(text, cursor);
+  return consumeXmlishToolCallClose(text, cursor, opening);
 }
 
 function parseXmlishOpening(text: string, start: number): PlainTextToolCallOpening | null {
-  return parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+  return (
+    parseBracketOpening(text, start) ??
+    parseXmlishFunctionOpening(text, start) ??
+    parseXmlishInvokeOpening(text, start)
+  );
 }
 
 function parseXmlishPlainTextToolCallBlockAt(
@@ -355,9 +423,7 @@ function parseXmlishPlainTextToolCallBlockAt(
     return null;
   }
 
-  const end = opening.allowsOptionalXmlishClose
-    ? consumeOptionalXmlishFunctionClose(text, cursor)
-    : consumeXmlishFunctionClose(text, cursor);
+  const end = consumeXmlishToolCallClose(text, cursor, opening);
   if (end === null) {
     return null;
   }
@@ -389,13 +455,26 @@ export function parseStandalonePlainTextToolCallBlocks(
   return blocks.length > 0 ? blocks : null;
 }
 
-/** Removes full-line standalone plain-text tool-call blocks from user-visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
+/**
+ * Removes full-line standalone plain-text tool-call blocks from user-visible text.
+ *
+ * `isInsideCodeRegion` lets the host skip blocks that sit inside a Markdown code
+ * fence / inline span, mirroring `stripToolCallXmlTags`. Without it a complete
+ * invoke block that the code-aware XML pass legitimately left inside a fence
+ * would be deleted here, silently dropping example content. The predicate is
+ * passed in (not imported) so this package keeps its `src/` dependency direction
+ * clean; callers compute the regions against the exact text handed in.
+ */
+export function stripPlainTextToolCallBlocks(
+  text: string,
+  isInsideCodeRegion?: (offset: number) => boolean,
+): string {
   if (
     !text ||
     (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
       !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text) &&
-      !/(?:^|\n)\s*<function=[A-Za-z0-9_.:-]{1,120}>/i.test(text))
+      !/(?:^|\n)\s*<function=[A-Za-z0-9_.:-]{1,120}>/i.test(text) &&
+      !/(?:^|\n)\s*<\s*(?:antml:|mm:)?(?:function_calls|invoke)\b/i.test(text))
   ) {
     return text;
   }
@@ -409,6 +488,12 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     const blockStart = skipHorizontalWhitespace(text, index);
+    // A complete block inside a code fence / inline span is example text, not a
+    // leaked call; leave it untouched to match the code-aware XML pass.
+    if (isInsideCodeRegion?.(blockStart)) {
+      index += 1;
+      continue;
+    }
     const block = parsePlainTextToolCallBlockAt(text, blockStart);
     const blockEnd = block?.end ?? parseXmlishPlainTextToolCallBlockEndAt(text, blockStart);
     if (blockEnd === null) {

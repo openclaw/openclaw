@@ -385,6 +385,99 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
+  it("promotes namespaced attribute-dialect tool calls into tool-call stream events", async () => {
+    const ns = "antml:";
+    const rawToolText = [
+      `<${ns}invoke name="read">`,
+      `<${ns}parameter name="path">`,
+      "/tmp/file.txt",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
+  });
+
+  it("scrubs over-cap namespaced attribute-dialect tool text from done messages", async () => {
+    const ns = "antml:";
+    const rawToolText = [
+      `<${ns}invoke name="read">`,
+      `<${ns}parameter name="path">`,
+      "x".repeat(256_001),
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
+    const doneEvent = requireRecord(events[0], "done event");
+    expect(doneEvent.reason).toBe("stop");
+    expect(doneEvent.message).toMatchObject({
+      role: "assistant",
+      content: [],
+      stopReason: "stop",
+    });
+    expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
+  });
+
   it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>

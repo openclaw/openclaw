@@ -822,6 +822,132 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:exec]");
   });
 
+  it("promotes streamed namespaced attribute-dialect text to a structured tool call", async () => {
+    const ns = "antml:";
+    const rawToolText = [
+      `<${ns}function_calls>`,
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "pwd",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+      `</${ns}function_calls>`,
+    ].join("\n");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: resultMessage },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(requireRecord(events.at(-1), "done").reason).toBe("toolUse");
+    expect(result.stopReason).toBe("toolUse");
+    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "pwd" },
+    });
+    expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
+  });
+
+  it("buffers attribute-dialect invoke text split mid-tag until final promotion", async () => {
+    const ns = "";
+    const rawToolText = [
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "pwd",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+    const splitAt = `<${ns}invoke name="ex`.length;
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText.slice(0, splitAt) },
+          { type: "text_delta", contentIndex: 0, delta: rawToolText.slice(splitAt) },
+          { type: "done", reason: "stop", message: resultMessage },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(result.stopReason).toBe("toolUse");
+    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "pwd" },
+    });
+  });
+
+  it("does not promote a self-closing parameterless invoke", async () => {
+    const ns = "";
+    const rawToolText = `<${ns}invoke name="exec"/>`;
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: resultMessage },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.map((event) => requireRecord(event, "event").type)).not.toContain(
+      "toolcall_start",
+    );
+    expect(requireRecord(events.at(-1), "done").reason).toBe("stop");
+    expect(result.stopReason).toBe("stop");
+  });
+
   it("does not buffer normal prose that starts like a final answer", async () => {
     const resultMessage = {
       role: "assistant",
