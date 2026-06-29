@@ -14,6 +14,10 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
@@ -241,11 +245,16 @@ export async function containerRestRequest<T = unknown>(
   }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
+    // Bound the error body: signal-cli-rest-api is an untrusted external container,
+    // and a hostile/buggy response must not let an error path buffer an unbounded body.
+    const errorText = await readResponseTextLimited(res).catch(() => "");
     throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
   }
 
-  const text = await res.text();
+  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+  // funnel through here). Reuse the same bounded reader family as the attachment path.
+  const text = await readProviderTextResponse(res, "Signal REST");
   if (!text) {
     return undefined as T;
   }
