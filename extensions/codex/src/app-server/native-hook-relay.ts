@@ -253,7 +253,7 @@ export function buildCodexNativeHookRelayConfig(params: {
       selected &&
       event === "pre_tool_use" &&
       !shouldRelay &&
-      params.relay.shouldInstallInactivePreToolUseHook();
+      params.relay.shouldInstallInactivePreToolUseHook?.() === true;
     if (!selected || (!shouldRelay && !selectedNoopPreToolUse)) {
       if (selected || params.clearOmittedEvents) {
         config[`hooks.${codexEvent}`] = [] satisfies JsonValue;

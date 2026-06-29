@@ -31,6 +31,7 @@ Global defaults, with every documented field shown:
   tools: {
     loopDetection: {
       enabled: false, // master switch for the rolling-history detectors
+      nativePreToolUseRelay: true, // Codex Harness native PreToolUse relay path
       historySize: 30,
       warningThreshold: 10,
       criticalThreshold: 20,
@@ -72,18 +73,19 @@ Per-agent override (optional):
 
 ### Field behavior
 
-| Field                            | Default | Effect                                                                                                                          |
-| -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                        | `false` | Master switch for the rolling-history detectors. Setting `false` also disables the post-compaction guard.                       |
-| `historySize`                    | `30`    | Number of recent tool calls kept for analysis.                                                                                  |
-| `warningThreshold`               | `10`    | Threshold before a pattern is classified as warning-only.                                                                       |
-| `criticalThreshold`              | `20`    | Threshold for blocking repetitive no-progress loop patterns.                                                                    |
-| `unknownToolThreshold`           | `10`    | Block repeated calls to the same unavailable tool after this many misses.                                                       |
-| `globalCircuitBreakerThreshold`  | `30`    | Global no-progress breaker threshold across all detectors.                                                                      |
-| `detectors.genericRepeat`        | `true`  | Warns on repeated same-tool + same-params patterns and blocks when the same calls also return identical outcomes.               |
-| `detectors.knownPollNoProgress`  | `true`  | Detects known polling-like patterns with no state change.                                                                       |
-| `detectors.pingPong`             | `true`  | Detects alternating ping-pong patterns.                                                                                         |
-| `postCompactionGuard.windowSize` | `3`     | Number of post-compaction tool calls during which the guard stays armed and the count of identical triples that aborts the run. |
+| Field                            | Default | Effect                                                                                                                                                                                            |
+| -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                        | `false` | Master switch for the rolling-history detectors. Setting `false` also disables the post-compaction guard.                                                                                         |
+| `nativePreToolUseRelay`          | `true`  | Codex Harness only. Set `false` to disable the loop-detection-only native `PreToolUse` relay subprocess path without disabling before-tool policy, trusted-tool policy, or other local tool work. |
+| `historySize`                    | `30`    | Number of recent tool calls kept for analysis.                                                                                                                                                    |
+| `warningThreshold`               | `10`    | Threshold before a pattern is classified as warning-only.                                                                                                                                         |
+| `criticalThreshold`              | `20`    | Threshold for blocking repetitive no-progress loop patterns.                                                                                                                                      |
+| `unknownToolThreshold`           | `10`    | Block repeated calls to the same unavailable tool after this many misses.                                                                                                                         |
+| `globalCircuitBreakerThreshold`  | `30`    | Global no-progress breaker threshold across all detectors.                                                                                                                                        |
+| `detectors.genericRepeat`        | `true`  | Warns on repeated same-tool + same-params patterns and blocks when the same calls also return identical outcomes.                                                                                 |
+| `detectors.knownPollNoProgress`  | `true`  | Detects known polling-like patterns with no state change.                                                                                                                                         |
+| `detectors.pingPong`             | `true`  | Detects alternating ping-pong patterns.                                                                                                                                                           |
+| `postCompactionGuard.windowSize` | `3`     | Number of post-compaction tool calls during which the guard stays armed and the count of identical triples that aborts the run.                                                                   |
 
 For `exec`, no-progress checks compare stable command outcomes and ignore volatile runtime metadata such as duration, PID, session ID, and working directory. When a run id is available, recent tool-call history is evaluated only within that run so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts from earlier runs.
 

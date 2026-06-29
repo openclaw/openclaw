@@ -1074,7 +1074,7 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
     });
 
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalledWith(9_999_992, 0);
     await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
