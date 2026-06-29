@@ -1256,6 +1256,67 @@ describe("resolveSlackThreadHistory", () => {
     expect(result[0]?.botId).toBe("BMONITOR");
   });
 
+  it("includes bot messages whose text is only in standard attachment blocks", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              blocks: [
+                {
+                  type: "section",
+                  text: { type: "mrkdwn", text: "High error rate on checkout" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("High error rate on checkout");
+    expect(result[0]?.botId).toBe("BMONITOR");
+  });
+
+  it("preserves formatting in primary Slack text", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  line one\nline two  ",
+          ts: "1.000",
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result[0]?.text).toBe("line one\nline two");
+  });
+
   it("returns empty when limit is zero without calling Slack API", async () => {
     const replies = vi.fn();
     const client = {

@@ -27,6 +27,7 @@ export type SlackAttachment = {
   image_height?: number;
   thumb_url?: string;
   files?: SlackFile[];
+  blocks?: unknown[];
   message_blocks?: unknown[];
 };
 
