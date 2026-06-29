@@ -357,7 +357,7 @@ async function runLoop(
         toolCallingRound += 1;
         if (config.onBeforeToolCallingRound) {
           const shouldContinue = await config.onBeforeToolCallingRound(toolCallingRound);
-          if (shouldContinue === false) {
+          if (!shouldContinue) {
             await emit({ type: "turn_end", message, toolResults: [] });
             turnOpen = false;
             await emit({ type: "agent_end", messages: newMessages });

@@ -1054,8 +1054,13 @@ async function runEmbeddedAgentInternal(
           ? resolveAgentConfig(params.config, sessionAgentId)?.iterationBudget
           : undefined) ?? params.config?.agents?.defaults?.iterationBudget,
       );
+      const isSubagentRun = Boolean(params.spawnedBy);
       const iterationBudget = resolvedBudgetConfig?.enabled
-        ? new IterationBudget(resolvedBudgetConfig.maxIterations)
+        ? new IterationBudget(
+            isSubagentRun
+              ? resolvedBudgetConfig.subagentMaxIterations
+              : resolvedBudgetConfig.maxIterations,
+          )
         : undefined;
       let budgetExhaustedSummaryPending = false;
       let budgetExhaustedSummaryInstruction: string | null = null;
@@ -1544,12 +1549,6 @@ async function runEmbeddedAgentInternal(
             });
           }
           runLoopIterations += 1;
-          // Budget consumption: each outer-loop iteration counts against the budget.
-          // onBeforeToolCallingRound handles inner-loop tool rounds separately;
-          // this covers non-tool iterations (compaction retries, auth retries, etc.).
-          if (iterationBudget && !budgetSummaryAttempt) {
-            iterationBudget.consume();
-          }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1821,7 +1820,7 @@ async function runEmbeddedAgentInternal(
             fastMode: attemptFastMode,
             fastModeAuto: params.fastMode === "auto",
             onBeforeToolCallingRound: iterationBudget
-              ? (round: number) => iterationBudget.consume()
+              ? (_round: number) => iterationBudget.consume()
               : undefined,
             ...(params.fastMode === "auto"
               ? {

@@ -762,6 +762,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].runRetries.perProfile": "Agent Run Retries Per Profile",
   "agents.list[].runRetries.min": "Agent Run Retries Minimum",
   "agents.list[].runRetries.max": "Agent Run Retries Maximum",
+  "agents.defaults.iterationBudget": "Iteration Budget",
+  "agents.defaults.iterationBudget.enabled": "Iteration Budget Enabled",
+  "agents.defaults.iterationBudget.maxIterations": "Iteration Budget Max Iterations",
+  "agents.defaults.iterationBudget.subagentMaxIterations":
+    "Iteration Budget Subagent Max Iterations",
+  "agents.defaults.iterationBudget.forceSummaryOnExhaustion": "Iteration Budget Force Summary",
+  "agents.list[].iterationBudget": "Agent Iteration Budget",
+  "agents.list[].iterationBudget.enabled": "Agent Iteration Budget Enabled",
+  "agents.list[].iterationBudget.maxIterations": "Agent Iteration Budget Max Iterations",
+  "agents.list[].iterationBudget.subagentMaxIterations": "Agent Iteration Budget Subagent Max",
+  "agents.list[].iterationBudget.forceSummaryOnExhaustion": "Agent Iteration Budget Force Summary",
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",
