@@ -14,6 +14,7 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { jsonResult } from "../tools/common.js";
 import {
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
@@ -263,6 +264,104 @@ describe("compaction-safeguard tool failures", () => {
     const section = formatToolFailuresSection(failures);
     expect(section).toContain("## Tool Failures");
     expect(section).toContain("exec (status=failed exitCode=1): ENOENT: missing file");
+  });
+
+  it("excludes accepted sessions_spawn results even when persisted with isError", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-accepted",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: {
+          status: "accepted",
+          childSessionKey: "agent:watcher:subagent:abc",
+          runId: "run-123",
+          mode: "run",
+        },
+        content: [{ type: "text", text: "accepted" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    expect(collectToolFailures(messages)).toHaveLength(0);
+  });
+
+  it("still reports sessions_spawn results that genuinely failed", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-error",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: { status: "error" },
+        content: [{ type: "text", text: "spawn rejected" }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-forbidden",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: { status: "forbidden" },
+        content: [{ type: "text", text: "not allowed" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const failures = collectToolFailures(messages);
+    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+      "call-spawn-error",
+      "call-spawn-forbidden",
+    ]);
+  });
+
+  it("only excludes the accepted spawn from a mixed batch and reports look-alike non-spawn tools", () => {
+    // Build the accepted-spawn details via the production helper so the skip is
+    // proven against the real sessions_spawn result shape, not a hand-authored stub.
+    const acceptedDetails = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+      mode: "run",
+    }).details;
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-accepted",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: acceptedDetails,
+        content: [{ type: "text", text: "accepted" }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-exec-failed",
+        toolName: "exec",
+        isError: true,
+        details: { status: "failed", exitCode: 1 },
+        content: [{ type: "text", text: "boom" }],
+        timestamp: Date.now(),
+      },
+      {
+        // Same accepted-shaped details on a non-spawn tool must still be reported:
+        // the skip is gated on toolName so look-alike payloads are not suppressed.
+        role: "toolResult",
+        toolCallId: "call-other-lookalike",
+        toolName: "some_other_tool",
+        isError: true,
+        details: acceptedDetails,
+        content: [{ type: "text", text: "real failure" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const failures = collectToolFailures(messages);
+    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+      "call-exec-failed",
+      "call-other-lookalike",
+    ]);
   });
 
   it("dedupes by toolCallId and handles empty output", () => {
