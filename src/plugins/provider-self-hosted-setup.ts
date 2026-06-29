@@ -18,6 +18,7 @@ import {
 } from "../agents/self-hosted-provider-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -38,6 +39,9 @@ export {
 } from "../agents/self-hosted-provider-defaults.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
+
+/** Maximum bytes read from a self-hosted provider probe response (2 MiB). */
+const SELF_HOSTED_PROBE_MAX_BYTES = 2 * 1024 * 1024;
 
 type OpenAICompatModelsResponse = {
   data?: Array<{
@@ -126,7 +130,13 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
       if (!response.ok) {
         return undefined;
       }
-      const data = (await response.json()) as LlamaCppPropsResponse;
+      const rawBody = await readResponseWithLimit(response, SELF_HOSTED_PROBE_MAX_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `Self-hosted provider probe response too large: ${size} bytes (limit: ${maxBytes})`,
+          ),
+      });
+      const data = JSON.parse(rawBody.toString()) as LlamaCppPropsResponse;
       return (
         readPositiveInteger(data.default_generation_settings?.n_ctx) ??
         readPositiveInteger(data.n_ctx)
@@ -170,7 +180,13 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = (await response.json()) as OpenAICompatModelsResponse;
+      const rawBody = await readResponseWithLimit(response, SELF_HOSTED_PROBE_MAX_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `Self-hosted provider probe response too large: ${size} bytes (limit: ${maxBytes})`,
+          ),
+      });
+      const data = JSON.parse(rawBody.toString()) as OpenAICompatModelsResponse;
       const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);

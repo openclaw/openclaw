@@ -397,6 +397,87 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 });
 
+describe("discoverOpenAICompatibleLocalModels – bound read proof", () => {
+  it("rejects /models response over 2 MiB with valid JSON and returns [] (over-cap)", async () => {
+    // Build a valid JSON payload whose encoded size exceeds 2 MiB.
+    // Mutation test: reverting to bare response.json() parses this successfully
+    // and returns a non-empty model list — the expect([]) assertion would fail.
+    const OVER_CAP = 2 * 1024 * 1024 + 1;
+    const overCapJson = JSON.stringify({ data: [{ id: "x".repeat(OVER_CAP) }] });
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(overCapJson, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      env: {},
+    });
+
+    expect(result).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects /props response over 2 MiB with valid JSON, leaving contextTokens absent (over-cap)", async () => {
+    // Build a valid /props payload with n_ctx set; pad it past 2 MiB.
+    // Mutation test: reverting to bare response.json() parses n_ctx = 65536
+    // and contextTokens appears — the expect(not.toHaveProperty) assertion would fail.
+    const OVER_CAP = 2 * 1024 * 1024 + 1;
+    const overCapPropsJson = JSON.stringify({ n_ctx: 65536, _pad: "x".repeat(OVER_CAP) });
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data: [{ id: "llama-model" }] }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(overCapPropsJson, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toHaveLength(1);
+    expect(models[0]).not.toHaveProperty("contextTokens");
+    expect(models[0]).toMatchObject({ id: "llama-model" });
+    expect(modelsRelease).toHaveBeenCalledOnce();
+    expect(propsRelease).toHaveBeenCalledOnce();
+  });
+
+  it("parses /models response under 2 MiB correctly (under-cap control)", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data: [{ id: "control-model" }] }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("{}", { status: 404 }),
+      finalUrl: "http://127.0.0.1:8000/props",
+      release: vi.fn(async () => undefined),
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      env: {},
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "control-model" });
+    expect(release).toHaveBeenCalledOnce();
+  });
+});
+
 describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
   it.each([
     {
