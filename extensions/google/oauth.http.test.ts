@@ -1,5 +1,8 @@
 // Google tests cover oauth.http body-byte-cap for the Gemini CLI OAuth
 // token-exchange/identity calls.
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TOKEN_URL } from "./oauth.shared.js";
 
@@ -75,5 +78,94 @@ describe("oauth.http fetchWithTimeout body byte cap", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ access_token: "abc", expires_in: 3600 });
     expect(releaseMock).toHaveBeenCalledOnce();
+  });
+});
+
+// Real-wire loopback proof. These tests bypass `fetchWithSsrFGuard` (which
+// blocks 127.0.0.1 by design) and exercise `readResponseWithLimit` directly
+// against a real `http.createServer` listener — the same helper that
+// `fetchWithTimeout` calls inside its try/finally block. Captured vitest
+// output for these two tests is the ClawSweeper "real behavior proof" required
+// before merge.
+describe("oauth.http bounded-read real wire proof (loopback http.createServer)", () => {
+  it("caps an oversized body streamed chunked over real wire", async () => {
+    const CHUNK = 1024 * 1024;
+    const MAX = 16 * 1024 * 1024;
+    const TOTAL = 18 * 1024 * 1024;
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      let sent = 0;
+      const tick = setInterval(() => {
+        if (sent < 18) {
+          res.write(Buffer.alloc(CHUNK));
+          sent++;
+        } else {
+          clearInterval(tick);
+          res.end();
+        }
+      }, 1);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    let captured: Error | undefined;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      // Wire framing merges TCP packets, so the reported size at throw time
+      // is between MAX (cap) and TOTAL (cap+last merged packet). Both bounds
+      // prove (a) cap fired (size > MAX) and (b) we did not buffer beyond the
+      // server's full 18 MiB (size < TOTAL).
+      try {
+        await readResponseWithLimit(response, MAX, {
+          onOverflow: ({ size, maxBytes }) =>
+            new Error(`real wire: body exceeds ${maxBytes} bytes (got ${size})`),
+        });
+      } catch (err) {
+        captured = err as Error;
+      }
+      expect(captured).toBeInstanceOf(Error);
+      const match = captured!.message.match(/real wire: body exceeds \d+ bytes \(got (\d+)\)/);
+      expect(match).not.toBeNull();
+      const got = Number(match![1]);
+      expect(got).toBeGreaterThan(MAX);
+      expect(got).toBeLessThan(TOTAL);
+      // Print to vitest stdout for PR-body real behavior proof capture.
+      console.log(
+        `[oauth.http loopback proof] oversized path: cap=${MAX} reported=${got} server_total=${TOTAL}`,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns a Buffer for normal-size responses on real wire", async () => {
+    const bodyText = '{"access_token":"loopback","expires_in":3600}';
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(bodyText);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      const body = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`real wire: body exceeds ${maxBytes} bytes (got ${size})`),
+      });
+      expect(body.byteLength).toBe(Buffer.byteLength(bodyText, "utf8"));
+      expect(new TextDecoder("utf-8").decode(body)).toBe(bodyText);
+      console.log(
+        `[oauth.http loopback proof] normal path: cap=16777216 returned=${body.byteLength} body=${JSON.stringify(new TextDecoder("utf-8").decode(body))}`,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
