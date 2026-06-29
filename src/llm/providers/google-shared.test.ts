@@ -136,6 +136,42 @@ describe("consumeGoogleGenerateContentStream", () => {
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
 
+  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+    const terminalReason = (async () => {
+      for await (const event of stream) {
+        if (event.type === "done") {
+          return event.reason;
+        }
+      }
+      return undefined;
+    })();
+
+    await consumeGoogleGenerateContentStream({
+      chunks: chunks([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
+              },
+              finishReason: FinishReason.MAX_TOKENS,
+            },
+          ],
+        } as unknown as GenerateContentResponse,
+      ]),
+      model,
+      output,
+      stream,
+      nextToolCallId: (name) => `generated-${name}`,
+    });
+
+    expect(await terminalReason).toBe("length");
+    expect(output.stopReason).toBe("length");
+    expect(output.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
+  });
+
   it("generates a new id when Google repeats a streamed tool-call id", async () => {
     const output = createOutput();
     const stream = new AssistantMessageEventStream();

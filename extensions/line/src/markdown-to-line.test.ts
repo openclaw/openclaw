@@ -8,6 +8,7 @@ import {
   processLineMessage,
   convertTableToFlexBubble,
   convertCodeBlockToFlexBubble,
+  convertLinksToFlexBubble,
   hasMarkdownToConvert,
 } from "./markdown-to-line.js";
 
@@ -129,6 +130,18 @@ describe("extractLinks", () => {
     expect(links[0]).toEqual({ text: "Google", url: "https://google.com" });
     expect(links[1]).toEqual({ text: "GitHub", url: "https://github.com" });
     expect(textWithLinks).toBe("Check out Google and GitHub.");
+  });
+});
+
+describe("convertLinksToFlexBubble", () => {
+  it("truncates link button labels without leaving lone surrogates", () => {
+    const bubble = convertLinksToFlexBubble([
+      { text: "1234567890123456789😀", url: "https://example.com" },
+    ]);
+    const footer = bubble.footer as { contents: Array<{ action: { label: string } }> };
+
+    expect(footer.contents[0].action.label).toBe("1234567890123456789");
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(footer.contents[0].action.label)).toBe(false);
   });
 });
 

@@ -144,6 +144,324 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("follows next_cursor pagination before projecting model ids", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            has_more: true,
+            next_cursor: "cursor-2",
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({ data: [{ id: "model-b", object: "model" }], has_more: false }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models?after=cursor-2",
+    );
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows absolute next links when providers return them", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            next: "https://provider.example.test/v1/models?page=2",
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models?page=2",
+    );
+  });
+
+  it("follows nested links.next pagination when providers return it", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            links: { next: "/v1/models?page=2" },
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models?page=2",
+    );
+  });
+
+  it("resolves relative pagination links against the guarded fetch final URL", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            links: { next: "?page=2" },
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models/",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models/?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models/?page=2",
+    );
+  });
+
+  it("does not re-add credentials to redirected-origin pagination requests", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            links: { next: "?page=2" },
+          }),
+        ),
+        finalUrl: "https://redirected.example.test/v1/models/",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://redirected.example.test/v1/models/?page=2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        discoveryApiKey: "provider-token",
+        fetchGuard: fetchGuardMock,
+        buildRequestHeaders: ({ discoveryApiKey }) => ({
+          Accept: "application/json",
+          ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+          "ChatGPT-Account-ID": "acct-1",
+        }),
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    const firstHeaders = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
+    const secondHeaders = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
+    expect(firstHeaders).toBeInstanceOf(Headers);
+    expect(secondHeaders).toBeInstanceOf(Headers);
+    expect((firstHeaders as Headers).get("authorization")).toBe("Bearer provider-token");
+    expect((firstHeaders as Headers).get("chatgpt-account-id")).toBe("acct-1");
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://redirected.example.test/v1/models/?page=2",
+    );
+    expect((secondHeaders as Headers).get("authorization")).toBeNull();
+    expect((secondHeaders as Headers).get("chatgpt-account-id")).toBeNull();
+    expect((secondHeaders as Headers).get("accept")).toBe("application/json");
+  });
+
+  it("follows nextPageToken pagination before projecting model ids", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: "model-a", object: "model" }],
+            nextPageToken: "page-2",
+          }),
+        ),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models?pageToken=page-2",
+        release,
+      });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a", "model-b"]);
+
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
+      "https://provider.example.test/v1/models?pageToken=page-2",
+    );
+  });
+
+  it("fails truncated live catalog pagination instead of returning partial rows", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async ({ url }) => {
+      const page = Number(new URL(url).searchParams.get("after") ?? "0");
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: [{ id: `model-${page}`, object: "model" }],
+            has_more: true,
+            next_cursor: String(page + 1),
+          }),
+        ),
+        finalUrl: url,
+        release,
+      };
+    });
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow("provider model discovery exceeded 50 pages before the catalog completed");
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(50);
+    expect(release).toHaveBeenCalledTimes(50);
+  });
+
+  it("fails explicit incomplete live catalog pagination without a supported next page", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+          has_more: true,
+        }),
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow(
+      "provider model discovery did not include a supported next page before the catalog completed",
+    );
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses one timeout budget across paginated live catalog discovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => undefined);
+      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await vi.advanceTimersByTimeAsync(800);
+          return {
+            response: new Response(
+              JSON.stringify({
+                data: [{ id: "model-a", object: "model" }],
+                has_more: true,
+                next_cursor: "cursor-2",
+              }),
+            ),
+            finalUrl: "https://provider.example.test/v1/models",
+            release,
+          };
+        })
+        .mockImplementationOnce(async () => ({
+          response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+          finalUrl: "https://provider.example.test/v1/models?after=cursor-2",
+          release,
+        }));
+
+      await expect(
+        fetchLiveProviderModelIds({
+          providerId: "provider",
+          endpoint: "https://provider.example.test/v1/models",
+          fetchGuard: fetchGuardMock,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toEqual(["model-a", "model-b"]);
+
+      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchGuardMock.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
+      expect(fetchGuardMock.mock.calls[1]?.[0].timeoutMs).toBe(200);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caches raw live model rows for provider-specific projection", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       models: [{ slug: "custom-a" }, { slug: "custom-b" }],

@@ -468,16 +468,25 @@ function escapeUnsupportedTelegramHtml(
   return result;
 }
 
+function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
+  return (
+    Number.isInteger(codePoint) &&
+    codePoint >= 0 &&
+    codePoint <= 0x10ffff &&
+    !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+  );
+}
+
 function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
   if (entity.startsWith("#x") || entity.startsWith("#X")) {
     const codePoint = Number.parseInt(entity.slice(2), 16);
-    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    return isValidTelegramHtmlEntityCodePoint(codePoint)
       ? String.fromCodePoint(codePoint)
       : fallback;
   }
   if (entity.startsWith("#")) {
     const codePoint = Number.parseInt(entity.slice(1), 10);
-    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    return isValidTelegramHtmlEntityCodePoint(codePoint)
       ? String.fromCodePoint(codePoint)
       : fallback;
   }

@@ -858,7 +858,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -977,7 +977,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1058,7 +1058,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1212,8 +1212,8 @@ jobs:
     strategy:
       fail-fast: false
       # The canonical main path waits for the admission debounce above, so
-      # modestly widen this large matrix without recreating registration bursts.
-      max-parallel: 16
+      # widen this large matrix within the current runner-registration budget.
+      max-parallel: 24
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1351,7 +1351,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 12
       matrix:
         include:
           - check_name: check-guards
@@ -1359,6 +1359,9 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-shrinkwrap
             task: shrinkwrap
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-bundled-channel-config-metadata
+            task: bundled-channel-config-metadata
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
@@ -1451,6 +1454,9 @@ jobs:
             shrinkwrap)
               pnpm deps:shrinkwrap:check
               ;;
+            bundled-channel-config-metadata)
+              pnpm check:bundled-channel-config-metadata
+              ;;
             prod-types)
               pnpm tsgo:prod
               ;;
@@ -1493,7 +1499,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 12
       matrix:
         include:
           - check_name: check-additional-boundaries-a
@@ -2419,7 +2425,8 @@ jobs:
       - macos-swift
       - ios-build
       - android
-    if: ${{ !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    # Re-enable this job when we want to collect CI timing data for timing optimization.
+    if: ${{ false && !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

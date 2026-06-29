@@ -2716,7 +2716,10 @@ describe("executeNodeHostCommand", () => {
     expect(requireGatewayCommand("system.run.prepare").params?.params?.env).toEqual({
       FOO: "bar",
     });
-    expect(requireRunParams(requireGatewayCommand("system.run")).env).toEqual({ FOO: "bar" });
+    expect(requireGatewayCommand("system.run.prepare").params?.params?.cwd).toBe("/tmp/work");
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams.env).toEqual({ FOO: "bar" });
+    expect(runParams.cwd).toBe("/tmp/work");
     const evalEnvs = evaluateShellAllowlistMock.mock.calls.map(
       ([raw]) => (raw as ShellAllowlistMockParams).env,
     );
@@ -2745,10 +2748,29 @@ describe("executeNodeHostCommand", () => {
     const runParams = requireRunParams(call);
     expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
     expect(runParams.rawCommand).toBe("bun ./script.ts");
+    expect(runParams.cwd).toBe("/tmp/work");
     expect(typeof runParams.runId).toBe("string");
     expect(runParams.suppressNotifyOnExit).toBe(true);
     expect(runParams.timeoutMs).toBe(30_000);
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
+  });
+
+  it("omits cwd from direct node system.run when workdir is undefined", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: undefined,
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const runParams = requireRunParams(requireGatewayCall(0));
+    expect(Object.hasOwn(runParams, "cwd")).toBe(false);
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {

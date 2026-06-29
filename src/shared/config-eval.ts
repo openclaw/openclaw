@@ -1,6 +1,7 @@
 // Config evaluation helpers load dynamic config modules with guarded evaluation.
 import fs from "node:fs";
 import path from "node:path";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
 export function isTruthy(value: unknown): boolean {
@@ -27,9 +28,19 @@ export function resolveConfigPath(config: unknown, pathStr: string): unknown {
     if (typeof current !== "object" || current === null) {
       return undefined;
     }
+    if (isBlockedObjectKey(part)) {
+      return undefined;
+    }
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function hasBlockedConfigPathSegment(pathStr: string): boolean {
+  return pathStr
+    .split(".")
+    .filter(Boolean)
+    .some((part) => isBlockedObjectKey(part));
 }
 
 /** Checks a config path with fallback defaults only when the path is unresolved. */
@@ -39,7 +50,11 @@ export function isConfigPathTruthyWithDefaults(
   defaults: Record<string, boolean>,
 ): boolean {
   const value = resolveConfigPath(config, pathStr);
-  if (value === undefined && pathStr in defaults) {
+  if (
+    value === undefined &&
+    !hasBlockedConfigPathSegment(pathStr) &&
+    Object.hasOwn(defaults, pathStr)
+  ) {
     return defaults[pathStr] ?? false;
   }
   return isTruthy(value);

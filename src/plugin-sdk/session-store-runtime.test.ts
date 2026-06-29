@@ -145,6 +145,7 @@ describe("session-store-runtime compatibility surface", () => {
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 7 * DAY_MS,
+          modelRunPruneAfterMs: DAY_MS,
           maxEntries: 1,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
@@ -162,6 +163,51 @@ describe("session-store-runtime compatibility surface", () => {
       sessionId: "session-active",
     });
     expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+  });
+
+  it("accepts pre-model-run maintenance configs through entry patches", async () => {
+    const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const activeSessionKey = "agent:main:active";
+    const now = Date.now();
+    await saveSessionStore(
+      storePath,
+      {
+        [staleModelRunKey]: {
+          sessionId: "session-probe",
+          updatedAt: now - 2 * DAY_MS,
+        },
+        [activeSessionKey]: {
+          sessionId: "session-active",
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const legacyMaintenanceConfig = {
+      mode: "enforce" as const,
+      pruneAfterMs: 7 * DAY_MS,
+      maxEntries: 500,
+      resetArchiveRetentionMs: 7 * DAY_MS,
+      maxDiskBytes: null,
+      highWaterBytes: null,
+    };
+
+    await expect(
+      patchSessionEntry({
+        sessionKey: activeSessionKey,
+        storePath,
+        maintenanceConfig: legacyMaintenanceConfig,
+        update: () => ({ model: "gpt-5.5" }),
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-active",
+    });
+
+    expect(getSessionEntry({ sessionKey: staleModelRunKey, storePath })).toMatchObject({
+      sessionId: "session-probe",
+    });
   });
 
   it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {
@@ -292,7 +338,9 @@ describe("session-store-runtime compatibility surface", () => {
       sessionId: "regular",
     });
     expect(
-      fs.readdirSync(tempDir).filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
+      fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
     ).toHaveLength(1);
   });
 });

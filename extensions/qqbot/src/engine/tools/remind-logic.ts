@@ -1,5 +1,6 @@
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 /**
  * QQBot reminder tool core logic.
@@ -171,7 +172,7 @@ export function isCronExpression(timeStr: string): boolean {
  */
 export function generateJobName(content: string): string {
   const trimmed = content.trim();
-  const short = trimmed.length > 20 ? `${trimmed.slice(0, 20)}…` : trimmed;
+  const short = trimmed.length > 20 ? `${truncateUtf16Safe(trimmed, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 

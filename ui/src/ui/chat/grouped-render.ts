@@ -421,6 +421,7 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userName?: string | null;
@@ -456,6 +457,7 @@ function buildGroupedMessageRenderOptions(
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
@@ -1373,6 +1375,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
+  onAssistantAttachmentLoaded?: () => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1424,7 +1427,12 @@ function renderAssistantAttachments(
                     : nothing}
               </div>
               ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                ? html`<audio
+                    controls
+                    preload="metadata"
+                    src=${attachmentUrl}
+                    @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+                  ></audio>`
                 : availability.status === "unavailable"
                   ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
@@ -1444,7 +1452,12 @@ function renderAssistantAttachments(
           }
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <video controls preload="metadata" src=${attachmentUrl}></video>
+              <video
+                controls
+                preload="metadata"
+                src=${attachmentUrl}
+                @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+              ></video>
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
@@ -1615,6 +1628,7 @@ function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1758,7 +1772,11 @@ function renderGroupedMessage(
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses}"
+      data-message-id=${messageKey}
+      data-message-text=${extractedText || nothing}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
@@ -1812,6 +1830,7 @@ function renderGroupedMessage(
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
+                        opts.onAssistantAttachmentLoaded,
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
@@ -1869,6 +1888,7 @@ function renderGroupedMessage(
               opts.basePath,
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
+              opts.onAssistantAttachmentLoaded,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
