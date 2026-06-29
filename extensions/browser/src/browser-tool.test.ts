@@ -753,6 +753,7 @@ describe("browser tool snapshot maxChars", () => {
           timeoutMs: 7777,
         }),
       }),
+      { scopes: ["operator.admin"] },
     );
   });
 
