@@ -258,7 +258,11 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
       return "";
     }
     lastBackspaceAt = ts;
-    return data;
+    // Normalize DEL (0x7f), Kitty CSI-u backspace sequences, and any other
+    // backspace representation to canonical ASCII BS (0x08). Some terminals
+    // (e.g. WSL Ubuntu) send DEL, and downstream keybinding handling is
+    // simplest when there is one canonical backspace byte.
+    return "\x08";
   };
 }
 

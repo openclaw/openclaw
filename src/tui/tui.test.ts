@@ -241,9 +241,7 @@ describe("resolveTuiShutdownHardExitMs", () => {
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
-        MAX_TIMER_TIMEOUT_MS + 2000,
-      );
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
     });
   });
 });
@@ -379,7 +377,7 @@ describe("createBackspaceDeduper", () => {
   it("suppresses duplicate backspace events within the dedupe window", () => {
     const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
     advance(1);
     expect(dedupe("\x08")).toBe("");
   });
@@ -387,9 +385,9 @@ describe("createBackspaceDeduper", () => {
   it("preserves backspace events outside the dedupe window", () => {
     const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
     advance(10);
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
   });
 
   it("treats ASCII BS as backspace when it is the first event", () => {
@@ -398,6 +396,12 @@ describe("createBackspaceDeduper", () => {
     expect(dedupe("\x08")).toBe("\x08");
     advance(1);
     expect(dedupe("\x7f")).toBe("");
+  });
+
+  it("normalizes WSL Ubuntu DEL (0x7f) to canonical ASCII BS (0x08)", () => {
+    const dedupe = createBackspaceDeduper();
+
+    expect(dedupe("\x7f")).toBe("\x08");
   });
 
   it("never suppresses non-backspace keys", () => {
