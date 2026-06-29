@@ -421,6 +421,62 @@ describe("secrets apply env scrub value collision", () => {
     expect(nextEnv).not.toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
   });
 
+  it("scrubs the provider .env line when a talk provider apiKey is migrated to a non-env ref", async () => {
+    const secretFilePath = path.join(rootDir, "talk-openai.key");
+    await fs.writeFile(secretFilePath, SHARED_KEY, "utf8");
+
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              mounted: {
+                source: "file",
+                path: secretFilePath,
+                mode: "singleValue",
+                allowInsecurePath: true,
+              },
+            },
+          },
+          talk: { providers: { openai: { apiKey: SHARED_KEY } } },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await fs.writeFile(envPath, `OPENAI_API_KEY=${SHARED_KEY}\nUNRELATED=value\n`, "utf8");
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "file", provider: "mounted", id: "value" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    await runSecretsApply({ plan, env, write: true });
+
+    const nextEnv = await fs.readFile(envPath, "utf8");
+
+    expect(nextEnv).toContain("UNRELATED=value");
+    expect(nextEnv).not.toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
+  });
+
   it("does NOT delete OPENAI_API_KEY when a no-op already-ref openai target shares a value with a migrated plugin target", async () => {
     await fs.writeFile(
       configPath,

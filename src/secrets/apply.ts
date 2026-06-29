@@ -144,7 +144,11 @@ function appendKeyedValue<K>(map: Map<K, Set<string>>, key: K, value: string): v
 }
 
 function migratesProviderAuthCredential(resolved: ResolvedPlanTargetEntry["resolved"]): boolean {
-  return resolved.entry.trackProviderShadowing === true || resolved.entry.authProfileType != null;
+  const { entry } = resolved;
+  return (
+    entry.authProfileType != null ||
+    (entry.providerIdPathSegmentIndex != null && entry.pathPattern.endsWith(".apiKey"))
+  );
 }
 
 function scrubEnvRaw(
