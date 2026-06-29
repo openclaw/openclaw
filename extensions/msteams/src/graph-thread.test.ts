@@ -1,3 +1,4 @@
+// Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _teamGroupIdCacheForTest,
@@ -33,6 +34,15 @@ describe("stripHtmlFromTeamsMessage", () => {
   it("decodes common HTML entities", () => {
     expect(stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z")).toBe(
       "& <b> \"x\" 'y' z",
+    );
+  });
+
+  it("does not double-decode escaped entities (decodes &amp; last)", () => {
+    // Graph encodes literally-typed entity text by escaping its '&' to '&amp;'.
+    // Decoding '&amp;' first would re-decode the now-bare '&lt;'/'&gt;' into
+    // angle brackets, corrupting the user's literal text.
+    expect(stripHtmlFromTeamsMessage("The token is &amp;lt;APIKEY&amp;gt;")).toBe(
+      "The token is &lt;APIKEY&gt;",
     );
   });
 

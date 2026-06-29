@@ -1,19 +1,33 @@
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
+import { spawn } from "node:child_process";
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
+  signalNodeStep,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function createMockPipe() {
   const pipe = new EventEmitter() as EventEmitter & {
@@ -29,6 +43,53 @@ afterEach(() => {
   }
   tempRoots.clear();
 });
+
+async function waitForFile(filePath: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function waitForDead(pid: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error(`Process ${pid} was still alive after ${timeoutMs}ms`);
+}
+
+async function waitForProcessExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const timeout = delay(timeoutMs).then(() => {
+    throw new Error(`Process ${child.pid ?? "unknown"} did not exit after ${timeoutMs}ms`);
+  });
+  return Promise.race([exit, timeout]);
+}
 
 describe("prepare-extension-package-boundary-artifacts", () => {
   it("prefixes each completed line and flushes the trailing partial line", () => {
@@ -69,6 +130,167 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
 
+  it("signals Windows node step process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalNodeStep(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalNodeStep(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows node step process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalNodeStep(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "force-kills aborted sibling step process groups",
+    async () => {
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-abort-group-"));
+      tempRoots.add(rootDir);
+      const descendantPidPath = path.join(rootDir, "descendant.pid");
+      let descendantPid = 0;
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      try {
+        const command = runNodeStepsInParallel([
+          {
+            label: "delayed-fail",
+            args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
+            timeoutMs: 5_000,
+          },
+          {
+            label: "abort-group-prep",
+            args: ["--eval", parentScript],
+            timeoutMs: 60_000,
+          },
+        ]);
+        const expectedFailure = expect(command).rejects.toThrow(
+          "delayed-fail failed with exit code 2",
+        );
+        await waitForFile(descendantPidPath, 1_000);
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+
+        await expectedFailure;
+        await waitForDead(descendantPid, 2_000);
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets aborted sibling descendants drain during kill grace",
+    async () => {
+      const rootDir = makeTempDir(tempRoots, "openclaw-boundary-abort-drain-");
+      const readyPath = path.join(rootDir, "descendant.ready");
+      const drainedPath = path.join(rootDir, "descendant.drained");
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(drainedPath)}, 'drained');`,
+        "    process.exit(0);",
+        "  }, 50);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const command = runNodeStepsInParallel([
+        {
+          label: "delayed-fail",
+          args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
+          timeoutMs: 5_000,
+        },
+        {
+          label: "abort-group-drain",
+          args: ["--eval", parentScript],
+          timeoutMs: 60_000,
+        },
+      ]);
+
+      await waitForFile(readyPath, 1_000);
+      await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
+      expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
+    },
+  );
+
   it("hard-kills timed out prep steps", async () => {
     const signals: Array<NodeJS.Signals | number | undefined> = [];
     const child = new EventEmitter() as EventEmitter & {
@@ -95,6 +317,101 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
     expect(signals).toEqual(["SIGKILL"]);
   });
+
+  it("clamps oversized prep step timers before scheduling", async () => {
+    await expect(
+      runNodeStep(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        MAX_TIMER_TIMEOUT_MS + 1,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.runIf(process.platform !== "win32")("kills timed-out prep step process groups", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-group-"));
+    tempRoots.add(rootDir);
+    const descendantPidPath = path.join(rootDir, "descendant.pid");
+    let descendantPid = 0;
+    const descendantScript = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+
+    try {
+      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 750);
+      const expectedFailure = expect(command).rejects.toThrow(
+        "hung-group-prep timed out after 750ms",
+      );
+      await waitForFile(descendantPidPath, 500);
+      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+
+      await expectedFailure;
+      await waitForDead(descendantPid, 2_000);
+    } finally {
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "forwards wrapper termination to detached prep step groups",
+    async () => {
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-signal-group-"));
+      tempRoots.add(rootDir);
+      const descendantPidPath = path.join(rootDir, "descendant.pid");
+      let descendantPid = 0;
+      let runnerPid = 0;
+      const moduleHref = pathToFileURL(
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+      ).href;
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runnerScript = [
+        `import { runNodeStep } from ${JSON.stringify(moduleHref)};`,
+        `await runNodeStep("signal-group-prep", ["--eval", ${JSON.stringify(parentScript)}], 60_000);`,
+      ].join("\n");
+      const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
+        stdio: "ignore",
+      });
+      runnerPid = runner.pid ?? 0;
+
+      try {
+        await waitForFile(descendantPidPath, 2_000);
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        const runnerExit = waitForProcessExit(runner, 2_000);
+        runner.kill("SIGTERM");
+
+        expect(await runnerExit).toEqual({ code: 143, signal: null });
+        await waitForDead(descendantPid, 2_000);
+      } finally {
+        if (runnerPid && isProcessAlive(runnerPid)) {
+          process.kill(runnerPid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("runs boundary prep steps serially for local checks", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-serial-"));
@@ -174,6 +491,67 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).toBe(false);
   });
 
+  it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "scripts", "write-plugin-sdk-entry-dts.ts");
+    const stampPath = path.join(rootDir, "dist", "plugin-sdk", ".boundary-entry-shims.stamp");
+    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "index.d.ts");
+    const packageDtsPath = path.join(
+      rootDir,
+      "packages",
+      "plugin-sdk",
+      "dist",
+      "src",
+      "plugin-sdk",
+      "index.d.ts",
+    );
+
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.mkdirSync(path.dirname(rootDtsPath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageDtsPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export {};\n", "utf8");
+    fs.writeFileSync(stampPath, "ok\n", "utf8");
+    fs.writeFileSync(rootDtsPath, "export {};\n", "utf8");
+    fs.writeFileSync(packageDtsPath, "export {};\n", "utf8");
+
+    fs.utimesSync(inputPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(stampPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(rootDtsPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(packageDtsPath, new Date(2_000), new Date(2_000));
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(true);
+
+    fs.rmSync(packageDtsPath);
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(false);
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/index.d.ts");
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
+      "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+    );
+  });
+
   it("parses prep mode and rejects unknown values", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
@@ -187,10 +565,15 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "450000",
       }),
     ).toBe(450_000);
-    expect(
+    expect(() =>
       resolveBoundaryRootShimsTimeoutMs({
         OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "120s",
       }),
-    ).toBe(300_000);
+    ).toThrow("OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS must be a positive integer");
+    expect(() =>
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "0",
+      }),
+    ).toThrow("OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS must be a positive integer");
   });
 });

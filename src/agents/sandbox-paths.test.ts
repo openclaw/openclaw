@@ -1,12 +1,15 @@
+// Verifies sandbox media path admission for workspace, tmp, managed, and remote sources.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
+  // Real temp roots exercise path normalization and symlink/hardlink behavior.
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-media-"));
   try {
     return await run(sandboxDir);
@@ -30,13 +33,13 @@ function makeTmpProbePath(prefix: string): string {
 
 async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promise<T>) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-media-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   try {
-    await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
-    return await run({ stateDir });
+    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
+      return await run({ stateDir });
+    });
   } finally {
-    vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
@@ -49,6 +52,7 @@ async function withOutsideHardlinkInOpenClawTmp<T>(
   },
   run: (paths: { hardlinkPath: string; symlinkPath?: string }) => Promise<T>,
 ): Promise<void> {
+  // Hardlinks in allowed temp roots must still be rejected when inode points outside.
   const outsideDir = await fs.mkdtemp(path.join(process.cwd(), "sandbox-media-hardlink-outside-"));
   const outsideFile = path.join(outsideDir, "outside-secret.txt");
   const hardlinkPath = path.join(params.openClawTmpDir, makeTmpProbePath(params.hardlinkPrefix));

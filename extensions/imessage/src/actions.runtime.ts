@@ -1,3 +1,4 @@
+// Imessage plugin module implements actions behavior.
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
@@ -11,7 +12,10 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
+import {
+  normalizeDirectChatIdentifier,
+  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+} from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -114,7 +118,7 @@ function chatListCacheSet(
  * forms — the action surface synthesizes `iMessage;-;<phone>` from a
  * handle target, while imsg's chats.list returns `identifier: <phone>`
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
- * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
+ * miss the match.
  */
 export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
@@ -125,17 +129,6 @@ export function findChatGuidForTest(
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {
   return findChatGuid(chats, target);
-}
-
-function normalizeDirectChatIdentifier(raw: string): string {
-  const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {
-    if (lowered.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
-    }
-  }
-  return trimmed;
 }
 
 function findChatGuid(
@@ -189,20 +182,20 @@ async function runIMessageCliJson(
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
     let settled = false;
-    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+    const clearTimers = (optionsValue: { keepKillEscalation?: boolean } = {}): void => {
       if (timer) {
         clearTimeout(timer);
       }
-      if (killEscalation && !options.keepKillEscalation) {
+      if (killEscalation && !optionsValue.keepKillEscalation) {
         clearTimeout(killEscalation);
       }
     };
-    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+    const fail = (error: Error, optionsLocal: { keepKillEscalation?: boolean } = {}): void => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimers(options);
+      clearTimers(optionsLocal);
       reject(error);
     };
     const succeed = (value: Record<string, unknown>): void => {

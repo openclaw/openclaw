@@ -1,3 +1,4 @@
+/** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -7,9 +8,10 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { buildSnapshotPluginDependencyStatus } from "./status-snapshot-dependencies.js";
+import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
+/** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
 export type PluginRegistryStatusReport = PluginRegistry & {
   workspaceDir?: string;
   registrySource: PluginRegistrySnapshotSource;
@@ -38,20 +40,19 @@ function formatTraceValue(value: boolean | number | string): string {
   return JSON.stringify(value);
 }
 
-function tracePluginLifecyclePhase<T>(
-  phase: string,
-  fn: () => T,
-  details?: TraceDetails,
-): T {
+function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: TraceDetails): T {
   if (!isPluginLifecycleTraceEnabled()) {
     return fn();
   }
   const start = process.hrtime.bigint();
-  let status: "error" | "ok" = "error";
+  let status: "error" | "ok" | undefined;
   try {
     const result = fn();
     status = "ok";
     return result;
+  } catch (error) {
+    status = "error";
+    throw error;
   } finally {
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1_000_000;
     const detailText = Object.entries(details ?? {})
@@ -60,7 +61,7 @@ function tracePluginLifecyclePhase<T>(
       .join(" ");
     const suffix = detailText ? ` ${detailText}` : "";
     console.error(
-      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status}${suffix}`,
+      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status ?? "error"}${suffix}`,
     );
   }
 }
@@ -116,8 +117,8 @@ function buildPluginRecordFromInstalledIndex(
     httpRoutes: 0,
     hookCount: 0,
     configSchema: false,
-    contracts: {},
-    dependencyStatus: buildSnapshotPluginDependencyStatus({
+    contracts: manifest?.contracts,
+    dependencyStatus: buildPluginDependencyStatus({
       rootDir: plugin.rootDir,
       dependencies: manifest?.packageDependencies,
       optionalDependencies: manifest?.packageOptionalDependencies,
@@ -125,6 +126,7 @@ function buildPluginRecordFromInstalledIndex(
   };
 }
 
+/** Resolves the best available plugin registry snapshot and annotates dependency status. */
 export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {

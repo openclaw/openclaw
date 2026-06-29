@@ -1,10 +1,11 @@
+// Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { tempWorkspaceSync, withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
-import { basenameFromAnyPath } from "./file-name.js";
 
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
@@ -42,6 +43,7 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+/** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
   inputExtension?: string;
@@ -100,6 +102,7 @@ export async function transcodeAudioBufferToOpus(params: {
   );
 }
 
+/** Outcome for lightweight container transcodes that may be unsupported or intentionally skipped. */
 export type AudioContainerTranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
@@ -113,6 +116,7 @@ export type AudioContainerTranscodeOutcome =
       detail?: string;
     };
 
+/** Transcodes known audio container pairs, currently using macOS afconvert recipes where needed. */
 export async function transcodeAudioBuffer(params: {
   audioBuffer: Buffer;
   sourceExtension: string;
@@ -135,6 +139,7 @@ export async function transcodeAudioBuffer(params: {
     return { ok: false, reason: "platform-unsupported" };
   }
 
+  // afconvert is macOS-only and writes native Messages-compatible voice containers.
   const tmp = tempWorkspaceSync({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",

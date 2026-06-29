@@ -1,3 +1,4 @@
+// Voice Call plugin module implements realtime handler behavior.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
@@ -29,6 +30,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
+import { normalizePath } from "../path-utils.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
@@ -62,18 +64,6 @@ const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const logger = createSubsystemLogger("voice-call/realtime");
-
-function normalizePath(pathname: string): string {
-  const trimmed = pathname.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (prefixed === "/") {
-    return prefixed;
-  }
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-}
 
 function buildGreetingInstructions(
   baseInstructions: string | undefined,
@@ -759,7 +749,7 @@ export class RealtimeCallHandler {
           text,
         });
       },
-      onToolCall: (toolEvent, session) => {
+      onToolCall: (toolEvent, sessionLocal) => {
         const turnId = ensureTalkTurn();
         emitTalkEvent({
           type: "tool.call",
@@ -772,7 +762,7 @@ export class RealtimeCallHandler {
           `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
         );
         void this.executeToolCall(
-          session,
+          sessionLocal,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
@@ -900,7 +890,7 @@ export class RealtimeCallHandler {
       closeSession();
     };
 
-    session.connect().catch((error: Error) => {
+    session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       session.close();
       emitCallEnd("error");
@@ -999,9 +989,9 @@ export class RealtimeCallHandler {
       if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
         return;
       }
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
+      });
     }
   }
 

@@ -1,3 +1,4 @@
+// Zalo tests cover api plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,7 +11,36 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
     resolvePinnedHostnameWithPolicyMock(...args),
 }));
 
-import { deleteWebhook, getWebhookInfo, sendChatAction, sendPhoto, type ZaloFetch } from "./api.js";
+import {
+  deleteWebhook,
+  getMe,
+  getWebhookInfo,
+  sendChatAction,
+  sendPhoto,
+  type ZaloFetch,
+} from "./api.js";
+
+const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
+
+function oversizedZaloJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(ZALO_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
 
 function createOkFetcher() {
   return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
@@ -59,7 +89,7 @@ describe("Zalo API request methods", () => {
     try {
       const fetcher = vi.fn<ZaloFetch>(
         (_, init) =>
-          new Promise<Response>((_, reject) => {
+          new Promise<Response>((_Local, reject) => {
             init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
               once: true,
             });
@@ -102,10 +132,7 @@ describe("Zalo API request methods", () => {
       .mockImplementation(() => undefined);
     try {
       const fetcher = vi.fn<ZaloFetch>(
-        async () =>
-          ({
-            json: async () => ({ ok: true, result: {} }),
-          }) as Response,
+        async () => new Response(JSON.stringify({ ok: true, result: {} })),
       );
 
       await sendChatAction(
@@ -197,5 +224,19 @@ describe("Zalo API request methods", () => {
 
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("bounds oversized getMe JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const fetcher = vi.fn<ZaloFetch>(async () =>
+      oversizedZaloJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    await expect(getMe("test-token", undefined, fetcher)).rejects.toThrow(
+      "zalo.getMe: JSON response exceeds 16777216 bytes",
+    );
+    expect(cancelCount).toBe(1);
   });
 });

@@ -1,18 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
+// Loads dotenv files while blocking unsafe workspace env keys.
 import path from "node:path";
-import dotenv from "dotenv";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
-import { resolveConfigDir } from "../utils.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
+import { loadGlobalRuntimeDotEnvFiles, readDotEnvFile } from "./dotenv-global.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
-
-const logger = createSubsystemLogger("infra:dotenv");
 
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
@@ -170,6 +164,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMFILES(X86)",
   "PROGRAMW6432",
   "STATE_DIRECTORY",
+  "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
@@ -194,15 +189,6 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
 
 function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
-}
-
-function shouldBlockRuntimeDotEnvKey(key: string): boolean {
-  // The global ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env) is a trusted
-  // operator-controlled runtime surface. Workspace .env is untrusted and gets
-  // the strict blocklist, but the trusted global fallback is allowed to set
-  // runtime vars like proxy/base-url/auth values.
-  void key;
-  return false;
 }
 
 function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
@@ -232,55 +218,6 @@ function shouldBlockWorkspaceDotEnvKey(
   );
 }
 
-type DotEnvEntry = {
-  key: string;
-  value: string;
-};
-
-type LoadedDotEnvFile = {
-  filePath: string;
-  entries: DotEnvEntry[];
-};
-
-function readDotEnvFile(params: {
-  filePath: string;
-  shouldBlockKey: (key: string) => boolean;
-  quiet?: boolean;
-}): LoadedDotEnvFile | null {
-  let content: string;
-  try {
-    content = fs.readFileSync(params.filePath, "utf8");
-  } catch (error) {
-    if (!params.quiet) {
-      const code =
-        error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-      if (code !== "ENOENT") {
-        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
-      }
-    }
-    return null;
-  }
-
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
-  const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key || params.shouldBlockKey(key)) {
-      continue;
-    }
-    entries.push({ key, value });
-  }
-  return { filePath: params.filePath, entries };
-}
-
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -289,7 +226,7 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
   };
   const parsed = readDotEnvFile({
     filePath,
-    shouldBlockKey: (key) => shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
+    entryFilter: (key) => !shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
     quiet: opts?.quiet ?? true,
   });
   if (!parsed) {
@@ -303,87 +240,7 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
   }
 }
 
-function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
-  const preExistingKeys = new Set(Object.keys(process.env));
-  const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
-  const firstSeen = new Map<string, { value: string; filePath: string }>();
-
-  for (const file of files) {
-    for (const { key, value } of file.entries) {
-      if (preExistingKeys.has(key)) {
-        continue;
-      }
-      const previous = firstSeen.get(key);
-      if (previous) {
-        if (previous.value !== value) {
-          const conflictKey = `${previous.filePath}\u0000${file.filePath}`;
-          const existing = conflicts.get(conflictKey);
-          if (existing) {
-            existing.keys.add(key);
-          } else {
-            conflicts.set(conflictKey, {
-              keptPath: previous.filePath,
-              ignoredPath: file.filePath,
-              keys: new Set([key]),
-            });
-          }
-        }
-        continue;
-      }
-      firstSeen.set(key, { value, filePath: file.filePath });
-      if (process.env[key] === undefined) {
-        process.env[key] = value;
-      }
-    }
-  }
-
-  for (const conflict of conflicts.values()) {
-    const keys = [...conflict.keys].toSorted();
-    if (keys.length === 0) {
-      continue;
-    }
-    logger.warn(
-      `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
-      { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
-    );
-  }
-}
-
-export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
-  const quiet = opts?.quiet ?? true;
-  const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");
-  const defaultStateEnvPath = path.join(
-    resolveRequiredHomeDir(process.env, os.homedir),
-    ".openclaw",
-    ".env",
-  );
-  const hasExplicitNonDefaultStateDir =
-    process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
-    path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
-  const parsedFiles = [
-    readDotEnvFile({
-      filePath: stateEnvPath,
-      shouldBlockKey: shouldBlockRuntimeDotEnvKey,
-      quiet,
-    }),
-  ];
-  if (!hasExplicitNonDefaultStateDir) {
-    parsedFiles.push(
-      readDotEnvFile({
-        filePath: path.join(
-          resolveRequiredHomeDir(process.env, os.homedir),
-          ".config",
-          "openclaw",
-          "gateway.env",
-        ),
-        shouldBlockKey: shouldBlockRuntimeDotEnvKey,
-        quiet,
-      }),
-    );
-  }
-  const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  loadParsedDotEnvFiles(parsed);
-}
+export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;

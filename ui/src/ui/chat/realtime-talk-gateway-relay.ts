@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk gateway relay behavior.
 import { bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
 import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
 import {
@@ -209,9 +210,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           );
           this.stopLocal();
         }
-        return;
+
       default:
-        return;
     }
   }
 
@@ -233,11 +233,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           1000,
       ),
     );
-    window.setTimeout(() => {
-      if (this.closed) {
-        return;
-      }
-    }, delayMs);
+    window.setTimeout(() => {}, delayMs);
   }
 
   private async handleToolCall(event: Extract<GatewayRelayEvent, { type?: "toolCall" }>) {

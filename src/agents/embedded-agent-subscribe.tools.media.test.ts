@@ -1,20 +1,21 @@
+// Tool media extraction tests cover structured media payloads, image fallbacks,
+// trust decisions, and filtering of local/remote media URLs.
 import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
-  extractToolResultMediaPaths,
   filterToolResultMediaUrls,
   isToolResultMediaTrusted,
 } from "./embedded-agent-subscribe.tools.js";
 
-describe("extractToolResultMediaPaths", () => {
-  it("returns empty array for null/undefined", () => {
-    expect(extractToolResultMediaPaths(null)).toStrictEqual([]);
-    expect(extractToolResultMediaPaths(undefined)).toStrictEqual([]);
+describe("extractToolResultMediaArtifact", () => {
+  it("returns undefined for null/undefined", () => {
+    expect(extractToolResultMediaArtifact(null)).toBeUndefined();
+    expect(extractToolResultMediaArtifact(undefined)).toBeUndefined();
   });
 
-  it("returns empty array for non-object", () => {
-    expect(extractToolResultMediaPaths("hello")).toStrictEqual([]);
-    expect(extractToolResultMediaPaths(42)).toStrictEqual([]);
+  it("returns undefined for non-object", () => {
+    expect(extractToolResultMediaArtifact("hello")).toBeUndefined();
+    expect(extractToolResultMediaArtifact(42)).toBeUndefined();
   });
 
   it("extracts structured details.media without content blocks", () => {
@@ -28,6 +29,30 @@ describe("extractToolResultMediaPaths", () => {
       }),
     ).toEqual({
       mediaUrls: ["/tmp/img.png", "/tmp/img-2.png"],
+    });
+  });
+
+  it("extracts structured details.media top-level aliases", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            path: " /tmp/path.png ",
+            filePath: "/tmp/file.png",
+            url: "https://example.test/url.png",
+            fileUrl: "https://example.test/file-url.png",
+            media: "/tmp/media.png",
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: [
+        "/tmp/media.png",
+        "/tmp/path.png",
+        "https://example.test/url.png",
+        "/tmp/file.png",
+        "https://example.test/file-url.png",
+      ],
     });
   });
 
@@ -55,8 +80,8 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
-  it("returns empty array when content has no text or image blocks", () => {
-    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
+  it("returns undefined when content has no text or image blocks", () => {
+    expect(extractToolResultMediaArtifact({ content: [{ type: "other" }] })).toBeUndefined();
   });
 
   it("extracts structured media with audioAsVoice", () => {
@@ -68,33 +93,6 @@ describe("extractToolResultMediaPaths", () => {
             audioAsVoice: true,
           },
         },
-      }),
-    ).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
-  });
-
-  it("extracts audioAsVoice from text MEDIA directives", () => {
-    expect(
-      extractToolResultMediaArtifact({
-        content: [
-          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
-        ],
-      }),
-    ).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      audioAsVoice: true,
-    });
-  });
-
-  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
-    expect(
-      extractToolResultMediaArtifact({
-        content: [
-          { type: "text", text: "[[audio_as_voice]]" },
-          { type: "text", text: "MEDIA:/tmp/reply.opus" },
-        ],
       }),
     ).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
@@ -118,7 +116,7 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
-  it("extracts MEDIA: path from text content block", () => {
+  it("ignores media-looking text content and uses details.path image fallback", () => {
     const result = {
       content: [
         { type: "text", text: "MEDIA:/tmp/screenshot.png" },
@@ -126,29 +124,26 @@ describe("extractToolResultMediaPaths", () => {
       ],
       details: { path: "/tmp/screenshot.png" },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaArtifact(result)).toEqual({
+      mediaUrls: ["/tmp/screenshot.png"],
+    });
   });
 
-  it("extracts MEDIA: path with extra text in the block", () => {
-    const result = {
-      content: [{ type: "text", text: "Here is the image\nMEDIA:/tmp/output.jpg\nDone" }],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/output.jpg"]);
-  });
-
-  it("extracts multiple MEDIA: paths from different text blocks", () => {
+  it("ignores media-looking text content without structured media or image fallback", () => {
     const result = {
       content: [
         { type: "text", text: "MEDIA:/tmp/page1.png" },
         { type: "text", text: "MEDIA:/tmp/page2.png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("falls back to details.path when image content exists but no MEDIA: text", () => {
-    // Embedded read tool doesn't include MEDIA: but OpenClaw imageResult
-    // sets details.path as fallback.
+  it("falls back to details.path when image content exists", () => {
+    // Embedded read image results omit structured media but include details.path,
+    // so image content is the guard that makes that path media.
+    // Embedded read tool doesn't include structured media but OpenClaw
+    // imageResult sets details.path as fallback.
     const result = {
       content: [
         { type: "text", text: "Read image file [image/png]" },
@@ -156,10 +151,12 @@ describe("extractToolResultMediaPaths", () => {
       ],
       details: { path: "/tmp/generated.png" },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/generated.png"]);
+    expect(extractToolResultMediaArtifact(result)).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+    });
   });
 
-  it("returns empty array when image content exists but no MEDIA: and no details.path", () => {
+  it("returns undefined when image content exists but no details.path", () => {
     // Embedded read tool: has image content but no path anywhere in the result.
     const result = {
       content: [
@@ -167,49 +164,32 @@ describe("extractToolResultMediaPaths", () => {
         { type: "image", data: "base64data", mimeType: "image/png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
-  });
-
-  it("does not fall back to details.path when MEDIA: paths are found", () => {
-    const result = {
-      content: [
-        { type: "text", text: "MEDIA:/tmp/from-text.png" },
-        { type: "image", data: "base64data", mimeType: "image/png" },
-      ],
-      details: { path: "/tmp/from-details.png" },
-    };
-    // MEDIA: text takes priority; details.path is NOT also included.
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/from-text.png"]);
-  });
-
-  it("handles backtick-wrapped MEDIA: paths", () => {
-    const result = {
-      content: [{ type: "text", text: "MEDIA: `/tmp/screenshot.png`" }],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
   it("ignores null/undefined items in content array", () => {
     const result = {
       content: [null, undefined, { type: "text", text: "MEDIA:/tmp/ok.png" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/ok.png"]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("returns empty array for text-only results without MEDIA:", () => {
+  it("returns empty array for text-only results", () => {
     const result = {
       content: [{ type: "text", text: "Command executed successfully" }],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
   it("ignores details.path when no image content exists", () => {
+    // Plain file paths in details are not media unless the content proves an
+    // image/audio/video artifact was produced.
     // details.path without image content is not media.
     const result = {
       content: [{ type: "text", text: "File saved" }],
       details: { path: "/tmp/data.json" },
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
   it("handles details.path with whitespace", () => {
@@ -217,7 +197,9 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "  /tmp/image.png  " },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/image.png"]);
+    expect(extractToolResultMediaArtifact(result)).toEqual({
+      mediaUrls: ["/tmp/image.png"],
+    });
   });
 
   it("skips empty details.path", () => {
@@ -225,10 +207,10 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "   " },
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("does not match <media:audio> placeholder as a MEDIA: token", () => {
+  it("does not match <media:audio> placeholder as media", () => {
     const result = {
       content: [
         {
@@ -237,14 +219,14 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("does not match <media:image> placeholder as a MEDIA: token", () => {
+  it("does not match <media:image> placeholder as media", () => {
     const result = {
       content: [{ type: "text", text: "<media:image> (2 images)" }],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
   it("does not match other media placeholder variants", () => {
@@ -257,11 +239,11 @@ describe("extractToolResultMediaPaths", () => {
       const result = {
         content: [{ type: "text", text: `${tag} some context` }],
       };
-      expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+      expect(extractToolResultMediaArtifact(result)).toBeUndefined();
     }
   });
 
-  it("does not match mid-line MEDIA: in documentation text", () => {
+  it("does not match media-looking documentation text", () => {
     const result = {
       content: [
         {
@@ -270,10 +252,10 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("does not treat malformed MEDIA:-prefixed prose as a file path", () => {
+  it("does not treat malformed media-looking prose as a file path", () => {
     const result = {
       content: [
         {
@@ -282,61 +264,18 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("still extracts MEDIA: at line start after other text lines", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: "Generated screenshot\nMEDIA:/tmp/screenshot.png\nDone",
-        },
-      ],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
-  });
-
-  it("extracts indented MEDIA: line", () => {
-    const result = {
-      content: [{ type: "text", text: "  MEDIA:/tmp/indented.png" }],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
-  });
-
-  it("extracts valid MEDIA: line while ignoring <media:audio> on another line", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: "<media:audio> was transcribed\nMEDIA:/tmp/tts-output.opus\nDone",
-        },
-      ],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
-  });
-
-  it("extracts multiple MEDIA: lines from a single text block", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: "MEDIA:/tmp/page1.png\nSome text\nMEDIA:/tmp/page2.png",
-        },
-      ],
-    };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
-  });
-
-  it("trusts image_generate local MEDIA paths", () => {
+  it("trusts image_generate local media paths", () => {
     expect(isToolResultMediaTrusted("image_generate")).toBe(true);
   });
 
-  it("trusts music_generate local MEDIA paths", () => {
+  it("trusts music_generate local media paths", () => {
     expect(isToolResultMediaTrusted("music_generate")).toBe(true);
   });
 
-  it("trusts video_generate local MEDIA paths", () => {
+  it("trusts video_generate local media paths", () => {
     expect(isToolResultMediaTrusted("video_generate")).toBe(true);
   });
 

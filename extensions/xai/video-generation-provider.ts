@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -68,9 +70,12 @@ type VideoGenerationSourceInput = {
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
   try {
-    payload = await response.json();
-  } catch {
-    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+    payload = await readProviderJsonResponse<unknown>(response, "xAI video generation response");
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      throw new Error(XAI_VIDEO_MALFORMED_RESPONSE, { cause: error });
+    }
+    throw error;
   }
   if (!isRecord(payload)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
@@ -296,8 +301,6 @@ function resolveCreateEndpoint(req: VideoGenerationRequest): string {
       return "/videos/edits";
     case "extend":
       return "/videos/extensions";
-    case "referenceToVideo":
-    case "generate":
     default:
       return "/videos/generations";
   }

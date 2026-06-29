@@ -1,4 +1,6 @@
+// Synology Chat tests cover core plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -431,6 +433,31 @@ describe("synology-chat security helpers", () => {
     expect(result).toContain("[truncated]");
   });
 
+  it("truncates long inputs without splitting a surrogate pair", () => {
+    const loneSurrogatePattern =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    const input = "a".repeat(3999) + "\u{1F600}" + "b".repeat(2000);
+
+    const result = sanitizeInput(input);
+
+    expect(result).toContain("[truncated]");
+    expect(result).not.toMatch(loneSurrogatePattern);
+    expect(result).toBe(`${"a".repeat(3999)}... [truncated]`);
+  });
+
+  it("keeps complete supplementary-plane characters that fit before truncation", () => {
+    const loneSurrogatePattern =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    const emoji = "\u{1F600}";
+    const input = "a".repeat(3998) + emoji + "b".repeat(2000);
+
+    const result = sanitizeInput(input);
+
+    expect(result).toContain("[truncated]");
+    expect(result.startsWith(`${"a".repeat(3998)}${emoji}`)).toBe(true);
+    expect(result).not.toMatch(loneSurrogatePattern);
+  });
+
   it("rate limits per user and caps tracked state", () => {
     const limiter = new RateLimiter(3, 60);
     expect(limiter.check("user1")).toBe(true);
@@ -445,5 +472,24 @@ describe("synology-chat security helpers", () => {
     expect(capped.check("user3")).toBe(true);
     expect(capped.check("user4")).toBe(true);
     expect(capped.size()).toBeLessThanOrEqual(3);
+  });
+
+  it("caps oversized rate limit windows before constructing the limiter", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const limiter = new RateLimiter(1, Number.MAX_SAFE_INTEGER);
+
+      expect(limiter.check("user1")).toBe(true);
+      expect(limiter.check("user1")).toBe(false);
+
+      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS - 1);
+      expect(limiter.check("user1")).toBe(false);
+
+      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS);
+      expect(limiter.check("user1")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

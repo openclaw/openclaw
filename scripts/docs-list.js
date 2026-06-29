@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Lists source docs pages and routes for docs-aware tooling.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -115,6 +116,11 @@ function extractMetadata(fullPath) {
         } catch {
           // ignore malformed inline arrays
         }
+      } else if (
+        (inline.startsWith('"') && inline.endsWith('"')) ||
+        (inline.startsWith("'") && inline.endsWith("'"))
+      ) {
+        readWhen.push(...compactStrings([inline.slice(1, -1)]));
       }
       continue;
     }

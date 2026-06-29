@@ -1,13 +1,96 @@
+// Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeMigratedSessionState(stateDir: string): void {
+  const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
+  const agentDbDir = join(stateDir, "agents", "main", "agent");
+  const mainSessionFile = join(agentSessionsDir, "upgrade-main-session.jsonl");
+  const directSessionFile = join(agentSessionsDir, "upgrade-direct-session.jsonl");
+  const groupSessionFile = join(agentSessionsDir, "upgrade-group-session.jsonl");
+  mkdirSync(agentSessionsDir, { recursive: true });
+  mkdirSync(agentDbDir, { recursive: true });
+  writeFileSync(mainSessionFile, '{"type":"main"}\n');
+  writeFileSync(directSessionFile, '{"type":"direct"}\n');
+  writeFileSync(groupSessionFile, '{"type":"group"}\n');
+  writeJson(join(agentSessionsDir, "sessions.json"), {
+    "agent:main:main": {
+      sessionFile: mainSessionFile,
+      sessionId: "upgrade-main-session",
+      skillsSnapshot: {
+        prompt: "legacy prompt survives as metadata",
+      },
+    },
+    "agent:main:+15551234567": {
+      sessionFile: directSessionFile,
+      sessionId: "upgrade-direct-session",
+    },
+    "agent:main:slack:channel:cupgrade": {
+      sessionFile: groupSessionFile,
+      sessionId: "upgrade-group-session",
+    },
+  });
+
+  const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS cache_entries (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT,
+        blob BLOB,
+        expires_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+    `);
+    const insert = db.prepare(`
+      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    insert.run(
+      "session_entries",
+      "agent:main:main",
+      JSON.stringify({
+        sessionFile: mainSessionFile,
+        sessionId: "upgrade-main-session",
+        skillsSnapshot: {
+          prompt: "legacy prompt survives as metadata",
+        },
+      }),
+      1710000000000,
+    );
+    insert.run(
+      "session_entries",
+      "agent:main:+15551234567",
+      JSON.stringify({
+        sessionFile: directSessionFile,
+        sessionId: "upgrade-direct-session",
+      }),
+      1710000000100,
+    );
+    insert.run(
+      "session_entries",
+      "agent:main:slack:channel:cupgrade",
+      JSON.stringify({
+        sessionFile: groupSessionFile,
+        sessionId: "upgrade-group-session",
+      }),
+      1710000000200,
+    );
+  } finally {
+    db.close();
+  }
 }
 
 function assertConfiguredPluginState(params: { installPath?: string } = {}): void {
@@ -24,6 +107,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     writeJson(join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
       id: "legacy-session",
     });
+    writeMigratedSessionState(stateDir);
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
     });
@@ -62,6 +146,65 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 }
 
 describe("upgrade survivor assertions", () => {
+  it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("asserts the ACPX OpenClaw tools bridge config survived", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-config-"));
+    try {
+      const configPath = join(root, "openclaw.json");
+      const coveragePath = join(root, "coverage.json");
+      writeJson(configPath, {
+        plugins: {
+          allow: ["acpx"],
+          entries: {
+            acpx: {
+              enabled: true,
+              config: {
+                openClawToolsMcpBridge: true,
+              },
+            },
+          },
+        },
+      });
+      writeJson(coveragePath, {
+        acceptedIntents: ["acpx-openclaw-tools-bridge"],
+        skippedIntents: [],
+      });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+        env: {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
   });

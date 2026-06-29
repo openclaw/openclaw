@@ -21,7 +21,7 @@ surfaces such as images, embeddings, speech, and realtime.
   OpenAI API-key backup when you intentionally want API-key auth.
 - **Non-agent OpenAI APIs** - direct OpenAI Platform access with usage-based
   billing through `OPENAI_API_KEY` or OpenAI API-key onboarding.
-- **Legacy config** - `openai-codex/*` model refs are repaired by
+- **Legacy config** - legacy Codex model refs are repaired by
   `openclaw doctor --fix` to `openai/*` plus the Codex runtime.
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
@@ -49,7 +49,7 @@ The names are similar but not interchangeable:
 | Name you see                            | Layer             | Meaning                                                                                           |
 | --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
-| `openai-codex`                          | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
+| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
 | `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
 | provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
 | `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                        |
@@ -58,8 +58,8 @@ The names are similar but not interchangeable:
 This means a config can intentionally contain `openai/*` model refs while auth
 profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
 `auth.order.openai` for config; `openclaw doctor --fix` rewrites legacy
-`openai-codex/*` model refs, `openai-codex:*` profile ids, and
-`auth.order.openai-codex` to the canonical OpenAI route.
+legacy Codex model refs, legacy Codex auth profile ids, and
+legacy Codex auth order to the canonical OpenAI route.
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
@@ -75,7 +75,7 @@ OpenClaw runtime config remains available as an opt-in compatibility route. When
 explicitly selected with an `openai` OAuth profile, OpenClaw keeps the
 public model ref as `openai/*` and routes internally through the Codex-auth
 transport. Run `openclaw doctor --fix` to repair stale
-`openai-codex/*`, `codex-cli/*`, or old runtime session pins that do not come from
+legacy Codex model refs, `codex-cli/*`, or old runtime session pins that do not come from
 explicit runtime config.
 </Note>
 
@@ -85,7 +85,7 @@ explicit runtime config.
 | ------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Chat / Responses          | `openai/<model>` model provider                                                               | Yes                                                                    |
 | Codex subscription models | `openai/<model>` with OpenAI OAuth                                                            | Yes                                                                    |
-| Legacy Codex model refs   | `openai-codex/<model>` or `codex-cli/<model>`                                                 | Repaired by doctor to `openai/<model>`                                 |
+| Legacy Codex model refs   | legacy Codex model refs or `codex-cli/<model>`                                                | Repaired by doctor to `openai/<model>`                                 |
 | Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex`              | Yes                                                                    |
 | Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no provider pinned                 |
 | Images                    | `image_generate`                                                                              | Yes                                                                    |
@@ -101,21 +101,19 @@ explicit runtime config.
   Control UI Talk with `talk.realtime.provider: "openai"`) goes through the
   public **OpenAI Platform Realtime API**, which is billed against OpenAI
   Platform credits rather than Codex/ChatGPT subscription quota. An account
-  with healthy OpenAI OAuth that runs Codex-backed chat models without
-  issue can still hit `insufficient_quota` / "You exceeded your current
-  quota" on the first Realtime turn if the same OpenAI organization has no
-  Platform billing set up.
+  with healthy OpenAI OAuth that runs Codex-backed chat models without issue
+  still needs an OpenAI API-key auth profile or a Platform API key with funded
+  Platform billing for Realtime voice.
 
 Fix: top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
-for the organization backing your realtime credentials. Realtime accepts
-either a Platform `OPENAI_API_KEY` (configured via `talk.realtime.providers.openai.apiKey`
-for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
-for Voice Call) or an `openai` OAuth profile whose underlying
-organization has Platform billing — both routes mint Realtime client secrets
-through the Platform API, so either way the org needs funded Platform
-credits. For chat turns you can still use Codex-backed `openai/*` models against the same
-OpenClaw install; Realtime is the one route that needs Platform billing.
+for the organization backing your realtime credentials. Realtime voice accepts
+the `openai` API-key auth profile created by `openclaw onboard --auth-choice openai-api-key`,
+a Platform `OPENAI_API_KEY` configured via `talk.realtime.providers.openai.apiKey`
+for Control UI Talk, `plugins.entries.voice-call.config.realtime.providers.openai.apiKey`
+for Voice Call, or the `OPENAI_API_KEY` environment variable. OpenAI OAuth
+profiles can still run Codex-backed `openai/*` chat models in the same
+OpenClaw install, but they do not configure Realtime voice.
 </Note>
 
 ## Memory embeddings
@@ -185,7 +183,7 @@ Choose your preferred auth method and follow the setup steps.
     auth for an agent model, create a Codex-compatible API-key profile and order
     it with `auth.order.openai`; `OPENAI_API_KEY` remains the direct fallback for
     non-agent OpenAI API surfaces. Run `openclaw doctor --fix` to migrate older
-    `auth.order.openai-codex` entries.
+    legacy Codex auth order entries.
     </Note>
 
     ### Config example
@@ -266,12 +264,12 @@ Choose your preferred auth method and follow the setup steps.
     |-----------|----------------|-------|------|
     | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or ordered `openai` auth profile |
     | `openai/gpt-5.5` | provider/model `agentRuntime.id: "openclaw"` | OpenClaw embedded runtime with internal Codex-auth transport | Selected `openai` OAuth profile |
-    | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Migrated OpenAI OAuth profile |
+    | legacy Codex GPT-5.5 ref | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Migrated OpenAI OAuth profile |
     | `codex-cli/gpt-5.5` | repaired by doctor | Legacy CLI route rewritten to `openai/gpt-5.5` | Codex app-server auth |
 
     <Warning>
     Prefer `openai/gpt-5.5` for new subscription-backed agent config. Older
-    `openai-codex/gpt-*` refs are legacy OpenClaw routes, not the native Codex runtime
+    legacy Codex GPT refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` when you want to migrate them to canonical
     `openai/*` refs. `gpt-5.3-codex-spark` remains limited to accounts whose
     Codex subscription catalog advertises that model; direct OpenAI API-key and
@@ -279,11 +277,11 @@ Choose your preferred auth method and follow the setup steps.
     </Warning>
 
     <Note>
-    The `openai-codex/*` model prefix is legacy config repaired by doctor. For
+    The legacy Codex model prefix is legacy config repaired by doctor. For
     the common subscription plus native runtime setup, sign in with Codex auth
     but keep the model ref as `openai/gpt-5.5`. New config should put OpenAI
     agent auth order under `auth.order.openai`; doctor migrates older
-    `auth.order.openai-codex` entries.
+    legacy Codex auth order entries.
     </Note>
 
     ### Config example
@@ -345,7 +343,7 @@ Choose your preferred auth method and follow the setup steps.
     openclaw models auth list --agent <id> --provider openai
     ```
 
-    If an older config still has `openai-codex/gpt-*` or a stale OpenAI runtime
+    If an older config still has legacy Codex GPT refs or a stale OpenAI runtime
     session pin without explicit runtime config, repair it:
 
     ```bash
@@ -370,7 +368,7 @@ Choose your preferred auth method and follow the setup steps.
     ```
 
     `openai/*` is the model route for OpenAI agent turns through Codex. Run
-    `openclaw doctor --fix` to migrate older `openai-codex` profile ids and
+    `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix profile ids and
     order entries before relying on profile ordering.
 
     ### Status indicator
@@ -382,7 +380,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ### Doctor warning
 
-    If `openai-codex/*` routes or stale OpenAI runtime pins remain in config or
+    If legacy Codex model refs or stale OpenAI runtime pins remain in config or
     session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
     Codex runtime unless OpenClaw is explicitly configured.
 
@@ -432,7 +430,7 @@ still account-based. OpenClaw selects auth in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
-   `openai-codex:*` profiles and `auth.order.openai-codex`.
+   legacy Codex auth profile ids and legacy Codex auth order.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when the app-server reports no account and still requires
@@ -508,6 +506,9 @@ openclaw infer image generate \
 Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
+Use `--quality low|medium|high|auto` when you need to control OpenAI Images
+quality and cost. Use `--openai-moderation low|auto` to pass OpenAI's
+provider-specific moderation hint from either `image generate` or `image edit`.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -571,7 +572,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so OpenClaw/provider routes such as legacy pre-repair refs (`openai-codex/gpt-5.5`), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so OpenClaw/provider routes such as legacy pre-repair refs (legacy Codex GPT-5.5 ref), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness does not receive this OpenClaw GPT-5 overlay through Codex app-server developer instructions. Native Codex keeps Codex-owned base, model, and project-doc behavior, while OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files stay authoritative. OpenClaw contributes only runtime context such as channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and OpenClaw skills.
 
@@ -646,7 +647,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     ```
 
     <Note>
-    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS is still configured through an API key; for OAuth-only live talk-back, use the Realtime voice path instead of agent-mode STT -> TTS speech.
+    Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting the chat API endpoint. OpenAI TTS and Realtime voice are both configured through an OpenAI Platform API key; OAuth-only installs can still use Codex-backed chat models, but not OpenAI live talk-back.
     </Note>
 
   </Accordion>
@@ -717,7 +718,7 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | Prefix padding | `...openai.prefixPaddingMs` | `300` |
     | Reasoning effort | `...openai.reasoningEffort` | (unset) |
-    | Auth | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth | Browser Talk and non-Azure backend bridges can use OpenAI OAuth |
+    | Auth | `openai` API-key auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OpenAI Platform API key required; OpenAI OAuth does not configure Realtime voice |
 
     Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -739,10 +740,10 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     <Note>
     Control UI Talk uses OpenAI browser realtime sessions with a Gateway-minted
     ephemeral client secret and a direct browser WebRTC SDP exchange against the
-    OpenAI Realtime API. When no direct OpenAI API key is configured, the
-    Gateway can mint that client secret with the selected `openai` OAuth
-    profile. Gateway relay and Voice Call backend realtime WebSocket bridges use
-    the same OAuth fallback for native OpenAI endpoints. Maintainer live
+    OpenAI Realtime API. The Gateway mints that client secret with the selected
+    `openai` API-key auth profile or configured OpenAI Platform API key. Gateway
+    relay and Voice Call backend realtime WebSocket bridges use the same
+    API-key-only auth path for native OpenAI endpoints. Maintainer live
     verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser
@@ -914,17 +915,17 @@ the Server-side compaction accordion below.
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
-    - **Chat/UI:** `/fast status|on|off`
+    - **Chat/UI:** `/fast status|auto|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`.
+    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the auto cutoff, then starts later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
           },
         },
       },
@@ -1042,10 +1043,11 @@ the Server-side compaction accordion below.
     ```
 
     With `strict-agentic`, OpenClaw:
-    - No longer treats a plan-only turn as successful progress when a tool action is available
-    - Retries the turn with an act-now steer
     - Auto-enables `update_plan` for substantial work
-    - Surfaces an explicit blocked state if the model keeps planning without acting
+    - Retries structurally empty or reasoning-only turns with a visible-answer continuation
+    - Uses explicit harness plan events when the selected harness provides them
+
+    OpenClaw does not classify assistant prose to decide whether a turn is a plan, progress update, or final answer.
 
     <Note>
     Scoped to OpenAI and Codex GPT-5-family runs only. Other providers and older model families keep default behavior.

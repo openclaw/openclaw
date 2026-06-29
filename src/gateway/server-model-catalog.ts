@@ -1,3 +1,5 @@
+// Gateway model catalog cache.
+// Serves model catalogs with stale-while-refresh behavior for Gateway surfaces.
 import { getRuntimeConfig } from "../config/io.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
@@ -88,6 +90,7 @@ function startGatewayModelCatalogRefresh(
   return refresh;
 }
 
+/** Mark cached model catalogs stale after config/plugin reload changes. */
 export function markGatewayModelCatalogStaleForReload(): void {
   readOnlyModelCatalogCache.staleGeneration += 1;
   fullModelCatalogCache.staleGeneration += 1;
@@ -98,10 +101,12 @@ export function markGatewayModelCatalogStaleForReload(): void {
 // isolated unit tests harder. Keep this intentionally obscure.
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetGatewayModelCatalogState();
-  const { resetModelCatalogCacheForTest } = await loadModelCatalogModule();
-  resetModelCatalogCacheForTest();
+  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+    await loadModelCatalogModule();
+  resetModelCatalogCacheForTestLocal();
 }
 
+/** Load the Gateway model catalog, returning cached data while stale refreshes run. */
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {

@@ -1,3 +1,4 @@
+// Xiaomi tests cover index plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -580,7 +581,7 @@ describe("xiaomi provider plugin", () => {
     await wrapThinkingNone(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+    expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
   });

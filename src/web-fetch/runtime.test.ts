@@ -1,7 +1,9 @@
+/** Tests web_fetch runtime provider selection, credential discovery, and sandbox filtering. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginWebFetchProviderEntry } from "../plugins/types.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   createWebFetchTestProvider,
   type WebFetchTestProviderParams,
@@ -94,7 +96,6 @@ describe("web fetch runtime", () => {
   });
 
   beforeEach(() => {
-    vi.unstubAllEnvs();
     resolvePluginWebFetchProvidersMock.mockReset();
     resolveRuntimeWebFetchProvidersMock.mockReset();
     resolvePluginWebFetchProvidersMock.mockReturnValue([]);
@@ -117,9 +118,9 @@ describe("web fetch runtime", () => {
       id: "AWS_SECRET_ACCESS_KEY",
     });
 
-    vi.stubEnv("FIRECRAWL_API_KEY", "");
-
-    expect(resolveWebFetchDefinition({ config })).toBeNull();
+    withEnv({ FIRECRAWL_API_KEY: "" }, () => {
+      expect(resolveWebFetchDefinition({ config })).toBeNull();
+    });
   });
 
   it("prefers the runtime-selected provider when metadata is available", async () => {
@@ -168,13 +169,44 @@ describe("web fetch runtime", () => {
   it("auto-detects providers from provider-declared env vars", () => {
     const provider = createFirecrawlProvider();
     resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
-    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-key");
+
+    withEnv({ FIRECRAWL_API_KEY: "firecrawl-env-key" }, () => {
+      const resolved = resolveWebFetchDefinition({
+        config: {},
+      });
+
+      expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+    });
+  });
+
+  it("uses an explicitly configured keyless provider without an API key", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
 
     const resolved = resolveWebFetchDefinition({
-      config: {},
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      } as OpenClawConfig,
     });
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+  });
+
+  it("does not auto-detect a keyless provider without a credential", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
   });
 
   it("auto-detects providers from configured fallback credentials", () => {
@@ -272,7 +304,7 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
-  it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("keeps sandboxed web fetch on trusted providers even when runtime providers are preferred", () => {
     const bundled = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "bundled-key",
     });
@@ -287,6 +319,11 @@ describe("web fetch runtime", () => {
     });
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledWith({
+      config: {},
+      sandboxed: true,
+    });
+    expect(resolveRuntimeWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
   it("uses runtime providers for non-sandboxed web fetch when runtime providers are preferred", () => {

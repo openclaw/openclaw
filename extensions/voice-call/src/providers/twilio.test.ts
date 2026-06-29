@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+// Voice Call tests cover twilio plugin behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
 
 const STREAM_URL = "wss://example.ngrok.app/voice/stream";
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
 
 function createProvider(): TwilioProvider {
   return new TwilioProvider(
@@ -240,6 +245,8 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA222");
 
     const firstResult = provider.parseWebhookEvent(firstInbound);
+    // Simulate the stream actually connecting (the bug: without this, no activeStreamCalls entry exists)
+    provider.registerCallStream("CA111", "MZ111");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
     expectStreamingTwiml(requireResponseBody(firstResult.providerResponseBody));
@@ -252,6 +259,7 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA322");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA311", "MZ311");
     provider.unregisterCallStream("CA311");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
@@ -269,6 +277,7 @@ describe("TwilioProvider", () => {
     const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA422");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA411", "MZ411");
     provider.parseWebhookEvent(completed);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
@@ -286,6 +295,7 @@ describe("TwilioProvider", () => {
     const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA522");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA511", "MZ511");
     provider.parseWebhookEvent(canceled);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
@@ -300,11 +310,29 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA622");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA611", "MZ611");
     const result = provider.parseWebhookEvent(secondInbound);
 
     expect(requireResponseBody(result.providerResponseBody)).toContain(
       'waitUrl="/voice/hold-music"',
     );
+  });
+
+  it("does not block subsequent call when first call never opens a media stream", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA711");
+    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA722");
+
+    // First call gets streaming TwiML but never connects a media stream
+    // (no registerCallStream ever fires for CA711)
+    provider.parseWebhookEvent(firstInbound);
+
+    // Second inbound call should NOT be queued — no active stream is registered
+    const secondResult = provider.parseWebhookEvent(secondInbound);
+
+    const secondBody = requireResponseBody(secondResult.providerResponseBody);
+    expectStreamingTwiml(secondBody);
+    expect(secondBody).not.toContain("hold-queue");
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
@@ -550,37 +578,43 @@ describe("TwilioProvider", () => {
   });
 
   it("fails stream playback when all audio sends and completion mark are dropped", async () => {
-    const provider = createProvider();
-    provider.registerCallStream("CA-dropped", "MZ-dropped");
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-dropped", "MZ-dropped");
 
-    const sendAudio = vi.fn(() => ({ sent: false }));
-    const sendMark = vi.fn(() => ({ sent: false }));
-    const mediaStreamHandler = {
-      queueTts: async (
-        _streamSid: string,
-        playFn: (signal: AbortSignal) => Promise<void>,
-      ): Promise<void> => {
-        await playFn(new AbortController().signal);
-      },
-      sendAudio,
-      sendMark,
-    };
+      const sendAudio = vi.fn(() => ({ sent: false }));
+      const sendMark = vi.fn(() => ({ sent: false }));
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(new AbortController().signal);
+        },
+        sendAudio,
+        sendMark,
+      };
 
-    provider.setMediaStreamHandler(mediaStreamHandler as never);
-    provider.setTTSProvider({
-      synthesisTimeoutMs: 5000,
-      synthesizeForTelephony: async () => Buffer.alloc(320),
-    });
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async () => Buffer.alloc(320),
+      });
 
-    await expect(
-      provider.playTts({
+      const playback = provider.playTts({
         callId: "call-dropped",
         providerCallId: "CA-dropped",
         text: "Dropped audio",
-      }),
-    ).rejects.toThrow("Telephony stream playback failed");
-    expect(sendAudio).toHaveBeenCalled();
-    expect(sendMark).toHaveBeenCalledTimes(1);
+      });
+      const playExpectation = expect(playback).rejects.toThrow("Telephony stream playback failed");
+      await vi.advanceTimersByTimeAsync(100);
+      await playExpectation;
+      expect(sendAudio).toHaveBeenCalled();
+      expect(sendMark).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails stream playback when telephony synthesis returns empty audio", async () => {

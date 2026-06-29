@@ -1,3 +1,4 @@
+// Register status/health/session tests cover status-related command registration.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
@@ -7,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  sessionsTailCommand: vi.fn(),
+  sessionsCompactCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -31,6 +34,8 @@ const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const sessionsTailCommand = mocks.sessionsTailCommand;
+const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -88,6 +93,14 @@ vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand: mocks.sessionsCleanupCommand,
 }));
 
+vi.mock("../../commands/sessions-tail.js", () => ({
+  sessionsTailCommand: mocks.sessionsTailCommand,
+}));
+
+vi.mock("../../commands/sessions-compact.js", () => ({
+  sessionsCompactCommand: mocks.sessionsCompactCommand,
+}));
+
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -134,6 +147,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsTailCommand.mockResolvedValue(undefined);
+    sessionsCompactCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -281,6 +296,58 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("inherits the parent sessions --agent for compact (regression #91378: wrong-agent compaction)", async () => {
+    await runCli(["sessions", "--agent", "work", "compact", "agent:work:main"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      agent: "work",
+    });
+  });
+
+  it("inherits the parent sessions --json for compact", async () => {
+    await runCli(["sessions", "--json", "compact", "agent:work:main"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      json: true,
+    });
+  });
+
+  it("prefers the compact-level --agent over the parent sessions --agent", async () => {
+    await runCli(["sessions", "--agent", "main", "compact", "agent:work:main", "--agent", "work"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      agent: "work",
+    });
+  });
+
+  it("rejects an inherited parent --store for compact instead of mutating a different store (regression #91378)", async () => {
+    await runCli(["sessions", "--store", "/tmp/other-sessions.json", "compact", "agent:work:main"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects other unsupported inherited parent list options for compact", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "--limit",
+      "25",
+      "--verbose",
+      "compact",
+      "agent:work:main",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+  });
+
   it("forwards sessions list-side options", async () => {
     await runCli([
       "sessions",
@@ -342,6 +409,31 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     expectCommandOptions(sessionsCleanupCommand, {
       allAgents: true,
+    });
+  });
+
+  it("runs sessions tail with forwarded progress options", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "tail",
+      "--session-key",
+      "agent:main:telegram:direct:owner",
+      "--tail",
+      "5",
+      "--follow",
+    ]);
+
+    expectCommandOptions(sessionsTailCommand, {
+      sessionKey: "agent:main:telegram:direct:owner",
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: false,
+      follow: true,
+      tail: "5",
     });
   });
 

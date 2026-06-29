@@ -1,3 +1,4 @@
+// Covers provider usage summary loading across auth and plugin paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
@@ -39,7 +40,7 @@ describe("provider-usage.load", () => {
               displayName: "Gemini CLI",
               windows: [{ label: "Pro", usedPercent: 40 }],
             };
-          case "openai-codex":
+          case "openai":
             return {
               provider,
               displayName: "Codex",
@@ -71,7 +72,7 @@ describe("provider-usage.load", () => {
       [
         { provider: "github-copilot", token: "copilot-token" },
         { provider: googleGeminiCliProvider, token: "gemini-token" },
-        { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
+        { provider: "openai", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
         { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
       ],
@@ -81,7 +82,7 @@ describe("provider-usage.load", () => {
     expect(summary.providers.map((provider) => provider.provider)).toEqual([
       "github-copilot",
       googleGeminiCliProvider,
-      "openai-codex",
+      "openai",
       "xiaomi",
       "xiaomi-token-plan",
     ]);
@@ -93,7 +94,7 @@ describe("provider-usage.load", () => {
         ?.windows[0]?.label,
     ).toBe("Pro");
     expect(
-      summary.providers.find((provider) => provider.provider === "openai-codex")?.windows[0]?.label,
+      summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
     ).toBe("3h");
     expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
       [],
@@ -144,6 +145,33 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("keeps balance-only summary snapshots", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      summary: "Balance ¥42.50",
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "deepseek", token: "token-d" }],
+      mockFetch,
+    );
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "deepseek",
+        displayName: "DeepSeek",
+        windows: [],
+        summary: "Balance ¥42.50",
+      },
+    ]);
+  });
+
   it("keeps usage summary available when one provider fetch rejects", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
       async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
@@ -166,7 +194,7 @@ describe("provider-usage.load", () => {
       loadProviderUsageSummary,
       [
         { provider: "anthropic", token: "token-a" },
-        { provider: "openai-codex", token: "token-codex" },
+        { provider: "openai", token: "token-codex" },
       ],
       mockFetch,
     );
@@ -179,7 +207,7 @@ describe("provider-usage.load", () => {
         error: "fetch failed",
       },
       {
-        provider: "openai-codex",
+        provider: "openai",
         displayName: "Codex",
         windows: [{ label: "3h", usedPercent: 12 }],
       },
@@ -194,6 +222,7 @@ describe("provider-usage.load", () => {
         loadProviderUsageSummary({
           now: usageNow,
           auth: [{ provider: "xiaomi", token: "token-x" }],
+          env: {},
           fetch: undefined,
         }),
       ).rejects.toThrow("fetch is not available");

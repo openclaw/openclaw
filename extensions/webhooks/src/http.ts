@@ -1,3 +1,4 @@
+// Webhooks plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -374,7 +375,7 @@ function mapFlowMutationResult(
 
 function mapMutationStatus(result: {
   applied: boolean;
-  code?: "not_found" | "not_managed" | "revision_conflict";
+  code?: "not_found" | "not_managed" | "revision_conflict" | "persist_failed";
 }): { statusCode: number; code?: string; error?: string } {
   if (result.applied) {
     return { statusCode: 200 };
@@ -398,6 +399,12 @@ function mapMutationStatus(result: {
         code: "revision_conflict",
         error: "TaskFlow changed since the caller's expected revision.",
       };
+    case "persist_failed":
+      return {
+        statusCode: 503,
+        code: "persist_failed",
+        error: "TaskFlow persistence failed.",
+      };
     default:
       return {
         statusCode: 409,
@@ -405,6 +412,28 @@ function mapMutationStatus(result: {
         error: "TaskFlow mutation was rejected.",
       };
   }
+}
+
+function mapCreateFlowStatus(result: { created: boolean; code?: "persist_failed" }): {
+  statusCode: number;
+  code?: string;
+  error?: string;
+} {
+  if (result.created) {
+    return { statusCode: 200 };
+  }
+  if (result.code === "persist_failed") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
+      error: "TaskFlow persistence failed.",
+    };
+  }
+  return {
+    statusCode: 409,
+    code: "create_rejected",
+    error: "TaskFlow creation was rejected.",
+  };
 }
 
 function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: string }): {
@@ -440,6 +469,13 @@ function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: s
     return {
       statusCode: 409,
       code: "terminal",
+      error: result.reason,
+    };
+  }
+  if (result.reason === "Task persistence failed.") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
       error: result.reason,
     };
   }
@@ -486,6 +522,13 @@ function mapCancelStatus(result: { found: boolean; cancelled: boolean; reason?: 
       error: result.reason,
     };
   }
+  if (result.reason === "Flow persistence failed.") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
+      error: result.reason,
+    };
+  }
   return {
     statusCode: 409,
     code: "cancel_rejected",
@@ -499,6 +542,13 @@ function describeWebhookOutcome(params: { action: WebhookAction; result: unknown
   error?: string;
 } {
   switch (params.action.action) {
+    case "create_flow":
+      return mapCreateFlowStatus(
+        params.result as {
+          created: boolean;
+          code?: "persist_failed";
+        },
+      );
     case "set_waiting":
     case "resume_flow":
     case "finish_flow":
@@ -507,7 +557,7 @@ function describeWebhookOutcome(params: { action: WebhookAction; result: unknown
       return mapMutationStatus(
         params.result as {
           applied: boolean;
-          code?: "not_found" | "not_managed" | "revision_conflict";
+          code?: "not_found" | "not_managed" | "revision_conflict" | "persist_failed";
         },
       );
     case "cancel_flow":
@@ -539,7 +589,7 @@ async function executeWebhookAction(params: {
   const { action, target } = params;
   switch (action.action) {
     case "create_flow": {
-      const flow = target.taskFlow.createManaged({
+      const flow = target.taskFlow.tryCreateManaged({
         controllerId: action.controllerId ?? target.defaultControllerId,
         goal: action.goal,
         status: action.status,
@@ -548,7 +598,9 @@ async function executeWebhookAction(params: {
         stateJson: action.stateJson,
         waitJson: action.waitJson,
       });
-      return { flow: toFlowView(flow) };
+      return flow
+        ? { created: true, flow: toFlowView(flow) }
+        : { created: false, code: "persist_failed" };
     }
     case "get_flow": {
       const flow = target.taskFlow.get(action.flowId);

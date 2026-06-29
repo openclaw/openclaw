@@ -1,3 +1,12 @@
+/**
+ * pdf built-in tool.
+ *
+ * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { complete } from "../../llm/stream.js";
@@ -8,10 +17,6 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
@@ -20,6 +25,7 @@ import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.help
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
@@ -54,7 +60,6 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const PDF_REMOTE_READ_IDLE_TIMEOUT_MS = 120_000;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -76,12 +81,6 @@ export const PdfToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
-
-// ---------------------------------------------------------------------------
-// Model resolution (mirrors image tool pattern)
-// ---------------------------------------------------------------------------
-
-export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
   return (
@@ -121,7 +120,8 @@ function buildPdfExtractionContext(
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
-  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+  const systemPrompt =
+    model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -456,7 +456,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
-              ...(isHttpUrl ? { readIdleTimeoutMs: PDF_REMOTE_READ_IDLE_TIMEOUT_MS } : {}),
+              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
             });
 

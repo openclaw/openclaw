@@ -1,3 +1,4 @@
+// Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
@@ -6,6 +7,7 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -23,7 +25,11 @@ import {
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -61,6 +67,10 @@ vi.mock("../agents/auth-profiles/store.js", () => {
   };
 });
 
+vi.mock("../agents/auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+}));
+
 vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
@@ -83,12 +93,14 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleEnd: vi.fn(),
     emitAcpLifecycleError: vi.fn(),
     emitAcpLifecycleStart: vi.fn(),
-    persistAcpTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
-    persistCliTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
+    persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
+    persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
@@ -334,8 +346,8 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
-function installThinkingTestProviders() {
-  const registry = createTestRegistry();
+function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
+  const registry = createTestRegistry(channels);
   registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
     (providerId): PluginProviderRegistration => ({
       pluginId: providerId,
@@ -374,7 +386,7 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enables the Codex runtime plugin and provider owner for one-shot OpenAI model overrides", async () => {
+  it("enables Codex, provider owner, and memory slot plugins for one-shot OpenAI model overrides", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       mockConfig(home, storePath, { models: undefined });
@@ -395,7 +407,7 @@ describe("agentCommand", () => {
         expect(registryLoad?.config).toBeTypeOf("object");
         expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
         expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai"]);
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai", "memory-core"]);
       }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
@@ -855,7 +867,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for auto session model overrides", async () => {
+  it("probes the configured primary first for origin-backed auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {
@@ -865,6 +877,8 @@ describe("agentCommand", () => {
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
           modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-4.1-mini",
         },
       });
 
@@ -907,9 +921,65 @@ describe("agentCommand", () => {
         .mocked(runEmbeddedAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "openai", model: "gpt-4.1-mini" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("clears legacy auto session model overrides without origin metadata", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-legacy-auto-override.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:legacy-auto": {
+          sessionId: "session-legacy-auto",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:legacy-auto",
+        },
+        runtime,
+      );
+
+      const attempts = vi
+        .mocked(runEmbeddedAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+
+      const cleared = readSessionStore<{
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+      }>(store);
+      const entry = cleared["agent:main:subagent:legacy-auto"];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideSource).toBeUndefined();
     });
   });
 
@@ -1217,7 +1287,61 @@ describe("agentCommand", () => {
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+    });
+  });
+
+  it("rejects agent-scoped to session selectors that conflict with the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
+      });
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
+
+      await expect(
+        agentCommand({ message: "hi", agentId: "work", to: sessionKey }, runtime),
+      ).rejects.toThrow('Agent id "work" does not match session key agent "main".');
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not forward agent-scoped to session selectors as delivery targets", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "wechat-session",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "+1555",
+        },
+      });
+      mockConfig(home, store);
+      installThinkingTestProviders([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+          }),
+        },
+      ]);
+
+      await agentCommand(
+        { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
+        runtime,
+      );
+
+      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
+        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | undefined;
+      expect(deliveryCall?.opts?.to).toBeUndefined();
+      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
     });
   });
 

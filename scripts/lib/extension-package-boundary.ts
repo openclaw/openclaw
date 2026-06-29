@@ -1,3 +1,4 @@
+// Extension Package Boundary script supports OpenClaw repository automation.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { privateLocalOnlyPluginSdkEntrypoints } from "./plugin-sdk-entries.mjs";
@@ -20,6 +21,38 @@ const privateLocalOnlyPluginSdkPackageDtsPaths = Object.fromEntries(
   ]),
 ) as Record<string, readonly string[]>;
 
+function buildPackageBoundaryDtsPaths(params: {
+  packageName: string;
+  packageDir: string;
+}): Record<string, readonly string[]> {
+  const packageJson = JSON.parse(
+    readFileSync(join("packages", params.packageDir, "package.json"), "utf8"),
+  ) as { exports?: Record<string, unknown> };
+  return Object.fromEntries(
+    Object.entries(packageJson.exports ?? {}).flatMap(([exportKey, value]) => {
+      const subpath =
+        exportKey === "." ? "" : exportKey.startsWith("./") ? exportKey.slice(2) : null;
+      const importPath =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>).import
+          : value;
+      if (subpath === null || subpath.includes("..") || typeof importPath !== "string") {
+        return [];
+      }
+      if (!importPath.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        return [];
+      }
+      const specifier = subpath ? `${params.packageName}/${subpath}` : params.packageName;
+      return [
+        [
+          specifier,
+          [`../dist/plugin-sdk/packages/${params.packageDir}/src/${subpath || "index"}.d.ts`],
+        ],
+      ];
+    }),
+  );
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/extension-api": ["../src/extensionAPI.ts"],
   "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
@@ -39,6 +72,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],
@@ -62,6 +98,15 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/model-catalog-core": ["../dist/plugin-sdk/packages/model-catalog-core/src/index.d.ts"],
   "@openclaw/model-catalog-core/configured-model-refs": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-refs": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-types": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
   ],
   "@openclaw/model-catalog-core/provider-id": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
@@ -107,6 +152,42 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-generation-core/*": [
     "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
   ],
+  "@openclaw/media-core": ["../dist/plugin-sdk/packages/media-core/src/index.d.ts"],
+  "@openclaw/media-core/base64": ["../dist/plugin-sdk/packages/media-core/src/base64.d.ts"],
+  "@openclaw/media-core/constants": ["../dist/plugin-sdk/packages/media-core/src/constants.d.ts"],
+  "@openclaw/media-core/content-length": [
+    "../dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  ],
+  "@openclaw/media-core/file-name": ["../dist/plugin-sdk/packages/media-core/src/file-name.d.ts"],
+  "@openclaw/media-core/inbound-path-policy": [
+    "../dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  ],
+  "@openclaw/media-core/inline-image-data-url": [
+    "../dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  ],
+  "@openclaw/media-core/media-source-url": [
+    "../dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  ],
+  "@openclaw/media-core/mime": ["../dist/plugin-sdk/packages/media-core/src/mime.d.ts"],
+  "@openclaw/media-core/read-byte-stream-with-limit": [
+    "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  ],
+  "@openclaw/media-core/read-response-with-limit": [
+    "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
+  ],
+  "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
+  "@openclaw/normalization-core/record-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/string-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  ...buildPackageBoundaryDtsPaths({
+    packageName: "@openclaw/acp-core",
+    packageDir: "acp-core",
+  }),
+  "@openclaw/acp-core/*": ["../dist/plugin-sdk/packages/acp-core/src/*.d.ts"],
   "@openclaw/terminal-core": ["../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"],
   "@openclaw/terminal-core/ansi": ["../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"],
   "@openclaw/terminal-core/decorative-emoji": [
@@ -187,6 +268,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
   ],
   "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],
@@ -219,9 +303,8 @@ type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Boundary helper lets callers ascribe JSON file shape.
-function readJsonFile<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
@@ -243,18 +326,18 @@ export function readExtensionPackageBoundaryTsconfig(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryTsConfigJson {
-  return readJsonFile<ExtensionPackageBoundaryTsConfigJson>(
+  return readJsonFile(
     resolveExtensionTsconfigPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryTsConfigJson;
 }
 
 export function readExtensionPackageBoundaryPackageJson(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryPackageJson {
-  return readJsonFile<ExtensionPackageBoundaryPackageJson>(
+  return readJsonFile(
     resolveExtensionPackageJsonPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryPackageJson;
 }
 
 export function isOptInExtensionPackageBoundaryTsconfig(

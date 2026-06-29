@@ -1,5 +1,7 @@
+// Media Generation Core module implements capability model ref behavior.
 import { normalizeOptionalString } from "./string.js";
 
+/** Provider catalog entry shape used when resolving capability-scoped model references. */
 export type CapabilityModelProviderCandidate = {
   id: string;
   aliases?: readonly string[];
@@ -7,6 +9,7 @@ export type CapabilityModelProviderCandidate = {
   models?: readonly string[];
 };
 
+/** Normalized provider/model reference selected for a media capability. */
 export type CapabilityModelRef = {
   provider: string;
   model: string;
@@ -22,6 +25,7 @@ function normalizeProviderForMatch(
   return normalized && normalizeProviderId ? normalizeProviderId(normalized) : normalized;
 }
 
+/** Finds a provider by id or alias using the caller's provider-id normalization rules. */
 export function findCapabilityProviderById<T extends CapabilityModelProviderCandidate>(params: {
   providers: readonly T[];
   providerId?: string;
@@ -43,6 +47,7 @@ export function findCapabilityProviderById<T extends CapabilityModelProviderCand
   });
 }
 
+/** Resolves a bare model name to the provider that advertises it for this capability. */
 export function resolveCapabilityProviderModelOnlyRef(params: {
   providers: readonly CapabilityModelProviderCandidate[];
   raw?: string;
@@ -58,6 +63,7 @@ export function resolveCapabilityProviderModelOnlyRef(params: {
   return provider ? { provider: provider.id, model } : null;
 }
 
+/** Resolves provider/model refs first, then falls back to model-only catalog matching. */
 export function resolveCapabilityModelRefForProviders(params: {
   providers: readonly CapabilityModelProviderCandidate[];
   raw?: string;

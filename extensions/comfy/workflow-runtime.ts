@@ -1,3 +1,4 @@
+// Comfy plugin module implements workflow runtime behavior.
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
@@ -11,6 +12,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -317,15 +319,14 @@ async function readJsonResponse<T>(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
-    try {
-      return (await response.json()) as T;
-    } catch (cause) {
-      throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
-    }
+    return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
   } finally {
     await release();
   }
 }
+
+/** @internal Test-only export. */
+export const readJsonResponseForTest = readJsonResponse;
 
 function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
   const extension = extensionForMime(params.mimeType);
@@ -440,7 +441,9 @@ async function waitForLocalHistory(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 
@@ -479,7 +482,9 @@ async function waitForCloudCompletion(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 

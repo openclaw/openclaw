@@ -1,3 +1,4 @@
+// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressIdentifierKind,
@@ -187,7 +188,7 @@ export async function resolveSlackEffectiveAllowFrom(
   if (options?.includePairingStore !== true) {
     return base;
   }
-  let storeAllowFrom: string[] = [];
+  let storeAllowFrom: string[];
   try {
     const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
       provider: "slack",

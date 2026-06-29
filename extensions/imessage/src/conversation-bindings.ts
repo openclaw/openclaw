@@ -1,3 +1,4 @@
+// Imessage plugin module implements conversation bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createAccountScopedConversationBindingManager,
@@ -44,4 +45,3 @@ export const testing = {
     });
   },
 };
-export { testing as __testing };

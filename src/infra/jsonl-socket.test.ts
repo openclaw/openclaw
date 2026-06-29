@@ -1,7 +1,8 @@
+// Covers JSONL socket request framing and response handling.
 import net from "node:net";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { requestJsonlSocket, testApi } from "./jsonl-socket.js";
 

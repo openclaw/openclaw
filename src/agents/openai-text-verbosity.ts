@@ -1,4 +1,9 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+/**
+ * OpenAI text verbosity normalization for provider-owned stream parameters.
+ *
+ * Invalid operator-supplied values are ignored with a warning instead of leaking into API payloads.
+ */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { log } from "./embedded-agent-runner/logger.js";
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

@@ -1,3 +1,6 @@
+/**
+ * Shared result and attempt types for embedded-agent run internals.
+ */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -29,7 +32,15 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
-  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
+  | "provider"
+  | "model"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "thinkLevel"
+  | "fastMode"
+  | "lane"
+  | "enqueue"
+  | "sessionFile"
 >;
 
 export type EmbeddedRunContextWindowInfo = {
@@ -38,7 +49,11 @@ export type EmbeddedRunContextWindowInfo = {
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
+export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Active file-backed artifact target resolved by the run/session target seam. */
+  sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
@@ -54,6 +69,14 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Operator-requested or initial model id before any fallback resolution. */
+  requestedModelId?: string | null;
+  /** True when this attempt is running after a model fallback decision. */
+  fallbackActive?: boolean;
+  /** Concrete fallback reason that selected this attempt, when known. */
+  fallbackReason?: string | null;
+  /** Concrete degraded-runtime reason for this attempt, when known. */
+  degradedReason?: string | null;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
@@ -62,6 +85,14 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Signals that the attempt's own run-timeout watchdog is active. */
+  onAttemptTimeoutArmed?: () => void;
+  /** Signals that this attempt's timeout has fired and must unwind promptly. */
+  onAttemptTimeout?: (reason: Error) => void;
+  /** Signals an explicit cancellation through the active native run handle. */
+  onAttemptAbort?: () => void;
+  /** Supplies run-global model-call ordering for parallel tool outcomes. */
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
@@ -73,7 +104,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  fastMode?: EmbeddedRunFastModeParam;
+  /** True when this attempt is running the auto fast-mode policy. */
+  fastModeAuto?: boolean;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  beforeAgentFinalizeRevisionAttempts?: number;
+  maxBeforeAgentFinalizeRevisions?: number;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -135,19 +171,45 @@ export type EmbeddedRunAttemptResult = {
       | "tool_activity"
       | "potential_side_effect"
       | "active_item";
+    diagnostics?: {
+      idleMs?: number;
+      timeoutMs?: number;
+      lastActivityReason?: string;
+      lastNotificationMethod?: string;
+      lastNotificationItemId?: string;
+      lastNotificationItemType?: string;
+      lastNotificationItemRole?: string;
+      lastAssistantTextPreview?: string;
+      activeAppServerTurnRequests?: number;
+      activeTurnItemCount?: number;
+      terminalTurnNotificationQueued?: boolean;
+      completionIdleWatchArmed?: boolean;
+      assistantCompletionIdleWatchArmed?: boolean;
+      terminalIdleWatchArmed?: boolean;
+    };
   };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  lastAssistantTextMessageIndex?: number;
+  toolMetas: Array<{
+    toolName: string;
+    meta?: string;
+    replaySafe?: boolean;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
@@ -157,6 +219,7 @@ export type EmbeddedRunAttemptResult = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  hasToolMediaBlockReply?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
@@ -187,5 +250,6 @@ export type EmbeddedRunAttemptResult = {
     yielded?: boolean;
     timeoutPhase?: AgentRunTimeoutPhase;
     providerStarted?: boolean;
+    aborted?: boolean;
   }) => void;
 };

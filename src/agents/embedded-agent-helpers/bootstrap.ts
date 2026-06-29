@@ -1,8 +1,11 @@
+/**
+ * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -85,7 +88,7 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
+export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;

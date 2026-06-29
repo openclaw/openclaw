@@ -1,5 +1,10 @@
+// Plugin install persist tests cover saving installed plugin records after install.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
@@ -34,6 +39,12 @@ function expectRuntimeLogIncludes(fragment: string) {
   expect(runtimeLogs.join("\n")).toContain(fragment);
 }
 
+const installWriteOptions = {
+  assertConfigPathForWrite: () => {},
+  expectedConfigPath: "/tmp/openclaw.json",
+  ownedConfigPathForWrite: "/tmp/openclaw.json",
+};
+
 describe("persistPluginInstall", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -48,7 +59,7 @@ describe("persistPluginInstall", () => {
     } as OpenClawConfig;
     const enabledConfig = {
       plugins: {
-        allow: ["alpha", "memory-core"],
+        allow: ["memory-core", "alpha"],
         entries: {
           alpha: { enabled: true },
         },
@@ -57,7 +68,7 @@ describe("persistPluginInstall", () => {
     enablePluginInConfig.mockImplementation((...args: unknown[]) => {
       const [cfg, pluginId] = args as [OpenClawConfig, string];
       expect(pluginId).toBe("alpha");
-      expect(cfg.plugins?.allow).toEqual(["alpha", "memory-core"]);
+      expect(cfg.plugins?.allow).toEqual(["memory-core", "alpha"]);
       return { config: enabledConfig };
     });
 
@@ -65,6 +76,13 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: {
+          assertConfigPathForWrite: installWriteOptions.assertConfigPathForWrite,
+          expectedConfigPath: "/tmp/openclaw.json",
+          ownedConfigPathForWrite: "/tmp/openclaw.json",
+          includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
+          includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
+        },
       },
       pluginId: "alpha",
       install: {
@@ -90,6 +108,11 @@ describe("persistPluginInstall", () => {
       nextConfig: enabledConfig,
       baseHash: "config-1",
       writeOptions: {
+        assertConfigPathForWrite: installWriteOptions.assertConfigPathForWrite,
+        expectedConfigPath: "/tmp/openclaw.json",
+        ownedConfigPathForWrite: "/tmp/openclaw.json",
+        includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
+        includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
         afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
@@ -129,6 +152,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "alpha",
       install: {
@@ -193,6 +217,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "codex",
       install: {
@@ -256,6 +281,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "codex",
       install: {
@@ -267,6 +293,108 @@ describe("persistPluginInstall", () => {
 
     expect(planPluginUninstall).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+  });
+
+  it("preserves replaced npm install directories across generation updates", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-persist-"));
+    const previousProjectRoot = path.join(tempRoot, "npm", "projects", "codex-v1");
+    const previousInstallPath = path.join(
+      previousProjectRoot,
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const nextInstallPath = path.join(
+      tempRoot,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        installPath: previousInstallPath,
+      },
+    });
+    planPluginUninstall.mockReturnValueOnce({
+      ok: true,
+      config: {} as OpenClawConfig,
+      pluginId: "codex",
+      actions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: {
+        target: previousInstallPath,
+        cleanup: {
+          kind: "npm",
+          npmRoot: previousProjectRoot,
+          packageName: "@openclaw/codex",
+        },
+      },
+    });
+
+    try {
+      await persistPluginInstall({
+        snapshot: {
+          config: baseConfig,
+          baseHash: "config-1",
+          writeOptions: installWriteOptions,
+        },
+        pluginId: "codex",
+        install: {
+          source: "npm",
+          spec: "@openclaw/codex@2.0.0",
+          installPath: nextInstallPath,
+        },
+      });
+
+      expect(planPluginUninstall).toHaveBeenCalledWith({
+        config: {
+          plugins: {
+            installs: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@1.0.0",
+                installPath: previousInstallPath,
+              },
+            },
+          },
+        },
+        pluginId: "codex",
+        deleteFiles: true,
+      });
+      expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
@@ -300,6 +428,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "discord",
       install: {
@@ -358,6 +487,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "discord",
       install: {
@@ -391,6 +521,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "alpha",
       install: {
@@ -404,6 +535,42 @@ describe("persistPluginInstall", () => {
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
     expectRuntimeLogIncludes("Plugin registry refresh failed");
+  });
+
+  it("skips runtime cache invalidation when the caller opts out", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+        writeOptions: installWriteOptions,
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+      invalidateRuntimeCache: false,
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(clearPluginRegistryLoadCache).not.toHaveBeenCalled();
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {
@@ -432,6 +599,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "alpha",
       install: {
@@ -499,6 +667,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "legacy-memory",
       install: {
@@ -571,6 +740,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "memory-b",
       install: {
@@ -621,6 +791,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "plain",
       install: {
@@ -653,6 +824,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "memory-lancedb",
       enable: false,
@@ -694,6 +866,7 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: installWriteOptions,
       },
       pluginId: "memory-lancedb",
       enable: false,

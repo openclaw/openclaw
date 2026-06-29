@@ -1,11 +1,24 @@
+// Model catalog core import tests cover allowed model-catalog imports in plugin code.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const LEGACY_MODEL_CATALOG_BRIDGES = new Map([
   [path.join(REPO_ROOT, "src/agents/provider-id.ts"), "@openclaw/model-catalog-core/provider-id"],
+  [
+    path.join(REPO_ROOT, "src/model-catalog/refs.ts"),
+    "@openclaw/model-catalog-core/model-catalog-refs",
+  ],
+  [
+    path.join(REPO_ROOT, "src/model-catalog/normalize.ts"),
+    "@openclaw/model-catalog-core/model-catalog-normalize",
+  ],
+  [
+    path.join(REPO_ROOT, "src/model-catalog/types.ts"),
+    "@openclaw/model-catalog-core/model-catalog-types",
+  ],
   [
     path.join(REPO_ROOT, "src/config/model-refs.ts"),
     "@openclaw/model-catalog-core/configured-model-refs",
@@ -39,13 +52,13 @@ function resolveRelativeJsImport(sourceFile: string, specifier: string): string 
 }
 
 describe("model catalog core imports", () => {
-  it("uses package subpaths instead of legacy internal bridge modules", () => {
-    const bridgePaths = [...LEGACY_MODEL_CATALOG_BRIDGES.keys()];
-    for (const bridgePath of bridgePaths) {
-      expect(fs.existsSync(bridgePath), path.relative(REPO_ROOT, bridgePath)).toBe(false);
-    }
+  let legacyBridgeImportOffenders: string[] = [];
 
-    const offenders: string[] = [];
+  beforeAll(() => {
+    const bridgePaths = [...LEGACY_MODEL_CATALOG_BRIDGES.keys()];
+    legacyBridgeImportOffenders = bridgePaths
+      .filter((bridgePath) => fs.existsSync(bridgePath))
+      .map((bridgePath) => `${path.relative(REPO_ROOT, bridgePath)} still exists`);
     for (const relativeFile of listSourceFiles()) {
       const filePath = path.join(REPO_ROOT, relativeFile);
       const source = fs.readFileSync(filePath, "utf8");
@@ -53,11 +66,15 @@ describe("model catalog core imports", () => {
         const resolved = resolveRelativeJsImport(filePath, match[1] ?? "");
         const replacement = resolved ? LEGACY_MODEL_CATALOG_BRIDGES.get(resolved) : undefined;
         if (replacement) {
-          offenders.push(`${relativeFile} imports ${match[1]} instead of ${replacement}`);
+          legacyBridgeImportOffenders.push(
+            `${relativeFile} imports ${match[1]} instead of ${replacement}`,
+          );
         }
       }
     }
+  });
 
-    expect(offenders).toEqual([]);
+  it("uses package subpaths instead of legacy internal bridge modules", () => {
+    expect(legacyBridgeImportOffenders).toEqual([]);
   });
 });

@@ -143,6 +143,21 @@ current latest release declares a newer `openclaw.compat.pluginApi` or
 and installs the newest one that fits. Exact versions and explicit channel tags
 such as `@beta` stay pinned to the selected package and fail when incompatible.
 
+### Operator install policy
+
+Configure `security.installPolicy` to run a trusted local policy command before
+plugin install or update proceeds. The policy receives metadata plus the staged
+source path and can allow or block the install. It covers CLI and Gateway-backed
+plugin install/update paths. Plugin `before_install` hooks run later only in
+OpenClaw processes where plugin hooks are loaded, so use `security.installPolicy`
+for operator-owned install decisions. The deprecated
+`--dangerously-force-unsafe-install` flag is accepted for compatibility but does
+not bypass install policy or OpenClaw's built-in plugin dependency denylist.
+
+See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+for the shared `security.installPolicy` exec schema used by both skills and
+plugins.
+
 ### Configure plugin policy
 
 The common plugin config shape is:
@@ -172,7 +187,9 @@ Key policy rules:
   allowlist stay unavailable, even when `tools.allow` includes `"*"`.
 - `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
   config.
-- `plugins.load.paths` adds explicit local plugin files or directories.
+- `plugins.load.paths` adds explicit local plugin files or directories. Managed
+  `plugins install` local paths must be plugin directories or archives; use
+  `plugins.load.paths` for standalone plugin files.
 - Workspace-origin plugins are disabled by default; explicitly enable or
   allowlist them before using local workspace code.
 - Bundled plugins follow their built-in default-on/default-off metadata unless
@@ -186,9 +203,22 @@ Key policy rules:
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
-  separate: `openai-codex/*` is legacy config repaired by doctor, while the bundled
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
+
+When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
+the workspace or global plugin roots, startup logs
+`plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`.
+The warning includes discovered plugin ids and, for short lists, a minimal
+`plugins.allow` snippet. Run
+[`openclaw plugins list --enabled --verbose`](/cli/plugins#list) or
+[`openclaw plugins inspect <id>`](/cli/plugins#inspect) with the listed plugin
+id before copying trusted plugins into `openclaw.json`. The same trust-pinning
+guidance applies when diagnostics say a plugin loaded
+`without install/load-path provenance`: inspect that plugin id, then pin the
+trusted id in `plugins.allow` or reinstall from a trusted source so OpenClaw
+records install provenance.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.

@@ -1,10 +1,16 @@
+// Channel setup flow configures channels, auth, and workspace bindings.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
+  ChannelOnboardingPostWriteHook,
+  ChannelSetupConfiguredResult,
   ChannelSetupPlugin,
+  ChannelSetupResult,
+  ChannelSetupStatus,
   ChannelSetupWizardAdapter,
+  SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -20,19 +26,12 @@ import {
   getTrustedChannelPluginCatalogEntry,
   listTrustedChannelPluginCatalogEntries,
 } from "../commands/channel-setup/trusted-catalog.js";
-import type {
-  ChannelSetupConfiguredResult,
-  ChannelSetupResult,
-  ChannelSetupStatus,
-  ChannelOnboardingPostWriteHook,
-  SetupChannelsOptions,
-} from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enableExplicitlySelectedPluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -52,7 +51,6 @@ import {
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
-export { noteChannelStatus } from "./channel-setup.status.js";
 
 export function createChannelOnboardingPostWriteHookCollector() {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
@@ -383,7 +381,7 @@ export async function setupChannels(
       );
       return false;
     }
-    const result = enablePluginInConfig(next, channel);
+    const result = enableExplicitlySelectedPluginInConfig(next, channel);
     next = result.config;
     if (!result.enabled) {
       await prompter.note(

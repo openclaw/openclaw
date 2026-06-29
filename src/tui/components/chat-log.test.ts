@@ -1,3 +1,4 @@
+// Chat log tests cover message rendering order and layout behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
@@ -97,6 +98,22 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it("clears visible tool entries and stale tool references", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+
+    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Read File");
+
+    chatLog.clearTools();
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "stale" }] });
+
+    rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Read File");
+    expect(rendered).not.toContain("stale");
+  });
+
   it("prunes system messages atomically when a non-system entry overflows the log", () => {
     const chatLog = new ChatLog(20);
     for (let i = 1; i <= 20; i++) {
@@ -157,15 +174,19 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
-  it("stops counting a pending user message once the run is committed", () => {
+  it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "hello");
-    expect(chatLog.countPendingUsers()).toBe(1);
+    chatLog.addPendingUser("local", "queued hello", 1_000);
+    chatLog.startAssistant("hi there", "r-accepted");
 
-    expect(chatLog.commitPendingUser("run-1")).toBe(true);
+    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
+    // The row is now addressable by the gateway-assigned runId.
+    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
     expect(chatLog.countPendingUsers()).toBe(0);
-    expect(chatLog.render(120).join("\n")).toContain("hello");
   });
 
   it("reconciles pending users against rebuilt history using timestamps", () => {

@@ -1,3 +1,6 @@
+/**
+ * Chutes OAuth PKCE login flow.
+ */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
@@ -5,11 +8,16 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
+const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 type OAuthPrompt = {
   message: string;
@@ -117,7 +125,7 @@ async function fetchChutesUserInfo(params: {
   if (!response.ok) {
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
   return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
 }
 
@@ -149,14 +157,18 @@ async function exchangeChutesCodeForTokens(params: {
     body,
   });
   if (!response.ok) {
-    throw new Error(`Chutes token exchange failed: ${await response.text()}`);
+    const detail = await readResponseTextLimited(
+      response,
+      CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES,
+    ).catch(() => "");
+    throw new Error(`Chutes token exchange failed: ${detail}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response, "Chutes token exchange");
   const access = normalizeOptionalString(data.access_token);
   const refresh = normalizeOptionalString(data.refresh_token);
   const expires = resolveChutesExpiresAt(data.expires_in, now);
@@ -181,6 +193,7 @@ async function exchangeChutesCodeForTokens(params: {
   } as ChutesStoredOAuth;
 }
 
+/** Runs Chutes OAuth and returns refreshable stored credentials. */
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;

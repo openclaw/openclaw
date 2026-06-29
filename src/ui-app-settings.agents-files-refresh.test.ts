@@ -1,3 +1,4 @@
+// Tests UI app settings refresh behavior for agent files.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadAgentsMock = vi.hoisted(() =>
@@ -67,7 +68,6 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,

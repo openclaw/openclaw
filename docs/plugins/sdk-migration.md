@@ -318,8 +318,10 @@ releases.
     }
     ```
 
-    External plugins cannot register tool-result middleware because it can
-    rewrite high-trust tool output before the model sees it.
+    Installed plugins can also register tool-result middleware when they are
+    explicitly enabled and declare every targeted runtime in
+    `contracts.agentToolResultMiddleware`. Undeclared installed middleware
+    registrations are rejected.
 
   </Step>
 
@@ -652,6 +654,7 @@ releases.
   | `plugin-sdk/zod` | Deprecated Zod compatibility re-export | Import `zod` from `zod` directly |
   | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
+  | `plugin-sdk/memory-core-host-embedding-registry` | Memory embedding registry | Lightweight memory embedding provider registry helpers |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
   | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
   | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
@@ -789,6 +792,35 @@ canonical replacement.
 
     `deactivate` remains wired as a deprecated compatibility alias until after
     2026-08-16.
+
+  </Accordion>
+
+  <Accordion title="subagent_spawning hook → core thread binding">
+    **Old**: `api.on("subagent_spawning", handler)` returning
+    `threadBindingReady` or `deliveryOrigin`.
+
+    **New**: let core prepare `thread: true` subagent bindings through the
+    channel session-binding adapter. Use `api.on("subagent_spawned", handler)`
+    only for post-launch observation.
+
+    ```typescript
+    // Before
+    api.on("subagent_spawning", async () => ({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: { channel: "discord", to: "channel:123", threadId: "456" },
+    }));
+
+    // After
+    api.on("subagent_spawned", async (event) => {
+      await observeSubagentLaunch(event);
+    });
+    ```
+
+    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
+    `PluginHookSubagentSpawningResult`, and
+    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
+    deprecated compatibility surfaces while external plugins migrate.
 
   </Accordion>
 

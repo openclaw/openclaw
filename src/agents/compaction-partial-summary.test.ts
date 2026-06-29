@@ -1,6 +1,7 @@
+// Covers partial-summary recovery when compaction chunk summarization fails.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const compactionMocks = vi.hoisted(() => {
   function readText(value: unknown): string {
@@ -98,6 +99,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
   });
 
   it("returns partial summary when a later chunk fails with a non-abort error", async () => {
+    // A completed earlier chunk is useful context; keep it with an explicit
+    // partial marker instead of discarding all summarization progress.
     compactionMocks.generateSummary
       .mockResolvedValueOnce("Summary of chunk 1")
       .mockRejectedValue(new Error("API quota exceeded"));
@@ -113,7 +116,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     );
   });
 
-  it("re-throws abort errors instead of returning partial summary", async () => {
+  it("re-throws abort errors when the caller signal is already aborted", async () => {
     const abortErr = new Error("aborted");
     abortErr.name = "AbortError";
 
@@ -121,15 +124,46 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       .mockResolvedValueOnce("Summary of chunk 1")
       .mockRejectedValue(abortErr);
 
-    const result = await callSummarize();
+    const controller = new AbortController();
+    controller.abort();
 
-    // Abort error propagates from summarizeChunks; summarizeWithFallback catches it
-    // and falls through to the final fallback (not the partial summary).
-    expect(result).not.toBe("Summary of chunk 1");
-    expect(result).toContain("Context contained");
+    await expect(
+      summarizeWithFallback({
+        messages: twoChunkMessages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 150,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — partial recovery must not mask cancellation.
     expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
       "chunk summarization failed after retries; partial summary available",
       expect.anything(),
+    );
+  });
+
+  it("returns partial summary when a later chunk fails with a provider-side AbortError", async () => {
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+
+    compactionMocks.generateSummary
+      .mockResolvedValueOnce("Summary of chunk 1")
+      .mockRejectedValue(providerAbortErr);
+
+    const result = await callSummarize();
+
+    // Provider-side disconnects are not caller cancellation; preserve completed work.
+    expect(result).toContain("Summary of chunk 1");
+    expect(result).toContain("[Partial summary:");
+    expect(result).toMatch(/chunks 1-1 of 2 were summarized/);
+    expect(compactionMocks.logWarn).toHaveBeenCalledWith(
+      "chunk summarization failed after retries; partial summary available",
+      expect.objectContaining({ err: providerAbortErr }),
     );
   });
 
@@ -196,8 +230,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
 
     const result = await callSummarize(mixedMessages);
 
-    // The oversized retry should have recovered more content than
-    // the partial summary from chunk 1 alone.
+    // The oversized retry should have recovered more content than the partial
+    // summary from chunk 1 alone.
     expect(result).toContain("Summary of small messages (oversized retry)");
     // The partial summary should NOT be the final result because the
     // oversized retry succeeded.
@@ -217,6 +251,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       { role: "user", content: "b".repeat(400), timestamp: 4 },
     ];
 
+    // The retry excludes oversized messages and can produce a better partial
+    // summary than the original attempt, so fallback ordering matters.
     compactionMocks.generateSummary
       // Full attempt: chunk 1 succeeds, chunk 2 fails (oversized message)
       .mockResolvedValueOnce("Full attempt chunk 1")

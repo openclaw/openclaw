@@ -1,8 +1,13 @@
+/** Installs native Node resolution aliases so plugins can import the OpenClaw SDK in dev and tests. */
 import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildPluginLoaderAliasMap, type PluginSdkResolutionPreference } from "./sdk-alias.js";
+import {
+  buildPluginLoaderAliasMap,
+  listWorkspacePackageExportAliasEntries,
+  type PluginSdkResolutionPreference,
+} from "./sdk-alias.js";
 
 type ResolveFilename = (
   request: string,
@@ -32,18 +37,61 @@ type NativeAliasEntry = {
   target: string;
 };
 
+/** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
 export type InstallOpenClawPluginSdkNativeResolverOptions = {
   modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
   argv1?: string;
   moduleUrl?: string;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
 const nodeResolveFilenameProperty = "_resolveFilename" as const;
 const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const INTERNAL_CORE_PACKAGE_ALIASES = [
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["number-coercion", "number-coercion.ts"],
+      ["record-coerce", "record-coerce.ts"],
+      ["string-coerce", "string-coerce.ts"],
+      ["string-normalization", "string-normalization.ts"],
+    ],
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["base64", "base64.ts"],
+      ["constants", "constants.ts"],
+      ["content-length", "content-length.ts"],
+      ["file-name", "file-name.ts"],
+      ["inbound-path-policy", "inbound-path-policy.ts"],
+      ["inline-image-data-url", "inline-image-data-url.ts"],
+      ["media-source-url", "media-source-url.ts"],
+      ["mime", "mime.ts"],
+      ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
+      ["read-response-with-limit", "read-response-with-limit.ts"],
+    ],
+  },
+  {
+    packageName: "@openclaw/llm-core",
+    packageDir: "llm-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["diagnostics", path.join("utils", "diagnostics.ts")],
+      ["event-stream", path.join("utils", "event-stream.ts")],
+      ["types", "types.ts"],
+      ["validation", "validation.ts"],
+    ],
+  },
+] as const;
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
 let installed = false;
 let previousResolveFilename: ResolveFilename | undefined;
@@ -174,7 +222,7 @@ function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
 ): string | undefined {
-  if (!isPluginSdkAliasSpecifier(request) || !parentUrl?.startsWith("file:")) {
+  if (!parentUrl?.startsWith("file:")) {
     return undefined;
   }
   try {
@@ -207,6 +255,7 @@ function listPluginSdkNativeAliases(
       // Native require hooks must point at JavaScript artifacts, even when the
       // plugin loader itself is configured to prefer source imports.
       "dist",
+      options.devSourceRoot,
     ),
   )
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
@@ -220,6 +269,51 @@ function listPluginSdkNativeAliases(
         [`${specifier}.js`, target],
       ] as Array<readonly [string, string]>;
     });
+}
+
+function listInternalCorePackageNativeAliases(
+  options: InstallOpenClawPluginSdkNativeResolverOptions,
+): Array<{
+  request: string;
+  target: string;
+  parentRoots: string[];
+}> {
+  const packageRoot = resolveLoaderPackageRootFromModulePath(resolveLoaderModulePath(options));
+  const parentRoots = ["src", "scripts", "packages", "test"]
+    .map((segment) => path.join(packageRoot, segment))
+    .filter((candidate) => fs.existsSync(candidate))
+    .map(normalizePathForBoundary);
+  if (parentRoots.length === 0) {
+    return [];
+  }
+
+  const aliases: Array<{
+    request: string;
+    target: string;
+    parentRoots: string[];
+  }> = [];
+  const internalCorePackageAliases = [
+    ...INTERNAL_CORE_PACKAGE_ALIASES,
+    {
+      packageName: "@openclaw/acp-core",
+      packageDir: "acp-core",
+      subpaths: listWorkspacePackageExportAliasEntries({
+        packageRoot,
+        packageName: "@openclaw/acp-core",
+        packageDir: "acp-core",
+      }).map((entry) => [entry.subpath, entry.srcFile] as const),
+    },
+  ];
+  for (const entry of internalCorePackageAliases) {
+    for (const [subpath, srcFile] of entry.subpaths) {
+      const request = subpath ? `${entry.packageName}/${subpath}` : entry.packageName;
+      const target = path.join(packageRoot, "packages", entry.packageDir, "src", srcFile);
+      if (fs.existsSync(target)) {
+        aliases.push({ request, target, parentRoots });
+      }
+    }
+  }
+  return aliases;
 }
 
 function installResolver(): void {
@@ -256,9 +350,9 @@ function registerNativeAlias(params: {
 }): void {
   const entries = pluginSdkNativeAliases.get(params.request) ?? [];
   for (const parentRoot of params.parentRoots) {
-    if (
-      entries.some((entry) => entry.parentRoot === parentRoot && entry.target === params.target)
-    ) {
+    const existingIndex = entries.findIndex((entry) => entry.parentRoot === parentRoot);
+    if (existingIndex !== -1) {
+      entries[existingIndex] = { parentRoot, target: params.target };
       continue;
     }
     entries.push({ parentRoot, target: params.target });
@@ -268,12 +362,41 @@ function registerNativeAlias(params: {
   }
 }
 
+function clearNativeAliasesForParentRoots(parentRoots: readonly string[]): void {
+  if (parentRoots.length === 0) {
+    return;
+  }
+  const parentRootSet = new Set(parentRoots);
+  for (const [request, entries] of pluginSdkNativeAliases) {
+    const nextEntries = entries.filter((entry) => !parentRootSet.has(entry.parentRoot));
+    if (nextEntries.length === 0) {
+      pluginSdkNativeAliases.delete(request);
+    } else {
+      pluginSdkNativeAliases.set(request, nextEntries);
+    }
+  }
+}
+
 export function installOpenClawPluginSdkNativeResolver(
   options: InstallOpenClawPluginSdkNativeResolverOptions = {},
 ): string[] {
   const parentRoots = resolveAllowedParentRoots(options);
+  clearNativeAliasesForParentRoots(parentRoots);
   for (const [specifier, target] of listPluginSdkNativeAliases(options)) {
     registerNativeAlias({ request: specifier, target, parentRoots });
+  }
+  for (const alias of listInternalCorePackageNativeAliases(options)) {
+    registerNativeAlias(alias);
+  }
+  installResolver();
+  return [...pluginSdkNativeAliases.keys()].toSorted();
+}
+
+export function installOpenClawInternalCorePackageNativeResolver(
+  options: Pick<InstallOpenClawPluginSdkNativeResolverOptions, "moduleUrl"> = {},
+): string[] {
+  for (const alias of listInternalCorePackageNativeAliases(options)) {
+    registerNativeAlias(alias);
   }
   installResolver();
   return [...pluginSdkNativeAliases.keys()].toSorted();

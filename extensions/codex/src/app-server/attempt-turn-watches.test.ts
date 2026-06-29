@@ -1,4 +1,7 @@
+// Codex tests cover attempt turn watches plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateActiveCompletionBlockerItemIds } from "./attempt-notifications.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 
 describe("Codex app-server attempt turn watches", () => {
@@ -8,6 +11,8 @@ describe("Codex app-server attempt turn watches", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -19,6 +24,7 @@ describe("Codex app-server attempt turn watches", () => {
     let terminalQueued = false;
     let activeRequests = 0;
     let activeItems = 0;
+    let activeCompletionBlockers = 0;
     const interrupts: Array<Record<string, unknown>> = [];
     const timeouts: Array<Record<string, unknown>> = [];
     const events: Array<{ name: string; fields: Record<string, unknown> }> = [];
@@ -32,6 +38,7 @@ describe("Codex app-server attempt turn watches", () => {
       isTerminalTurnNotificationQueued: () => terminalQueued,
       getActiveAppServerTurnRequests: () => activeRequests,
       getActiveTurnItemCount: () => activeItems,
+      getActiveCompletionBlockerItemCount: () => activeCompletionBlockers,
       turnCompletionIdleTimeoutMs: 10,
       turnAssistantCompletionIdleTimeoutMs: 10,
       turnAttemptIdleTimeoutMs: 10,
@@ -65,6 +72,9 @@ describe("Codex app-server attempt turn watches", () => {
       set activeItems(value: number) {
         activeItems = value;
       },
+      set activeCompletionBlockers(value: number) {
+        activeCompletionBlockers = value;
+      },
       interrupts,
       timeouts,
       events,
@@ -85,9 +95,59 @@ describe("Codex app-server attempt turn watches", () => {
         idleMs: 10,
         timeoutMs: 10,
         lastActivityReason: "turn:start",
+        details: {
+          activeAppServerTurnRequests: 0,
+          activeTurnItemCount: 0,
+          terminalTurnNotificationQueued: false,
+          completionIdleWatchArmed: true,
+          assistantCompletionIdleWatchArmed: false,
+          terminalIdleWatchArmed: false,
+        },
       },
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");
+  });
+
+  it("prefers completion idle timeout when completion and progress watches are due together", () => {
+    const harness = createController();
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:item/tool/call:response", {
+      arm: true,
+      attemptProgress: true,
+      attemptTimeoutMs: 10,
+    });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "completion",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "request:item/tool/call:response",
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");
+  });
+
+  it("clamps oversized completion idle timeouts before scheduling", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const harness = createController({
+      turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    harness.controller.touchActivity("turn:start", { arm: true });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("clamps oversized completion idle override timeouts before scheduling", () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const harness = createController();
+
+    harness.controller.armCompletionIdleWatch({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not fire completion idle timeout after terminal notification is queued", () => {
@@ -99,6 +159,32 @@ describe("Codex app-server attempt turn watches", () => {
 
     expect(harness.timeouts).toEqual([]);
     expect(harness.abortController.signal.aborted).toBe(false);
+  });
+
+  it("waits for active completion blocker items before firing completion idle timeout", () => {
+    const harness = createController();
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.touchActivity("request:mcpServer/elicitation/request:response", {
+      arm: true,
+    });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeCompletionBlockers = 0;
+    harness.controller.touchActivity("notification:item/completed");
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "completion",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "notification:item/completed",
+      },
+    ]);
   });
 
   it("releases a completed assistant item after the assistant idle guard expires", () => {
@@ -159,4 +245,42 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
   });
+});
+
+describe("Codex completion blocker item tracking", () => {
+  it.each([
+    "collabAgentToolCall",
+    "commandExecution",
+    "dynamicToolCall",
+    "fileChange",
+    "imageGeneration",
+    "imageView",
+    "mcpToolCall",
+    "webSearch",
+  ])("tracks the %s lifecycle", (type) => {
+    const activeItemIds = new Set<string>();
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/started", params: { item: { id: "item-1", type } } },
+      activeItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set(["item-1"]));
+
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/completed", params: { item: { id: "item-1", type } } },
+      activeItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+  });
+
+  it.each(["agentMessage", "contextCompaction", "plan", "reasoning", "subAgentActivity"])(
+    "does not track the %s lifecycle",
+    (type) => {
+      const activeItemIds = new Set<string>();
+      updateActiveCompletionBlockerItemIds(
+        { method: "item/started", params: { item: { id: "item-1", type } } },
+        activeItemIds,
+      );
+      expect(activeItemIds).toEqual(new Set());
+    },
+  );
 });

@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare behavior.
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -39,6 +40,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
+import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -205,8 +207,14 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
 function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
   agentId: string | undefined,
+  options?: Parameters<typeof buildMentionRegexes>[2],
 ): RegExp[] {
-  const key = normalizeOptionalString(agentId) ?? "__default__";
+  const key = [
+    normalizeOptionalString(agentId) ?? "__default__",
+    normalizeOptionalString(options?.provider),
+    normalizeOptionalString(options?.conversationId ?? undefined),
+    options?.providerPolicy ? JSON.stringify(options.providerPolicy) : "",
+  ].join("\u001f");
   let byAgent = mentionRegexCache.get(ctx);
   if (!byAgent) {
     byAgent = new Map<string, RegExp[]>();
@@ -216,7 +224,7 @@ function resolveCachedMentionRegexes(
   if (cached) {
     return cached;
   }
-  const built = buildMentionRegexes(ctx.cfg, agentId);
+  const built = buildMentionRegexes(ctx.cfg, agentId, options);
   byAgent.set(key, built);
   return built;
 }
@@ -612,7 +620,11 @@ export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
-  opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+  opts: {
+    source: "message" | "app_mention";
+    wasMentioned?: boolean;
+    relayIdentity?: SlackSendIdentity;
+  };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
@@ -721,7 +733,13 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
-  let mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+  const buildPolicyMentionRegexes = (agentId: string | undefined) =>
+    resolveCachedMentionRegexes(ctx, agentId, {
+      provider: "slack",
+      conversationId: message.channel,
+      providerPolicy: account.config.mentionPatterns,
+    });
+  let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
   let wasMentioned = resolveWasMentioned(mentionRegexes);
   const hasBoundSession = Boolean(
     routing.runtimeBoundSessionKey || routing.configuredBindingSessionKey,
@@ -746,7 +764,7 @@ export async function prepareSlackMessage(params: {
       seedTopLevelRoomThread: true,
       assistantThreadTs: assistantThreadContext?.threadTs,
     });
-    mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+    mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
     wasMentioned = resolveWasMentioned(mentionRegexes);
   }
   const {
@@ -762,6 +780,14 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     historyKey,
   } = routing;
+  const isAssistantThreadMessage = Boolean(isDirectMessage && messageAssistantThreadContext);
+  const shouldForceAssistantReplyThread = Boolean(
+    assistantThreadContext?.threadTs &&
+    (isThreadReply || isAssistantThreadMessage || replyToMode !== "off"),
+  );
+  const forcedAssistantReplyThreadTs = shouldForceAssistantReplyThread
+    ? assistantThreadContext?.threadTs
+    : undefined;
   if (runtimeBinding && shouldLogVerbose()) {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
@@ -1087,7 +1113,7 @@ export async function prepareSlackMessage(params: {
           client: ctx.app.client,
         }).then(
           () => true,
-          (err) => {
+          (err: unknown) => {
             logVerbose(
               `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
             );
@@ -1110,7 +1136,7 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+  enqueueSystemEvent(inboundLabel, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
@@ -1199,7 +1225,7 @@ export async function prepareSlackMessage(params: {
   const {
     threadStarterBody,
     threadHistoryBody,
-    threadSessionPreviousTimestamp,
+    shouldSeedInitialThreadContext,
     threadLabel,
     threadStarterMedia,
   } = await resolveSlackThreadContextData({
@@ -1294,7 +1320,7 @@ export async function prepareSlackMessage(params: {
       thread: {
         // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
         starterBody:
-          !directThreadRoutedToDmSession && !threadSessionPreviousTimestamp
+          !directThreadRoutedToDmSession && shouldSeedInitialThreadContext
             ? threadStarterBody
             : undefined,
         historyBody: supplementalThreadHistoryBody,
@@ -1314,7 +1340,7 @@ export async function prepareSlackMessage(params: {
         isThreadReply &&
         threadTs &&
         !directThreadRoutedToDmSession &&
-        !threadSessionPreviousTimestamp
+        shouldSeedInitialThreadContext
           ? true
           : undefined,
       ...buildSlackMentionContextPayload({
@@ -1369,6 +1395,7 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+    ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
     route,
     channelConfig,
     replyTarget,
@@ -1427,9 +1454,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(assistantThreadContext?.threadTs
-      ? { forcedReplyThreadTs: assistantThreadContext.threadTs }
-      : {}),
+    ...(forcedAssistantReplyThreadTs ? { forcedReplyThreadTs: forcedAssistantReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }
       : {}),

@@ -1,3 +1,5 @@
+// Covers global Undici dispatcher policy: proxy bootstrap, stream timeouts,
+// WSL2 address-family handling, and managed-dispatcher wrapping.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,20 +20,20 @@ const {
   createHttp1EnvHttpProxyAgent,
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
-  class Agent {
+  class AgentLocal {
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
-  class EnvHttpProxyAgent {
+  class EnvHttpProxyAgentLocal {
     public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
   }
 
-  class ProxyAgent {
+  class ProxyAgentLocal {
     constructor(public readonly url: string) {}
   }
 
-  class ManagedUndiciDispatcher {
+  class ManagedUndiciDispatcherLocal {
     #closed = false;
     #destroyed = false;
     public readonly dispatchCalls: Array<Record<string, unknown>> = [];
@@ -61,61 +63,64 @@ const {
       this.#destroyed = true;
     }
   }
+  Object.defineProperty(ManagedUndiciDispatcherLocal, "name", {
+    value: "ManagedUndiciDispatcher",
+  });
 
-  let currentDispatcher: unknown = new Agent();
+  let currentDispatcher: unknown = new AgentLocal();
 
   const getGlobalDispatcher = vi.fn(() => currentDispatcher);
-  const setGlobalDispatcher = vi.fn((next: unknown) => {
+  const setGlobalDispatcherLocal = vi.fn((next: unknown) => {
     currentDispatcher = next;
   });
-  const setCurrentDispatcher = (next: unknown) => {
+  const setCurrentDispatcherLocal = (next: unknown) => {
     currentDispatcher = next;
   };
-  const getCurrentDispatcher = () => currentDispatcher;
-  const getDefaultAutoSelectFamily = vi.fn(() => undefined as boolean | undefined);
-  const setDefaultAutoSelectFamily = vi.fn();
-  const isProxylineDispatcher = vi.fn(
-    (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcher,
+  const getCurrentDispatcherLocal = () => currentDispatcher;
+  const getDefaultAutoSelectFamilyLocal = vi.fn(() => undefined as boolean | undefined);
+  const setDefaultAutoSelectFamilyLocal = vi.fn();
+  const isProxylineDispatcherLocal = vi.fn(
+    (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcherLocal,
   );
-  const createHttp1Agent = vi.fn(
+  const createHttp1AgentLocal = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new Agent({
+      new AgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
       }),
   );
-  const createHttp1EnvHttpProxyAgent = vi.fn(
+  const createHttp1EnvHttpProxyAgentLocal = vi.fn(
     (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new EnvHttpProxyAgent({
+      new EnvHttpProxyAgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
         clientFactory: "ip-safe-test-client-factory",
       }),
   );
-  const loadUndiciGlobalDispatcherDeps = vi.fn(() => ({
-    Agent,
-    EnvHttpProxyAgent,
+  const loadUndiciGlobalDispatcherDepsLocal = vi.fn(() => ({
+    Agent: AgentLocal,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
     getGlobalDispatcher,
-    setGlobalDispatcher,
+    setGlobalDispatcher: setGlobalDispatcherLocal,
   }));
 
   return {
-    Agent,
-    EnvHttpProxyAgent,
-    ManagedUndiciDispatcher,
-    ProxyAgent,
+    Agent: AgentLocal,
+    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
+    ManagedUndiciDispatcher: ManagedUndiciDispatcherLocal,
+    ProxyAgent: ProxyAgentLocal,
     getGlobalDispatcher,
-    setGlobalDispatcher,
-    setCurrentDispatcher,
-    getCurrentDispatcher,
-    getDefaultAutoSelectFamily,
-    isProxylineDispatcher,
-    createHttp1Agent,
-    createHttp1EnvHttpProxyAgent,
-    setDefaultAutoSelectFamily,
-    loadUndiciGlobalDispatcherDeps,
+    setGlobalDispatcher: setGlobalDispatcherLocal,
+    setCurrentDispatcher: setCurrentDispatcherLocal,
+    getCurrentDispatcher: getCurrentDispatcherLocal,
+    getDefaultAutoSelectFamily: getDefaultAutoSelectFamilyLocal,
+    isProxylineDispatcher: isProxylineDispatcherLocal,
+    createHttp1Agent: createHttp1AgentLocal,
+    createHttp1EnvHttpProxyAgent: createHttp1EnvHttpProxyAgentLocal,
+    setDefaultAutoSelectFamily: setDefaultAutoSelectFamilyLocal,
+    loadUndiciGlobalDispatcherDeps: loadUndiciGlobalDispatcherDepsLocal,
   };
 });
 
@@ -170,6 +175,7 @@ let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.
 let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
+let noProxySubprocessOutput = "";
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeAll(async () => {
@@ -182,6 +188,28 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
+    const moduleUrl = pathToFileURL(path.resolve("src/infra/net/undici-global-dispatcher.ts")).href;
+    const source = `
+      const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
+      const mod = await import(${JSON.stringify(moduleUrl)});
+      mod.ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
+      if (globalThis[dispatcherKey] !== undefined) {
+        throw new Error("undici global dispatcher was initialized");
+      }
+      console.log("ok");
+    `;
+    const env = { ...process.env };
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ]) {
+      delete env[key];
+    }
+    noProxySubprocessOutput = execNodeEvalSync(source, { env, imports: ["tsx"] });
   });
 
   beforeEach(() => {
@@ -209,31 +237,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
   });
 
   it("does not initialize the undici global dispatcher in a no-proxy subprocess", () => {
-    const moduleUrl = pathToFileURL(path.resolve("src/infra/net/undici-global-dispatcher.ts")).href;
-    const source = `
-      const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
-      const mod = await import(${JSON.stringify(moduleUrl)});
-      mod.ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
-      if (globalThis[dispatcherKey] !== undefined) {
-        throw new Error("undici global dispatcher was initialized");
-      }
-      console.log("ok");
-    `;
-    const env = { ...process.env };
-    for (const key of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-    ]) {
-      delete env[key];
-    }
-
-    const output = execNodeEvalSync(source, { env, imports: ["tsx"] });
-
-    expect(output.trim()).toBe("ok");
+    expect(noProxySubprocessOutput.trim()).toBe("ok");
   });
 
   it("explicitly tunes the global dispatcher when requested for embedded attempts", () => {

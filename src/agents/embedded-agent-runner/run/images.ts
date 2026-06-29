@@ -1,11 +1,14 @@
+/**
+ * Detects, resolves, and loads prompt image references for model input.
+ */
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { loadWebMedia } from "../../../media/web-media.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
@@ -75,13 +78,12 @@ const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
  *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  */
-// eslint-disable-next-line no-control-regex
-const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\]+)/;
 
 /**
  * Result of detecting an image reference in text.
  */
-export interface DetectedImageRef {
+interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */
@@ -113,6 +115,11 @@ function isOpenClawCliImageCachePath(filePath: string): boolean {
   });
 }
 
+/**
+ * Rebuilds the model image array in the same order the prompt saw them:
+ * existing inline images and offloaded attachments follow `imageOrder`, then
+ * explicit prompt path/media refs are appended after attachment-owned images.
+ */
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
@@ -184,6 +191,10 @@ function consumeRefCount(counts: Map<string, number>, ref: DetectedImageRef): bo
   return true;
 }
 
+/**
+ * Reads only the leading attachment boilerplate block. User-authored image refs
+ * after the first blank/non-attachment line must remain prompt refs.
+ */
 function extractLeadingAttachmentPrompt(prompt: string): string {
   const lines = prompt.split(/\r?\n/);
   const attachmentLines: string[] = [];
@@ -216,6 +227,11 @@ function extractLeadingInlineAttachmentRefs(prompt: string, count: number): Dete
   return detectImageReferences(attachmentPrompt).slice(0, count);
 }
 
+/**
+ * Finds trailing media:// attachment lines produced by claim-check offload. The
+ * reverse scan stops at the first non-attachment line so prompt text above it is
+ * not accidentally treated as attachment boilerplate.
+ */
 function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
   if (count <= 0) {
     return [];
@@ -242,6 +258,11 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
   return uris;
 }
 
+/**
+ * Separates image refs that came from attachment boilerplate from refs the user
+ * actually typed into the prompt. Attachment refs are already represented by
+ * existing/offloaded image content and should not be loaded a second time.
+ */
 export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
@@ -253,6 +274,7 @@ export function splitPromptAndAttachmentRefs(params: {
 } {
   const existingImageCount = params.existingImageCount ?? 0;
   const inlineOrderCount = params.imageOrder?.filter((entry) => entry === "inline").length;
+  // Inline attachments appear at the front of the prompt and are already present in existingImages.
   const inlineAttachmentRefCount = Math.min(
     existingImageCount,
     inlineOrderCount ?? existingImageCount,
@@ -261,6 +283,7 @@ export function splitPromptAndAttachmentRefs(params: {
     extractLeadingInlineAttachmentRefs(params.prompt, inlineAttachmentRefCount),
   );
   const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  // Offloaded claim-check attachments are appended after the prompt and loaded through media://.
   const attachmentUris = new Set(
     offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
   );
@@ -314,7 +337,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   const refs: DetectedImageRef[] = [];
   const seen = new Set<string>();
 
-  // Helper to add a path ref
+  // Dedupe by the user-visible token before resolving so repeated refs keep their first spelling.
   const addPathRef = (raw: string) => {
     const trimmed = raw.trim();
     const dedupeKey = normalizeRefForDedupe(trimmed);
@@ -361,7 +384,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // This must be tested before the extension-based path regex because the
     // URI has no file extension suffix in its base form.
     const mediaUriMatch = content.match(MEDIA_URI_REGEX);
-    if (mediaUriMatch) {
+    if (mediaUriMatch && !mediaUriMatch[1].includes("\0")) {
       const uri = `media://inbound/${mediaUriMatch[1]}`;
       const dedupeKey = normalizeRefForDedupe(uri);
       if (!seen.has(dedupeKey)) {
@@ -435,12 +458,10 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
 }
 
 /**
- * Loads an image from a file path and returns it as ImageContent.
- *
- * @param ref The detected image reference
- * @param workspaceDir The current workspace directory for resolving relative paths
- * @param options Optional settings for sandbox and size limits
- * @returns The loaded image content, or null if loading failed
+ * Resolves and loads one detected image ref into model-ready image content.
+ * Sandbox refs must validate through the bridge; non-sandbox refs can resolve
+ * media claim-checks and workspace-relative paths before loadWebMedia enforces
+ * local-root and size limits.
  */
 export async function loadImageFromRef(
   ref: DetectedImageRef,
@@ -455,11 +476,12 @@ export async function loadImageFromRef(
   try {
     let targetPath = ref.resolved;
 
+    // media:// claim-check refs are resolved only outside sandbox mode; sandbox
+    // mode validates through resolveSandboxedBridgeMediaPath instead.
     if (!options?.sandbox) {
       targetPath = await resolveMediaReferenceLocalPath(targetPath);
     }
 
-    // Resolve paths relative to sandbox or workspace as needed
     if (options?.sandbox) {
       try {
         const resolved = await resolveSandboxedBridgeMediaPath({
@@ -482,7 +504,7 @@ export async function loadImageFromRef(
       targetPath = path.resolve(workspaceDir, targetPath);
     }
 
-    // loadWebMedia handles local file paths (including file:// URLs)
+    // loadWebMedia handles local file paths and file:// URLs after the path policy above.
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
@@ -514,25 +536,15 @@ export async function loadImageFromRef(
   }
 }
 
-/**
- * Checks if a model supports image input based on its input capabilities.
- *
- * @param model The model object with input capability array
- * @returns True if the model supports image input
- */
+/** Returns whether the resolved model advertises native image input support. */
 export function modelSupportsImages(model: { input?: string[] }): boolean {
   return model.input?.includes("image") ?? false;
 }
 
 /**
- * Detects and loads images referenced in a prompt for models with vision capability.
- *
- * This function scans the prompt for image references (file paths and URLs),
- * loads them, and returns them as ImageContent array ready to be passed to
- * the model's prompt method.
- *
- * @param params Configuration for image detection and loading
- * @returns Object with loaded images for current prompt only
+ * Detects, loads, orders, and sanitizes the image payload for one prompt turn.
+ * Attachment boilerplate is separated from user-authored refs so existing
+ * inline images and offloaded claim-check images are not loaded twice.
  */
 export async function detectAndLoadPromptImages(params: {
   prompt: string;
@@ -552,7 +564,6 @@ export async function detectAndLoadPromptImages(params: {
   loadedCount: number;
   skippedCount: number;
 }> {
-  // If model doesn't support images, return empty results
   if (!modelSupportsImages(params.model)) {
     return {
       images: [],
@@ -562,7 +573,6 @@ export async function detectAndLoadPromptImages(params: {
     };
   }
 
-  // Detect images from current prompt
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {

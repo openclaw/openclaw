@@ -1,3 +1,4 @@
+// Official plugin setup tests cover plugin installation during onboarding.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -132,6 +133,11 @@ describe("setupOfficialPluginInstalls", () => {
           value: "diagnostics-prometheus",
           label: "Diagnostics Prometheus",
           hint: "OpenClaw diagnostics Prometheus exporter",
+        },
+        {
+          value: "tokenjuice",
+          label: "Tokenjuice",
+          hint: "OpenClaw tokenjuice exec output compaction plugin",
         },
       ]),
     );

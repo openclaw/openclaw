@@ -1,6 +1,7 @@
+// Discord provider module implements model/runtime integration.
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
+import { Client, type RequestClient } from "../internal/discord.js";
 import {
   attachDiscordDeployRestContext,
   attachDiscordDeployRequestBody,
@@ -139,7 +140,6 @@ async function deployDiscordCommands(params: {
   try {
     try {
       await params.client.deployCommands({ mode: "reconcile" });
-      return;
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(
@@ -205,17 +205,4 @@ export function runDiscordCommandDeployInBackground(params: {
         ),
       );
     });
-}
-
-export async function clearDiscordNativeCommands(params: {
-  client: Client;
-  applicationId: string;
-  runtime: RuntimeEnv;
-}) {
-  try {
-    await overwriteApplicationCommands(params.client.rest, params.applicationId, []);
-    params.runtime.log?.("discord: cleared native commands (commands.native=false)");
-  } catch (err) {
-    params.runtime.error?.(`discord: failed to clear native commands: ${String(err)}`);
-  }
 }

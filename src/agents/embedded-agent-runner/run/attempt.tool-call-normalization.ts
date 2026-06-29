@@ -1,5 +1,18 @@
+/**
+ * Normalizes tool-call names, ids, and standalone text calls for providers.
+ */
+import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
+import {
+  extractStandalonePlainTextToolCallText,
+  normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage as promotePlainTextToolCallMessage,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallBlock,
+  type PlainTextToolCallNameMatcher,
+} from "../../../../packages/tool-call-repair/src/index.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -9,16 +22,16 @@ import {
 } from "../../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
-import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
@@ -28,6 +41,7 @@ type UnknownToolLoopGuardState = {
   count: number;
   countedMessages: WeakSet<object>;
 };
+type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
@@ -94,10 +108,7 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   addCandidate(normalizedDelimiter);
   addCandidate(normalizeToolName(normalizedDelimiter));
 
-  const segments = normalizedDelimiter
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
   if (segments.length > 1) {
     for (let index = 1; index < segments.length; index += 1) {
       const suffix = segments.slice(index).join(".");
@@ -228,10 +239,6 @@ function normalizeToolCallNameForDispatch(
   return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
-function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
 type ReplayToolCallBlock = {
@@ -288,7 +295,7 @@ function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
-  return isToolCallBlockType((block as { type?: unknown }).type);
+  return isRunnerToolCallBlockType((block as { type?: unknown }).type);
 }
 
 function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
@@ -523,7 +530,7 @@ function sanitizeAnthropicReplayToolResults(
             continue;
           }
           const typedBlock = block as { type?: unknown; id?: unknown };
-          if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+          if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
             continue;
           }
           const trimmedId = typedBlock.id.trim();
@@ -615,7 +622,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+    if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
       continue;
     }
     const trimmedId = typedBlock.id.trim();
@@ -632,7 +639,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     if (typeof typedBlock.id === "string") {
@@ -664,7 +671,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
 ): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
@@ -711,7 +718,7 @@ function classifyToolCallMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     sawToolCall = true;
@@ -820,6 +827,8 @@ function guardUnknownToolLoopInMessage(
   const unknownToolName = toolCallState.toolName;
 
   if (!params.countAttempt) {
+    // Partial stream events can rewrite after the threshold, but only final
+    // messages advance the loop counter.
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
       rewriteUnknownToolLoopMessage(message, unknownToolName);
     }
@@ -849,11 +858,210 @@ function guardUnknownToolLoopInMessage(
   return true;
 }
 
+type PromotedTextToolCallBlock = {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  partialArgs: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function createStandaloneTextToolCallId(): string {
+  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function createPromotedTextToolCallBlock(
+  block: PlainTextToolCallBlock,
+  name: string,
+): PromotedTextToolCallBlock {
+  return {
+    type: "toolCall",
+    id: createStandaloneTextToolCallId(),
+    name,
+    arguments: block.arguments,
+    partialArgs: JSON.stringify(block.arguments),
+  };
+}
+
+function isRetainableNonVisibleBlock(block: Record<string, unknown>): boolean {
+  return block.type === "thinking" || block.type === "redacted_thinking";
+}
+
+const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop"]);
+const STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS = new Set<unknown>(["stop", "length"]);
+
+function extractStandaloneTextToolCallCandidateForStopReasons(
+  message: unknown,
+  allowedStopReasons: ReadonlySet<unknown>,
+):
+  | {
+      text: string;
+    }
+  | undefined {
+  const text = extractStandalonePlainTextToolCallText({
+    allowedStopReasons,
+    isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+    message,
+    requireAssistantRole: true,
+  });
+  return text ? { text } : undefined;
+}
+
+function promoteStandaloneTextToolCallMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): Record<string, unknown> | undefined {
+  if (!allowedToolNames) {
+    return undefined;
+  }
+  return promotePlainTextToolCallMessage({
+    allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
+    allowedToolNames,
+    createToolCallBlock: createPromotedTextToolCallBlock,
+    isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+    message,
+    requireAssistantRole: true,
+    resolveToolName: resolveExactAllowedToolName,
+  });
+}
+
+function createPromotedToolCallEvents(
+  message: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const content = Array.isArray(message.content) ? message.content : [];
+  const events: Array<Record<string, unknown>> = [];
+  content.forEach((block, contentIndex) => {
+    const record = asRecord(block);
+    if (record?.type !== "toolCall") {
+      return;
+    }
+    events.push({ type: "toolcall_start", contentIndex, partial: message });
+    events.push({
+      type: "toolcall_delta",
+      contentIndex,
+      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
+      partial: message,
+    });
+  });
+  return events;
+}
+
+function createStandaloneToolCallNameMatcher(
+  allowedToolNames: Set<string>,
+): PlainTextToolCallNameMatcher {
+  return {
+    hasExactName: (name) => Boolean(resolveExactAllowedToolName(name, allowedToolNames)),
+    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
+  };
+}
+
+function wrapStreamPromoteStandaloneTextToolCalls(
+  stream: AssistantStream,
+  allowedToolNames: Set<string>,
+): AssistantStream {
+  const matcher = createStandaloneToolCallNameMatcher(allowedToolNames);
+  const normalizedMessages = new WeakMap<
+    object,
+    { kind: "promoted" | "scrubbed"; message: Record<string, unknown> }
+  >();
+  const normalizeMessage = (
+    message: unknown,
+  ): { kind: "promoted" | "scrubbed"; message: Record<string, unknown> } | undefined => {
+    if (!message || typeof message !== "object") {
+      return undefined;
+    }
+    const cached = normalizedMessages.get(message);
+    if (cached) {
+      return cached;
+    }
+    const promoted = promoteStandaloneTextToolCallMessage(message, allowedToolNames);
+    if (promoted) {
+      const result = { kind: "promoted" as const, message: promoted };
+      normalizedMessages.set(message, result);
+      return result;
+    }
+    const scrubbed = scrubOverCapPlainTextToolCallMessage({
+      candidateText: extractStandaloneTextToolCallCandidateForStopReasons(
+        message,
+        STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS,
+      )?.text,
+      matcher,
+      message,
+    });
+    if (scrubbed) {
+      const result = { kind: "scrubbed" as const, message: scrubbed };
+      normalizedMessages.set(message, result);
+      return result;
+    }
+    return undefined;
+  };
+
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    return (normalizeMessage(message)?.message ?? message) as Awaited<
+      ReturnType<typeof originalResult>
+    >;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<unknown> })[
+    Symbol.asyncIterator
+  ] = async function* () {
+    const source = {
+      [Symbol.asyncIterator]: originalAsyncIterator,
+    } as AsyncIterable<unknown>;
+    yield* normalizePlainTextToolCallStreamEvents(source, {
+      createPromotedToolCallEvents,
+      matcher,
+      normalizeDoneMessage: ({ message, reason }) => {
+        if (reason === "stop") {
+          return normalizeMessage(message);
+        }
+        const scrubbed = scrubOverCapPlainTextToolCallMessage({
+          candidateText: extractStandaloneTextToolCallCandidateForStopReasons(
+            message,
+            STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS,
+          )?.text,
+          matcher,
+          message,
+        });
+        return scrubbed ? { kind: "scrubbed", message: scrubbed } : undefined;
+      },
+    });
+  };
+
+  return stream;
+}
+
+/** Promotes standalone plain-text tool-call replies into structured toolCall blocks when safe. */
+export function wrapStreamFnPromoteStandaloneTextToolCalls(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return baseFn;
+  }
+  return (model, context, streamOptions) => {
+    const maybeStream = baseFn(model, context, streamOptions);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+      );
+    }
+    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, allowedToolNames);
+  };
+}
+
 function wrapStreamTrimToolCallNames(
-  stream: MutableAssistantMessageEventStream,
+  stream: AssistantStream,
   allowedToolNames?: Set<string>,
   options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
-): MutableAssistantMessageEventStream {
+): AssistantStream {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
     countedMessages: new WeakSet<object>(),
@@ -900,6 +1108,7 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
+/** Normalizes streamed tool-call names and guards repeated unknown-tool loops. */
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -932,6 +1141,7 @@ type ReplayToolCallIdSanitizerDecision = {
   isOpenAIResponsesApi: boolean;
 };
 
+/** Returns whether replayed tool-call ids should be sanitized for non-Responses providers. */
 export function shouldApplyReplayToolCallIdSanitizer(
   params: ReplayToolCallIdSanitizerDecision,
 ): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
@@ -940,16 +1150,19 @@ export function shouldApplyReplayToolCallIdSanitizer(
   );
 }
 
+/** Rewrites replayed tool-call ids into provider-safe ids and optionally repairs result pairing. */
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
   allowedToolNames?: Set<string>;
   preserveNativeAnthropicToolUseIds?: boolean;
+  duplicateToolCallIdStyle?: "openai";
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
   const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });
@@ -959,12 +1172,23 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   return sanitizeToolUseResultPairing(sanitized);
 }
 
+/** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+  const repaired = sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: "aborted",
+  });
   return downgradeOpenAIFunctionCallReasoningPairs(
-    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
+    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
   );
 }
 
+/**
+ * Sanitizes malformed replay tool calls before provider submission. The wrapper
+ * drops invalid assistant tool calls, repairs adjacent tool results when needed,
+ * strips trailing assistant prefill turns for strict providers, and revalidates
+ * Anthropic/Gemini transcripts after mutations.
+ */
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -994,10 +1218,19 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
+    const isOpenAIResponsesApi =
+      (model as { api?: unknown }).api === "openai-responses" ||
+      (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
+      (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = replayInputsChanged
-      ? sanitizeToolUseResultPairing(sanitized.messages)
-      : sanitized.messages;
+    let nextMessages = isOpenAIResponsesApi
+      ? sanitizeToolUseResultPairing(sanitized.messages, {
+          erroredAssistantResultPolicy: "drop",
+          missingToolResultText: "aborted",
+        })
+      : replayInputsChanged
+        ? sanitizeToolUseResultPairing(sanitized.messages)
+        : sanitized.messages;
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {

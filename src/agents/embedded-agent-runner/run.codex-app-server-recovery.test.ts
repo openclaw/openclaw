@@ -1,3 +1,4 @@
+// Coverage for replay-safe Codex app-server recovery retries.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -13,9 +14,14 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
+const CODEX_MISSING_TERMINAL_MESSAGE =
+  "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
+
 function codexClientClosedAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  // Stdio client-close failures can be replay-safe when Codex reports that the
+  // turn ended before completion and no user-visible side effect escaped.
   return makeAttemptResult({
     assistantTexts: [],
     promptError: new Error("codex app-server client closed before turn completed"),
@@ -34,12 +40,17 @@ function codexClientClosedAttempt(
 function codexTurnCompletionIdleTimeoutAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  // Completion-watch idle timeouts are retried separately from progress timeouts
+  // because only the former indicates Codex may have lost the final event.
   return makeAttemptResult({
     assistantTexts: [],
     aborted: true,
     timedOut: true,
     promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
     promptErrorSource: "prompt",
+    promptTimeoutOutcome: {
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+    },
     codexAppServerFailure: {
       kind: "turn_completion_idle_timeout",
       turnWatchTimeoutKind: "completion",
@@ -98,7 +109,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -106,6 +117,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   });
 
   it("suppresses duplicate user persistence when retrying after the inbound message was persisted", async () => {
+    // If the first attempt already persisted the inbound message, the retry must
+    // not mirror it again into the transcript.
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (attemptParams) => {
         (
@@ -127,7 +140,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -144,6 +157,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
           turnId: "turn-1",
           replaySafe: true,
         },
+        promptTimeoutOutcome: undefined,
       }),
     );
 
@@ -184,6 +198,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
           turnId: "turn-1",
           replaySafe: true,
         },
+        promptTimeoutOutcome: undefined,
       }),
     );
 
@@ -216,10 +231,15 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(result.payloads?.[0]).toMatchObject({
       isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      text: CODEX_MISSING_TERMINAL_MESSAGE,
     });
     expect(result.meta.timeoutPhase).toBe("provider");
     expect(result.meta.providerStarted).toBe(true);
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+      fallbackSafe: false,
+    });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
@@ -247,7 +267,12 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(result.payloads?.[0]).toMatchObject({
       isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      text: CODEX_MISSING_TERMINAL_MESSAGE,
+    });
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+      fallbackSafe: false,
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -287,7 +312,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
               fallbacks: ["anthropic/claude-opus-4-6"],
             },
           },
@@ -301,6 +326,12 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(result.meta.replayInvalid).toBe(true);
     expect(result.meta.livenessState).toBe("abandoned");
+    expect(result.meta.error).toEqual({
+      kind: "incomplete_turn",
+      message:
+        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      fallbackSafe: false,
+    });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });

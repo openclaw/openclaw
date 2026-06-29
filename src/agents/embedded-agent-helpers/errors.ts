@@ -1,3 +1,10 @@
+/**
+ * Classifies provider/runtime failures and formats assistant-facing error text.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -7,10 +14,7 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -34,6 +38,7 @@ import {
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
 import {
+  classifyProviderPluginError,
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
@@ -70,7 +75,19 @@ export {
 
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+export const AUTH_INVALID_TOKEN_USER_TEXT =
+  "Authentication failed (provider returned HTTP 401). " +
+  "Your provider token may have expired — try the request again in a moment. " +
+  "If the failure persists, re-authenticate this provider.";
+const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
+const MODEL_NOT_FOUND_USER_TEXT =
+  "The selected model was not found by the provider. Check the model id or choose a different model.";
+const MAX_FAILOVER_DETAIL_CANDIDATES = 12;
+const MAX_FAILOVER_DETAIL_CHARS = 1_000;
 
+/** Detect provider errors that require reasoning to stay enabled. */
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -89,6 +106,7 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+/** Detect explicit context-window overflow without confusing TPM rate limits. */
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -264,8 +282,10 @@ type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_l
 export type FailoverSignal = {
   status?: number;
   code?: string;
+  errorType?: string;
   message?: string;
   provider?: string;
+  details?: readonly string[];
 };
 
 export type FailoverClassification =
@@ -277,6 +297,87 @@ export type FailoverClassification =
       kind: "context_overflow";
     };
 
+// Provider SDKs often keep semantic error fields outside Error.message.
+// These bounded candidates feed classification only; user-facing copy still
+// comes from the normal sanitized formatter path.
+function normalizeFailoverDetailString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
+    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    : trimmed;
+}
+
+function appendFailoverDetailCandidate(candidates: string[], value: unknown): void {
+  const normalized =
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+      ? normalizeFailoverDetailString(String(value))
+      : undefined;
+  if (!normalized || candidates.includes(normalized)) {
+    return;
+  }
+  candidates.push(normalized);
+}
+
+function collectFailoverDetailCandidates(
+  value: unknown,
+  candidates: string[],
+  seen: Set<object>,
+): void {
+  if (
+    candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES ||
+    value === undefined ||
+    value === null
+  ) {
+    return;
+  }
+  if (typeof value === "string") {
+    appendFailoverDetailCandidate(candidates, value);
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return;
+    }
+    try {
+      collectFailoverDetailCandidates(JSON.parse(trimmed) as unknown, candidates, seen);
+    } catch {
+      // Non-JSON detail strings are still useful as direct classifier candidates.
+    }
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    appendFailoverDetailCandidate(candidates, value);
+    return;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "param", "code", "type", "error", "detail", "body"]) {
+    collectFailoverDetailCandidates(record[key], candidates, seen);
+    if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
+      return;
+    }
+  }
+}
+
+export function extractFailoverSignalDetails(...values: unknown[]): string[] | undefined {
+  const candidates: string[] = [];
+  const seen = new Set<object>();
+  for (const value of values) {
+    collectFailoverDetailCandidates(value, candidates, seen);
+    if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
+      break;
+    }
+  }
+  return candidates.length > 0 ? candidates : undefined;
+}
+
 export type ProviderRuntimeFailureKind =
   | "auth_scope"
   | "auth_refresh"
@@ -285,11 +386,14 @@ export type ProviderRuntimeFailureKind =
   | "callback_timeout"
   | "callback_validation"
   | "auth_html"
+  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
+  | "auth_invalid_token"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
   | "dns"
   | "timeout"
+  | "model_not_found"
   | "schema"
   | "sandbox_blocked"
   | "replay_invalid"
@@ -345,6 +449,8 @@ const TIMEOUT_ERROR_CODES = new Set([
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const AUTH_INVALID_TOKEN_HINT_RE =
+  /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const PROXY_ERROR_RE =
@@ -354,6 +460,8 @@ const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
+const THINKING_SIGNATURE_ERROR_RE =
+  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -423,7 +531,7 @@ function isTransportHtmlErrorStatus(status: number | undefined): boolean {
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   return (
-    normalizedProvider === "openai-codex" ||
+    normalizedProvider === "openai" ||
     /\bopenai\s+codex\b/i.test(raw) ||
     /\bcodex\b.*\bscopes?\b/i.test(raw)
   );
@@ -469,7 +577,11 @@ function isDnsTransportErrorMessage(raw: string): boolean {
 }
 
 function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw);
+  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
+}
+
+function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
+  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
 }
 
 function isSandboxBlockedErrorMessage(raw: string): boolean {
@@ -633,16 +745,30 @@ export function classifyFailoverReasonFromHttpStatus(
   message?: string,
   opts?: { provider?: string },
 ): FailoverReason | null {
+  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
   const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
+        includeProviderPluginHooks: !hasProviderStatusSignal,
+      })
     : null;
+  const providerPluginReason = hasProviderStatusSignal
+    ? classifyProviderPluginError({
+        errorMessage: message ?? "",
+        provider: opts?.provider,
+        status,
+      })
+    : null;
+  const effectiveMessageClassification = providerPluginReason
+    ? toReasonClassification(providerPluginReason)
+    : messageClassification;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(
       status,
       message,
-      messageClassification,
+      effectiveMessageClassification,
       status,
       opts?.provider,
+      { preserveProviderSignalClassification: providerPluginReason !== null },
     ),
   );
 }
@@ -653,6 +779,7 @@ function classifyFailoverClassificationFromHttpStatus(
   messageClassification: FailoverClassification | null,
   explicitStatus: number | undefined,
   provider?: string,
+  opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -685,6 +812,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
+    if (opts?.preserveProviderSignalClassification && messageClassification) {
+      return messageClassification;
+    }
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
@@ -835,7 +965,7 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
 // stream ends with stopReason === "aborted" | "error" without specific info. Treat
 // it as a transient transport failure so the configured fallback chain rotates
 // instead of returning the bare string to the user (#71620).
-function isGenericUnknownStreamError(raw: string): boolean {
+export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 
@@ -868,6 +998,7 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
+  opts?: { includeProviderPluginHooks?: boolean },
 ): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -938,7 +1069,7 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isGenericUnknownStreamError(raw)) {
+  if (isGenericUnknownStreamErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {
@@ -960,15 +1091,63 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
-  const providerSpecific = classifyProviderSpecificError(raw);
+  const providerSpecific = classifyProviderSpecificError(
+    { errorMessage: raw, provider },
+    { includePluginHooks: opts?.includeProviderPluginHooks },
+  );
   if (providerSpecific) {
     return toReasonClassification(providerSpecific);
   }
   return null;
 }
 
+function classificationReason(
+  classification: FailoverClassification | null,
+): FailoverReason | undefined {
+  return classification?.kind === "reason" ? classification.reason : undefined;
+}
+
+function classifyFailoverDetailCandidates(
+  details: readonly string[] | undefined,
+  provider: string | undefined,
+  includeProviderPluginHooks: boolean,
+): FailoverClassification | null {
+  for (const detail of details ?? []) {
+    const classification = classifyFailoverClassificationFromMessage(detail, provider, {
+      includeProviderPluginHooks,
+    });
+    if (classification) {
+      return classification;
+    }
+  }
+  return null;
+}
+
+function mergeMessageAndDetailClassification(
+  messageClassification: FailoverClassification | null,
+  detailClassification: FailoverClassification | null,
+): FailoverClassification | null {
+  if (!messageClassification) {
+    return detailClassification;
+  }
+  if (!detailClassification) {
+    return messageClassification;
+  }
+  if (messageClassification.kind === "context_overflow") {
+    return messageClassification;
+  }
+  if (detailClassification.kind === "context_overflow") {
+    return detailClassification;
+  }
+  return classificationReason(messageClassification) === "format"
+    ? detailClassification
+    : messageClassification;
+}
+
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  const explicitStatus =
+    typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   if (
     signal.message &&
     isTransportHtmlErrorStatus(inferredStatus) &&
@@ -976,9 +1155,35 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   ) {
     return toReasonClassification("timeout");
   }
+  const hasStructuredProviderSignal = Boolean(
+    signal.provider &&
+    (explicitStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined),
+  );
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, {
+        includeProviderPluginHooks: !hasStructuredProviderSignal,
+      })
     : null;
+  const detailClassification = classifyFailoverDetailCandidates(
+    signal.details,
+    signal.provider,
+    !hasStructuredProviderSignal,
+  );
+  const providerPluginReason =
+    hasStructuredProviderSignal &&
+    signal.provider &&
+    (signal.message || signal.code || signal.errorType || typeof inferredStatus === "number")
+      ? classifyProviderPluginError({
+          errorMessage: signal.message ?? "",
+          provider: signal.provider,
+          status: explicitStatus,
+          code: signal.code,
+          errorType: signal.errorType,
+        })
+      : null;
+  const effectiveMessageClassification = providerPluginReason
+    ? toReasonClassification(providerPluginReason)
+    : mergeMessageAndDetailClassification(messageClassification, detailClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -986,9 +1191,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
-    messageClassification,
+    effectiveMessageClassification,
     signal.status,
     signal.provider,
+    { preserveProviderSignalClassification: providerPluginReason !== null },
   );
   if (statusClassification) {
     return statusClassification;
@@ -996,7 +1202,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
-  return messageClassification;
+  return effectiveMessageClassification;
 }
 
 export function classifyProviderRuntimeFailureKind(
@@ -1044,6 +1250,12 @@ export function classifyProviderRuntimeFailureKind(
   if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
     return "rate_limit";
   }
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "model_not_found"
+  ) {
+    return "model_not_found";
+  }
   if (message && isDnsTransportErrorMessage(message)) {
     return "dns";
   }
@@ -1055,6 +1267,24 @@ export function classifyProviderRuntimeFailureKind(
   }
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
+  }
+  // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
+  // same failover reason also covers plain 403 and status-less auth payloads.
+  // Require positive 401 evidence so we do not claim the wrong HTTP status.
+  const messageMentions401 = /\b401\b/.test(message);
+  const messageMentions403 = /\b403\b/.test(message);
+  const has401Evidence =
+    status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  const hasPermissionScopeSignal =
+    AUTH_SCOPE_HINT_RE.test(message) || AUTH_SCOPE_NAME_RE.test(message);
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "auth" &&
+    has401Evidence &&
+    AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
+    !hasPermissionScopeSignal
+  ) {
+    return "auth_invalid_token";
   }
   if (
     failoverClassification?.kind === "reason" &&
@@ -1071,9 +1301,43 @@ export function classifyProviderRuntimeFailureKind(
   return "unclassified";
 }
 
+function buildAssistantFailoverSignal(
+  msg: AssistantMessage,
+  opts?: { provider?: string },
+): FailoverSignal {
+  return {
+    status: extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    code: msg.errorCode,
+    errorType: msg.errorType,
+    message: msg.errorMessage?.trim() || undefined,
+    provider: opts?.provider ?? msg.provider,
+    details: extractFailoverSignalDetails(msg.errorBody),
+  };
+}
+
+export function classifyAssistantFailoverReason(
+  msg: AssistantMessage | undefined,
+  opts?: { provider?: string },
+): FailoverReason | null {
+  if (!msg || msg.stopReason !== "error") {
+    return null;
+  }
+  return failoverReasonFromClassification(
+    classifyFailoverSignal(buildAssistantFailoverSignal(msg, opts)),
+  );
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    /** Credential auth mode (e.g. "oauth", "token", "api_key", "aws-sdk").
+     * When "oauth" or "token", billing copy omits API-key language (#80877). */
+    authMode?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -1085,9 +1349,8 @@ export function formatAssistantErrorText(
   }
 
   const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-    status: extractLeadingHttpStatus(raw)?.code,
+    ...buildAssistantFailoverSignal(msg, { provider: opts?.provider }),
     message: raw,
-    provider: opts?.provider ?? msg.provider,
   });
 
   const unknownTool =
@@ -1148,8 +1411,8 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "auth_scope") {
     return (
-      "Authentication is missing the required OpenAI Codex scopes. " +
-      "Re-run OpenAI/Codex login and try again."
+      "Authentication is missing the required OpenAI ChatGPT scopes. " +
+      "Re-run OpenAI login and try again."
     );
   }
 
@@ -1158,6 +1421,10 @@ export function formatAssistantErrorText(
       "Authentication failed at the provider. " +
       "Re-authenticate and verify your provider credentials and account access."
     );
+  }
+
+  if (providerRuntimeFailureKind === "auth_invalid_token") {
+    return AUTH_INVALID_TOKEN_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "upstream_html") {
@@ -1170,6 +1437,10 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "proxy") {
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
+  }
+
+  if (providerRuntimeFailureKind === "model_not_found") {
+    return MODEL_NOT_FOUND_USER_TEXT;
   }
 
   if (isContextOverflowError(raw)) {
@@ -1219,10 +1490,10 @@ export function formatAssistantErrorText(
     isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
     isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
   ) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
   if (isBilling429MessageForProvider(raw, opts?.provider)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
@@ -1244,11 +1515,11 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return "LLM request failed: provider rejected the request schema or tool payload.";
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "replay_invalid") {
@@ -1270,7 +1541,56 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
+}
+
+export function isRawAssistantErrorPassthrough(params: {
+  friendlyError?: string;
+  rawError?: string;
+}): boolean {
+  const friendlyError = params.friendlyError?.trim();
+  const rawError = params.rawError?.trim();
+  if (!friendlyError || !rawError) {
+    return false;
+  }
+  const parsedMessage = parseApiErrorInfo(rawError)?.message?.trim();
+  const leadingStatusRest = extractLeadingHttpStatus(rawError)?.rest?.trim();
+  const hasRawDerivedProviderPrefix =
+    friendlyError.startsWith("LLM request rejected:") ||
+    friendlyError.startsWith("LLM error") ||
+    friendlyError.startsWith("HTTP ");
+  return (
+    friendlyError === rawError ||
+    (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
+    Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
+    Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
+  );
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantMessage,
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    /** Credential auth mode for billing copy (#80877). */
+    authMode?: string;
+  },
+): string {
+  const friendlyError = formatAssistantErrorText(msg, opts);
+  const rawError = msg.errorMessage?.trim();
+  const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
+  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
+  const rawProviderSchemaError =
+    friendlyError?.startsWith("LLM request rejected:") ||
+    parsedErrorType.includes("invalid_request");
+  const safeFriendlyError = rawPassthrough
+    ? rawProviderSchemaError
+      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+      : undefined
+    : friendlyError;
+  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -1405,8 +1725,6 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
-export { isModelNotFoundErrorMessage };
-
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -1446,8 +1764,5 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
-    return false;
-  }
-  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
+  return classifyAssistantFailoverReason(msg) !== null;
 }

@@ -1,3 +1,4 @@
+// Imessage tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveIMessageGroupRequireMention,
@@ -28,7 +29,12 @@ describe("imessage targets", () => {
 
   it("parses sms handles with service", () => {
     const target = parseIMessageTarget("sms:+1555");
-    expect(target).toEqual({ kind: "handle", to: "+1555", service: "sms", serviceExplicit: true });
+    expect(target).toEqual({
+      kind: "handle",
+      to: "+1555",
+      service: "sms",
+      serviceExplicit: true,
+    });
   });
 
   it("normalizes handles", () => {

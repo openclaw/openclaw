@@ -1,3 +1,6 @@
+/**
+ * Tests shared gateway auth behavior across config method updates.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -18,9 +21,7 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => {
-    return "/tmp/restart-sentinel.json";
-  }),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -29,8 +30,6 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
-    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
-    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
     replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: unknown }) => {
       await writeConfigFileMock(params.nextConfig, params.writeOptions);
@@ -45,6 +44,25 @@ vi.mock("../../config/config.js", async () => {
         followUp: { mode: "auto", requiresRestart: false },
       };
     },
+  };
+});
+
+vi.mock("../../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
+  return {
+    ...actual,
+    createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
+  };
+});
+
+vi.mock("../../config/validation.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
+    "../../config/validation.js",
+  );
+  return {
+    ...actual,
+    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   };
 });
 
@@ -81,6 +99,75 @@ const GATEWAY_CONFIG_WRITE_OPTIONS = {
     includeAuthStoreRefs: false,
   },
 };
+
+function tokenAuthConfig(token: string): OpenClawConfig {
+  return {
+    gateway: {
+      auth: {
+        mode: "token",
+        token,
+      },
+    },
+  };
+}
+
+function trustedProxyConfig(params: {
+  trustedProxies?: string[];
+  requiredHeaders?: string[];
+  allowUsers?: string[];
+}): OpenClawConfig {
+  return {
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          ...(params.requiredHeaders ? { requiredHeaders: params.requiredHeaders } : {}),
+          ...(params.allowUsers ? { allowUsers: params.allowUsers } : {}),
+        },
+      },
+      ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
+    },
+  };
+}
+
+function hotReloadConfig(): OpenClawConfig {
+  return {
+    gateway: {
+      reload: {
+        mode: "hot",
+      },
+    },
+  };
+}
+
+function mockPreviousConfig(config: OpenClawConfig): void {
+  readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
+}
+
+async function runConfigPatch(
+  raw: unknown,
+  params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
+) {
+  const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+    method: "config.patch",
+    params: {
+      baseHash: "base-hash",
+      raw: typeof raw === "string" ? raw : JSON.stringify(raw),
+      restartDelayMs: params.restartDelayMs ?? 1_000,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
+    },
+  });
+
+  await configHandlers["config.patch"](options);
+  await flushConfigHandlerMicrotasks();
+  return { disconnectClientsUsingSharedGatewayAuth };
+}
+
+function expectNoDirectRestart(): void {
+  expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+}
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -147,23 +234,8 @@ describe("config shared auth disconnects", () => {
   });
 
   it("does not disconnect shared-auth clients for config.set auth writes without restart", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "old-token",
-        },
-      },
-    };
-    const nextConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "new-token",
-        },
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+    const nextConfig = tokenAuthConfig("new-token");
+    mockPreviousConfig(tokenAuthConfig("old-token"));
 
     const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
       method: "config.set",
@@ -178,169 +250,126 @@ describe("config shared auth disconnects", () => {
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expectNoDirectRestart();
   });
 
   it("lets the config reloader own hybrid-mode auth restarts", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "old-token",
-        },
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+    mockPreviousConfig(tokenAuthConfig("old-token"));
 
-    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({ gateway: { auth: { token: "new-token" } } }),
-        restartDelayMs: 1_000,
-      },
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
+      gateway: { auth: { token: "new-token" } },
     });
 
-    await configHandlers["config.patch"](options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "old-token",
-        },
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+    mockPreviousConfig(tokenAuthConfig("old-token"));
 
-    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({ gateway: { auth: { password: "new-password" } } }),
-        restartDelayMs: 1_000,
-      },
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
+      gateway: { auth: { password: "new-password" } },
     });
 
-    await configHandlers["config.patch"](options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
   it("disconnects gateway-auth clients when active trusted-proxy policy changes", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["alice@example.com"],
-          },
-        },
+    mockPreviousConfig(
+      trustedProxyConfig({
+        allowUsers: ["alice@example.com"],
         trustedProxies: ["127.0.0.1"],
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+      }),
+    );
 
-    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({
-          gateway: {
-            auth: {
-              trustedProxy: {
-                userHeader: "x-forwarded-user",
-                allowUsers: ["bob@example.com"],
-              },
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          auth: {
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              allowUsers: ["bob@example.com"],
             },
           },
-        }),
-        restartDelayMs: 1_000,
+        },
       },
-    });
+      { replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
+    );
 
-    await configHandlers["config.patch"](options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
   it("disconnects gateway-auth clients when trusted-proxy source list changes", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-          },
-        },
+    mockPreviousConfig(
+      trustedProxyConfig({
         trustedProxies: ["127.0.0.1"],
+      }),
+    );
+
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          trustedProxies: ["10.0.0.10"],
+        },
       },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+      { replacePaths: ["gateway.trustedProxies"] },
+    );
 
-    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({
-          gateway: {
-            trustedProxies: ["10.0.0.10"],
-          },
-        }),
-        restartDelayMs: 1_000,
-      },
-    });
-
-    await configHandlers["config.patch"](options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
   it("does not disconnect gateway-auth clients when trusted-proxy lists are reordered", async () => {
-    const prevConfig: OpenClawConfig = {
+    mockPreviousConfig(
+      trustedProxyConfig({
+        requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+        allowUsers: ["alice@example.com", "bob@example.com"],
+        trustedProxies: ["127.0.0.1", "10.0.0.10"],
+      }),
+    );
+
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
       gateway: {
         auth: {
-          mode: "trusted-proxy",
           trustedProxy: {
             userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-            allowUsers: ["alice@example.com", "bob@example.com"],
+            requiredHeaders: ["x-forwarded-host", "x-forwarded-proto"],
+            allowUsers: ["bob@example.com", "alice@example.com"],
           },
         },
-        trustedProxies: ["127.0.0.1", "10.0.0.10"],
+        trustedProxies: ["10.0.0.10", "127.0.0.1"],
+      },
+    });
+
+    expectNoDirectRestart();
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+  });
+
+  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+    mockPreviousConfig(hotReloadConfig());
+
+    await runConfigPatch({ gateway: { port: 19001 } });
+
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(true);
+  });
+
+  it("marks hot-reloaded config.patch writes as not restart required", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        channelHealthCheckMinutes: 10,
       },
     };
     readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
 
-    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+    const { options } = createConfigHandlerHarness({
       method: "config.patch",
       params: {
         baseHash: "base-hash",
-        raw: JSON.stringify({
-          gateway: {
-            auth: {
-              trustedProxy: {
-                userHeader: "x-forwarded-user",
-                requiredHeaders: ["x-forwarded-host", "x-forwarded-proto"],
-                allowUsers: ["bob@example.com", "alice@example.com"],
-              },
-            },
-            trustedProxies: ["10.0.0.10", "127.0.0.1"],
-          },
-        }),
+        raw: JSON.stringify({ gateway: { channelHealthCheckMinutes: 15 } }),
         restartDelayMs: 1_000,
       },
     });
@@ -349,55 +378,19 @@ describe("config shared auth disconnects", () => {
     await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
-  });
-
-  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        reload: {
-          mode: "hot",
-        },
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
-
-    const { options } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({ gateway: { port: 19001 } }),
-        restartDelayMs: 1_000,
-      },
-    });
-
-    await configHandlers["config.patch"](options);
-    await flushConfigHandlerMicrotasks();
-
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(false);
   });
 
   it("does not add an agent continuation from generic control-plane sessionKey params", async () => {
-    const prevConfig: OpenClawConfig = {
-      gateway: {
-        reload: {
-          mode: "hot",
-        },
-      },
-    };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+    mockPreviousConfig(hotReloadConfig());
 
-    const { options } = createConfigHandlerHarness({
-      method: "config.patch",
-      params: {
-        baseHash: "base-hash",
-        raw: JSON.stringify({ gateway: { port: 19001 } }),
-        restartDelayMs: 1_000,
+    await runConfigPatch(
+      { gateway: { port: 19001 } },
+      {
         sessionKey: "agent:main:main",
       },
-    });
-
-    await configHandlers["config.patch"](options);
+    );
 
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
     expect(payload?.sessionKey).toBe("agent:main:main");

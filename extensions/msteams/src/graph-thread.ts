@@ -1,3 +1,4 @@
+// Msteams plugin module implements graph thread behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -34,14 +35,16 @@ export function stripHtmlFromTeamsMessage(html: string): string {
   let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
   // Strip remaining HTML tags.
   text = text.replace(/<[^>]*>/g, " ");
-  // Decode common HTML entities.
+  // Decode common HTML entities. &amp; must be decoded LAST to prevent
+  // double-decoding (e.g. &amp;lt; → &lt; not <), matching decodeHtmlEntities
+  // in inbound.ts.
   text = text
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
   // Normalize whitespace.
   return text.replace(/\s+/g, " ").trim();
 }

@@ -1,21 +1,15 @@
+// Shared plugin CLI helpers for install logging, file specs, hooks, and slot selection.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginKind } from "../plugins/plugin-kind.types.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
-import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
-export const quietPluginJsonLogger: PluginLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
 
 type SlotSelectionPlugin = {
   id: string;
@@ -99,6 +93,7 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
+  // Static metadata is preferred; runtime diagnostics fill in kind for older manifests.
   const report = buildSlotSelectionRegistry(config, pluginId);
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
@@ -132,7 +127,7 @@ export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime):
 } {
   return {
     info: (msg) => runtime.log(msg),
-    warn: (msg) => runtime.log(theme.warn(msg)),
+    warn: (msg) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
 }
 

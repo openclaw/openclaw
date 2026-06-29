@@ -1,3 +1,4 @@
+/** Doctor checks and repairs for Docker sandbox images, namespaces, and registry state. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -16,10 +17,13 @@ import {
 } from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
 type SandboxScriptInfo = {
   scriptPath: string;
@@ -255,22 +259,23 @@ async function handleMissingSandboxImage(
     : "Build or pull it first.";
   note(`Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`, "Sandbox");
 
-  let built = false;
   if (params.buildScript) {
     const build = await prompter.confirmRuntimeRepair({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
     if (build) {
-      built = await runSandboxScript(params.buildScript, runtime);
+      await runSandboxScript(params.buildScript, runtime);
     }
-  }
-
-  if (built) {
-    return;
   }
 }
 
+/**
+ * Checks configured sandbox images and optionally runs repo build scripts for missing defaults.
+ *
+ * Non-Docker backends skip Docker image checks; Docker mode also probes Codex bwrap namespace
+ * support because nested app-server shells rely on host user/network namespace policy.
+ */
 export async function maybeRepairSandboxImages(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -356,26 +361,68 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
-  return `- ${file.kind}: ${shortenHomePath(file.registryPath)} (${status})`;
+  const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
+  return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
+}
+
+function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryInspection): string {
+  return file.source === "sharded" ? file.shardedDir : file.registryPath;
 }
 
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
-  const file = shortenHomePath(result.registryPath);
   if (result.status === "migrated") {
-    return `- Migrated ${result.kind} registry from ${file} into ${result.entries} shard${result.entries === 1 ? "" : "s"}.`;
+    return `- Migrated ${result.kind} registry into ${result.entries} SQLite row${result.entries === 1 ? "" : "s"}.`;
   }
   if (result.status === "removed-empty") {
-    return `- Removed empty legacy ${result.kind} registry ${file}.`;
+    return `- Removed empty legacy ${result.kind} registry files.`;
   }
   if (result.status === "quarantined-invalid") {
+    const sourcePath = result.source === "sharded" ? result.shardedDir : result.registryPath;
+    const file = shortenHomePath(sourcePath);
     const quarantine = result.quarantinePath ? ` to ${shortenHomePath(result.quarantinePath)}` : "";
     return `- Quarantined invalid legacy ${result.kind} registry ${file}${quarantine}.`;
   }
   return "";
 }
 
+export async function detectLegacySandboxRegistryFileIssues(): Promise<
+  readonly LegacySandboxRegistryInspection[]
+> {
+  return (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
+}
+
+export function legacySandboxRegistryInspectionToHealthFinding(
+  file: LegacySandboxRegistryInspection,
+): HealthFinding {
+  return {
+    checkId: SANDBOX_REGISTRY_FILES_CHECK_ID,
+    severity: "warning",
+    message: `Legacy sandbox registry file detected.
+${formatLegacyRegistryInspectionLine(file)}`,
+    path: legacySandboxRegistryInspectionSourcePath(file),
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
+  };
+}
+
+export function legacySandboxRegistryInspectionToRepairEffect(
+  file: LegacySandboxRegistryInspection,
+): HealthRepairEffect {
+  const action = !file.valid
+    ? "would-quarantine-legacy-sandbox-registry"
+    : file.entries === 0
+      ? "would-remove-empty-legacy-sandbox-registry"
+      : "would-migrate-legacy-sandbox-registry";
+  return {
+    kind: "state",
+    action,
+    target: legacySandboxRegistryInspectionSourcePath(file),
+    dryRunSafe: false,
+  };
+}
+
+/** Migrates legacy sandbox registry files and directories. */
 export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
-  const legacyFiles = (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
+  const legacyFiles = await detectLegacySandboxRegistryFileIssues();
   if (legacyFiles.length === 0) {
     return;
   }
@@ -385,7 +432,7 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
       [
         "Legacy sandbox registry files detected.",
         ...legacyFiles.map(formatLegacyRegistryInspectionLine),
-        `Run ${formatCliCommand("openclaw doctor --fix")} to migrate them to sharded registry files.`,
+        `Run ${formatCliCommand("openclaw doctor --fix")} to migrate them to SQLite.`,
       ].join("\n"),
       "Sandbox",
     );
@@ -401,6 +448,7 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
   }
 }
 
+/** Warns when agent sandbox overrides are ignored because sandbox scope resolves to shared. */
 export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];

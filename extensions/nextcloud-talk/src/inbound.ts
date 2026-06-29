@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
@@ -230,7 +231,7 @@ export async function handleNextcloudTalkInbound(params: {
     providerKey: "nextcloud-talk",
     accountId: account.accountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
-    log: (message) => runtime.log?.(message),
+    log: (messageValue) => runtime.log?.(messageValue),
   });
   const commandAuthorized = access.commandAccess.authorized;
   const accessReason =
@@ -255,33 +256,31 @@ export async function handleNextcloudTalkInbound(params: {
       runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (reason=${accessReason})`);
       return;
     }
-  } else {
-    if (access.senderAccess.decision !== "allow") {
-      if (access.senderAccess.decision === "pairing") {
-        await pairing.issueChallenge({
-          senderId,
-          senderIdLine: `Your Nextcloud user id: ${senderId}`,
-          meta: { name: senderName || undefined },
-          sendPairingReply: async (text) => {
-            await sendMessageNextcloudTalk(roomToken, text, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-            statusSink?.({ lastOutboundAt: Date.now() });
-          },
-          onReplyError: (err) => {
-            runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
-          },
-        });
-      }
-      runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${accessReason})`);
-      return;
+  } else if (access.senderAccess.decision !== "allow") {
+    if (access.senderAccess.decision === "pairing") {
+      await pairing.issueChallenge({
+        senderId,
+        senderIdLine: `Your Nextcloud user id: ${senderId}`,
+        meta: { name: senderName || undefined },
+        sendPairingReply: async (text) => {
+          await sendMessageNextcloudTalk(roomToken, text, {
+            cfg: config,
+            accountId: account.accountId,
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+        },
+        onReplyError: (err) => {
+          runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
+        },
+      });
     }
+    runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${accessReason})`);
+    return;
   }
 
   if (access.commandAccess.shouldBlockControlCommand) {
     logInboundDrop({
-      log: (message) => runtime.log?.(message),
+      log: (messageLocal) => runtime.log?.(messageLocal),
       channel: CHANNEL_ID,
       reason: "control command (unauthorized)",
       target: senderId,

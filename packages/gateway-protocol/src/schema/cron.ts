@@ -1,30 +1,67 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type TSchema } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
-function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
+/**
+ * Cron scheduler protocol schemas.
+ *
+ * These contracts describe scheduled agent turns, system events, delivery
+ * routing, run history, and mutable job state shared by gateway RPC clients.
+ */
+
+/** Builds create/patch payload variants while preserving per-call field optionality. */
+function cronAgentTurnPayloadSchema(params: {
+  message: TSchema;
+  model: TSchema;
+  fallbacks: TSchema;
+  toolsAllow: TSchema;
+}) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
-      model: Type.Optional(Type.String()),
-      fallbacks: Type.Optional(Type.Array(Type.String())),
+      model: Type.Optional(params.model),
+      fallbacks: Type.Optional(params.fallbacks),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),
+      // Server-managed marker for auto-stamped defaults; persisted so CLI cron
+      // runs can drop only the cap that was never user-explicit.
+      toolsAllowIsDefault: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );
 }
 
+/** Builds command payload variants while preserving create/patch argv optionality. */
+function cronCommandPayloadSchema(params: { argv: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("command"),
+      argv: params.argv,
+      cwd: Type.Optional(Type.String({ minLength: 1 })),
+      env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
+      input: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
+/** Session target accepted by cron jobs. */
 const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
 ]);
+/** Whether a cron job waits for heartbeat processing or wakes immediately. */
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
+/** Run status factory reused for the active field and deprecated alias metadata. */
 function cronRunStatusSchema(options: Record<string, unknown> = {}) {
   return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
 }
@@ -75,6 +112,8 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
+const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
   Type.Literal("auth_permanent"),
@@ -157,6 +196,7 @@ const CronRunLogJobIdSchema = Type.String({
   pattern: "^[^/\\\\]+$",
 });
 
+/** Schedule expression for one-time, interval, or cron-expression jobs. */
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
@@ -184,6 +224,7 @@ export const CronScheduleSchema = Type.Union([
   ),
 ]);
 
+/** Full cron payload for new jobs. */
 export const CronPayloadSchema = Type.Union([
   Type.Object(
     {
@@ -194,10 +235,16 @@ export const CronPayloadSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
+    model: Type.String(),
+    fallbacks: Type.Array(Type.String()),
     toolsAllow: Type.Array(Type.String()),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Array(NonEmptyString, { minItems: 1 }),
   }),
 ]);
 
+/** Partial cron payload for job updates. */
 export const CronPayloadPatchSchema = Type.Union([
   Type.Object(
     {
@@ -208,15 +255,21 @@ export const CronPayloadPatchSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
+    model: Type.Union([Type.String(), Type.Null()]),
+    fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
   }),
 ]);
 
+/** Failure alert policy for repeated cron run failures. */
 export const CronFailureAlertSchema = Type.Object(
   {
     after: Type.Optional(Type.Integer({ minimum: 1 })),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
+    channel: Type.Optional(CronAnnounceChannelSchema),
+    to: Type.Optional(NonBlankString),
     cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
     includeSkipped: Type.Optional(Type.Boolean()),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
@@ -225,29 +278,58 @@ export const CronFailureAlertSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Delivery destination used when failure alerts need a separate target. */
 export const CronFailureDestinationSchema = Type.Object(
   {
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
+    channel: Type.Optional(CronAnnounceChannelSchema),
+    to: Type.Optional(NonBlankString),
     accountId: Type.Optional(NonEmptyString),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
   },
   { additionalProperties: false },
 );
 
+const CronFailureDestinationPatchSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+    to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
+    accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const CronCompletionDestinationSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    to: NonBlankString,
+  },
+  { additionalProperties: false },
+);
+
 const CronDeliverySharedProperties = {
-  channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+  channel: Type.Optional(CronAnnounceChannelSchema),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
 };
 
+const CronDeliveryPatchSharedProperties = {
+  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
+  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  bestEffort: Type.Optional(Type.Boolean()),
+  failureDestination: Type.Optional(Type.Union([CronFailureDestinationPatchSchema, Type.Null()])),
+};
+
 const CronDeliveryNoopSchema = Type.Object(
   {
     mode: Type.Literal("none"),
     ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    to: Type.Optional(NonBlankString),
   },
   { additionalProperties: false },
 );
@@ -256,7 +338,8 @@ const CronDeliveryAnnounceSchema = Type.Object(
   {
     mode: Type.Literal("announce"),
     ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    completionDestination: Type.Optional(CronCompletionDestinationSchema),
+    to: Type.Optional(NonBlankString),
   },
   { additionalProperties: false },
 );
@@ -265,24 +348,29 @@ const CronDeliveryWebhookSchema = Type.Object(
   {
     mode: Type.Literal("webhook"),
     ...CronDeliverySharedProperties,
-    to: NonEmptyString,
+    to: NonBlankString,
   },
   { additionalProperties: false },
 );
 
+/** Delivery policy for cron run output. */
 export const CronDeliverySchema = Type.Union([
   CronDeliveryNoopSchema,
   CronDeliveryAnnounceSchema,
   CronDeliveryWebhookSchema,
 ]);
 
+/** Patch shape for cron delivery policy updates. */
 export const CronDeliveryPatchSchema = Type.Object(
   {
     mode: Type.Optional(
       Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
     ),
-    ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    ...CronDeliveryPatchSharedProperties,
+    completionDestination: Type.Optional(
+      Type.Union([CronCompletionDestinationSchema, Type.Null()]),
+    ),
+    to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
   },
   { additionalProperties: false },
 );
@@ -296,6 +384,7 @@ const CronFailureNotificationDeliverySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -344,6 +433,7 @@ const CronJobStatePatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Persisted cron job definition returned by scheduler list/get APIs. */
 export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -366,6 +456,7 @@ export const CronJobSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Query params for listing cron jobs with filters and pagination. */
 export const CronListParamsSchema = Type.Object(
   {
     includeDisabled: Type.Optional(Type.Boolean()),
@@ -378,14 +469,18 @@ export const CronListParamsSchema = Type.Object(
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
     agentId: Type.Optional(NonEmptyString),
+    compact: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
 
+/** Empty request payload for scheduler status. */
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
 
+/** Creates a scheduled job with schedule, target, payload, and delivery policy. */
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
@@ -400,6 +495,7 @@ export const CronAddParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Mutable cron job fields accepted by update APIs. */
 export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
@@ -415,16 +511,20 @@ export const CronJobPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Updates a cron job by id or legacy jobId alias. */
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
 });
 
+/** Removes a cron job by id or legacy jobId alias. */
 export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
 
+/** Runs a cron job immediately or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
 });
 
+/** Query params for cron run history. */
 export const CronRunsParamsSchema = Type.Object(
   {
     scope: Type.Optional(Type.Union([Type.Literal("job"), Type.Literal("all")])),
@@ -445,6 +545,7 @@ export const CronRunsParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One persisted cron run history entry. */
 export const CronRunLogEntrySchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),

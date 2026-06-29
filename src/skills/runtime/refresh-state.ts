@@ -1,12 +1,14 @@
+// Skill refresh state types describe change notifications emitted by runtime reloads.
 export type SkillsChangeEvent = {
   workspaceDir?: string;
-  reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change";
+  reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change" | "workshop";
   changedPath?: string;
 };
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
-let globalVersion = 0;
+const INITIAL_SKILLS_SNAPSHOT_VERSION = Date.now();
+let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let listenerErrorHandler: ((err: unknown) => void) | undefined;
 
 function bumpVersion(current: number): number {
@@ -43,7 +45,7 @@ export function bumpSkillsSnapshotVersion(params?: {
   const reason = params?.reason ?? "manual";
   const changedPath = params?.changedPath;
   if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
+    const current = Math.max(globalVersion, workspaceVersions.get(params.workspaceDir) ?? 0);
     const next = bumpVersion(current);
     workspaceVersions.set(params.workspaceDir, next);
     emit({ workspaceDir: params.workspaceDir, reason, changedPath });
@@ -62,6 +64,16 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
+export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
+  const local = workspaceVersions.get(workspaceDir);
+  if (typeof local === "number" && local > globalVersion) {
+    // Keep pending workspace invalidation visible after dropping the workspace
+    // key; otherwise teardown can hide a skill change from cached snapshots.
+    globalVersion = local;
+  }
+  workspaceVersions.delete(workspaceDir);
+}
+
 export function shouldRefreshSnapshotForVersion(
   cachedVersion?: number,
   nextVersion?: number,
@@ -74,6 +86,6 @@ export function shouldRefreshSnapshotForVersion(
 export function resetSkillsRefreshStateForTest(): void {
   listeners.clear();
   workspaceVersions.clear();
-  globalVersion = 0;
+  globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
   listenerErrorHandler = undefined;
 }

@@ -1,13 +1,24 @@
+/**
+ * Built-in ls session tool.
+ *
+ * Lists directory entries through local or injected operations with bounded output rendering.
+ */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
-import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import {
+  appendSessionToolTruncationWarning,
+  formatSessionToolOutput,
+  invalidArgText,
+  shortenPath,
+  str,
+} from "./render-utils.js";
 import type { LsToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
@@ -74,32 +85,15 @@ function formatLsResult(
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
   showImages: boolean,
 ): string {
-  const output = getTextOutput(result, showImages).trim();
-  let text = "";
-  if (output) {
-    const lines = output.split("\n");
-    const maxLines = options.expanded ? lines.length : 20;
-    const displayLines = lines.slice(0, maxLines);
-    const remaining = lines.length - maxLines;
-    text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
-    if (remaining > 0) {
-      text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
-    }
-  }
-
   const entryLimit = result.details?.entryLimitReached;
-  const truncation = result.details?.truncation;
-  if (entryLimit || truncation?.truncated) {
-    const warnings: string[] = [];
-    if (entryLimit) {
-      warnings.push(`${entryLimit} entries limit`);
-    }
-    if (truncation?.truncated) {
-      warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-    }
-    text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
-  }
-  return text;
+  return appendSessionToolTruncationWarning(
+    formatSessionToolOutput(result, options, theme, showImages, 20),
+    theme,
+    {
+      limit: entryLimit ? { count: entryLimit, noun: "entries" } : undefined,
+      truncation: result.details?.truncation,
+    },
+  );
 }
 
 export function createLsToolDefinition(
@@ -223,7 +217,7 @@ export function createLsToolDefinition(
             });
           } catch (e: unknown) {
             signal?.removeEventListener("abort", onAbort);
-            reject(e);
+            reject(toErrorObject(e, "Non-Error rejection"));
           }
         })();
       });
@@ -233,9 +227,9 @@ export function createLsToolDefinition(
       text.setText(formatLsCall(args, theme));
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatLsResult(result, options, theme, context.showImages));
+      text.setText(formatLsResult(result, optionsLocal, theme, context.showImages));
       return text;
     },
   };

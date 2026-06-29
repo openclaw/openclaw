@@ -1,3 +1,6 @@
+/**
+ * Shared HTTP fetch mock helpers for provider contract tests.
+ */
 import { afterEach, vi, type Mock } from "vitest";
 import type {
   fetchProviderDownloadResponse,
@@ -40,6 +43,9 @@ interface ProviderHttpMocks {
   pollProviderOperationJsonMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  readProviderJsonResponseMock: Mock<
+    <T>(response: Response, label: string, opts?: { maxBytes?: number }) => Promise<T>
+  >;
   sanitizeConfiguredModelProviderRequestMock: Mock<
     (
       request: SanitizeConfiguredModelProviderRequestParams,
@@ -62,6 +68,48 @@ const providerHttpMocks = vi.hoisted(() => ({
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  readProviderJsonResponseMock: vi.fn(
+    async <T>(response: Response, label: string, opts?: { maxBytes?: number }): Promise<T> => {
+      const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+      if (!response.body) {
+        try {
+          return (await response.json()) as T;
+        } catch (cause) {
+          throw new Error(`${label}: malformed JSON response`, { cause });
+        }
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          totalBytes += value.byteLength;
+          if (totalBytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const body = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        return JSON.parse(new TextDecoder().decode(body)) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    },
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
@@ -231,6 +279,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
   providerOperationRetryConfig: (_stage: string) => true,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
@@ -256,6 +305,7 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });

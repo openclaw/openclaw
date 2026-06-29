@@ -1,8 +1,11 @@
+// Doctor health flow renders interactive health check output.
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
+// Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
@@ -14,6 +17,7 @@ function loadConfigModule(): Promise<ConfigModule> {
   return (configModulePromise ??= import("../config/config.js"));
 }
 
+/** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
@@ -46,6 +50,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     return;
   }
 
+  // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
   const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
   const { noteStalePluginRuntimeSymlinks } =
@@ -64,7 +69,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     prompter,
   });
   const { CONFIG_PATH } = await loadConfigModule();
-  const ctx = {
+  const ctx: DoctorHealthFlowContext = {
     runtime: effectiveRuntime,
     options,
     prompter,
@@ -76,6 +81,22 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);
+  if (ctx.postInstallDoctorResult) {
+    const {
+      UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+      UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+      writeUpdatePostInstallDoctorResult,
+    } = await import("../infra/update-doctor-result.js");
+    const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+    if (resultPath) {
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: ctx.postInstallDoctorResult,
+      });
+      effectiveRuntime.exit(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
+      return;
+    }
+  }
 
   outro("Doctor complete.");
 }

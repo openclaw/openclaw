@@ -1,3 +1,4 @@
+// Google Meet plugin module implements oauth behavior.
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveDateTimestampMs,
@@ -10,6 +11,7 @@ import {
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
 const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -84,7 +86,7 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
+      const detail = await readGoogleApiErrorDetail(response);
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
     const payload = (await response.json()) as {

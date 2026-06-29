@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.captures media path image messages support behavior.
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,8 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  settleInboundWork,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
@@ -49,7 +52,8 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
     return { onMessage, listener, sock };
   }
 
@@ -80,7 +84,7 @@ describe("web monitor inbox", () => {
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0]?.[0]?.body).toBe("<media:image>");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("<media:image>");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "888@s.whatsapp.net",
@@ -218,10 +222,20 @@ describe("web monitor inbox", () => {
     });
 
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "99999@g.us",
-      senderE164: "+777",
-      mentionedJids: ["123@s.whatsapp.net"],
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "99999@g.us",
+        }),
+      }),
+      group: expect.objectContaining({
+        mentions: expect.objectContaining({
+          jids: ["123@s.whatsapp.net"],
+        }),
+      }),
+      platform: expect.objectContaining({
+        senderE164: "+777",
+      }),
     });
     await listener.close();
   });
@@ -251,11 +265,23 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "424242@g.us",
-      body: "oh hey @Clawd UK !",
-      mentionedJids: ["123@s.whatsapp.net"],
-      senderE164: "+888",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "424242@g.us",
+        }),
+      }),
+      group: expect.objectContaining({
+        mentions: expect.objectContaining({
+          jids: ["123@s.whatsapp.net"],
+        }),
+      }),
+      payload: expect.objectContaining({
+        body: "oh hey @Clawd UK !",
+      }),
+      platform: expect.objectContaining({
+        senderE164: "+888",
+      }),
     });
     await listener.close();
   });
@@ -295,13 +321,23 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      from: "55555@g.us",
-      senderE164: "+777",
-      senderJid: "777@s.whatsapp.net",
-      mentionedJids: ["123@s.whatsapp.net"],
-      selfE164: "+123",
-      selfJid: "123@s.whatsapp.net",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "55555@g.us",
+        }),
+      }),
+      group: expect.objectContaining({
+        mentions: expect.objectContaining({
+          jids: ["123@s.whatsapp.net"],
+        }),
+      }),
+      platform: expect.objectContaining({
+        senderE164: "+777",
+        senderJid: "777@s.whatsapp.net",
+        selfE164: "+123",
+        selfJid: "123@s.whatsapp.net",
+      }),
     });
     await listener.close();
   });

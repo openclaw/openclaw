@@ -1,3 +1,4 @@
+// Covers config write preparation diffs and metadata preservation.
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
@@ -166,6 +167,45 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
     expect(persisted.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]).toEqual({
       params: { thinking: { level: "high" } },
+    });
+  });
+
+  it("does not reintroduce legacy openai-codex model params after doctor route repair", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { reasoning_effort: "high" },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": {
+                params: { reasoning_effort: "high" },
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(persisted.agents?.defaults?.models).not.toHaveProperty("openai-codex/gpt-5.5");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      params: { reasoning_effort: "high" },
+      agentRuntime: { id: "codex" },
     });
   });
 
@@ -468,6 +508,259 @@ describe("config io write prepare", () => {
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
 
+  it("allows removing root-authored sibling keys beside an include", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        gateway: { mode: "local", legacyKey: true },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", legacyKey: true },
+      },
+      rootAuthoredConfig: {
+        gateway: { $include: "./config/gateway.json", legacyKey: true },
+      },
+      nextConfig: {
+        gateway: { mode: "local" },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.gateway).toEqual({ $include: "./config/gateway.json" });
+  });
+
+  it("allows nested root-authored sibling edits without flattening included values", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "old" },
+        },
+      },
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "old" },
+        },
+      },
+      rootAuthoredConfig: {
+        gateway: {
+          $include: "./config/gateway.json",
+          auth: { token: "old" },
+        },
+      },
+      nextConfig: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "none", token: "new", strategy: "strict" },
+        },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.gateway).toEqual({
+      $include: "./config/gateway.json",
+      auth: { token: "new", mode: "none", strategy: "strict" },
+    });
+  });
+
+  it("does not copy runtime-normalized include values into root-authored siblings", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        gateway: {
+          tls: { certPath: "/home/test/cert.pem", enabled: false },
+        },
+      },
+      sourceConfig: {
+        gateway: {
+          tls: { certPath: "~/cert.pem", enabled: false },
+        },
+      },
+      rootAuthoredConfig: {
+        gateway: {
+          $include: "./config/gateway.json",
+          tls: { enabled: false },
+        },
+      },
+      nextConfig: {
+        gateway: {
+          tls: { certPath: "~/cert.pem", enabled: true },
+        },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.gateway).toEqual({
+      $include: "./config/gateway.json",
+      tls: { enabled: true },
+    });
+  });
+
+  it("rejects included-value edits beside root-authored sibling edits", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          gateway: { mode: "local", legacyKey: "old" },
+        },
+        sourceConfig: {
+          gateway: { mode: "local", legacyKey: "old" },
+        },
+        rootAuthoredConfig: {
+          gateway: { $include: "./config/gateway.json", legacyKey: "old" },
+        },
+        nextConfig: {
+          gateway: { mode: "remote", legacyKey: "new" },
+        },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at gateway");
+  });
+
+  it("preserves include-owned array entries across runtime-only normalization", () => {
+    const sourceAgents = { list: [{ id: "main", workspace: "~/agent" }] };
+    const runtimeAgents = { list: [{ id: "main", workspace: "/home/test/agent" }] };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: runtimeAgents,
+        gateway: { mode: "local" },
+      },
+      sourceConfig: {
+        agents: sourceAgents,
+        gateway: { mode: "local" },
+      },
+      rootAuthoredConfig: {
+        agents: { list: [{ $include: "./config/main-agent.json" }] },
+        gateway: { mode: "local" },
+      },
+      nextConfig: {
+        agents: sourceAgents,
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.agents).toEqual({
+      list: [{ $include: "./config/main-agent.json" }],
+    });
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("allows edits to root-owned siblings beside an include-owned array entry", () => {
+    const mainAgent = { id: "main", workspace: "~/agent" };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: { list: [mainAgent, { id: "ops", workspace: "~/ops" }] },
+      },
+      sourceConfig: {
+        agents: { list: [mainAgent, { id: "ops", workspace: "~/ops" }] },
+      },
+      rootAuthoredConfig: {
+        agents: {
+          list: [{ $include: "./config/main-agent.json" }, { id: "ops", workspace: "~/ops" }],
+        },
+      },
+      nextConfig: {
+        agents: {
+          list: [
+            mainAgent,
+            { id: "ops", workspace: "~/ops-next" },
+            { id: "new", workspace: "~/new" },
+          ],
+        },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.agents).toEqual({
+      list: [
+        { $include: "./config/main-agent.json" },
+        { id: "ops", workspace: "~/ops-next" },
+        { id: "new", workspace: "~/new" },
+      ],
+    });
+  });
+
+  it("rejects writes that change include-owned array entries", () => {
+    const agents = { list: [{ id: "main", workspace: "~/agent" }] };
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents },
+        sourceConfig: { agents },
+        rootAuthoredConfig: {
+          agents: { list: [{ $include: "./config/main-agent.json" }] },
+        },
+        nextConfig: {
+          agents: { list: [{ id: "main", workspace: "~/other-agent" }] },
+        },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at agents.list.0");
+  });
+
+  it("rejects array shifts when an included value has a duplicate sibling", () => {
+    const paths = ["/same", "/same"];
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { plugins: { load: { paths } } },
+        sourceConfig: { plugins: { load: { paths } } },
+        rootAuthoredConfig: {
+          plugins: {
+            load: { paths: [{ $include: "./path.json5" }, "/same"] },
+          },
+        },
+        nextConfig: { plugins: { load: { paths: ["/same"] } } },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at plugins.load.paths.0");
+  });
+
+  it("allows unrelated removals after duplicate include-resolved values", () => {
+    const paths = ["/same", "/same", "/other"];
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: { plugins: { load: { paths } } },
+      sourceConfig: { plugins: { load: { paths } } },
+      rootAuthoredConfig: {
+        plugins: {
+          load: { paths: [{ $include: "./path.json5" }, "/same", "/other"] },
+        },
+      },
+      nextConfig: { plugins: { load: { paths: ["/same", "/same"] } } },
+    }) as Record<string, unknown>;
+
+    expect(persisted).toEqual({
+      plugins: {
+        load: { paths: [{ $include: "./path.json5" }, "/same"] },
+      },
+    });
+  });
+
+  it("rejects included-entry removals hidden by duplicate sibling edits", () => {
+    const paths = ["/same", "/same", "/old"];
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { plugins: { load: { paths } } },
+        sourceConfig: { plugins: { load: { paths } } },
+        rootAuthoredConfig: {
+          plugins: {
+            load: { paths: [{ $include: "./path.json5" }, "/same", "/old"] },
+          },
+        },
+        nextConfig: { plugins: { load: { paths: ["/same", "/new"] } } },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at plugins.load.paths.0");
+  });
+
+  it("rejects newly introduced duplicates of include-owned array entries", () => {
+    const paths = ["/root", "/included"];
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { plugins: { load: { paths } } },
+        sourceConfig: { plugins: { load: { paths } } },
+        rootAuthoredConfig: {
+          plugins: {
+            load: { paths: ["/root", { $include: "./path.json5" }] },
+          },
+        },
+        nextConfig: { plugins: { load: { paths: ["/included", "/included"] } } },
+      }),
+    ).toThrow("Config write would flatten $include-owned config at plugins.load.paths.1");
+  });
+
   it("rejects writes that would flatten include-owned subtrees", () => {
     expect(() =>
       resolvePersistCandidateForWrite({
@@ -722,6 +1015,85 @@ describe("config io write prepare", () => {
     ]);
   });
 
+  it("does not overwrite identity-restored env refs with positional map entries", () => {
+    const restored = restoreEnvRefsFromMap(
+      {
+        agents: [
+          { id: "b", token: "${TOKEN_B}" },
+          { id: "a", token: "${TOKEN_A}" },
+        ],
+      },
+      "",
+      new Map([
+        ["agents[0].token", "${TOKEN_A}"],
+        ["agents[1].token", "${TOKEN_B}"],
+      ]),
+      new Set(["agents[0].id", "agents[1].id"]),
+      new Set(["agents[0].token", "agents[1].token"]),
+    );
+
+    expect(restored).toEqual({
+      agents: [
+        { id: "b", token: "${TOKEN_B}" },
+        { id: "a", token: "${TOKEN_A}" },
+      ],
+    });
+  });
+
+  it("does not overwrite identity-restored escaped refs with positional map entries", () => {
+    const restored = restoreEnvRefsFromMap(
+      {
+        agents: [
+          { id: "real", token: "${TOKEN}" },
+          { id: "literal", token: "$${TOKEN}" },
+        ],
+      },
+      "",
+      new Map([["agents[1].token", "${TOKEN}"]]),
+      new Set(["agents[0].id", "agents[1].id"]),
+      new Set(["agents[0].token", "agents[1].token"]),
+    );
+
+    expect(restored).toEqual({
+      agents: [
+        { id: "real", token: "${TOKEN}" },
+        { id: "literal", token: "$${TOKEN}" },
+      ],
+    });
+  });
+
+  it("restores unchanged paths even when their values equal another authored template", () => {
+    const restored = restoreEnvRefsFromMap(
+      {
+        included: {
+          first: "${SECOND}",
+          second: "second-secret",
+          third: "$${SECOND}",
+          escaped: "$${SECOND}",
+        },
+        gateway: { port: 18790 },
+      },
+      "",
+      new Map([
+        ["included.first", "${FIRST}"],
+        ["included.second", "${SECOND}"],
+        ["included.third", "${THIRD}"],
+        ["included.escaped", "$${SECOND}"],
+      ]),
+      new Set(["gateway.port"]),
+    );
+
+    expect(restored).toEqual({
+      included: {
+        first: "${FIRST}",
+        second: "${SECOND}",
+        third: "${THIRD}",
+        escaped: "$${SECOND}",
+      },
+      gateway: { port: 18790 },
+    });
+  });
+
   it("keeps the read-time env snapshot when writing the same config path", () => {
     const snapshot = { OPENAI_API_KEY: "sk-secret" };
     expect(
@@ -761,7 +1133,7 @@ describe("config io write prepare", () => {
         },
       },
     } satisfies OpenClawConfig;
-    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
+    (runtimeConfig.channels!.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {

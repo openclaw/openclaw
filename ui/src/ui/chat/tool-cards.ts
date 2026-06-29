@@ -1,8 +1,12 @@
+// Control UI chat module implements tool cards behavior.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import { isMarkdownBlockArtText } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
@@ -12,8 +16,24 @@ import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
+type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+
 function resolveCanvasPreviewSandbox(preview: ToolPreview): string {
   return resolveEmbedSandbox(preview.kind === "canvas" ? "scripts" : "scripts");
+}
+
+function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
+  if (typeof message.messageId === "string" && message.messageId.trim()) {
+    return message.messageId;
+  }
+  const openClawMeta = message["__openclaw"];
+  const transcriptMeta =
+    openClawMeta && typeof openClawMeta === "object" && !Array.isArray(openClawMeta)
+      ? (openClawMeta as Record<string, unknown>)
+      : null;
+  return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
+    ? transcriptMeta.id
+    : undefined;
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown>> {
@@ -221,17 +241,27 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return normalized.slice(0, 120);
 }
 
-function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
-    const card = cards[i];
-    if (!card) {
-      continue;
-    }
-    if (card.id === id || (card.name === name && !card.outputText)) {
+function findFirstUnmatchedCard(
+  cards: ToolCard[],
+  id: string,
+  name: string,
+  fallbackMatchedCards: WeakSet<ToolCard>,
+): ToolCard | undefined {
+  let nameOnlyCandidate: ToolCard | undefined;
+  for (const card of cards) {
+    if (card.id === id) {
       return card;
     }
+    if (
+      !nameOnlyCandidate &&
+      card.name === name &&
+      card.outputText === undefined &&
+      !fallbackMatchedCards.has(card)
+    ) {
+      nameOnlyCandidate = card;
+    }
   }
-  return undefined;
+  return nameOnlyCandidate;
 }
 
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
@@ -239,6 +269,8 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
+  const fallbackMatchedCards = new WeakSet<ToolCard>();
+  const transcriptMessageId = resolveTranscriptMessageId(m);
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
@@ -254,6 +286,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         name: typeof item.name === "string" ? item.name : "tool",
         args,
         inputText: serializeToolInput(args),
+        messageId: transcriptMessageId,
       });
       continue;
     }
@@ -261,11 +294,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findLatestCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
+        fallbackMatchedCards.add(existing);
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
@@ -277,6 +311,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         id: cardId,
         name,
         outputText: text,
+        messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
         preview,
       });
@@ -301,11 +336,32 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       id: resolveToolCardId({}, m, 0, prefix),
       name,
       outputText: text,
+      messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       preview: extractToolPreview(text, name),
     });
   }
 
+  return cards;
+}
+
+const toolCardsByMessage = new WeakMap<object, Map<string, ToolCard[]>>();
+
+export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolCard[] {
+  if (!message || typeof message !== "object") {
+    return extractToolCards(message, prefix);
+  }
+  let byPrefix = toolCardsByMessage.get(message);
+  if (!byPrefix) {
+    byPrefix = new Map();
+    toolCardsByMessage.set(message, byPrefix);
+  }
+  const cached = byPrefix.get(prefix);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards(message, prefix);
+  byPrefix.set(prefix, cards);
   return cards;
 }
 
@@ -359,15 +415,20 @@ function renderPreviewFrame(params: {
   height?: number;
   sandbox?: string;
 }) {
-  return html`
-    <iframe
-      class="chat-tool-card__preview-frame"
-      title=${params.title}
-      sandbox=${params.sandbox ?? ""}
-      src=${params.src ?? nothing}
-      style=${params.height ? `height:${params.height}px` : ""}
-    ></iframe>
-  `;
+  const sandbox = params.sandbox ?? "";
+  const src = params.src ?? "";
+  return keyed(
+    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
+    html`
+      <iframe
+        class="chat-tool-card__preview-frame"
+        title=${params.title}
+        sandbox=${sandbox}
+        src=${src || nothing}
+        style=${params.height ? `height:${params.height}px` : ""}
+      ></iframe>
+    `,
+  );
 }
 
 export function renderToolPreview(
@@ -416,18 +477,23 @@ export function renderToolPreview(
 
 export function buildSidebarContent(
   value: string,
-  options?: { rawText?: string | null },
+  options?: {
+    rawText?: string | null;
+    fullMessageRequest?: FullMessageRequest;
+  },
 ): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
+    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 export function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
+  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -439,7 +505,20 @@ export function buildPreviewSidebarContent(
     ...(preview.title ? { title: preview.title } : {}),
     ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
     ...(rawText ? { rawText } : {}),
+    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
+}
+
+function buildToolSidebarFullMessageRequest(
+  card: ToolCard,
+  sessionKey: string | undefined,
+): FullMessageRequest | undefined {
+  if (!sessionKey || !card.messageId) {
+    return undefined;
+  }
+  // A transcript entry can contain multiple tool blocks. Until the request can
+  // identify a specific block, upgrading by message id can show the wrong tool.
+  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -472,6 +551,7 @@ function renderToolDataBlock(params: {
   empty?: boolean;
 }) {
   const { label, text, expanded, empty } = params;
+  const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
   return html`
     <div class="chat-tool-card__block ${expanded ? "chat-tool-card__block--expanded" : ""}">
       <div class="chat-tool-card__block-header">
@@ -481,7 +561,9 @@ function renderToolDataBlock(params: {
       ${empty
         ? html`<div class="chat-tool-card__block-empty muted">${text}</div>`
         : expanded
-          ? html`<pre class="chat-tool-card__block-content"><code>${text}</code></pre>`
+          ? html`<pre
+              class="chat-tool-card__block-content"
+            ><code class=${codeClass}>${text}</code></pre>`
           : html`<div class="chat-tool-card__block-preview mono">
               ${getTruncatedPreview(text)}
             </div>`}
@@ -533,23 +615,50 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
+export function resolveCollapsedToolSummaryParts(params: {
+  card: ToolCard;
+  displayLabel: string;
+  displayDetail: string | undefined;
+  isError: boolean;
+}): { label: string; name?: string } {
+  if (params.isError) {
+    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
+  }
+
+  const displayDetail = params.displayDetail?.trim();
+  if (displayDetail) {
+    return { label: params.displayLabel, name: displayDetail };
+  }
+
+  return {
+    label:
+      typeof params.card.args === "string"
+        ? (resolveCollapsedToolDetail(params.card, undefined) ?? params.displayLabel)
+        : params.displayLabel,
+  };
+}
+
 export function renderToolCard(
   card: ToolCard,
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
+    sessionKey?: string;
+    agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
 ) {
-  const hasOutput = Boolean(card.outputText?.trim());
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = isToolCardError(card);
-  const collapsedDetail = isError ? undefined : resolveCollapsedToolDetail(card, display.detail);
-  const previewLabel = isError ? "Tool error" : (collapsedDetail ?? display.label);
-  const previewName = isError ? display.label : collapsedDetail && hasOutput ? "output" : undefined;
+  const summary = resolveCollapsedToolSummaryParts({
+    card,
+    displayLabel: display.label,
+    displayDetail: display.detail,
+    isError,
+  });
 
   return html`
     <div
@@ -558,9 +667,9 @@ export function renderToolCard(
         : ""}"
     >
       ${renderCollapsedToolSummary({
-        label: previewLabel,
+        label: summary.label,
         icon: icons[display.icon],
-        name: previewName,
+        name: summary.name,
         expanded: opts.expanded,
         isError,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
@@ -570,6 +679,7 @@ export function renderToolCard(
             <div class="chat-tool-msg-body">
               ${renderExpandedToolCardContent(
                 card,
+                opts.sessionKey,
                 opts.onOpenSidebar,
                 opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
@@ -584,6 +694,7 @@ export function renderToolCard(
 
 export function renderExpandedToolCardContent(
   card: ToolCard,
+  sessionKey?: string,
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
@@ -595,12 +706,17 @@ export function renderExpandedToolCardContent(
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const canOpenSidebar = Boolean(onOpenSidebar);
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText)
+      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
       : null;
   const sidebarActionContent =
-    previewSidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+    previewSidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      fullMessageRequest,
+      rawText: card.outputText ?? null,
+    });
   const visiblePreview = card.preview
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
@@ -665,6 +781,7 @@ export function renderToolCardSidebar(
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
+  options?: { sessionKey?: string; agentId?: string },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -672,11 +789,20 @@ export function renderToolCardSidebar(
   const hasText = Boolean(card.outputText?.trim());
   const hasPreview = Boolean(preview);
   const isError = isToolCardError(card);
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, options?.sessionKey);
   const sidebarContent =
     preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(preview, card.outputText)
-      : buildSidebarContent(buildToolCardSidebarContent(card));
-  const actionContent = sidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+      ? buildPreviewSidebarContent(preview, card.outputText, { fullMessageRequest })
+      : buildSidebarContent(buildToolCardSidebarContent(card), {
+          fullMessageRequest,
+          rawText: card.outputText ?? null,
+        });
+  const actionContent =
+    sidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      fullMessageRequest,
+      rawText: card.outputText ?? null,
+    });
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick ? () => onOpenSidebar?.(actionContent) : undefined;
   const isShort = hasText && !hasPreview && (card.outputText?.length ?? 0) <= 240;

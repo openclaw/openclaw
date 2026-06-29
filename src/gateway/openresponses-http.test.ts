@@ -1,3 +1,5 @@
+// OpenAI Responses HTTP tests cover response creation, streaming, tool calls,
+// response-session lookup, limits, auth scopes, and provider error mapping.
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -6,13 +8,16 @@ import { createClientToolNameConflictError } from "../agents/agent-tool-definiti
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -261,6 +266,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
 
     try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
       const resNonPost = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "GET",
         headers: { authorization: "Bearer secret" },
@@ -314,6 +322,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
+      const resSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-agent-id": "beta",
+          "x-openclaw-session-key": "agent:beta:openresponses:custom",
+        },
+      );
+      expect(resSessionOverride.status).toBe(200);
+      expect((firstAgentOpts() as { sessionKey?: string }).sessionKey).toBe(
+        "agent:beta:openresponses:custom",
+      );
+      await ensureResponseConsumed(resSessionOverride);
+
+      agentCommand.mockClear();
+      const resReservedSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-session-key": "agent:main:subagent:spoofed" },
+      );
+      expect(resReservedSessionOverride.status).toBe(400);
+      const reservedSessionJson = (await resReservedSessionOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(reservedSessionJson.error?.type).toBe("invalid_request_error");
+      expect(reservedSessionJson.error?.message).toBe(
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
+      mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
       const optsModel = firstAgentOpts();
@@ -330,6 +369,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:main:/,
       );
       await ensureResponseConsumed(resDefaultAlias);
+
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(
+          port,
+          { model: "openclaw", input: "hi" },
+          { "x-openclaw-agent-id": "missing-agent" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(port, { model: "openclaw/missing-agent", input: "hi" });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
 
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
@@ -351,7 +414,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
           model: "openclaw",
           input: "hi",
         },
-        { "x-openclaw-model": "openai/gpt-5.4" },
+        {
+          "x-openclaw-model": "openai/gpt-5.4",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        },
       );
       expect(resModelOverride.status).toBe(200);
       const optsModelOverride = firstAgentOpts();
@@ -362,7 +428,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const resInvalidOverride = await postResponses(
         port,
         { model: "openclaw", input: "hi" },
-        { "x-openclaw-model": "openai/" },
+        {
+          "x-openclaw-model": "openai/",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        },
       );
       expect(resInvalidOverride.status).toBe(400);
       const invalidOverrideJson = (await resInvalidOverride.json()) as {
@@ -372,6 +441,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidOverride);
+
+      agentCommand.mockClear();
+      const resWriteOnlyOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-model": "openai/gpt-5.4" },
+      );
+      expect(resWriteOnlyOverride.status).toBe(403);
+      const writeOnlyJson = (await resWriteOnlyOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(writeOnlyJson.error?.type).toBe("forbidden");
+      expect(writeOnlyJson.error?.message).toBe("missing scope: operator.admin");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resWriteOnlyOverride);
 
       agentCommand.mockClear();
       agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
@@ -603,8 +687,50 @@ describe("OpenResponses HTTP API (e2e)", () => {
       ).toBeUndefined();
       await ensureResponseConsumed(resToolNone);
 
-      mockAgentOnce([{ text: "ok" }]);
+      // A pinned `tool_choice` now enforces the response contract, so the agent
+      // must produce the matching tool call for a 200; text-only would 502.
+      mockAgentOnce([{ text: "ok" }], {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      });
       const resToolChoice = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            name: "get_weather",
+            description: "Get weather",
+          },
+          {
+            type: "function",
+            name: "get_time",
+            description: "Get time",
+            strict: true,
+          },
+        ],
+        tool_choice: { type: "function", name: "get_time" },
+      });
+      expect(resToolChoice.status).toBe(200);
+      const optsToolChoice = firstAgentOpts();
+      const clientTools =
+        (
+          optsToolChoice as
+            | {
+                clientTools?: Array<{ function?: { name?: string; strict?: boolean } }>;
+              }
+            | undefined
+        )?.clientTools ?? [];
+      expect(clientTools).toHaveLength(1);
+      expect(clientTools[0]?.function?.name).toBe("get_time");
+      expect(clientTools[0]?.function?.strict).toBe(true);
+      await ensureResponseConsumed(resToolChoice);
+
+      mockAgentOnce([{ text: "ok" }], {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      });
+      const resWrappedToolChoice = await postResponses(port, {
         model: "openclaw",
         input: "hi",
         tools: [
@@ -622,26 +748,25 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
         tool_choice: { type: "function", function: { name: "get_time" } },
       });
-      expect(resToolChoice.status).toBe(200);
-      const optsToolChoice = firstAgentOpts();
-      const clientTools =
+      expect(resWrappedToolChoice.status).toBe(200);
+      const wrappedClientTools =
         (
-          optsToolChoice as
+          firstAgentOpts() as
             | {
                 clientTools?: Array<{ function?: { name?: string; strict?: boolean } }>;
               }
             | undefined
         )?.clientTools ?? [];
-      expect(clientTools).toHaveLength(1);
-      expect(clientTools[0]?.function?.name).toBe("get_time");
-      expect(clientTools[0]?.function?.strict).toBe(true);
-      await ensureResponseConsumed(resToolChoice);
+      expect(wrappedClientTools).toHaveLength(1);
+      expect(wrappedClientTools[0]?.function?.name).toBe("get_time");
+      expect(wrappedClientTools[0]?.function?.strict).toBe(true);
+      await ensureResponseConsumed(resWrappedToolChoice);
 
       const resUnknownTool = await postResponses(port, {
         model: "openclaw",
         input: "hi",
         tools: WEATHER_TOOL,
-        tool_choice: { type: "function", function: { name: "unknown_tool" } },
+        tool_choice: { type: "function", name: "unknown_tool" },
       });
       expect(resUnknownTool.status).toBe(400);
       await ensureResponseConsumed(resUnknownTool);
@@ -754,7 +879,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resNoUser);
     } finally {
-      // shared server
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
     }
   });
 
@@ -991,6 +1117,336 @@ describe("OpenResponses HTTP API (e2e)", () => {
     ).toBe("Let me check that.");
     expect(json.output?.[1]?.name).toBe("get_weather");
     await ensureResponseConsumed(res);
+  });
+
+  it("rejects an unsatisfied required tool_choice on the non-streaming path", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "plain text despite required" }],
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+      tool_choice: "required",
+    });
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("api_error");
+    expect(json.error?.message ?? "").toContain("tool_choice=required was not satisfied");
+    await ensureResponseConsumed(res);
+  });
+
+  it("returns the tool call when a required tool_choice is satisfied (non-streaming)", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling the tool." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+      tool_choice: "required",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(json.output?.[1]?.name).toBe("get_weather");
+    const opts = firstAgentOpts();
+    expect((opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "").toContain(
+      "You must call one of the available tools",
+    );
+    await ensureResponseConsumed(res);
+  });
+
+  it("rejects an unsatisfied function tool_choice on the non-streaming path", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "I can answer without the weather tool." }],
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+      tool_choice: { type: "function", name: "get_weather" },
+    });
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("api_error");
+    expect(json.error?.message ?? "").toContain("tool_choice required a get_weather tool call");
+    await ensureResponseConsumed(res);
+  });
+
+  it("rejects a non-streaming function tool_choice when the agent calls a different tool", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling another tool." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: [
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Get weather",
+        },
+        {
+          type: "function",
+          name: "get_time",
+          description: "Get time",
+        },
+      ],
+      tool_choice: { type: "function", name: "get_weather" },
+    });
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("api_error");
+    expect(json.error?.message ?? "").toContain("tool_choice required a get_weather tool call");
+    await ensureResponseConsumed(res);
+  });
+
+  it("rejects an unsatisfied required tool_choice on the streaming path without leaking text", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) =>
+      buildAssistantDeltaResult({
+        opts,
+        emit: emitAgentEvent,
+        deltas: ["plain text despite required"],
+        text: "plain text despite required",
+      })) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+      tool_choice: "required",
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const failed = findSseEvent(events, "response.failed");
+    const failedResponse = (
+      parseSseData(failed) as {
+        response?: { status?: string; error?: { code?: string; message?: string } };
+      }
+    ).response;
+    expect(failedResponse?.status).toBe("failed");
+    expect(failedResponse?.error?.code).toBe("api_error");
+    expect(failedResponse?.error?.message ?? "").toContain(
+      "tool_choice=required was not satisfied",
+    );
+    expect(text).toContain("[DONE]");
+    // Buffered prose must never reach the client when the contract fails.
+    expect(text).not.toContain("plain text despite required");
+    expect(collectSseEventTypes(events)).not.toContain("response.output_text.delta");
+  });
+
+  it("rejects a streaming function tool_choice when the agent calls a different tool", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling another tool." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: [
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Get weather",
+        },
+        {
+          type: "function",
+          name: "get_time",
+          description: "Get time",
+        },
+      ],
+      tool_choice: { type: "function", name: "get_weather" },
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const failed = findSseEvent(events, "response.failed");
+    const failedResponse = (
+      parseSseData(failed) as {
+        response?: { status?: string; error?: { code?: string; message?: string } };
+      }
+    ).response;
+    expect(failedResponse?.status).toBe("failed");
+    expect(failedResponse?.error?.code).toBe("api_error");
+    expect(failedResponse?.error?.message ?? "").toContain(
+      "tool_choice required a get_weather tool call",
+    );
+    expect(collectSseEventTypes(events)).not.toContain("response.completed");
+    expect(text).toContain("[DONE]");
+  });
+
+  it("emits the tool call when a streaming required tool_choice is satisfied", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "Calling " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "the tool." } });
+      return {
+        payloads: [{ text: "Calling the tool." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+        },
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+      tool_choice: "required",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const delta = findSseEvent(events, "response.output_text.delta");
+    expect((parseSseData(delta) as { delta?: string }).delta).toBe("Calling the tool.");
+    const completed = findSseEvent(events, "response.completed");
+    const response = (
+      parseSseData(completed) as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
+    expect(response?.status).toBe("incomplete");
+    expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(response?.output?.[1]?.name).toBe("get_weather");
+  });
+
+  it("buffers replaceable assistant events for streaming responses", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "final answer", delta: "", replace: true, replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    expect(deltas).toBe("final answer");
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("final answer");
+    expect(deltas).not.toContain("coordination draft");
+  });
+
+  it("prefers final result text over buffered replaceable response drafts", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+
+    expect(deltas).toBe("final answer");
   });
 
   it("falls back to payload text for streamed function_call responses", async () => {
@@ -1360,6 +1816,91 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }),
     });
     await expectInvalidRequest(blockedScheme, /invalid request|http or https/i);
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
+    const port = enabledPort;
+    // 1x1 PNG; same fixture used by the parity schema tests.
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              source: { type: "base64", media_type: "image/png", data: pngBase64 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    // Image-only turn carries a non-empty placeholder so the agent command runs,
+    // with the real image attached via `images` (parity with /v1/chat/completions).
+    expect((opts as { message?: string }).message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
+    expect((opts as { images?: unknown[] }).images?.length).toBe(1);
+    await ensureResponseConsumed(res);
+  });
+
+  it("accepts file-only input without text, matching image-only", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      instructions: "Summarize the attached document.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from("the quick brown fox").toString("base64"),
+                filename: "doc.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    expect((opts as { message?: string }).message ?? "").not.toBe("");
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="doc.txt">');
+    expect(extraSystemPrompt).toContain("the quick brown fox");
+    await ensureResponseConsumed(res);
+  });
+
+  it("still rejects input with neither text nor image", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [{ type: "message", role: "user", content: [] }],
+    });
+
+    await expectInvalidRequest(res, /Missing user message/i);
     expect(agentCommand).not.toHaveBeenCalled();
   });
 

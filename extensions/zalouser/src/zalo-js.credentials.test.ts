@@ -1,3 +1,4 @@
+// Zalouser tests cover zalo js.credentials plugin behavior.
 import {
   lstat,
   mkdir,
@@ -160,7 +161,7 @@ describe("zalouser credential persistence", () => {
 
   it("caps oversized QR start timeout before computing the polling deadline", async () => {
     createZaloMock.mockResolvedValueOnce({
-      loginQR: async () => new Promise(() => undefined),
+      loginQR: async () => new Promise(() => {}),
     });
     const nowSpy = vi.spyOn(Date, "now");
     nowSpy

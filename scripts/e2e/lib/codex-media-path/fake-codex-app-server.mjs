@@ -1,3 +1,4 @@
+// Fake Codex app server used by media-path E2E scenarios.
 import fs from "node:fs";
 import readline from "node:readline";
 
@@ -7,11 +8,25 @@ const requestLog =
 let turnCount = 0;
 
 function appendRequest(request) {
-  fs.appendFileSync(requestLog, `${JSON.stringify(request)}\n`);
+  try {
+    fs.appendFileSync(requestLog, `${JSON.stringify(request)}\n`);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`fake Codex app-server request log write failed: ${message}\n`);
+    if (request?.id != null) {
+      sendError(request.id, `fake Codex app-server request log write failed: ${message}`);
+    }
+    return false;
+  }
 }
 
 function send(id, result) {
   process.stdout.write(`${JSON.stringify({ id, result })}\n`);
+}
+
+function sendError(id, message) {
+  process.stdout.write(`${JSON.stringify({ error: { message }, id })}\n`);
 }
 
 const rl = readline.createInterface({ input: process.stdin });
@@ -20,7 +35,9 @@ rl.on("line", (line) => {
     return;
   }
   const request = JSON.parse(line);
-  appendRequest(request);
+  if (!appendRequest(request)) {
+    return;
+  }
   const { id, method, params } = request;
   if (method === "initialize") {
     send(id, {

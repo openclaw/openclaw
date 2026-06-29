@@ -1,3 +1,4 @@
+// Matrix tests cover verification plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const withResolvedActionClientMock = vi.fn();
@@ -589,7 +590,7 @@ describe("matrix verification actions", () => {
       startVerification: vi.fn(async () => sas),
     };
     const getOwnDeviceIdentityVerificationStatus = vi.fn(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi.fn(async () =>

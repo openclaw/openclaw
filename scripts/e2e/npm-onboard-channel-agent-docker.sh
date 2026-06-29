@@ -12,6 +12,12 @@ DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
+JSON_ARTIFACT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES 1048576
+)"
+STATUS_TEXT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES 1048576
+)"
 run_log=""
 
 cleanup() {
@@ -56,6 +62,8 @@ echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES=$JSON_ARTIFACT_MAX_BYTES" \
+  -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
@@ -72,7 +80,8 @@ CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
 PORT="18789"
 MOCK_PORT="44080"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
-MOCK_REQUEST_LOG="/tmp/openclaw-mock-openai-requests.jsonl"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 
@@ -104,6 +113,7 @@ esac
 
 cleanup() {
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 

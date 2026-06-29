@@ -1,3 +1,4 @@
+// Stores and verifies web push subscriptions and delivery payloads.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -190,39 +191,9 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function loadWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<WebPushSubscription | null> {
-  const state = await loadState(baseDir);
-  for (const sub of Object.values(state.subscriptionsByEndpointHash)) {
-    if (sub.subscriptionId === subscriptionId) {
-      return sub;
-    }
-  }
-  return null;
-}
-
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
-}
-
-export async function clearWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    for (const [hash, sub] of Object.entries(state.subscriptionsByEndpointHash)) {
-      if (sub.subscriptionId === subscriptionId) {
-        delete state.subscriptionsByEndpointHash[hash];
-        await persistState(state, baseDir);
-        return true;
-      }
-    }
-    return false;
-  });
 }
 
 export async function clearWebPushSubscriptionByEndpoint(
@@ -252,18 +223,6 @@ type WebPushPayload = {
 
 function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
-
-export async function sendWebPushNotification(
-  subscription: WebPushSubscription,
-  payload: WebPushPayload,
-  vapidKeys?: VapidKeyPair,
-): Promise<WebPushSendResult> {
-  const keys = vapidKeys ?? (await resolveVapidKeys());
-  const webPush = await loadWebPushRuntime();
-  applyVapidDetails(webPush, keys);
-
-  return sendPreparedWebPushNotification(webPush, subscription, payload);
 }
 
 async function sendPreparedWebPushNotification(

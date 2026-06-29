@@ -1,6 +1,8 @@
+// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -41,6 +43,9 @@ export type TelegramProbeOptions = {
 
 const probeTransportCache = new Map<string, TelegramTransport>();
 const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
+// Generous cap: Telegram Bot API responses for getMe/getWebhookInfo are always < 1 KiB.
+// 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
+const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export function resetTelegramProbeFetcherCacheForTests(): void {
   probeTransportCache.clear();
@@ -161,7 +166,8 @@ export async function probeTelegram(
         // On timeout or network error, promote the transport to its IPv4
         // fallback dispatcher so the next retry (and all future probes
         // sharing this cached transport) skip the stalled IPv6 path.
-        transport.forceFallback?.("probe timeout/network error");
+        // Keep the original socket code in transport fallback diagnostics.
+        transport.forceFallback?.("probe timeout/network error", err);
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
           if (remainingAfterAttemptMs <= 0) {
@@ -169,17 +175,24 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            await new Promise((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
           }
         }
       }
     }
 
     if (!meRes) {
-      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
+      throw toLintErrorObject(
+        fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+        "Non-Error thrown",
+      );
     }
 
-    const meJson = (await meRes.json()) as {
+    const meJson = JSON.parse(
+      (await readResponseWithLimit(meRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+    ) as {
       ok?: boolean;
       description?: string;
       result?: unknown;
@@ -222,7 +235,11 @@ export async function probeTelegram(
             Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
             fetcher,
           );
-          const webhookJson = (await webhookRes.json()) as {
+          const webhookJson = JSON.parse(
+            (await readResponseWithLimit(webhookRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString(
+              "utf8",
+            ),
+          ) as {
             ok?: boolean;
             result?: { url?: string; has_custom_certificate?: boolean };
           };
@@ -251,4 +268,18 @@ export async function probeTelegram(
       elapsedMs: Date.now() - started,
     };
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

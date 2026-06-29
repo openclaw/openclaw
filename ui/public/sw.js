@@ -22,22 +22,32 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
   event.waitUntil(
-    Promise.all([
-      self.clients.claim(),
-      caches.keys().then((keys) => {
-        const controlKeys = keys.filter((key) => key.startsWith(CACHE_PREFIX));
-        const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
-        const retained = new Set([
-          ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
-          CACHE_NAME,
-        ]);
-        return Promise.all(
+    (async () => {
+      const [cacheKeys, windowClients] = await Promise.all([
+        caches.keys(),
+        self.clients.matchAll({ type: "window", includeUncontrolled: true }),
+      ]);
+      const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
+      const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
+      // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
+      const retained = new Set([
+        ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
+        CACHE_NAME,
+      ]);
+
+      await Promise.all([
+        self.clients.claim(),
+        Promise.all(
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
-        );
-      }),
-    ]),
+        ),
+      ]);
+
+      for (const client of windowClients) {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.
+        client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
+      }
+    })(),
   );
 });
 
@@ -46,6 +56,14 @@ self.addEventListener("fetch", (event) => {
 
   // Skip non-GET and cross-origin requests.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Skip top-level navigations so the browser can handle HTTP auth
+  // challenges natively — WWW-Authenticate dialogs are bypassed when the
+  // response comes from a service worker, breaking reverse-proxy setups
+  // with basic/digest auth in front of the gateway.
+  if (event.request.mode === "navigate") {
     return;
   }
 

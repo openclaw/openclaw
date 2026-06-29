@@ -1,3 +1,4 @@
+// Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_TW = {
@@ -29,14 +30,18 @@ export const zh_TW = {
       compatibilityAnthropicHint: "使用 /messages",
       compatibilityOpenAi: "相容 OpenAI",
       compatibilityOpenAiHint: "使用 /chat/completions",
+      compatibilityOpenAiResponses: "相容 OpenAI Responses",
+      compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自動偵測）",
-      compatibilityUnknownHint: "先探測 OpenAI，再探測 Anthropic 端點",
+      compatibilityUnknownHint: "先探測 OpenAI Chat、OpenAI Responses，再探測 Anthropic 端點",
       detectionFailed: "無法偵測端點類型。",
-      detectionFailedNote: "這個端點沒有回應 OpenAI 或 Anthropic 風格的請求。",
+      detectionFailedNote:
+        "這個端點沒有回應 OpenAI Chat、OpenAI Responses 或 Anthropic 風格的請求。",
       detectionNoteTitle: "端點偵測",
       detectionProgress: "正在偵測端點類型...",
       detectedAnthropic: "偵測到相容 Anthropic 的端點。",
       detectedOpenAi: "偵測到相容 OpenAI 的端點。",
+      detectedOpenAiResponses: "偵測到相容 OpenAI Responses 的端點。",
       endpointId: "端點 ID",
       endpointIdRequired: "端點 ID 必填。",
       endpointIdRenamed: '端點 ID "{from}" 已用於不同的基礎 URL。將使用 "{to}"。',
@@ -230,6 +235,9 @@ export const zh_TW = {
       authChoiceRequired: "必須選擇認證方式",
       channelsTitle: "頻道",
       configHandling: "設定處理",
+      durationNote:
+        "接下來會依序設定模型/認證、工作區、Gateway、頻道、網頁搜尋、技能和選用插件。QuickStart 通常只需幾分鐘，但提供者登入、頻道配對、daemon 安裝、網路下載和選用依賴可能需要更久。你可以略過選用步驟，之後用 {command} 返回設定。",
+      durationTitle: "設定流程",
       existingConfigTitle: "偵測到既有設定",
       flowAdvanced: "手動設定",
       flowAdvancedHint: "選擇 Gateway 連接埠、網路暴露、Tailscale 和認證方式。",
@@ -958,6 +966,7 @@ export const zh_TW = {
       webSearchGetKey: "取得 key：{url}",
       webSearchAuthProfile: "憑證：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：透過 {env} 環境變數提供。",
+      webSearchKeyFree: "Web search 已就緒 —— 此 provider 無需 API key。",
       webSearchKeyRef: "API key：透過 secret reference 設定。",
       webSearchKeyStored: "API key：已存入設定。",
       webSearchNeedsKey: "新增 key 前 web_search 無法運作。",

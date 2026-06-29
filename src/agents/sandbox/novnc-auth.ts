@@ -1,9 +1,14 @@
+/**
+ * noVNC observer authentication helpers.
+ *
+ * Issues short-lived observer tokens and builds local noVNC URLs without exposing long-lived browser bridge state.
+ */
 import crypto from "node:crypto";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD"; // pragma: allowlist secret
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
@@ -17,7 +22,7 @@ type NoVncObserverTokenEntry = {
   expiresAt: number;
 };
 
-export type NoVncObserverTokenPayload = {
+type NoVncObserverTokenPayload = {
   noVncPort: number;
   password?: string;
 };
@@ -56,21 +61,6 @@ export function generateNoVncPassword() {
     out += NOVNC_PASSWORD_ALPHABET[crypto.randomInt(0, NOVNC_PASSWORD_ALPHABET.length)];
   }
   return out;
-}
-
-export function buildNoVncDirectUrl(port: number) {
-  return `http://127.0.0.1:${port}/vnc.html`;
-}
-
-export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
-  const query = new URLSearchParams({
-    autoconnect: "1",
-    resize: "remote",
-  });
-  if (params.password?.trim()) {
-    query.set("password", params.password);
-  }
-  return `${buildNoVncDirectUrl(params.port)}#${query.toString()}`;
 }
 
 export function issueNoVncObserverToken(params: {

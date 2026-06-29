@@ -1,3 +1,4 @@
+/** Extension that safeguards compaction with structured summaries and quality repair. */
 import fs from "node:fs";
 import path from "node:path";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
@@ -9,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
   computeAdaptiveChunkRatioWithWorker,
@@ -206,8 +208,13 @@ async function tryProviderSummarize(
     log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
     return undefined;
   } catch (err) {
-    // Abort/timeout errors must propagate — the caller requested cancellation.
-    if (isAbortError(err) || isTimeoutError(err)) {
+    // Propagate only when the caller explicitly cancelled. Provider-side
+    // AbortErrors (signal not aborted) fall through to LLM summarization.
+    if (params.signal?.aborted) {
+      throw err;
+    }
+    // Real non-abort transport timeouts (e.g. ETIMEDOUT) still propagate.
+    if (!isAbortError(err) && isTimeoutError(err)) {
       throw err;
     }
     log.warn(
@@ -444,6 +451,17 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       isError?: unknown;
     };
     if (toolResult.isError !== true) {
+      continue;
+    }
+    // Accepted sessions_spawn launches are successes, not failures, even when a legacy
+    // transcript persisted them with isError:true. Mirror the observer's detection
+    // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
+    // so only real failures stay in the summary and non-spawn tools are never matched by shape.
+    if (
+      typeof toolResult.toolName === "string" &&
+      toolResult.toolName.trim() === "sessions_spawn" &&
+      normalizeAcceptedSessionSpawnResult(toolResult)
+    ) {
       continue;
     }
     const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
@@ -875,6 +893,7 @@ async function readWorkspaceContextForSummary(
   }
 }
 
+/** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
@@ -1007,9 +1026,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           // Provider returned empty — fall through to LLM path.
           log.info("Compaction provider did not produce a result; falling back to LLM path.");
         } catch (err) {
-          // tryProviderSummarize rethrows abort/timeout — if we reach here it is
-          // an unexpected error from the assembly step. Fall through to LLM path.
-          if (isAbortError(err) || isTimeoutError(err)) {
+          // tryProviderSummarize rethrows on caller cancellation; reaching here
+          // means an unexpected error in the assembly step. Fall through to LLM.
+          if (signal?.aborted) {
+            throw err;
+          }
+          if (!isAbortError(err) && isTimeoutError(err)) {
             throw err;
           }
           log.warn(
@@ -1144,7 +1166,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
         .slice(-10)
@@ -1182,7 +1204,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
-        let splitTurnSection = "";
+        let splitTurnSectionLocal = "";
         let historySummary = "";
         try {
           historySummary =
@@ -1220,14 +1242,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               summarizationInstructions,
               previousSummary: undefined,
             });
-            splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
-              ? `${historySummary}\n\n---\n\n${splitTurnSection}`
-              : splitTurnSection;
+              ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
+              : splitTurnSectionLocal;
           }
           summaryWithPreservedTurns = appendSummarySection(
             summaryWithoutPreservedTurns,
-            preservedTurnsSection,
+            preservedTurnsSectionLocal,
           );
         } catch (attemptError) {
           if (lastSuccessfulSummary && attempt > 0) {
@@ -1242,7 +1264,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
         lastHistorySummary = historySummary;
-        lastSplitTurnSection = splitTurnSection;
+        lastSplitTurnSection = splitTurnSectionLocal;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1283,7 +1305,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       const suffix = assembleSuffix({
         splitTurnSection: lastSplitTurnSection,
-        preservedTurnsSection,
+        preservedTurnsSection: preservedTurnsSectionLocal,
         toolFailureSection,
         fileOpsSummary,
         workspaceContext,

@@ -1,9 +1,16 @@
+// Gateway maintenance timers.
+// Starts periodic health, dedupe, abort, and media cleanup loops.
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { isFutureDateTimestampMs } from "../shared/number-coercion.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  abortTrackedChatRunById,
+  type ChatAbortControllerEntry,
+  type RestartRecoveryCandidate,
+} from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -35,6 +42,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: Pick<
     ChatRunState,
     | "abortedRuns"
@@ -83,13 +91,13 @@ export function startGatewayMaintenanceTimers(params: {
   const healthInterval = setInterval(() => {
     void params
       .refreshGatewayHealthSnapshot({ probe: false })
-      .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+      .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
     .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -128,6 +136,8 @@ export function startGatewayMaintenanceTimers(params: {
       return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      // Keep idempotency records for active runs so retries cannot create
+      // duplicate chat/agent work while a command is still draining.
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
       }
@@ -184,27 +194,42 @@ export function startGatewayMaintenanceTimers(params: {
     };
 
     for (const [runId, entry] of params.chatAbortControllers) {
+      if (entry.projectSessionTerminalPending === true) {
+        continue;
+      }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      abortChatRunById(
-        {
-          chatAbortControllers: params.chatAbortControllers,
-          chatRunBuffers: params.chatRunBuffers,
-          chatAbortedRuns: params.chatRunState.abortedRuns,
-          clearChatRunState: params.chatRunState.clearRun,
-          removeChatRun: params.removeChatRun,
-          agentRunSeq: params.agentRunSeq,
-          broadcast: params.broadcast,
-          nodeSendToSession: params.nodeSendToSession,
-        },
-        { runId, sessionKey: entry.sessionKey, stopReason: "timeout" },
-      );
+      if (entry.projectSessionTerminalPersistence) {
+        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
+        const sessionKey = entry.sessionKey.trim();
+        const sessionId = entry.sessionId.trim();
+        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
+          params.restartRecoveryCandidates.set(runId, {
+            runId,
+            lifecycleGeneration,
+            sessionKey,
+            sessionId,
+            observedAt: entry.projectSessionTerminalObservedAt,
+          });
+        }
+        params.chatAbortControllers.delete(runId);
+        continue;
+      }
+      if (entry.projectSessionActive === false) {
+        params.chatAbortControllers.delete(runId);
+        continue;
+      }
+      abortTrackedChatRunById(params, {
+        runId,
+        sessionKey: entry.sessionKey,
+        stopReason: "timeout",
+      });
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
-      if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
+    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
+      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);
@@ -272,7 +297,7 @@ export function startGatewayMaintenanceTimers(params: {
       recursive: true,
       pruneEmptyDirs: true,
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
       .finally(() => {

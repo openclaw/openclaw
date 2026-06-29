@@ -1,9 +1,10 @@
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+// Implements dock commands that bind sessions to local workspaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { persistSessionEntry } from "./commands-session-store.js";

@@ -1,10 +1,12 @@
+// Verifies managed local provider services start, lease, probe, and stop safely.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
@@ -14,6 +16,7 @@ import {
 } from "./provider-local-service.js";
 
 async function freePort(): Promise<number> {
+  // Allocate a real loopback port to exercise child process health probes.
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -31,6 +34,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
+  // Idle-stop assertions wait until the local service no longer responds.
   try {
     await expect
       .poll(
@@ -183,6 +187,60 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
+  it("cancels local service health probe response bodies", async () => {
+    let socketClosed = false;
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("close", () => {
+        sockets.delete(socket);
+        socketClosed = true;
+      });
+      socket.write(
+        ["HTTP/1.1 200 OK", "Content-Type: application/json", "", '{"ok":true}'].join("\r\n"),
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server port");
+    }
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-body-cleanup",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["--version"],
+        healthUrl: `http://127.0.0.1:${address.port}/v1/models`,
+        readyTimeoutMs: 1_000,
+        idleStopMs: 1,
+      },
+    );
+
+    try {
+      await expect(ensureModelProviderLocalService(model)).resolves.toBeUndefined();
+      await expect.poll(() => socketClosed, { timeout: 1000, interval: 20 }).toBe(true);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("serializes concurrent cold starts for the same local service", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
@@ -298,6 +356,8 @@ describe("provider local service", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-restart-"));
     const startsPath = path.join(tempDir, "starts.txt");
     const statusPath = path.join(tempDir, "status.txt");
+    const forkedPidPath = path.join(tempDir, "forked.pid");
+    let firstForkedPid: number | undefined;
     const model = attachModelProviderLocalService(
       {
         id: "demo",
@@ -309,7 +369,9 @@ describe("provider local service", () => {
         command: process.execPath,
         args: [
           "-e",
-          `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
+          `const fs=require("node:fs");const http=require("node:http");const {spawn}=require("node:child_process");const fork=spawn(process.execPath,["-e","setInterval(() => {}, 1000)"],{stdio:"ignore"});fs.writeFileSync(${JSON.stringify(
+            forkedPidPath,
+          )},String(fork.pid));fs.appendFileSync(${JSON.stringify(
             startsPath,
           )},"start\\n");fs.writeFileSync(${JSON.stringify(
             statusPath,
@@ -327,6 +389,7 @@ describe("provider local service", () => {
       const firstLease = await ensureModelProviderLocalService(model);
       firstLease?.release();
       expect((await fetch(healthUrl)).ok).toBe(true);
+      firstForkedPid = await readPidFile(forkedPidPath);
 
       await fs.writeFile(statusPath, "down", "utf8");
       expect((await fetch(healthUrl)).status).toBe(503);
@@ -336,11 +399,13 @@ describe("provider local service", () => {
         throw new Error("Expected restarted provider local service lease");
       }
       expect((await fetch(healthUrl)).ok).toBe(true);
+      expect(await waitForPidToExit(firstForkedPid)).toBe(true);
       secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);
     } finally {
+      killPidIfAlive(firstForkedPid);
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });

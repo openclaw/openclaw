@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover monitor.replay plugin behavior.
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -181,6 +182,77 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
+  it("acknowledges signed non-message Create events instead of rejecting them", async () => {
+    const payload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Document",
+        id: "file-1",
+        name: "report.pdf",
+        content: "",
+        mediaType: "application/pdf",
+      },
+      target: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const body = JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-non-message-event",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges signed non-Create Talk events instead of rejecting them", async () => {
+    const payload = {
+      type: "Join",
+      actor: { type: "Application", id: "bots/bot-1", name: "Bot" },
+      object: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const body = JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-lifecycle-event",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed webhook payloads after signature verification", async () => {
     const payload = {
       type: "Create",

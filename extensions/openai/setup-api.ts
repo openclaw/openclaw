@@ -1,3 +1,4 @@
+// Openai API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
@@ -73,7 +74,6 @@ export function buildOpenAISetupProvider(): ProviderPlugin {
 
   return {
     id: "openai",
-    aliases: ["openai-codex"],
     label: "OpenAI",
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],

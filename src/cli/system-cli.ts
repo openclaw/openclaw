@@ -1,9 +1,10 @@
+// System CLI commands that call Gateway RPC methods for events, heartbeats, and presence.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
@@ -45,6 +46,7 @@ async function runSystemGatewayCommand(
   }
 }
 
+/** Register Gateway-backed system event, heartbeat, and presence commands. */
 export function registerSystemCli(program: Command) {
   const system = program
     .command("system")

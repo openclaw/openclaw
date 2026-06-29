@@ -1,3 +1,4 @@
+// Slack tests cover message handler.app mention race plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const prepareSlackMessageMock =
@@ -93,8 +94,8 @@ function createTestHandler() {
       accountId: "default",
       app: { client: {} },
       runtime: {},
-      markMessageSeen: seenMessages.markMessageSeen,
-      releaseSeenMessage: seenMessages.releaseSeenMessage,
+      markMessageSeen: seenMessages["markMessageSeen"],
+      releaseSeenMessage: seenMessages["releaseSeenMessage"],
     } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
     account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
   });

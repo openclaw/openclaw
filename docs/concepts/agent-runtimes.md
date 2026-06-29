@@ -58,7 +58,7 @@ Most confusion comes from several different surfaces sharing the Codex name:
 
 Those surfaces are intentionally independent. Enabling the `codex` plugin makes
 the native app-server features available; `openclaw doctor --fix` owns legacy
-`openai-codex/*` route repair and stale session pin cleanup. Selecting
+legacy Codex route repair and stale session pin cleanup. Selecting
 `openai/*` for an agent model now means "run this through Codex" unless a
 non-agent OpenAI API surface is being used.
 
@@ -97,7 +97,7 @@ This is the agent-facing decision tree:
    as `openai/<model>` and set provider/model runtime policy to
    `agentRuntime.id: "openclaw"`. A selected `openai` OAuth profile is routed
    internally through OpenClaw's Codex-auth transport.
-4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
+4. If legacy config still contains **legacy Codex model refs**, repair it to
    `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
    route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
    old model ref implied it.
@@ -202,7 +202,7 @@ keeping the public model ref as `openai/*`. Stale OpenAI runtime session pins ar
 ignored by runtime selection and can be cleaned with `openclaw doctor --fix`.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
-`openai-codex/*` remains in config, treat that as legacy route state. Run
+legacy Codex model refs remain in config, treat that as legacy route state. Run
 `openclaw doctor --fix` to rewrite it to `openai/*` with the Codex runtime.
 
 ## GitHub Copilot agent runtime
@@ -230,8 +230,8 @@ canonical subscription `github-copilot` provider and is **never** selected by
 The harness claims its provider, runtime, CLI session key, and auth profile
 prefix in `extensions/copilot/doctor-contract-api.ts`, which
 `openclaw doctor` auto-loads. For configuration, auth, transcript mirroring,
-compaction, the doctor probe surface, and the broader PI vs Codex vs Copilot
-SDK decision, see [GitHub Copilot agent runtime](/plugins/copilot).
+compaction, the declarative doctor contract, and the broader PI vs Codex vs
+Copilot SDK decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Compatibility contract
 

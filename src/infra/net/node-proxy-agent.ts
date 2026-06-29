@@ -1,3 +1,5 @@
+// Node proxy agent helpers adapt env or explicit proxy settings for libraries
+// that need node:http Agent instances.
 import type { Agent as HttpAgent } from "node:http";
 import { createRequire } from "node:module";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
@@ -15,6 +17,7 @@ type ProxylineTlsOptions = ProxylineAgentOptions["proxyTls"];
 
 const require = createRequire(import.meta.url);
 
+/** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
 export type CreateNodeProxyAgentOptions =
   | {
       mode: "env";
@@ -52,11 +55,15 @@ function parseTargetUrl(targetUrl: string | URL): URL | undefined {
 }
 
 function formatNoProxyTargetUrl(targetUrl: string | URL): string | undefined {
+  // WebSocket proxy bypass uses HTTP(S) semantics so NO_PROXY default ports and
+  // hostname matching stay aligned with normal requests.
   const target = parseTargetUrl(targetUrl);
   if (target === undefined) {
     return undefined;
   }
   const parsed = new URL(target.href);
+  // Bypass matching uses web request semantics. Map WebSocket schemes to the
+  // equivalent request schemes so default ports and host rules line up.
   if (parsed.protocol === "ws:") {
     parsed.protocol = "http:";
   } else if (parsed.protocol === "wss:") {
@@ -84,6 +91,8 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
 
 function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   const href = proxyUrl.href;
+  // Proxyline's ambient agent only reads env-shaped input. Pin both request
+  // scheme slots to the explicit URL and clear bypass rules for a fixed agent.
   return {
     HTTP_PROXY: href,
     HTTPS_PROXY: href,
@@ -101,6 +110,7 @@ function loadCreateAmbientNodeProxyAgent(): ProxylineCreateAmbientNodeProxyAgent
     .createAmbientNodeProxyAgent;
 }
 
+/** Resolves the env proxy URL that should be used for a specific Node target. */
 export function resolveEnvNodeProxyUrlForTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
@@ -143,9 +153,11 @@ function createFixedNodeProxyAgent(
   return agent as HttpAgent;
 }
 
+/** Creates a Node HTTP(S) agent for explicit proxy URLs; unsupported protocols throw. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "explicit" }>,
 ): HttpAgent;
+/** Creates a Node HTTP(S) agent from env proxy settings, or undefined when bypassed. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "env" }>,
 ): HttpAgent | undefined;
@@ -172,6 +184,7 @@ function createEnvNodeProxyAgentForTarget(
   });
 }
 
+/** Builds paired HTTP and HTTPS agents for libraries that require both slots. */
 export function createFixedNodeProxyAgentPair(proxyUrl: string | URL): {
   httpAgent: HttpAgent;
   httpsAgent: HttpAgent;

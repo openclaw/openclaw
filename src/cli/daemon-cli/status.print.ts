@@ -1,3 +1,4 @@
+// Human and JSON rendering for gathered daemon status diagnostics.
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -17,6 +18,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
+import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -36,6 +38,7 @@ import {
 } from "./status.gather.js";
 
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
+  // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
   if (!command?.environment) {
     return status;
@@ -86,7 +89,7 @@ function formatConnectionLine(
   return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
 }
 
-export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
+export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
     defaultRuntime.writeJson(sanitized);
@@ -324,12 +327,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     rpc?.ok !== true &&
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
-    const container = Boolean(
-      resolveDaemonContainerContext(service.command?.environment ?? process.env),
-    );
+    const serviceEnv = service.command?.environment ?? process.env;
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
-      wsl: isWSLEnv(),
+      wsl: isWSLEnv(serviceEnv),
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
     })) {
@@ -341,6 +343,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingGuiSession) {
+    defaultRuntime.error(
+      errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
+    );
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.runtime?.missingSupervision) {
@@ -449,6 +462,46 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
+    }
+    spacer();
+  }
+
+  const drift = status.pluginVersionDrift;
+  if (drift && drift.drifts.length > 0) {
+    defaultRuntime.log(
+      warnText(
+        `Plugin version drift: ${drift.drifts.length} active official plugin${
+          drift.drifts.length === 1 ? "" : "s"
+        } not on gateway ${drift.gatewayVersion}`,
+      ),
+    );
+    if (opts.deep) {
+      for (const entry of drift.drifts) {
+        const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        defaultRuntime.log(
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+        );
+      }
+      const updateCommands = drift.drifts.map((entry) =>
+        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
+      );
+      if (updateCommands.length === 1) {
+        defaultRuntime.log(
+          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
+        );
+      } else {
+        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
+        for (const command of updateCommands) {
+          defaultRuntime.log(`- ${command}`);
+        }
+        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+      }
+    } else {
+      defaultRuntime.log(
+        infoText(
+          `Run ${formatCliCommand("openclaw gateway status --deep")} for affected plugin ids and fix commands.`,
+        ),
+      );
     }
     spacer();
   }

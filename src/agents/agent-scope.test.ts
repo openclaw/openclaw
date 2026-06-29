@@ -1,11 +1,14 @@
+/** Tests agent scope config, model selection, fallbacks, and workspace resolution. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
+  hasLegacyAutoFallbackWithoutOrigin,
   markAutoFallbackPrimaryProbe,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
@@ -27,10 +30,6 @@ import {
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe("resolveAgentConfig", () => {
   it("should return undefined when no agents config exists", () => {
@@ -679,6 +678,36 @@ describe("resolveAgentConfig", () => {
     ).toBeUndefined();
   });
 
+  it("identifies legacy auto fallback overrides without origin metadata", () => {
+    expect(
+      hasLegacyAutoFallbackWithoutOrigin({
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      }),
+    ).toBe(false);
+    expect(
+      hasLegacyAutoFallbackWithoutOrigin({
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: " ",
+        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      }),
+    ).toBe(true);
+    expect(
+      hasLegacyAutoFallbackWithoutOrigin({
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "anthropic",
+      }),
+    ).toBe(true);
+    expect(
+      hasLegacyAutoFallbackWithoutOrigin({
+        modelOverrideSource: "user",
+      }),
+    ).toBe(false);
+    expect(hasLegacyAutoFallbackWithoutOrigin({})).toBe(false);
+    expect(hasLegacyAutoFallbackWithoutOrigin(undefined)).toBe(false);
+  });
+
   it("recognizes recovered auto fallback provenance without a source marker", () => {
     expect(
       resolveAutoFallbackPrimaryProbe({
@@ -842,7 +871,7 @@ describe("resolveAgentConfig", () => {
           subagents: {
             model: {
               primary: "kimi/kimi-code",
-              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+              fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
             },
           },
         },
@@ -852,7 +881,7 @@ describe("resolveAgentConfig", () => {
             subagents: {
               model: {
                 primary: "kimi/kimi-code",
-                fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
               },
             },
           },
@@ -891,21 +920,21 @@ describe("resolveAgentConfig", () => {
     };
 
     expect(resolveSubagentModelFallbacksOverride(cfg, "research")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
       "google/gemini-3-pro",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(
       resolveSubagentModelFallbacksOverride(cfg, "fallback-only-subagent-model"),
     ).toStrictEqual([]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
@@ -921,7 +950,7 @@ describe("resolveAgentConfig", () => {
           subagents: {
             model: {
               primary: "kimi/kimi-code",
-              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+              fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
             },
           },
         },
@@ -955,7 +984,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
+    ).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
@@ -996,7 +1025,7 @@ describe("resolveAgentConfig", () => {
             subagents: {
               model: {
                 primary: "kimi/kimi-code",
-                fallbacks: ["openai-codex/gpt-5.4"],
+                fallbacks: ["openai/gpt-5.4"],
               },
             },
           },
@@ -1017,7 +1046,7 @@ describe("resolveAgentConfig", () => {
     });
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
       primary: "kimi/kimi-code",
-      fallbacks: ["openai-codex/gpt-5.4"],
+      fallbacks: ["openai/gpt-5.4"],
     });
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -1122,41 +1151,43 @@ describe("resolveAgentConfig", () => {
 
   it("uses OPENCLAW_HOME for default agent workspace", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
-    vi.stubEnv("OPENCLAW_HOME", home);
-
-    const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
-    expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
+    withEnv({ OPENCLAW_HOME: home }, () => {
+      const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+      expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
+    });
   });
 
   it("uses OPENCLAW_WORKSPACE_DIR for default agent workspace", () => {
     const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
-    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaceDir);
-    vi.stubEnv("OPENCLAW_HOME", path.join(path.sep, "srv", "openclaw-home"));
-
-    const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
-    expect(workspace).toBe(path.resolve(workspaceDir));
+    withEnv(
+      {
+        OPENCLAW_WORKSPACE_DIR: workspaceDir,
+        OPENCLAW_HOME: path.join(path.sep, "srv", "openclaw-home"),
+      },
+      () => {
+        const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+        expect(workspace).toBe(path.resolve(workspaceDir));
+      },
+    );
   });
 
   it("uses OPENCLAW_HOME for default agentDir", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
-    vi.stubEnv("OPENCLAW_HOME", home);
-    // Clear state dir so it falls back to OPENCLAW_HOME
-    vi.stubEnv("OPENCLAW_STATE_DIR", "");
-
-    const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
-    expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+    withEnv({ OPENCLAW_HOME: home, OPENCLAW_STATE_DIR: "" }, () => {
+      const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
+      expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+    });
   });
 
   it("resolves default agentDir from the configured default agent", () => {
     const stateDir = path.join(path.sep, "tmp", "test-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main" }, { id: "ops", default: true }],
       },
     };
 
-    const agentDir = resolveDefaultAgentDir(cfg);
+    const agentDir = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => resolveDefaultAgentDir(cfg));
 
     expect(agentDir).toBe(path.resolve(stateDir, "agents", "ops", "agent"));
   });
@@ -1185,13 +1216,14 @@ describe("resolveAgentConfig", () => {
 
   it("non-default agent without defaults.workspace falls back to stateDir", () => {
     const stateDir = path.join(path.sep, "tmp", "test-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main" }, { id: "work", default: true, workspace: "/work-ws" }],
       },
     };
-    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    const workspace = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveAgentWorkspaceDir(cfg, "main"),
+    );
     expect(workspace).toBe(path.resolve(stateDir, "workspace-main"));
   });
 });

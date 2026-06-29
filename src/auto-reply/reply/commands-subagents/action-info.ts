@@ -1,11 +1,12 @@
+// Formats detailed subagent run information for the info action.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionStore } from "../../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { timestampMsToIsoString } from "../../../shared/number-coercion.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
@@ -46,8 +47,13 @@ function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], chi
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
-  const store = loadSessionStore(storePath);
-  return { entry: store[childKey] };
+  return {
+    entry: loadSessionEntry({
+      storePath,
+      sessionKey: childKey,
+      clone: false,
+    }),
+  };
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {

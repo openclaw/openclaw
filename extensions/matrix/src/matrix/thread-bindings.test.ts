@@ -1,3 +1,4 @@
+// Matrix tests cover thread bindings plugin behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,6 +6,7 @@ import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -196,6 +198,8 @@ describe("matrix thread bindings", () => {
       state: {
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("matrix", options),
+        openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateSyncKeyedStoreForTests("matrix", options),
         resolveStateDir: () => stateDir,
       },
     } as PluginRuntime);

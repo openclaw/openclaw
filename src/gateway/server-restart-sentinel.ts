@@ -1,3 +1,5 @@
+// Gateway restart sentinel recovery.
+// Resumes pending restart continuations and outbound delivery after process restart.
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -10,19 +12,18 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -45,7 +46,6 @@ import {
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -68,7 +68,7 @@ function cloneRestartSentinelPayload(
   if (!payload) {
     return null;
   }
-  return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+  return structuredClone(payload);
 }
 
 function hasRoutableDeliveryContext(context?: {
@@ -278,8 +278,12 @@ async function deliverQueuedSessionDelivery(params: {
   let dispatchError: unknown;
   const ctxPayload = finalizeInboundContext(
     {
+      // The per-message timestamp prefix is applied at the single LLM boundary
+      // (normalizeMessagesForLlmBoundary) from each message's own timestamp, so
+      // the current turn and historical turns carry identical bytes on the wire.
+      // See: https://github.com/openclaw/openclaw/issues/3658
       Body: userMessage,
-      BodyForAgent: injectTimestamp(userMessage, timestampOptsFromConfig(cfg)),
+      BodyForAgent: userMessage,
       BodyForCommands: "",
       RawBody: userMessage,
       CommandBody: "",
@@ -348,7 +352,7 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
-    throw dispatchError;
+    throw toErrorObject(dispatchError, "Non-Error thrown");
   }
 }
 
@@ -444,8 +448,10 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
-  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
+  if (payload.kind === "update") {
+    recordLatestUpdateRestartSentinel(payload);
+  }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
@@ -486,7 +492,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await removeRestartSentinelFile(sentinelPath);
+      await clearRestartSentinel();
       return { status: "ran" as const };
     }
 
@@ -580,7 +586,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -638,13 +644,17 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
-export function shouldWakeFromRestartSentinel() {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
-}
-
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
+  const current = await readRestartSentinel();
+  if (
+    current?.payload.kind === "update" &&
+    isPendingControlPlaneUpdateRestartSentinel(current.payload)
+  ) {
+    latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
+    return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  }
   const finalized = await finalizeUpdateRestartSentinelRunningVersion();
-  const sentinel = finalized ?? (await readRestartSentinel());
+  const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
   }

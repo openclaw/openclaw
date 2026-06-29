@@ -1,3 +1,6 @@
+/**
+ * BytePlus Seedance video generation provider implementation.
+ */
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,6 +11,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -52,16 +56,13 @@ type BytePlusTaskResponse = {
 
 type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
 
-async function readBytePlusJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readBytePlusJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // BytePlus submit/poll task bodies are read through the shared byte-bounded reader
+  // (readResponseWithLimit, via readProviderJsonResponse) so a hostile or buggy endpoint
+  // that streams an unbounded JSON body cannot force the runtime to buffer the whole
+  // payload before parsing. Overflow cancels the stream and throws a bounded error;
+  // malformed JSON keeps the existing `${label}: malformed JSON response` wrapping.
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }
@@ -193,8 +194,6 @@ async function pollBytePlusTask(params: {
         throw new Error(
           readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
-      case "queued":
-      case "running":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
@@ -229,6 +228,7 @@ async function downloadBytePlusVideo(params: {
   };
 }
 
+/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",

@@ -1,3 +1,4 @@
+// Covers user-facing formatting and sanitization of assistant/provider errors.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -5,6 +6,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
@@ -18,16 +20,18 @@ describe("formatAssistantErrorText", () => {
       errorMessage,
       content: [{ type: "text", text: errorMessage }],
     });
+  const authInvalidTokenCopy =
+    "Authentication failed (provider returned HTTP 401). " +
+    "Your provider token may have expired — try the request again in a moment. " +
+    "If the failure persists, re-authenticate this provider.";
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
   it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
-    // This is the new Anthropic error format that wasn't being detected.
-    // Without the fix, this falls through to the invalidRequest regex and returns
-    // "LLM request rejected: Request size exceeds model context window"
-    // instead of the context overflow message, preventing auto-compaction.
+    // This Anthropic shape must map to context overflow so auto-compaction can
+    // trigger instead of treating it as a generic schema rejection.
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
     );
@@ -112,6 +116,17 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("uses generic user-facing copy for escaped structured provider messages", () => {
+    // The internal formatter keeps detail for logs, while user-facing text must
+    // not expose arbitrary provider-controlled structured payload content.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
       'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',
@@ -163,6 +178,8 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
   it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
+    // Some providers report billing exhaustion as 429; billing copy should win
+    // when the payload carries high-confidence credit language.
     const msg = makeAssistantError(
       '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
     );
@@ -228,9 +245,24 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
+  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
+    const msg = makeAssistantError(
+      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    });
+    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
+  });
+  it("keeps plain HTTP rate-limit guidance user-facing", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
   });
 
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
@@ -250,6 +282,7 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
     expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
   it("returns generic rate limit message when no specific details are present", () => {
@@ -340,7 +373,7 @@ describe("formatAssistantErrorText", () => {
 
   it("returns an explicit re-authentication message for OAuth refresh failures", () => {
     const msg = makeAssistantError(
-      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
@@ -365,46 +398,46 @@ describe("formatAssistantErrorText", () => {
 
   it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
     const msg = makeAssistantError(
-      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 
-  it("returns a missing-scope message for OpenAI Codex scope failures", () => {
+  it("returns a missing-scope message for OpenAI ChatGPT scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
-      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
+      "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
     );
   });
 
-  it("returns a missing-scope message for raw OpenAI Codex scope payloads without an HTTP prefix", () => {
+  it("returns a missing-scope message for raw OpenAI ChatGPT scope payloads without an HTTP prefix", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
-      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
+      "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
     );
   });
 
-  it("does not misdiagnose non-Codex permission errors as missing-scope failures", () => {
+  it("does not misdiagnose other provider permission errors as OpenAI scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
-      "required OpenAI Codex scopes",
+    expect(formatAssistantErrorText(msg, { provider: "anthropic" })).not.toContain(
+      "required OpenAI ChatGPT scopes",
     );
   });
 
-  it("does not misdiagnose generic Codex permission failures as missing-scope failures", () => {
+  it("does not misdiagnose generic OpenAI permission failures as missing-scope failures", () => {
     const msg = makeAssistantError(
       '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
-      "required OpenAI Codex scopes",
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
+      "required OpenAI ChatGPT scopes",
     );
   });
 
@@ -420,6 +453,64 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
     );
+  });
+
+  it("sanitizes raw HTTP 401 / Invalid token errors into a re-auth hint (#56197)", () => {
+    const reportedPayload = makeAssistantError('HTTP 401: "Invalid token"');
+    const friendly = formatAssistantErrorText(reportedPayload);
+    expect(friendly).toBe(authInvalidTokenCopy);
+    expect(friendly).not.toContain("Invalid token");
+  });
+
+  it("sanitizes Unauthorized / token-expired variants under HTTP 401", () => {
+    const variants = [
+      "401 Unauthorized",
+      "HTTP 401 Unauthorized: token expired",
+      "HTTP 401: Incorrect API key provided",
+      'status code: 401, message: "expired token"',
+      '401 {"type":"error","error":{"type":"permission_error","message":"Invalid token"}}',
+    ];
+    for (const raw of variants) {
+      const friendly = formatAssistantErrorText(makeAssistantError(raw));
+      expect(friendly, raw).toBe(authInvalidTokenCopy);
+    }
+  });
+
+  it("does not collapse 401 billing / permanent-auth errors into the generic re-auth hint", () => {
+    const billing = makeAssistantError(
+      '{"error":{"code":401,"message":"Key limit exceeded","metadata":{"raw":"insufficient credits"}}}',
+    );
+    const billingFriendly = formatAssistantErrorText(billing);
+    expect(billingFriendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not claim HTTP 401 for plain 403 errors that fall through to the generic auth reason (#77394 review)", () => {
+    const plain403 = makeAssistantError("403 Forbidden");
+    const friendly = formatAssistantErrorText(plain403);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not claim HTTP 401 for message-only auth errors with no HTTP status prefix (#77394 review)", () => {
+    const messageOnly = makeAssistantError('{"error":{"code":"invalid_api_key"}}');
+    const friendly = formatAssistantErrorText(messageOnly);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+  });
+
+  it("does not rewrite provider-less missing-scope 401 payloads as invalid-token errors", () => {
+    const raw =
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}';
+    const missingScope = makeAssistantMessageFixture({
+      provider: undefined,
+      errorMessage: raw,
+      content: [{ type: "text", text: raw }],
+    });
+    const friendly = formatAssistantErrorText(missingScope);
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+    expect(friendly).toContain("permission_error");
   });
 
   it("returns a proxy-specific message for proxy misroutes", () => {
@@ -475,6 +566,26 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+
+  it("uses structured error body detail for model-not-found copy", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
     );
   });
 });
@@ -539,6 +650,33 @@ describe("formatRawAssistantErrorForUi", () => {
       "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
+
+  it("truncates fallback raw error text on UTF-16 code-point boundary without dangling surrogates", () => {
+    // 601 UTF-16 code units: emoji (surrogate pair) straddles the 600-unit truncation boundary
+    const prefix = "x".repeat(599);
+    const emoji = "🎉"; // U+1F389 — high surrogate 0xD83C + low surrogate 0xDF89
+    const raw = prefix + emoji; // 601 code units total
+
+    const result = formatRawAssistantErrorForUi(raw);
+
+    // Result must end with "…" after truncation
+    expect(result).toMatch(/…$/);
+
+    // Verify the truncated portion contains no dangling surrogates
+    for (let i = 0; i < result.length - 1; i++) {
+      const codeUnit = result.charCodeAt(i);
+      // High surrogate (0xD800-0xDBFF) must be followed by a low surrogate
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = result.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+      }
+      // Low surrogate (0xDC00-0xDFFF) must be preceded by a high surrogate
+      if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        const prev = i > 0 ? result.charCodeAt(i - 1) : -1;
+        expect(prev >= 0xd800 && prev <= 0xdbff).toBe(true);
+      }
+    }
+  });
 });
 
 describe("raw API error payload helpers", () => {
@@ -559,6 +697,38 @@ describe("raw API error payload helpers", () => {
     expect(formatRawAssistantErrorForUi(raw)).toBe(
       "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
     );
+  });
+});
+
+describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
+  // OAuth/Max users should NOT see "API key" or "top up" language.
+  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
+  });
+
+  it("returns neutral copy for token authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+  });
+
+  it("REGRESSION: api_key authMode still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "api_key");
+    expect(result).toMatch(/api key/i);
+    expect(result).toMatch(/top up/i);
+  });
+
+  it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
+    expect(result).toMatch(/api key/i);
+  });
+
+  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
+    const result = formatBillingErrorMessage();
+    expect(result).toMatch(/api key/i);
   });
 });
 

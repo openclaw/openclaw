@@ -16,7 +16,6 @@ struct OpenClawApp: App {
     private let gatewayManager = GatewayProcessManager.shared
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
-    private let connectivityCoordinator = GatewayConnectivityCoordinator.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
@@ -34,6 +33,7 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
+        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
@@ -55,6 +55,13 @@ struct OpenClawApp: App {
                 .background(SettingsWindowOpenRegistrar())
         }
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
+            // SwiftUI can vend a replacement status item during connection churn.
+            // Keep ownership to one item so stale menu bar icons are removed.
+            if let currentStatusItem = self.statusItem {
+                guard currentStatusItem !== item else { return }
+                Self.logger.warning("Replacing stale menu bar status item")
+                NSStatusBar.system.removeStatusItem(currentStatusItem)
+            }
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -267,8 +274,10 @@ private struct SettingsWindowOpenRegistrar: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
@@ -306,7 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func openDashboardFromDockMenu(_: Any?) {
-        AppNavigationActions.openDashboard()
+        self.openDashboardAction()
     }
 
     @objc
@@ -332,9 +341,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if flag {
+            return true
+        }
+        self.openDashboardAction()
+        return false
+    }
+
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {
+            NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return
         }

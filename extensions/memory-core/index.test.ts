@@ -1,4 +1,6 @@
+// Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +87,21 @@ describe("buildPromptSection", () => {
 describe("memory-core plugin runtime registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("registers the dreaming runtime slash command", () => {
+    let command: OpenClawPluginCommandDefinition | undefined;
+    plugin.register(
+      createTestPluginApi({
+        registerCommand(definition) {
+          command = definition;
+        },
+      }),
+    );
+
+    expect(command?.name).toBe("dreaming");
+    expect(command?.acceptsArgs).toBe(true);
+    expect(command?.description).toContain("Enable or disable");
   });
 
   it("wires scoped memory search cleanup through the lazy runtime", async () => {

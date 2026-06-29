@@ -1,5 +1,7 @@
+// Msteams plugin module implements presentation behavior.
 import {
   adaptMessagePresentationForChannel,
+  resolveMessagePresentationControlValue,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -74,11 +76,12 @@ export function buildMSTeamsPresentationCard(params: {
           });
           continue;
         }
-        if (button.value) {
+        const value = resolveMessagePresentationControlValue(button);
+        if (value) {
           actions.push({
             type: "Action.Submit",
             title: button.label,
-            data: { value: button.value, label: button.label },
+            data: button.action?.type === "command" ? value : { value, label: button.label },
           });
         }
       }

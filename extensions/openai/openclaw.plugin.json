@@ -8,16 +8,14 @@
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
-  "providerAuthAliases": {
-    "openai-codex": "openai"
-  },
   "providerEndpoints": [
     {
       "endpointClass": "openai-public",
-      "hosts": ["api.openai.com"]
+      "hosts": ["api.openai.com"],
+      "hostSuffixes": [".api.openai.com"]
     },
     {
-      "endpointClass": "openai-codex",
+      "endpointClass": "openai",
       "hosts": ["chatgpt.com"]
     },
     {
@@ -211,18 +209,21 @@
       }
     },
     "discovery": {
-      "openai": "static"
+      "openai": "runtime"
     },
     "suppressions": [
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use openai/gpt-5.5."
+        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+        "when": {
+          "baseUrlHosts": ["api.openai.com"]
+        }
       },
       {
         "provider": "azure-openai-responses",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use openai/gpt-5.5."
+        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; Azure/OpenAI API-key auth cannot use this model."
       }
     ]
   },
@@ -239,7 +240,6 @@
       "provider": "openai",
       "method": "oauth",
       "choiceId": "openai",
-      "deprecatedChoiceIds": ["openai-codex", "codex-cli", "openai-codex-import"],
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
       "assistantPriority": -40,
@@ -252,7 +252,6 @@
       "provider": "openai",
       "method": "device-code",
       "choiceId": "openai-device-code",
-      "deprecatedChoiceIds": ["openai-codex-device-code"],
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
@@ -265,7 +264,6 @@
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
-      "deprecatedChoiceIds": ["openai-codex-api-key"],
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
       "assistantPriority": 5,

@@ -1,3 +1,4 @@
+// Shares web provider runtime helpers across plugin-owned providers.
 import { withActivatedPluginIds } from "./activation-context.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
@@ -11,6 +12,7 @@ import {
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 
+/** Shared options for resolving plugin-backed web providers. */
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -20,6 +22,7 @@ export type ResolvePluginWebProvidersParams = {
   cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
 };
 
 type ResolveWebProviderRuntimeDeps<TEntry> = {
@@ -38,6 +41,7 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     env?: PluginLoadOptions["env"];
     onlyPluginIds?: readonly string[];
     origin?: PluginManifestRecord["origin"];
+    sandboxed?: boolean;
   }) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
@@ -75,7 +79,8 @@ function resolveWebProviderRuntimeContext<TEntry>(
   const shouldFilterProviders =
     params.config !== undefined ||
     params.onlyPluginIds !== undefined ||
-    params.origin !== undefined;
+    params.origin !== undefined ||
+    params.sandboxed === true;
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
@@ -89,6 +94,7 @@ function resolveWebProviderRuntimeContext<TEntry>(
       env,
       onlyPluginIds: params.onlyPluginIds,
       origin: params.origin,
+      sandboxed: params.sandboxed,
     }),
   );
   return {
@@ -144,6 +150,7 @@ function resolveRuntimeRegistryWebProviders<TEntry>(params: {
   };
 }
 
+/** Resolves plugin web providers from setup, active runtime, or a scoped load. */
 export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
@@ -158,6 +165,7 @@ export function resolvePluginWebProviders<TEntry>(
         env,
         onlyPluginIds: params.onlyPluginIds,
         origin: params.origin,
+        sandboxed: params.sandboxed,
       }) ?? [];
     if (pluginIds.length === 0) {
       return [];
@@ -236,6 +244,7 @@ export function resolvePluginWebProviders<TEntry>(
   });
 }
 
+/** Resolves web providers from the active runtime registry before falling back to plugin loading. */
 export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,

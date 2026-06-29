@@ -1,3 +1,4 @@
+// Discord plugin module implements message handlerm preflight behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
@@ -22,6 +23,10 @@ async function loadConversationRuntime() {
 async function loadDiscordSendRuntime() {
   discordSendRuntimePromise ??= import("../send.js");
   return await discordSendRuntimePromise;
+}
+
+function resolveDiscordDmPairingSenderId(sender: DiscordSenderIdentity): string {
+  return sender.isPluralKit ? `pk:${sender.id}` : sender.id;
 }
 
 export async function resolveDiscordDmPreflightAccess(params: {
@@ -79,10 +84,15 @@ export async function resolveDiscordDmPreflightAccess(params: {
   await handleDiscordDmCommandDecision({
     senderAccess: dmAccess.senderAccess,
     accountId: params.resolvedAccountId,
+    // Use the resolved sender identity (e.g. PluralKit member UUID) here so
+    // the pairing record is keyed under the same stableId that
+    // resolveDiscordDmCommandAccess / createDiscordDmIngressSubject use on
+    // subsequent inbound messages. Previously this used the raw gateway
+    // author id, which only matched non-PK users.
     sender: {
-      id: params.author.id,
-      tag: formatDiscordUserTag(params.author),
-      name: params.author.username ?? undefined,
+      id: resolveDiscordDmPairingSenderId(params.sender),
+      tag: params.sender.tag ?? formatDiscordUserTag(params.author),
+      name: params.sender.name ?? params.author.username ?? undefined,
     },
     onPairingCreated: async (code) => {
       logVerbose(

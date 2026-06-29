@@ -1,3 +1,5 @@
+// Number parsing facade for legacy infra imports; implementation lives in
+// normalization-core so config, timers, and CLI parsing share one contract.
 export {
   parseFiniteNumber,
   parseStrictFiniteNumber,
@@ -13,4 +15,4 @@ export {
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";

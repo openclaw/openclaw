@@ -1,3 +1,4 @@
+// Session store pruning integration tests cover filesystem-backed pruning.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,7 +22,6 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
-  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -33,10 +33,16 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   mode: "enforce" as const,
   pruneAfterMs: 7 * DAY_MS,
   maxEntries: 500,
+  modelRunPruneAfterMs: DAY_MS,
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
 };
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
@@ -46,8 +52,8 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyEnforcedMaintenanceConfig(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -58,8 +64,8 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
-function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.fn>) {
+  mockLoadConfigLocal.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -126,6 +132,126 @@ describe("Integration: saveSessionStore with pruning", () => {
     } else {
       process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
+  });
+
+  it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const normalRecent = "agent:main:explicit:normal-recent";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+      [normalRecent]: makeEntry(now - 2 * DAY_MS),
+    };
+
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        pruneAfterMs: 30 * DAY_MS,
+        maxEntries: 2,
+      },
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
+    expect(loaded).toHaveProperty(normalRecent);
+  });
+
+  it("sessions cleanup dry-run and apply report stale model-run probe pruning", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174010";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174011";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const cfg = { session: { store: storePath } };
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+    const defaultDryRun = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(defaultDryRun.previewResults[0]?.summary.modelRunPruned).toBe(0);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 1,
+        },
+      },
+    });
+    const dryRun = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.modelRunPruned).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    const applied = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: false, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.modelRunPruned).toBe(1);
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
+  });
+
+  it("saveSessionStore pressure-gates unset default model-run pruning", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174020";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174021";
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+    await saveSessionStore(storePath, {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+    });
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 1,
+        },
+      },
+    });
+    await saveSessionStore(storePath, loadSessionStore(storePath, { skipCache: true }));
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
@@ -452,6 +578,222 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(userOnlyPresentTranscript);
   });
 
+  it("sessions cleanup repairs stale generated sessionFile metadata before pruning", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const staleTranscript = path.join(testDir, "22222222-2222-4222-8222-222222222222.jsonl");
+    const canonicalTranscript = path.join(testDir, `${sessionId}.jsonl`);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:cron:job:run:fresh": {
+            sessionId,
+            updatedAt: now,
+            sessionFile: staleTranscript,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      canonicalTranscript,
+      '{"type":"session","id":"11111111-1111-4111-8111-111111111111","cwd":"/tmp"}\n{"type":"message","message":{"role":"user","content":"still valid"}}\n',
+      "utf-8",
+    );
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.repaired).toBe(1);
+    expect(preview?.summary.missing).toBe(0);
+    expect(preview?.summary.beforeCount).toBe(1);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.summary.wouldMutate).toBe(true);
+    expect(preview?.repairedKeys.has("agent:main:cron:job:run:fresh")).toBe(true);
+    expect(preview?.missingKeys.size).toBe(0);
+    expect(
+      loadSessionStore(storePath, { skipCache: true })["agent:main:cron:job:run:fresh"]
+        ?.sessionFile,
+    ).toBe(staleTranscript);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.repaired).toBe(1);
+    expect(applied.appliedSummaries[0]?.missing).toBe(0);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
+    expect(applied.appliedSummaries[0]?.wouldMutate).toBe(true);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted["agent:main:cron:job:run:fresh"]?.sessionFile).toBe(canonicalTranscript);
+    await expectPathExists(canonicalTranscript);
+  });
+
+  it("sessions cleanup repairs stale generated metadata even when the stale transcript exists", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const oldDate = new Date(now - 10 * DAY_MS);
+    const sessionKey = "agent:main:cron:job:run:fresh";
+    const sessionId = "55555555-5555-4555-8555-555555555555";
+    const staleTranscript = path.join(testDir, "66666666-6666-4666-8666-666666666666.jsonl");
+    const canonicalTranscript = path.join(testDir, `${sessionId}.jsonl`);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: now,
+            sessionFile: staleTranscript,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      staleTranscript,
+      '{"type":"session","id":"66666666-6666-4666-8666-666666666666","cwd":"/tmp"}\n{"type":"message","message":{"role":"user","content":"old transcript"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      canonicalTranscript,
+      '{"type":"session","id":"55555555-5555-4555-8555-555555555555","cwd":"/tmp"}\n{"type":"message","message":{"role":"user","content":"current transcript"}}\n',
+      "utf-8",
+    );
+    await fs.utimes(staleTranscript, oldDate, oldDate);
+    await fs.utimes(canonicalTranscript, oldDate, oldDate);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.repaired).toBe(1);
+    expect(applied.appliedSummaries[0]?.missing).toBe(0);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.sessionFile).toBe(canonicalTranscript);
+    await expectPathExists(canonicalTranscript);
+  });
+
+  it("sessions cleanup does not clobber concurrent sessionFile updates while repairing", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job:run:fresh";
+    const sessionId = "33333333-3333-4333-8333-333333333333";
+    const staleTranscript = path.join(testDir, "44444444-4444-4444-8444-444444444444.jsonl");
+    const canonicalTranscript = path.join(testDir, `${sessionId}.jsonl`);
+    const concurrentTranscript = path.join(testDir, "concurrent-cron-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: now,
+            sessionFile: staleTranscript,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      canonicalTranscript,
+      '{"type":"session","id":"33333333-3333-4333-8333-333333333333","cwd":"/tmp"}\n{"type":"message","message":{"role":"user","content":"still valid"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      concurrentTranscript,
+      '{"type":"session","id":"33333333-3333-4333-8333-333333333333","cwd":"/tmp"}\n{"type":"message","message":{"role":"assistant","content":"newer write"}}\n',
+      "utf-8",
+    );
+
+    const staleEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(staleEntry?.sessionFile).toBe(staleTranscript);
+    await updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        sessionFile: concurrentTranscript,
+        updatedAt: now + 1,
+      };
+    });
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.repaired).toBe(0);
+    expect(applied.appliedSummaries[0]?.missing).toBe(0);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.sessionFile).toBe(concurrentTranscript);
+    expect(persisted[sessionKey]?.updatedAt).toBe(now + 1);
+  });
+
+  it("sessions cleanup does not repair missing topic transcripts to the base transcript", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const sessionKey = "agent:main:telegram:thread:topic";
+    const sessionId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+    const missingTopicTranscript = path.join(testDir, `${sessionId}-topic-456.jsonl`);
+    const baseTranscript = path.join(testDir, `${sessionId}.jsonl`);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: now,
+            sessionFile: missingTopicTranscript,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      baseTranscript,
+      '{"type":"session","id":"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa","cwd":"/tmp"}\n{"type":"message","message":{"role":"user","content":"base conversation"}}\n',
+      "utf-8",
+    );
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(1);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(0);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]).toBeUndefined();
+    await expectPathExists(baseTranscript);
+  });
+
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
@@ -471,6 +813,10 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+          "agent:main:telegram::direct:malformed": {
+            sessionId: "malformed-session",
+            updatedAt: now,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -488,8 +834,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.dmScopeRetired).toBe(1);
-    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.summary.afterCount).toBe(2);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram::direct:malformed")).toBe(false);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(directTranscript);
   });
@@ -499,6 +846,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const directTranscript = path.join(testDir, "direct-session.jsonl");
+    const nestedTranscript = path.join(testDir, "nested-agent-session.jsonl");
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -514,6 +862,11 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+          "agent:main:agent:direct:customer": {
+            sessionId: "nested-agent-session",
+            updatedAt: now,
+            sessionFile: nestedTranscript,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -522,6 +875,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
+    await fs.writeFile(nestedTranscript, "nested", "utf-8");
 
     const applied = await runSessionsCleanup({
       cfg: { session: { dmScope: "main" } },
@@ -532,8 +886,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted).toHaveProperty("agent:main:main");
+    expect(persisted).toHaveProperty("agent:main:agent:direct:customer");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
     await expectPathMissing(directTranscript);
+    await expectPathExists(nestedTranscript);
     const files = await fs.readdir(testDir);
     const archivedDirectTranscripts = files.filter((name) =>
       name.startsWith("direct-session.jsonl.deleted."),
@@ -678,7 +1034,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     const freshReset = path.join(
       testDir,
-      `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - DAY_MS)}`,
     );
     await fs.writeFile(oldReset, "old", "utf-8");
     await fs.writeFile(freshReset, "fresh", "utf-8");
@@ -884,57 +1240,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     } finally {
       unregister();
     }
-  });
-
-  it("persists quota suspension TTL transitions through writer maintenance", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      suspended: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 30_000,
-          expectedResumeBy: now - 1,
-          state: "suspended",
-          reason: "quota_exhausted",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-      active: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 61_000,
-          expectedResumeBy: now - 31_000,
-          state: "active",
-          reason: "circuit_open",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-    };
-    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
-
-    const result = await runQuotaSuspensionMaintenance({
-      storePath,
-      now,
-      ttlMs: 30_000,
-      log: false,
-    });
-
-    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
-    const loaded = loadSessionStore(storePath, { skipCache: true });
-    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(loaded.active?.quotaSuspension).toBeUndefined();
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
@@ -1193,10 +1498,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
-    await saveSessionStore(
-      storePath,
-      JSON.parse(JSON.stringify(store)) as Record<string, SessionEntry>,
-    );
+    await saveSessionStore(storePath, jsonRoundTrip(store));
 
     const files = await fs.readdir(testDir);
     const backups = files.filter((file) => file.startsWith("sessions.json.bak."));

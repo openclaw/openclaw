@@ -80,14 +80,17 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "tts",
     "gateway",
     "agents_list",
@@ -95,7 +98,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -119,7 +121,9 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -223,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40943,
-    "roughTokens": 10236
+    "chars": 50616,
+    "roughTokens": 12654
   },
   "openClawDeveloperInstructions": {
     "chars": 1964,
@@ -235,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6544
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67121,
-    "roughTokens": 16781
+    "chars": 76794,
+    "roughTokens": 19199
   },
   "userInputText": {
     "chars": 1129,
@@ -539,9 +543,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "tts",
   "gateway",
   "agents_list",
@@ -549,7 +554,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -580,19 +584,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each entry uses media.",
           "items": {
             "properties": {
-              "filePath": {
-                "type": "string"
-              },
-              "fileUrl": {
-                "type": "string"
-              },
               "media": {
-                "type": "string"
-              },
-              "mediaUrl": {
                 "type": "string"
               },
               "mimeType": {
@@ -601,14 +596,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
               "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
               "type": {
                 "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              },
-              "url": {
                 "type": "string"
               }
             },
@@ -643,9 +632,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "filename": {
           "type": "string"
         },
-        "filePath": {
-          "type": "string"
-        },
         "forceDocument": {
           "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
@@ -667,9 +653,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "mimeType": {
-          "type": "string"
-        },
-        "path": {
           "type": "string"
         },
         "quoteText": {
@@ -704,7 +687,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   }
 ]
 ```

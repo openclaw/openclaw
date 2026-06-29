@@ -1,3 +1,4 @@
+// Slack plugin module implements interactions.block actions behavior.
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
@@ -20,6 +21,7 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -172,7 +174,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const max = 120;
-  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+  return joined.length <= max ? joined : truncateSlackText(joined, max);
 }
 
 function readInteractionAction(raw: unknown) {

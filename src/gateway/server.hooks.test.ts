@@ -1,3 +1,5 @@
+// Server hooks tests cover HTTP hook auth, payload normalization, dedupe,
+// session targeting, system events, and cron-isolated hook dispatch.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -49,14 +51,14 @@ function buildHookJsonHeaders(options?: {
 
 async function postHook(
   port: number,
-  path: string,
+  pathLocal: string,
   body: Record<string, unknown> | string,
   options?: {
     token?: string | null;
     headers?: Record<string, string>;
   },
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}${path}`, {
+  return fetch(`http://127.0.0.1:${port}${pathLocal}`, {
     method: "POST",
     headers: buildHookJsonHeaders(options),
     body: typeof body === "string" ? body : JSON.stringify(body),

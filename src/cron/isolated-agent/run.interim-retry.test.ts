@@ -1,8 +1,7 @@
+// Interim retry tests cover retry behavior for incomplete isolated cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
@@ -46,7 +45,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   const runTurnAndExpectOk = async (expectedFallbackCalls: number, expectedAgentCalls: number) => {
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(expectedFallbackCalls);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(expectedAgentCalls);
@@ -119,7 +118,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     });
 
     mockRunCronFallbackPassthrough();
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
@@ -152,7 +151,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     });
 
     mockRunCronFallbackPassthrough();
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");

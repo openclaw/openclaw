@@ -1,3 +1,4 @@
+/** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
@@ -66,7 +67,7 @@ function createManifestPlugin(id: string): PluginManifestRecord {
 
 function createManifestPluginWithModelCatalog(
   id: string,
-  discovery: "static" | "runtime" = "static",
+  discovery: "static" | "refreshable" | "runtime" = "static",
 ): PluginManifestRecord {
   return {
     ...createManifestPluginWithoutDiscovery({ id }),
@@ -260,6 +261,38 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       [],
     );
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize manifest entry providers for refreshable catalogs", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
+      [],
+    );
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("loads the full plugin for refreshable manifest catalog rows", () => {
+    const refreshableProvider = createProvider({ id: "token-plan", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.resolvePluginProviders.mockReturnValue([refreshableProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toStrictEqual([refreshableProvider]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["token-plan"]);
   });
 
   it("loads the full plugin when one manifest catalog provider is runtime-owned", () => {
@@ -685,6 +718,25 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
 
     const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers).toStrictEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("can omit manifest model catalogs from static discovery entries", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("openai")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeManifestModelCatalogProviders: false,
+    });
 
     expect(providers).toStrictEqual([]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();

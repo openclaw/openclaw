@@ -1,17 +1,38 @@
+// MCP loopback HTTP request helpers.
+// Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
+const MCP_HTTP_BODY_TOO_LARGE_CODE = "ETOOBIG";
+const MCP_HTTP_BODY_TIMEOUT_CODE = "ETIMEDOUT";
+const MCP_HTTP_BODY_CLOSED_CODE = "ECONNRESET";
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
 
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
@@ -29,13 +50,16 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 type McpRequestContext = {
   sessionKey: string;
+  sessionId: string | undefined;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
 
@@ -54,6 +78,11 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -79,11 +108,26 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function resolveMcpSender(params: {
+  req: IncomingMessage;
+  ownerToken: string;
+  nonOwnerToken: string;
+}): { senderIsOwner: boolean } | undefined {
+  const authHeader = getHeader(params.req, "authorization") ?? "";
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+    return undefined;
+  }
+  return { senderIsOwner: ownerTokenMatched };
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
+  onSseResponse?: (res: ServerResponse) => void;
 }): { senderIsOwner: boolean } | null {
   let url: URL;
   try {
@@ -112,13 +156,55 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  if (params.req.method === "GET" || params.req.method === "DELETE") {
+    // Origin validation first (matches the POST path): a browser loopback request is
+    // rejected before bearer auth, so the local-loopback Origin boundary holds even for
+    // unauthenticated browser requests.
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
+    const sender = resolveMcpSender(params);
+    if (!sender) {
+      params.res.writeHead(401, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "unauthorized" }));
+      return null;
+    }
+    if (params.req.method === "GET") {
+      logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
+      params.res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      params.res.flushHeaders();
+      params.res.write(":\n\n");
+      params.onSseResponse?.(params.res);
+      params.req.on("close", () => {
+        if (!params.res.writableEnded) {
+          params.res.end();
+        }
+      });
+      return null;
+    }
+
+    // Streamable HTTP session teardown. The loopback server is stateless — it owns no
+    // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
+    // send DELETE when closing the transport get a clean 200 rather than a 405.
+    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
+    params.res.writeHead(200, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify({ ok: true }));
+    return null;
+  }
+
   if (params.req.method !== "POST") {
     logMcpLoopbackHttp("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "POST" });
+    params.res.writeHead(405, { Allow: "GET, POST, DELETE" });
     params.res.end();
     return null;
   }
@@ -134,15 +220,12 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const sender = resolveMcpSender(params);
+  if (!sender) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
-      hasAuthorization: authHeader.length > 0,
+      hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
     });
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
@@ -161,25 +244,114 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return { senderIsOwner: sender.senderIsOwner };
 }
 
-export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
+export async function readMcpHttpBody(
+  req: IncomingMessage,
+  options: { maxBytes?: number; timeoutMs?: number } = {},
+): Promise<string> {
   return await new Promise((resolve, reject) => {
+    const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? MAX_MCP_BODY_BYTES));
+    const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS));
     const chunks: Buffer[] = [];
     let received = 0;
-    req.on("data", (chunk: Buffer) => {
+    let settled = false;
+    // Remove listeners on every terminal path; oversized bodies keep the error
+    // listener briefly so Node can deliver the pause/error safely.
+    const cleanup = (cleanupOptions?: { keepErrorListener?: boolean }) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("close", onClose);
+      if (cleanupOptions?.keepErrorListener !== true) {
+        req.off("error", onError);
+      }
+      clearTimeout(timeout);
+    };
+    const rejectOnce = (error: Error, rejectOptions?: { keepErrorListener?: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(rejectOptions);
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
       received += chunk.length;
-      if (received > MAX_MCP_BODY_BYTES) {
-        req.destroy();
-        reject(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`));
+      if (received > maxBytes) {
+        req.pause();
+        rejectOnce(createMcpHttpBodyTooLargeError(maxBytes), { keepErrorListener: true });
         return;
       }
       chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+    };
+    const onEnd = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    };
+    const onError = (error: Error) => {
+      rejectOnce(error);
+    };
+    const onClose = () => {
+      rejectOnce(createMcpHttpBodyClosedError());
+    };
+    const timeout = setTimeout(() => {
+      req.pause();
+      rejectOnce(createMcpHttpBodyTimeoutError(), { keepErrorListener: true });
+    }, timeoutMs);
+    timeout.unref?.();
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("close", onClose);
+    req.on("error", onError);
   });
+}
+
+function createMcpHttpBodyTooLargeError(maxBytes: number): Error & { code: string } {
+  return Object.assign(new Error(`Request body exceeds ${maxBytes} bytes`), {
+    code: MCP_HTTP_BODY_TOO_LARGE_CODE,
+  });
+}
+
+function createMcpHttpBodyTimeoutError(): Error & { code: string } {
+  return Object.assign(new Error("Request body timed out"), {
+    code: MCP_HTTP_BODY_TIMEOUT_CODE,
+  });
+}
+
+function createMcpHttpBodyClosedError(): Error & { code: string } {
+  return Object.assign(new Error("Request body connection closed"), {
+    code: MCP_HTTP_BODY_CLOSED_CODE,
+  });
+}
+
+export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === MCP_HTTP_BODY_TOO_LARGE_CODE
+  );
+}
+
+export function isMcpHttpBodyTimeoutError(error: unknown): error is Error & { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === MCP_HTTP_BODY_TIMEOUT_CODE
+  );
+}
+
+export function resolveMcpHttpBodyTimeoutMs(): number {
+  return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
+}
+
+export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
 }
 
 export function resolveMcpRequestContext(
@@ -189,15 +361,22 @@ export function resolveMcpRequestContext(
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    currentInboundAudio: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-current-inbound-audio"),
+    ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    requireExplicitMessageTarget: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-require-explicit-message-target"),
     ),
     senderIsOwner: auth.senderIsOwner,
   };

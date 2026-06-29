@@ -1,3 +1,4 @@
+// Msteams plugin module implements message handler behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
@@ -19,6 +20,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -326,7 +328,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching,
       });
       if (senderAccess.decision === "pairing") {
-        conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+        conversationStore.upsert(conversationId, conversationRef).catch((err: unknown) => {
           log.debug?.("failed to save conversation reference", {
             error: formatUnknownError(err),
           });
@@ -433,7 +435,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+    conversationStore.upsert(conversationId, conversationRef).catch((err: unknown) => {
       log.debug?.("failed to save conversation reference", {
         error: formatUnknownError(err),
       });
@@ -507,7 +509,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : `Teams message in ${conversationType} from ${senderName}`;
 
     const enqueuePrimaryMessageSystemEvent = () =>
-      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      core.system.enqueueSystemEvent(inboundLabel, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });
@@ -1011,7 +1013,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : [];
     const rawText = activity.text?.trim() ?? "";
     const htmlText = extractTextFromHtmlAttachments(attachments);
-    const text = stripMSTeamsMentionTags(rawText || htmlText);
+    const valueText =
+      rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
+    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;

@@ -1,7 +1,9 @@
+// Session file rotation rewrites transcript paths when session ids reset or fork.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Rewrites transcript file paths when a session id changes during reset or fork. */
 export function rewriteSessionFileForNewSessionId(params: {
   sessionFile?: string;
   previousSessionId: string;
@@ -20,6 +22,7 @@ export function rewriteSessionFileForNewSessionId(params: {
     return path.join(path.dirname(trimmed), `${params.nextSessionId}.jsonl`);
   }
   if (withoutExt.startsWith(`${params.previousSessionId}-topic-`)) {
+    // Topic transcripts preserve their encoded topic suffix while adopting the new session id.
     return path.join(
       path.dirname(trimmed),
       `${params.nextSessionId}${base.slice(params.previousSessionId.length)}`,
@@ -40,6 +43,7 @@ export function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   let cursor = resolved;
   while (true) {
     try {
+      // Canonicalize the deepest existing parent; the transcript file may not exist yet.
       return path.join(fs.realpathSync(cursor), ...missingSegments.toReversed());
     } catch {
       const parent = path.dirname(cursor);

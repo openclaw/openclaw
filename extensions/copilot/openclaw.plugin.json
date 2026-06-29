@@ -2,7 +2,8 @@
   "id": "copilot",
   "name": "GitHub Copilot agent runtime",
   "description": "Registers the GitHub Copilot agent runtime.",
-  "version": "2026.5.30",
+  "icon": "https://cdn.simpleicons.org/githubcopilot",
+  "version": "2026.6.2",
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["copilot"]

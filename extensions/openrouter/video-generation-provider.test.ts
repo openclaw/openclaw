@@ -1,3 +1,4 @@
+// Openrouter tests cover video generation provider plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   expectExplicitVideoGenerationCapabilities,
@@ -53,10 +54,31 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
 
 function releasedJson(value: unknown) {
   return {
-    response: {
-      json: async () => value,
-    },
+    response: new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
     release: vi.fn(async () => {}),
+  };
+}
+
+function releasedOversizedJsonStream() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    release: vi.fn(async () => {}),
+    wasCanceled: () => canceled,
   };
 }
 
@@ -291,6 +313,40 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("cancels oversized OpenRouter video catalog success bodies", async () => {
+    const oversized = releasedOversizedJsonStream();
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(oversized);
+
+    await expect(
+      listOpenRouterVideoModelCatalog({
+        config: {
+          models: {
+            providers: {
+              openrouter: {
+                baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              },
+            },
+          },
+        } as never,
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+          mode: "api_key",
+          source: "env",
+        }),
+      }),
+    ).rejects.toThrow(
+      "OpenRouter video models request failed: JSON response exceeds 16777216 bytes",
+    );
+    expect(oversized.wasCanceled()).toBe(true);
+    expect(oversized.release).toHaveBeenCalledOnce();
+  });
+
   it("skips live OpenRouter video catalog discovery without an API key", async () => {
     await expect(
       listOpenRouterVideoModelCatalog({
@@ -490,6 +546,7 @@ describe("openrouter video generation provider", () => {
         provider: "openrouter",
         capability: "video",
         baseUrl: "https://custom.openrouter.test/api/v1",
+        allowPrivateNetwork: false,
         request: requestOverrides,
       },
     );
@@ -616,11 +673,10 @@ describe("openrouter video generation provider", () => {
 
   it("wraps non-JSON successful OpenRouter submit responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -633,6 +689,22 @@ describe("openrouter video generation provider", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
+  it("bounds oversized successful OpenRouter submit responses", async () => {
+    const oversized = releasedOversizedJsonStream();
+    postJsonRequestMock.mockResolvedValue(oversized);
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "oversized body",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation: JSON response exceeds 16777216 bytes");
+    expect(oversized.wasCanceled()).toBe(true);
   });
 
   it("rejects unknown OpenRouter poll statuses without waiting for timeout", async () => {

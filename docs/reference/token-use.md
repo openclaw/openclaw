@@ -20,7 +20,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   prompt surface. It is bounded by `skills.limits.maxSkillsPromptChars`, with
   optional per-agent override at `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Native Codex turns do not paste raw `MEMORY.md` from the configured agent workspace when memory tools are available for that workspace; they include a small memory pointer in turn-scoped collaboration developer instructions and use memory tools on demand. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` uses the normal bounded turn-context path. Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large injected files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Native Codex turns do not paste raw `MEMORY.md` from the configured agent workspace when memory tools are available for that workspace; they include a small memory pointer in turn-scoped collaboration developer instructions and use memory tools on demand. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` uses the normal bounded turn-context path. Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large injected files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -54,7 +54,7 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+`toolResultMaxChars` is an advanced ceiling (up to `1000000` characters). When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
 tokens, still bounded by the runtime context-share guard.
@@ -76,6 +76,8 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
+  - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+    override so the session re-inherits the configured default.
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
@@ -92,9 +94,11 @@ Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
 `output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
 field names do not change `/status`, `/usage`, or session summaries.
-Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
-`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
-used when the CLI omits an explicit `stats.input` field.
+Gemini CLI usage is normalized too: the default `stream-json` parser reads
+assistant `message` events, and `stats.cached` maps to `cacheRead` with
+`stats.input_tokens - stats.cached` used when the CLI omits an explicit
+`stats.input` field. Legacy JSON overrides still read reply text from
+`response`.
 For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
 normalized the same way, and totals fall back to normalized input + output when
 `total_tokens` is missing or `0`.

@@ -1,6 +1,11 @@
+/**
+ * Missing session cwd detection.
+ *
+ * Helps resume flows decide whether to stop, prompt, or continue in the current process cwd.
+ */
 import { existsSync } from "node:fs";
 
-export interface SessionCwdIssue {
+interface SessionCwdIssue {
   sessionFile?: string;
   sessionCwd: string;
   fallbackCwd: string;
@@ -11,7 +16,8 @@ interface SessionCwdSource {
   getSessionFile(): string | undefined;
 }
 
-export function getMissingSessionCwdIssue(
+/** Returns a cwd issue for persisted sessions whose stored cwd has disappeared. */
+function getMissingSessionCwdIssue(
   sessionManager: SessionCwdSource,
   fallbackCwd: string,
 ): SessionCwdIssue | undefined {
@@ -32,16 +38,14 @@ export function getMissingSessionCwdIssue(
   };
 }
 
-export function formatMissingSessionCwdError(issue: SessionCwdIssue): string {
+/** Formats the terminal error shown when resume cannot safely use the stored cwd. */
+function formatMissingSessionCwdError(issue: SessionCwdIssue): string {
   const sessionFile = issue.sessionFile ? `\nSession file: ${issue.sessionFile}` : "";
   return `Stored session working directory does not exist: ${issue.sessionCwd}${sessionFile}\nCurrent working directory: ${issue.fallbackCwd}`;
 }
 
-export function formatMissingSessionCwdPrompt(issue: SessionCwdIssue): string {
-  return `cwd from session file does not exist\n${issue.sessionCwd}\n\ncontinue in current cwd\n${issue.fallbackCwd}`;
-}
-
-export class MissingSessionCwdError extends Error {
+/** Error wrapper that preserves the missing-cwd facts for UI and recovery code. */
+class MissingSessionCwdError extends Error {
   readonly issue: SessionCwdIssue;
 
   constructor(issue: SessionCwdIssue) {
@@ -51,6 +55,7 @@ export class MissingSessionCwdError extends Error {
   }
 }
 
+/** Throws when a persisted session cwd is missing and the caller does not handle prompts. */
 export function assertSessionCwdExists(
   sessionManager: SessionCwdSource,
   fallbackCwd: string,

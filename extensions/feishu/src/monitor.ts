@@ -1,4 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+// Feishu plugin module implements monitor behavior.
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -11,9 +12,33 @@ import {
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   accountId?: string;
+  /**
+   * Optional status sink for Feishu channel health. Connected state comes
+   * from transport lifecycle callbacks; transport activity is only published
+   * when Feishu provides a real activity signal.
+   */
+  statusSink?: FeishuStatusSink;
 };
+
+/**
+ * Function shape for partial channel status patches with a bound accountId.
+ * Mirrors the return type of `createAccountStatusSink` from the plugin SDK
+ * so the feishu plugin does not need to depend on a specific channel runtime.
+ *
+ * We use a structural Partial<{...}> to keep the sink type lightweight and
+ * decoupled from the ChannelAccountSnapshot type. The runtime accepts any
+ * subset of these fields.
+ */
+export type FeishuStatusSink = (patch: {
+  connected?: boolean;
+  lastConnectedAt?: number | null;
+  lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
+  lastError?: string | null;
+}) => void;
 
 let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined;
 
@@ -48,8 +73,10 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     return monitorSingleAccount({
       cfg,
       account,
+      channelRuntime: opts.channelRuntime,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      ...(opts.statusSink ? { statusSink: opts.statusSink } : {}),
     });
   }
 
@@ -85,9 +112,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       monitorSingleAccount({
         cfg,
         account,
+        channelRuntime: opts.channelRuntime,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        ...(opts.statusSink ? { statusSink: opts.statusSink } : {}),
       }),
     );
   }
@@ -95,6 +124,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   await Promise.all(monitorPromises);
 }
 
-export function stopFeishuMonitor(accountId?: string): void {
-  stopFeishuMonitorState(accountId);
+export async function stopFeishuMonitor(accountId?: string): Promise<void> {
+  await stopFeishuMonitorState(accountId);
 }

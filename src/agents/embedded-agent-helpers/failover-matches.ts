@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+/**
+ * Shared text-pattern matchers for failover, auth, billing, and rate-limit errors.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ErrorPattern = RegExp | string;
 
@@ -53,6 +56,7 @@ const CJK_AUTH_ERROR_PATTERNS = [
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
+const VOLCENGINE_INVALID_SUBSCRIPTION_RE = /"code"\s*:\s*"InvalidSubscription"/i;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
@@ -103,6 +107,7 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+    "访问量过大",
   ],
   serverError: [
     "an error occurred while processing",
@@ -173,12 +178,24 @@ const ERROR_PATTERNS = {
     /^terminated$/i,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
-    // shared model runtime's openai-codex provider surfaces `Request failed` when the HTTP
+    // shared model runtime's openai provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
     // from the upstream Codex service). Treat it as a transport failure so
     // the configured fallback chain runs instead of surfacing the error.
     /^request failed$/i,
     /\brequest failed after repeated internal retries\b/i,
+    // The generic assistant error text "LLM request failed." is produced by
+    // formatUserFacingAssistantErrorText when the underlying provider error
+    // cannot be formatted into a specific category. For local providers (LM
+    // Studio, Ollama) this wraps connection/availability failures when the
+    // model is not loaded or the endpoint is unreachable. Without this match,
+    // cron retry and payload.fallbacks never engage because the error is not
+    // classified as any transient type (#93931).
+    // Use a strict exact-match regex so variants like
+    // "LLM request failed: provider rejected the request schema or tool payload."
+    // (a format/schema error, not transient) are NOT caught here — they
+    // fall through to their own pattern classifications.
+    /^llm request failed\.$/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -204,6 +221,10 @@ const ERROR_PATTERNS = {
     "账户余额不足",
     "欠费",
     "账户已欠费",
+    // Volcengine Coding Plan entitlement failure. Official Ark error code:
+    // HTTP 400 + InvalidSubscription means the plan is missing or expired.
+    VOLCENGINE_INVALID_SUBSCRIPTION_RE,
+    /\bdoes not have a valid coding\s*plan subscription\b/i,
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
     /\bcurrent\s+subscription\s+plan\b.*\b(?:does\s+not|doesn't|not)\b.*\binclude\s+access\b/i,
@@ -229,6 +250,11 @@ const ERROR_PATTERNS = {
     // (#79688).
     "does not support assistant message prefill",
     "conversation must end with a user message",
+    // Agent harness provider mismatch: the harness rejects the model because
+    // the provider id is not in its supported set. Retrying the same model
+    // will fail identically — classify so the fallback notice is informative
+    // instead of "unknown" (#91710).
+    /agent harness .* does not support .*provider is not one of/i,
   ],
 } as const;
 
@@ -278,7 +304,11 @@ export function isBillingErrorMessage(raw: string): boolean {
   }
 
   if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    return BILLING_ERROR_HARD_402_RE.test(value) || ZAI_BILLING_CODE_1311_RE.test(value);
+    return (
+      BILLING_ERROR_HARD_402_RE.test(value) ||
+      ZAI_BILLING_CODE_1311_RE.test(value) ||
+      VOLCENGINE_INVALID_SUBSCRIPTION_RE.test(value)
+    );
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;

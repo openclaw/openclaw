@@ -1,3 +1,5 @@
+// Slack plugin module implements message action dispatch behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
@@ -6,6 +8,11 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultSlackAccountId } from "./accounts.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -196,7 +203,20 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "member-info") {
-    const userId = readStringParam(actionParams, "userId", { required: true });
+    const requesterAccountId = ctx.requesterAccountId
+      ? normalizeAccountId(ctx.requesterAccountId)
+      : undefined;
+    const targetAccountId = normalizeAccountId(accountId ?? resolveDefaultSlackAccountId(cfg));
+    const requesterUserId =
+      normalizeOptionalLowercaseString(ctx.toolContext?.currentChannelProvider) === "slack" &&
+      requesterAccountId !== undefined &&
+      requesterAccountId === targetAccountId
+        ? normalizeOptionalString(ctx.requesterSenderId)
+        : undefined;
+    const userId = readStringParam(actionParams, "userId") ?? requesterUserId;
+    if (!userId) {
+      throw new Error("member-info requires a userId outside a current Slack conversation.");
+    }
     return await invoke({ action: "memberInfo", userId, accountId }, cfg);
   }
 

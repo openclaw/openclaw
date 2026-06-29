@@ -1,13 +1,24 @@
+// Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
-import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
+import {
+  EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  hasVisibleChannelTurnDispatch,
+  type ChannelTurnDispatchResultLike,
+} from "./dispatch-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
@@ -20,7 +31,6 @@ export {
 export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
-  listTrackedChannelBotPairsForTests,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "./bot-loop-protection.js";
 export { createChannelHistoryWindow } from "./history-window.js";
@@ -96,6 +106,7 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
   canStartAgentTurn: true,
 };
+const log = createSubsystemLogger("channels/turn/kernel");
 
 /**
  * @deprecated Compatibility assembly for legacy buffered reply dispatchers.
@@ -143,6 +154,7 @@ function emit(params: {
 }
 
 export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
+  // Observe-only channels still need an adapter shape for shared turn plumbing.
   return {
     deliver: async () => ({
       visibleReplySent: false,
@@ -263,6 +275,50 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
   }) as TDispatchResult;
 }
 
+function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
+  return (
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
+  );
+}
+
+function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
+  params: Pick<
+    PreparedChannelTurn<TDispatchResult>,
+    "admission" | "channel" | "ctxPayload" | "messageId" | "routeSessionKey"
+  > & {
+    dispatchResult: TDispatchResult;
+    log?: (event: ChannelTurnLogEvent) => void;
+  },
+): void {
+  if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
+    return;
+  }
+  const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  // Suppress the silent-drop warning using the canonical visible-delivery signal, which
+  // includes observedReplyDelivery and other non-count delivery paths. A partial count-only
+  // check would falsely flag observed-path deliveries (queuedFinal=false, zero counts) as drops.
+  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
+    return;
+  }
+  log.warn(
+    `visible channel turn dispatched with no queued reply payloads: channel=${params.channel} ` +
+      `messageId=${params.messageId ?? "unknown"} sessionKey=${
+        params.ctxPayload.SessionKey ?? params.routeSessionKey
+      }`,
+  );
+  emit({
+    ...params,
+    event: {
+      stage: "dispatch",
+      event: "warning",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: params.admission?.kind ?? "dispatch",
+      reason: "zero-count-visible-dispatch",
+    },
+  });
+}
+
 function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
   return (
     typeof result === "object" &&
@@ -366,6 +422,7 @@ export async function dispatchAssembledChannelTurn(
       storePath: params.storePath,
       ctxPayload: params.ctxPayload,
       recordInboundSession: params.recordInboundSession,
+      afterRecord: params.afterRecord,
       record: params.record,
       history: params.history,
       admission: params.admission,
@@ -419,6 +476,7 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
+          toolsAllow: params.toolsAllow,
           replyOptions: replyPipeline.replyOptions,
           replyResolver: params.replyResolver,
         }),
@@ -451,6 +509,18 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
 }
 
 async function runPreparedChannelTurnCore<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: PreparedChannelTurn<TDispatchResult>,
+  options: { suppressObserveOnlyDispatch: boolean },
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  const trace = createDiagnosticTraceContextFromActiveScope();
+  return await runWithDiagnosticTraceContext(trace, () =>
+    runPreparedChannelTurnCoreInTrace(params, options),
+  );
+}
+
+async function runPreparedChannelTurnCoreInTrace<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
   params: PreparedChannelTurn<TDispatchResult>,
@@ -493,6 +563,7 @@ async function runPreparedChannelTurnCore<
         admission: admission.kind,
       },
     });
+    await params.afterRecord?.();
   } catch (err) {
     emit({
       ...params,
@@ -529,6 +600,11 @@ async function runPreparedChannelTurnCore<
       options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
         : await params.runDispatch();
+    maybeWarnZeroCountVisibleDispatch({
+      ...params,
+      admission,
+      dispatchResult,
+    });
   } catch (err) {
     emit({
       ...params,

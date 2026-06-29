@@ -1,10 +1,12 @@
+// Resolves plugin SDK aliases for public package imports.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
@@ -15,6 +17,7 @@ export type LoaderModuleResolveParams = {
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
@@ -30,6 +33,14 @@ type PluginSdkPackageJson = {
   exports?: Record<string, unknown>;
   bin?: string | Record<string, unknown>;
   version?: string;
+};
+
+type WorkspacePackageAliasEntry = {
+  packageName: string;
+  packageDir: string;
+  subpath: string;
+  srcFile: string;
+  distFile: string;
 };
 
 const STARTUP_ARGV1 = process.argv[1];
@@ -149,14 +160,11 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageJson: PluginSdkPackageJson;
 }): boolean {
   const packageExports = params.packageJson.exports ?? {};
-  const hasPluginSdkRootExport = Object.prototype.hasOwnProperty.call(
-    packageExports,
-    "./plugin-sdk",
-  );
+  const hasPluginSdkRootExport = Object.hasOwn(packageExports, "./plugin-sdk");
   if (!hasPluginSdkRootExport) {
     return false;
   }
-  const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
+  const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof params.packageJson.bin === "string" &&
       normalizeLowercaseStringOrEmpty(params.packageJson.bin).includes("openclaw")) ||
@@ -332,9 +340,19 @@ function formatResolutionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function resolveDevSourceRootParam(params: { devSourceRoot?: string | null }): string | null {
+  return params.devSourceRoot !== undefined
+    ? params.devSourceRoot
+    : resolveOpenClawDevSourceRoot(process.env);
+}
+
 function resolveLoaderPluginSdkPackageRoot(
   params: LoaderModuleResolveParams & { modulePath: string },
 ): string | null {
+  const devSourceRoot = resolveDevSourceRootParam(params);
+  if (devSourceRoot) {
+    return devSourceRoot;
+  }
   const cwd = params.cwd ?? path.dirname(params.modulePath);
   const fromCwd = resolveOpenClawPackageRootSync({ cwd });
   const fromExplicitHints =
@@ -377,6 +395,7 @@ export function listPluginSdkAliasCandidates(params: {
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
@@ -418,6 +437,7 @@ export function resolvePluginSdkAliasFile(params: {
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }): string | null {
   try {
@@ -429,6 +449,7 @@ export function resolvePluginSdkAliasFile(params: {
       argv1: params.argv1,
       cwd: params.cwd,
       moduleUrl: params.moduleUrl,
+      devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
     })) {
       if (fs.existsSync(candidate)) {
@@ -496,7 +517,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-client",
     packageDir: "gateway-client",
@@ -657,6 +678,118 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     subpath: "normalization",
     srcFile: "normalization.ts",
     distFile: "normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "base64",
+    srcFile: "base64.ts",
+    distFile: "base64.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "constants",
+    srcFile: "constants.ts",
+    distFile: "constants.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "content-length",
+    srcFile: "content-length.ts",
+    distFile: "content-length.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "file-name",
+    srcFile: "file-name.ts",
+    distFile: "file-name.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "inbound-path-policy",
+    srcFile: "inbound-path-policy.ts",
+    distFile: "inbound-path-policy.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "inline-image-data-url",
+    srcFile: "inline-image-data-url.ts",
+    distFile: "inline-image-data-url.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "media-source-url",
+    srcFile: "media-source-url.ts",
+    distFile: "media-source-url.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "mime",
+    srcFile: "mime.ts",
+    distFile: "mime.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "read-byte-stream-with-limit",
+    srcFile: "read-byte-stream-with-limit.ts",
+    distFile: "read-byte-stream-with-limit.mjs",
+  },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpath: "read-response-with-limit",
+    srcFile: "read-response-with-limit.ts",
+    distFile: "read-response-with-limit.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "number-coercion",
+    srcFile: "number-coercion.ts",
+    distFile: "number-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "record-coerce",
+    srcFile: "record-coerce.ts",
+    distFile: "record-coerce.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "string-coerce",
+    srcFile: "string-coerce.ts",
+    distFile: "string-coerce.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "string-normalization",
+    srcFile: "string-normalization.ts",
+    distFile: "string-normalization.mjs",
   },
   {
     packageName: "@openclaw/terminal-core",
@@ -836,6 +969,27 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
   {
     packageName: "@openclaw/model-catalog-core",
     packageDir: "model-catalog-core",
+    subpath: "model-catalog-refs",
+    srcFile: "model-catalog-refs.ts",
+    distFile: "model-catalog-refs.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "model-catalog-normalize",
+    srcFile: "model-catalog-normalize.ts",
+    distFile: "model-catalog-normalize.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "model-catalog-types",
+    srcFile: "model-catalog-types.ts",
+    distFile: "model-catalog-types.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
     subpath: "provider-id",
     srcFile: "provider-id.ts",
     distFile: "provider-id.mjs",
@@ -855,6 +1009,123 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     distFile: "provider-model-id-normalize.mjs",
   },
 ] as const;
+const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
+  "acp-core",
+  "media-core",
+  "normalization-core",
+  "terminal-core",
+]);
+
+function normalizePackageExportSubpath(exportKey: string): string | null {
+  if (exportKey === ".") {
+    return "";
+  }
+  if (!exportKey.startsWith("./")) {
+    return null;
+  }
+  const subpath = exportKey.slice(2);
+  return subpath && !subpath.includes("..") ? subpath : null;
+}
+
+function resolvePackageExportImportPath(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.import === "string"
+    ? record.import
+    : typeof record.default === "string"
+      ? record.default
+      : null;
+}
+
+function listRootPackagedWorkspacePackageAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
+  if (!fs.existsSync(distRoot)) {
+    return [];
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  const visit = (dir: string, prefix = "") => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !relativePath.endsWith(".js")) {
+        continue;
+      }
+      const normalizedRelativePath = relativePath.split(path.sep).join("/");
+      const subpath =
+        normalizedRelativePath === "index.js" ? "" : normalizedRelativePath.slice(0, -".js".length);
+      if (subpath.includes("..")) {
+        continue;
+      }
+      entries.push({
+        packageName: params.packageName,
+        packageDir: params.packageDir,
+        subpath,
+        srcFile: `${subpath || "index"}.ts`,
+        distFile: relativePath,
+      });
+    }
+  };
+  visit(distRoot);
+  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+}
+
+export function listWorkspacePackageExportAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const packageJsonPath = path.join(
+    params.packageRoot,
+    "packages",
+    params.packageDir,
+    "package.json",
+  );
+  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+  const packageJson =
+    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
+    (fallbackPackageRoot
+      ? tryReadJsonSync<PluginSdkPackageJson>(
+          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
+        )
+      : null);
+  const exports = packageJson?.exports;
+  if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
+    return listRootPackagedWorkspacePackageAliasEntries(params);
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  for (const [exportKey, value] of Object.entries(exports)) {
+    const subpath = normalizePackageExportSubpath(exportKey);
+    const importPath = resolvePackageExportImportPath(value);
+    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+      continue;
+    }
+    const distFile = importPath.slice("./dist/".length);
+    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
+    entries.push({
+      packageName: params.packageName,
+      packageDir: params.packageDir,
+      subpath,
+      srcFile,
+      distFile,
+    });
+  }
+  return entries.length > 0
+    ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
+    : listRootPackagedWorkspacePackageAliasEntries(params);
+}
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
   if (!fs.existsSync(candidate)) {
@@ -985,6 +1256,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   argv1?: string;
   moduleUrl?: string;
   pluginSdkResolution: PluginSdkResolutionPreference;
+  devSourceRoot?: string | null;
 }): Record<string, string> {
   const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
   if (!packageRoot) {
@@ -1046,6 +1318,7 @@ function resolveWorkspacePackageAliasMap(params: {
   argv1?: string;
   moduleUrl?: string;
   pluginSdkResolution: PluginSdkResolutionPreference;
+  devSourceRoot?: string | null;
 }): Record<string, string> {
   const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
   if (!packageRoot) {
@@ -1057,18 +1330,26 @@ function resolveWorkspacePackageAliasMap(params: {
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const aliasMap: Record<string, string> = {};
-  for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
+  const workspacePackageAliasEntries = [
+    ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
+    ...listWorkspacePackageExportAliasEntries({
+      packageRoot,
+      packageName: "@openclaw/acp-core",
+      packageDir: "acp-core",
+    }),
+  ];
+  for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
       const candidates =
         kind === "dist"
           ? [
-              ...(entry.packageName === "@openclaw/terminal-core"
+              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
                 ? [
                     path.join(
                       packageRoot,
                       "dist",
-                      "terminal-core",
+                      entry.packageDir,
                       entry.distFile.replace(/\.mjs$/u, ".js"),
                     ),
                   ]
@@ -1181,6 +1462,21 @@ function listTrustedPrivatePluginSdkOwnerKeys(params: {
   ).map((owner) => owner.bundledPluginId);
 }
 
+function resolvePrivatePluginSdkOwnerPackageRoot(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  aliasPackageRoot: string;
+}): string {
+  return (
+    resolveLoaderPackageRoot({
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+      moduleUrl: params.moduleUrl,
+    }) ?? params.aliasPackageRoot
+  );
+}
+
 function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   packageRoot: string;
   modulePath: string;
@@ -1224,12 +1520,16 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
 
 function listPrivateLocalOnlyPluginSdkSubpaths(params: {
   packageRoot: string;
+  ownerPackageRoot: string;
   modulePath: string;
 }): string[] {
   return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
     (subpath) =>
-      shouldIncludePrivateLocalOnlyPluginSdkSubpath({ ...params, subpath }) &&
-      hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
+      shouldIncludePrivateLocalOnlyPluginSdkSubpath({
+        packageRoot: params.ownerPackageRoot,
+        modulePath: params.modulePath,
+        subpath,
+      }) && hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
   );
 }
 
@@ -1238,6 +1538,7 @@ export function listPluginSdkExportedSubpaths(
     modulePath?: string;
     argv1?: string;
     moduleUrl?: string;
+    devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
   } = {},
 ): string[] {
@@ -1246,11 +1547,21 @@ export function listPluginSdkExportedSubpaths(
     modulePath,
     argv1: params.argv1,
     moduleUrl: params.moduleUrl,
+    devSourceRoot: params.devSourceRoot,
   });
   if (!packageRoot) {
     return [];
   }
-  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const ownerPackageRoot = resolvePrivatePluginSdkOwnerPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+    aliasPackageRoot: packageRoot,
+  });
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
+    packageRoot: ownerPackageRoot,
+    modulePath,
+  });
   const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
@@ -1259,7 +1570,7 @@ export function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, modulePath }),
+      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, ownerPackageRoot, modulePath }),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
@@ -1271,6 +1582,7 @@ export function resolvePluginSdkScopedAliasMap(
     modulePath?: string;
     argv1?: string;
     moduleUrl?: string;
+    devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
   } = {},
 ): Record<string, string> {
@@ -1279,16 +1591,26 @@ export function resolvePluginSdkScopedAliasMap(
     modulePath,
     argv1: params.argv1,
     moduleUrl: params.moduleUrl,
+    devSourceRoot: params.devSourceRoot,
   });
   if (!packageRoot) {
     return {};
   }
+  const ownerPackageRoot = resolvePrivatePluginSdkOwnerPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+    aliasPackageRoot: packageRoot,
+  });
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath,
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
+    packageRoot: ownerPackageRoot,
+    modulePath,
+  });
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
@@ -1302,6 +1624,7 @@ export function resolvePluginSdkScopedAliasMap(
     modulePath,
     argv1: params.argv1,
     moduleUrl: params.moduleUrl,
+    devSourceRoot: params.devSourceRoot,
     pluginSdkResolution: params.pluginSdkResolution,
   })) {
     for (const kind of orderedKinds) {
@@ -1328,7 +1651,7 @@ export function resolvePluginSdkScopedAliasMap(
         }
         break;
       }
-      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
+      if (Object.hasOwn(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }
@@ -1340,7 +1663,8 @@ export function resolvePluginSdkScopedAliasMap(
 export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
   try {
     const modulePath = resolveLoaderModulePath(params);
-    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    const packageRoot =
+      resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
     if (!packageRoot) {
       return null;
     }
@@ -1499,13 +1823,16 @@ function buildPluginLoaderAliasMapCacheKey(params: {
   argv1?: string;
   moduleUrl?: string;
   pluginSdkResolution: PluginSdkResolutionPreference;
+  devSourceRoot?: string | null;
 }) {
+  const devSourceRoot = resolveDevSourceRootParam(params);
   return [
     params.modulePath,
     params.argv1 ?? "",
     params.moduleUrl ?? "",
     params.pluginSdkResolution,
     process.cwd(),
+    devSourceRoot ?? "",
     process.env.NODE_ENV === "production" ? "production" : "non-production",
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
   ].join("\0");
@@ -1515,6 +1842,7 @@ function buildPluginLoaderModuleConfigCacheKey(params: {
   modulePath: string;
   argv1?: string;
   moduleUrl: string;
+  devSourceRoot?: string | null;
   preferBuiltDist?: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
@@ -1524,6 +1852,7 @@ function buildPluginLoaderModuleConfigCacheKey(params: {
       argv1: params.argv1,
       moduleUrl: params.moduleUrl,
       pluginSdkResolution: params.pluginSdkResolution ?? "auto",
+      devSourceRoot: params.devSourceRoot,
     }),
     params.preferBuiltDist === true ? "prefer-built-dist" : "default-dist",
   ].join("\0");
@@ -1534,12 +1863,14 @@ export function buildPluginLoaderAliasMap(
   argv1: string | undefined = STARTUP_ARGV1,
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
+  devSourceRoot?: string | null,
 ): Record<string, string> {
   const cacheKey = buildPluginLoaderAliasMapCacheKey({
     modulePath,
     argv1,
     moduleUrl,
     pluginSdkResolution,
+    devSourceRoot,
   });
   const cached = aliasMapCache.get(cacheKey);
   if (cached) {
@@ -1553,8 +1884,13 @@ export function buildPluginLoaderAliasMap(
     argv1,
     moduleUrl,
     pluginSdkResolution,
+    devSourceRoot,
   });
-  const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
+  const extensionApiAlias = resolveExtensionApiAlias({
+    modulePath,
+    pluginSdkResolution,
+    devSourceRoot,
+  });
   const result: Record<string, string> = {
     ...(extensionApiAlias
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
@@ -1564,12 +1900,14 @@ export function buildPluginLoaderAliasMap(
       argv1,
       moduleUrl,
       pluginSdkResolution,
+      devSourceRoot,
     }),
     ...resolveWorkspacePackageAliasMap({
       modulePath,
       argv1,
       moduleUrl,
       pluginSdkResolution,
+      devSourceRoot,
     }),
     ...(pluginSdkAlias
       ? Object.fromEntries(
@@ -1581,7 +1919,13 @@ export function buildPluginLoaderAliasMap(
       : {}),
     ...Object.fromEntries(
       Object.entries(
-        resolvePluginSdkScopedAliasMap({ modulePath, argv1, moduleUrl, pluginSdkResolution }),
+        resolvePluginSdkScopedAliasMap({
+          modulePath,
+          argv1,
+          moduleUrl,
+          pluginSdkResolution,
+          devSourceRoot,
+        }),
       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
     ),
   };
@@ -1608,7 +1952,8 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     });
-    packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    packageRoot =
+      resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
     if (packageRoot) {
       appendPluginRuntimeModuleCandidates(candidates, packageRoot, orderedKinds);
     } else {
@@ -1730,6 +2075,7 @@ export function resolvePluginLoaderModuleConfig(params: {
   modulePath: string;
   argv1?: string;
   moduleUrl: string;
+  devSourceRoot?: string | null;
   preferBuiltDist?: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
 }): {
@@ -1752,6 +2098,7 @@ export function resolvePluginLoaderModuleConfig(params: {
     params.argv1,
     params.moduleUrl,
     params.pluginSdkResolution,
+    params.devSourceRoot,
   );
   const result = {
     tryNative,

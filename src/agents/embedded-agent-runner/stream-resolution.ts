@@ -1,3 +1,6 @@
+/**
+ * Resolves provider stream functions and API keys for embedded agents.
+ */
 import { getApiProvider } from "../../llm/api-registry.js";
 import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
@@ -50,7 +53,7 @@ function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
 }
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
-  return model.provider === "openai" && model.api === "openai-codex-responses";
+  return model.provider === "openai" && model.api === "openai-chatgpt-responses";
 }
 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {
@@ -265,4 +268,3 @@ function wrapEmbeddedAgentStreamFn(
     });
   };
 }
-export { testing as __testing };

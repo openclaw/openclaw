@@ -1,3 +1,4 @@
+// Discord tests cover send.creates thread plugin behavior.
 import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -329,6 +330,20 @@ describe("sendMessageDiscord", () => {
     await expect(
       timeoutMemberDiscord(
         { guildId: "g1", userId: "u1", durationMinutes: 8_640_000_000_000_001 },
+        discordClientOpts(rest),
+      ),
+    ).rejects.toThrow("Discord timeout duration is outside the supported Date range");
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects timeout durations that overflow from the current clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const { rest, patchMock } = makeDiscordRest();
+
+    await expect(
+      timeoutMemberDiscord(
+        { guildId: "g1", userId: "u1", durationMinutes: 1 },
         discordClientOpts(rest),
       ),
     ).rejects.toThrow("Discord timeout duration is outside the supported Date range");

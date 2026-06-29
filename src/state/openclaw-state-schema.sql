@@ -470,6 +470,20 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
 
+CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
+  feed_url TEXT NOT NULL PRIMARY KEY,
+  body TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checksum TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
+  ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -523,6 +537,28 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
+
+CREATE TABLE IF NOT EXISTS acp_sessions (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT,
+  backend TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  runtime_session_name TEXT NOT NULL,
+  identity_json TEXT,
+  mode TEXT NOT NULL,
+  runtime_options_json TEXT,
+  cwd TEXT,
+  state TEXT NOT NULL,
+  last_activity_at INTEGER NOT NULL,
+  last_error TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
+  ON acp_sessions(state, last_activity_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
+  ON acp_sessions(agent, last_activity_at DESC, session_key);
 
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -579,6 +615,39 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
 
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
   ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+
+CREATE TABLE IF NOT EXISTS channel_ingress_events (
+  queue_name TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lane_key TEXT,
+  payload_json TEXT NOT NULL,
+  metadata_json TEXT,
+  received_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  claim_token TEXT,
+  claim_owner TEXT,
+  claimed_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  failed_reason TEXT,
+  failed_at INTEGER,
+  completed_at INTEGER,
+  completed_metadata_json TEXT,
+  PRIMARY KEY (queue_name, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_pending
+  ON channel_ingress_events(queue_name, status, received_at, event_id);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_claims
+  ON channel_ingress_events(queue_name, status, claimed_at);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_lane
+  ON channel_ingress_events(queue_name, status, lane_key);
 
 CREATE TABLE IF NOT EXISTS plugin_blob_entries (
   plugin_id TEXT NOT NULL,
@@ -824,12 +893,15 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   payload_external_content_source_json TEXT,
   payload_light_context INTEGER,
   payload_tools_allow_json TEXT,
+  payload_tools_allow_is_default INTEGER,
   delivery_mode TEXT,
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
+  delivery_completion_mode TEXT,
+  delivery_completion_to TEXT,
   failure_delivery_mode TEXT,
   failure_delivery_channel TEXT,
   failure_delivery_to TEXT,
@@ -866,6 +938,9 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
+
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_order
+  ON cron_jobs(store_key, sort_order ASC, updated_at ASC, job_id);
 
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled_next_run
   ON cron_jobs(store_key, enabled, next_run_at_ms, job_id)
@@ -938,6 +1013,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   parent_flow_id TEXT,
   parent_task_id TEXT,
   agent_id TEXT,
+  requester_agent_id TEXT,
   run_id TEXT,
   label TEXT,
   task TEXT NOT NULL,

@@ -1,9 +1,11 @@
+// Fal provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -165,6 +167,21 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
   };
 }
 
+function readFalCompletedQueueResult(payload: unknown): FalQueueResponse {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (
+    payload.response !== undefined ||
+    (payload.video === undefined && payload.videos === undefined)
+  ) {
+    return readFalQueueResponse(payload);
+  }
+  return {
+    response: readFalVideoPayload(payload),
+  };
+}
+
 function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
@@ -207,9 +224,9 @@ async function downloadFalVideo(
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes }) => {
+        onOverflow: ({ maxBytes: maxBytesLocal }) => {
           exceededMaxBytes = true;
-          return new Error(`fal generated video download exceeds ${maxBytes} bytes`);
+          return new Error(`fal generated video download exceeds ${maxBytesLocal} bytes`);
         },
       });
     } catch (error) {
@@ -464,9 +481,12 @@ async function fetchFalJson(params: {
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
     try {
-      return await response.json();
-    } catch {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      return await readProviderJsonResponse<unknown>(response, params.errorContext);
+    } catch (error) {
+      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
+      }
+      throw error;
     }
   } finally {
     await release();
@@ -508,7 +528,7 @@ async function waitForFalQueueResult(params: {
     }
     lastStatus = status;
     if (status === "COMPLETED") {
-      return readFalQueueResponse(
+      return readFalCompletedQueueResult(
         await fetchFalJson({
           url: params.responseUrl,
           init: {
@@ -538,7 +558,9 @@ async function waitForFalQueueResult(params: {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
     const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 

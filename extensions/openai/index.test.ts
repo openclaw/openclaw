@@ -1,9 +1,7 @@
+// Openai tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -32,19 +30,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("./openai-codex-oauth-flow.runtime.js", () => ({
+vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-codex-provider.runtime.js";
-
-const registerOpenAIPluginForTest = async () =>
-  registerProviderPlugin({
-    plugin,
-    id: "openai",
-    name: "OpenAI Provider",
-  });
-
+import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
   const providers: ProviderPlugin[] = [];
@@ -96,6 +86,18 @@ function mockOpenAIImageApiResponse(params: {
   imageData: string;
   revisedPrompt?: string;
 }) {
+  const response = () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          {
+            b64_json: Buffer.from(params.imageData).toString("base64"),
+            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
   const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "sk-test",
     source: "env",
@@ -103,32 +105,12 @@ function mockOpenAIImageApiResponse(params: {
   });
   const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
     finalUrl: params.finalUrl,
-    response: {
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-    } as Response,
+    response: response(),
     release: vi.fn(async () => {}),
   });
   const postMultipartRequestSpy = vi.spyOn(providerHttp, "postMultipartRequest").mockResolvedValue({
     finalUrl: params.finalUrl,
-    response: {
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-    } as Response,
+    response: response(),
     release: vi.fn(async () => {}),
   });
   vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
@@ -354,10 +336,10 @@ describe("openai plugin", () => {
     const normalizedCodex = openaiProvider.normalizeToolSchemas?.({
       provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
         provider: "openai",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,
@@ -394,10 +376,10 @@ describe("openai plugin", () => {
       openaiProvider.inspectToolSchemas?.({
         provider: "openai",
         modelId: "gpt-5.4",
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
         model: {
           provider: "openai",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           id: "gpt-5.4",
         } as never,

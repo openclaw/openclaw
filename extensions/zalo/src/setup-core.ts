@@ -1,3 +1,4 @@
+// Zalo plugin module implements setup core behavior.
 import {
   addWildcardAllowFrom,
   createDelegatedSetupWizardProxy,
@@ -60,7 +61,7 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
-      cfg: cfg,
+      cfg,
       accountId: accountId ?? resolveDefaultZaloAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
@@ -69,7 +70,7 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
         : resolveDefaultZaloAccountId(cfg);
     const resolved = resolveZaloAccount({
-      cfg: cfg,
+      cfg,
       accountId: resolvedAccountId,
     });
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {

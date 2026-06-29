@@ -1,6 +1,7 @@
-import {
-  type WebSearchProviderPlugin,
-  type WebSearchProviderSetupContext,
+// Xai plugin module implements web search behavior.
+import type {
+  WebSearchProviderPlugin,
+  WebSearchProviderSetupContext,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { buildXaiWebSearchProviderBase } from "./web-search-provider-shared.js";
 

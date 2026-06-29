@@ -1,8 +1,18 @@
+/** Doctor repair for legacy OAuth sidecar files and inline auth profile stores. */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { shortenHomePath } from "../utils.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   isLegacyOAuthRef,
   isLegacyOAuthSidecarPayload,
@@ -11,16 +21,7 @@ import {
   resolveLegacyOAuthSidecarPath,
   type LegacyOAuthRef,
   type LegacyOAuthSecretMaterial,
-} from "../agents/auth-profiles/legacy-oauth-sidecar.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { shortenHomePath } from "../utils.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+} from "./doctor/shared/legacy-oauth-sidecar.js";
 
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
 
@@ -44,7 +45,7 @@ type LegacyOAuthUnreferencedSidecar = {
   sidecarPath: string;
 };
 
-export type LegacyOAuthSidecarRepairResult = {
+type LegacyOAuthSidecarRepairResult = {
   detected: string[];
   changes: string[];
   warnings: string[];
@@ -186,6 +187,12 @@ function backupLegacyOAuthSidecarStore(authPath: string, now: () => number): str
   return backupPath;
 }
 
+/**
+ * Migrates legacy Codex OAuth sidecar secrets back into inline auth profile credentials.
+ *
+ * Only sidecar files that were successfully imported and are not referenced by another failed
+ * profile are removed; unreferenced sidecars stay because unknown agent directories may use them.
+ */
 export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   cfg: OpenClawConfig;
   prompter: Pick<DoctorPrompter, "confirmAutoFix">;
@@ -327,4 +334,3 @@ export const testing = {
   buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
   buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
 };
-export { testing as __testing };

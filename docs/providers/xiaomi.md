@@ -24,7 +24,7 @@ The same plugin also registers the `xiaomi` speech (TTS) provider.
 | API              | OpenAI-compatible (`openai-completions`)                                                                                                           |
 | Base URLs        | Pay-as-you-go: `https://api.xiaomimimo.com/v1`; Token Plan presets: `token-plan-{cn,sgp,ams}...`                                                   |
 | Default models   | `xiaomi/mimo-v2-flash`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                          |
-| TTS default      | `mimo-v2.5-tts`, voice `mimo_default`                                                                                                              |
+| TTS default      | `mimo-v2.5-tts`, voice `mimo_default`; voicedesign model `mimo-v2.5-tts-voicedesign`                                                               |
 
 ## Getting started
 
@@ -84,8 +84,8 @@ Choose the Token Plan auth choice that matches the regional base URL shown in Xi
 
 | Model ref                         | Input       | Context   | Max output | Reasoning | Notes         |
 | --------------------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | Default model |
-| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | Multimodal    |
+| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | Default model |
+| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | Multimodal    |
 
 <Tip>
 Token Plan onboarding validates the key shape and warns when a `tp-...` key is entered into the pay-as-you-go path, or an `sk-...` key is entered into the Token Plan path.
@@ -126,10 +126,34 @@ an `assistant` message and optional style guidance as a `user` message.
 ```
 
 Supported built-in voices include `mimo_default`, `default_zh`, `default_en`,
-`Mia`, `Chloe`, `Milo`, and `Dean`. `mimo-v2-tts` is supported for older MiMo
-TTS accounts; the default uses the current MiMo-V2.5 TTS model. For voice-note
-targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi output to 48kHz
-Opus with `ffmpeg` before delivery.
+`Mia`, `Chloe`, `Milo`, and `Dean`. Preset-voice models use `audio.voice`, so
+OpenClaw sends `speakerVoice` for `mimo-v2.5-tts` and `mimo-v2-tts`.
+
+Xiaomi's voicedesign model, `mimo-v2.5-tts-voicedesign`, generates the voice
+from a natural-language style prompt instead of a preset voice id. Configure
+`style` with the desired voice description; OpenClaw sends it as the `user`
+message, sends the spoken text as the `assistant` message, and omits
+`audio.voice` for this model.
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "xiaomi",
+      providers: {
+        xiaomi: {
+          model: "mimo-v2.5-tts-voicedesign",
+          format: "wav",
+          style: "Warm, natural female voice with clear pronunciation.",
+        },
+      },
+    },
+  },
+}
+```
+
+For voice-note targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi
+output to 48kHz Opus with `ffmpeg` before delivery.
 
 ## Config example
 
@@ -198,7 +222,7 @@ Token Plan:
             reasoning: true,
             input: ["text"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
           {
             id: "mimo-v2.5",
@@ -206,7 +230,7 @@ Token Plan:
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
         ],
       },

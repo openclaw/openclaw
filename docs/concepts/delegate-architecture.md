@@ -127,7 +127,7 @@ See [Sandboxing](/gateway/sandboxing) and [Multi-Agent Sandbox & Tools](/tools/m
 
 Configure logging before the delegate handles any real data:
 
-- Cron run history: `~/.openclaw/cron/runs/<jobId>.jsonl`
+- Cron run history: OpenClaw shared SQLite state database
 - Session transcripts: `~/.openclaw/agents/delegate/sessions`
 - Identity provider audit logs (Exchange, Google Workspace)
 
@@ -297,7 +297,8 @@ tool-call XML payloads (including `<tool_call>...</tool_call>`,
 downgraded tool-call scaffolding / leaked ASCII/full-width model control
 tokens / malformed MiniMax tool-call XML from assistant recall, and can
 replace oversized rows with `[sessions_history omitted: message too large]`
-instead of returning a raw transcript dump.
+instead of returning a raw transcript dump. Use `nextOffset` when present to
+page backward through older transcript windows.
 
 ## Scaling pattern
 

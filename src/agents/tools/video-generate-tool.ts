@@ -1,3 +1,8 @@
+/**
+ * video_generate built-in tool.
+ *
+ * Validates media references, resolves provider/model capabilities, and schedules video generation.
+ */
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +57,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -964,7 +970,7 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      'Create videos. Session chats: background task; do not call video_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached or MEDIA: paths. "status" checks active task. Duration may round to provider-supported value.',
+      'Create videos. Session chats: background task; do not call video_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. "status" checks active task. Duration may round to provider-supported value.',
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -999,6 +1005,7 @@ export function createVideoGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+        { prompt },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -1107,7 +1114,7 @@ export function createVideoGenerateTool(options?: {
       });
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { requestKey },
+        { prompt, requestKey },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -1172,7 +1179,9 @@ export function createVideoGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

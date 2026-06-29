@@ -1,3 +1,4 @@
+// Unit-fast test discovery and classification helpers for fast local routing.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +33,7 @@ const unitFastCandidateGlobs = [
   "src/link-understanding/**/*.test.ts",
   "src/logging/**/*.test.ts",
   "packages/markdown-core/src/**/*.test.ts",
+  "packages/media-core/src/**/*.test.ts",
   "packages/terminal-core/src/**/*.test.ts",
   "src/media/**/*.test.ts",
   "src/media-generation/**/*.test.ts",
@@ -67,7 +69,12 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
+  "src/acp/control-plane/manager.backend-failover.test.ts",
+  "src/acp/control-plane/manager.failover.test.ts",
+  "src/acp/control-plane/manager.runtime-config.test.ts",
+  "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.test.ts",
+  "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/session-mapper.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -75,8 +82,16 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
+  "src/acp/translator.final-snapshots.test.ts",
+  "src/acp/translator.prompt-size.test.ts",
+  "src/acp/translator.replay.test.ts",
+  "src/acp/translator.session-config.test.ts",
+  "src/acp/translator.session-list.test.ts",
   "src/acp/translator.session-rate-limit.test.ts",
+  "src/acp/translator.session-setup.test.ts",
+  "src/acp/translator.session-snapshot.test.ts",
   "src/acp/translator.set-session-mode.test.ts",
+  "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "extensions/canvas/src/host/server.test.ts",
   "src/crestodian/audit.test.ts",
@@ -87,9 +102,7 @@ export const forcedUnitFastTestFiles = [
   "src/crestodian/rescue-policy.test.ts",
   "src/crestodian/rescue-message.test.ts",
   "src/crestodian/tui-backend.test.ts",
-  "src/flows/channel-setup.test.ts",
   "src/flows/channel-setup.status.test.ts",
-  "src/flows/doctor-health-contributions.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
   "extensions/canvas/src/host/server.state-dir.test.ts",
@@ -112,7 +125,6 @@ export const forcedUnitFastTestFiles = [
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/library.test.ts",
-  "src/memory-host-sdk/host/backend-config.test.ts",
   "src/media-generation/provider-capabilities.contract.test.ts",
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
@@ -122,7 +134,6 @@ export const forcedUnitFastTestFiles = [
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/pairing/pairing-challenge.test.ts",
-  "src/pairing/pairing-store.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
@@ -227,6 +238,7 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/proxy-capture/runtime.test.ts",
   "src/plugins/install.npm-spec.test.ts",
   "src/plugins/contracts/**/*.test.ts",
+  "src/pairing/pairing-store.test.ts",
   "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",
   "src/secrets/**/*.test.ts",
@@ -247,7 +259,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
+    pattern: /(?:plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",
@@ -400,7 +412,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       : collectUnitFastTestCandidates(cwd);
   const analysis = candidates.map((file) => {
     const absolutePath = path.join(cwd, file);
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(absolutePath, "utf8");
     } catch {
@@ -477,7 +489,7 @@ function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
     return false;
   }
 
-  let source = "";
+  let source;
   try {
     source = fs.readFileSync(path.join(cwd, normalized), "utf8");
   } catch {

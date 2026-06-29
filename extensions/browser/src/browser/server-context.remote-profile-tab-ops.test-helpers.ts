@@ -1,8 +1,13 @@
+/**
+ * Lazy-loaded dependency bundle for remote-profile tab operation tests.
+ */
 import { afterEach, beforeEach, vi } from "vitest";
 
+/** Modules and helpers shared by remote-profile tab operation tests. */
 export type RemoteProfileTestDeps = {
   cdpModule: typeof import("./cdp.js");
   chromeModule: typeof import("./chrome.js");
+  BrowserCdpEndpointBlockedError: typeof import("./errors.js").BrowserCdpEndpointBlockedError;
   InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
   pwAiModule: typeof import("./pw-ai-module.js");
   closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
@@ -16,11 +21,13 @@ export type RemoteProfileTestDeps = {
 
 let remoteProfileTestDepsPromise: Promise<RemoteProfileTestDeps> | undefined;
 
+/** Loads remote-profile tab operation dependencies after Chrome mocks are installed. */
 export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
   remoteProfileTestDepsPromise ??= (async () => {
     await import("./server-context.chrome-test-harness.js");
     const cdpModule = await import("./cdp.js");
     const chromeModule = await import("./chrome.js");
+    const { BrowserCdpEndpointBlockedError } = await import("./errors.js");
     const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
     const pwAiModule = await import("./pw-ai-module.js");
     const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
@@ -35,6 +42,7 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
     return {
       cdpModule,
       chromeModule,
+      BrowserCdpEndpointBlockedError,
       InvalidBrowserNavigationUrlError,
       pwAiModule,
       closePlaywrightBrowserConnection,
@@ -49,6 +57,7 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
   return await remoteProfileTestDepsPromise;
 }
 
+/** Installs per-test mock reset and Playwright connection cleanup. */
 export function installRemoteProfileTestLifecycle(deps: RemoteProfileTestDeps): void {
   beforeEach(() => {
     vi.clearAllMocks();

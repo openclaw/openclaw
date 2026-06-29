@@ -1,6 +1,7 @@
+/** Tests system.run allowlist planning, output truncation, and argv resolution. */
 import { describe, expect, it } from "vitest";
-import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
+import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { resolveSystemRunExecArgv } from "./invoke-system-run-allowlist.js";
 
@@ -19,20 +20,11 @@ function resolveAllowlistApprovals() {
 
 describe("resolveSystemRunExecArgv", () => {
   it.runIf(process.platform !== "win32")(
-    "keeps rebuilt shell argv behind a final allowlist check",
-    () => {
+    "fails closed when shell rewriting has no authorization plan",
+    async () => {
       const env = { PATH: "/usr/bin:/bin" };
-      const analysis = analyzeShellCommand({
-        command: "head -c 16",
-        env,
-        platform: process.platform,
-      });
-      expect(analysis.ok).toBe(true);
-      if (!analysis.ok) {
-        return;
-      }
 
-      const result = resolveSystemRunExecArgv({
+      const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
         argv: ["/bin/sh", "-lc", "head -c 16"],
         security: "allowlist",
@@ -49,8 +41,9 @@ describe("resolveSystemRunExecArgv", () => {
           allowlistSatisfied: true,
         },
         shellCommand: "head -c 16",
-        segments: analysis.segments,
+        segments: [],
         segmentSatisfiedBy: ["safeBins"],
+        authorizationPlan: undefined,
         cwd: undefined,
         env,
       });
@@ -60,23 +53,23 @@ describe("resolveSystemRunExecArgv", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "returns rebuilt shell argv when the final allowlist check passes",
-    () => {
+    "returns rebuilt shell argv when the authorization plan supports rewriting",
+    async () => {
       const env = { PATH: "/usr/bin:/bin" };
-      const analysis = analyzeShellCommand({
+      const authorizationPlan = await planShellAuthorization({
         command: "head -c 16",
         env,
         platform: process.platform,
       });
-      expect(analysis.ok).toBe(true);
-      if (!analysis.ok) {
-        return;
+      expect(authorizationPlan.ok).toBe(true);
+      if (!authorizationPlan.ok) {
+        throw new Error(authorizationPlan.reason);
       }
       const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
         global: { safeBins: ["head"] },
       });
 
-      const result = resolveSystemRunExecArgv({
+      const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
         argv: ["/bin/sh", "-lc", "head -c 16"],
         security: "allowlist",
@@ -93,16 +86,18 @@ describe("resolveSystemRunExecArgv", () => {
           allowlistSatisfied: true,
         },
         shellCommand: "head -c 16",
-        segments: analysis.segments,
+        segments: authorizationPlan.groups.flatMap((group) =>
+          group.candidates.map((candidate) => candidate.sourceSegment),
+        ),
         segmentSatisfiedBy: ["safeBins"],
+        authorizationPlan,
         cwd: undefined,
         env,
       });
 
       expect(result).not.toBeNull();
       expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toContain("head");
-      expect(result?.[2]).not.toBe("head -c 16");
+      expect(result?.[2]).toBe("/usr/bin/head -c 16");
     },
   );
 });

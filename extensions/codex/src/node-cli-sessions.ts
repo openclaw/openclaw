@@ -1,3 +1,4 @@
+// Codex plugin module implements node cli sessions behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -11,6 +12,7 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -690,7 +692,10 @@ function normalizeTimeoutMs(value: unknown): number {
 }
 
 function truncateText(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+  if (value.length <= max) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
 }
 
 function compareOptionalStringsDesc(a?: string, b?: string): number {

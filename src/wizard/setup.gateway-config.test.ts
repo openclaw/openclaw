@@ -1,3 +1,4 @@
+// Setup gateway config tests cover gateway prompt choices and config output.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
@@ -28,12 +29,12 @@ describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
-    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+    const select = vi.fn(async (paramsLocal: WizardSelectParams<unknown>) => {
       const next = selectQueue.shift();
       if (next !== undefined) {
         return next;
       }
-      return params.initialValue ?? params.options[0]?.value;
+      return paramsLocal.initialValue ?? paramsLocal.options[0]?.value;
     }) as unknown as WizardPrompter["select"];
 
     return buildWizardPrompter({
@@ -331,7 +332,7 @@ describe("configureGatewayForSetup", () => {
       ...createQuickstartGateway("token"),
       token: {
         source: "exec" as const,
-        provider: "gatewayTokens",
+        provider: "gatewaytokens",
         id: "gateway/auth/token",
       },
     };
@@ -347,7 +348,7 @@ describe("configureGatewayForSetup", () => {
       nextConfig: {
         secrets: {
           providers: {
-            gatewayTokens: {
+            gatewaytokens: {
               source: "exec",
               command: process.execPath,
               allowInsecurePath: true,

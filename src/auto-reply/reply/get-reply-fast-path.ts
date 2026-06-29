@@ -1,4 +1,9 @@
+// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -7,17 +12,14 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { SessionInitResult } from "./session.js";
 
 const COMPLETE_REPLY_CONFIG_SYMBOL = Symbol.for("openclaw.reply.complete-config");
@@ -177,6 +179,7 @@ export function buildFastReplyCommandContext(params: {
     surface,
     channel,
     channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: commandAuthorized,
@@ -256,7 +259,7 @@ export function initFastReplySessionState(params: {
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
     ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
-    responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
+    responseUsage: existingEntry?.responseUsage,
     modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
     providerOverride: resetTriggered
       ? existingEntry?.providerOverride
@@ -282,6 +285,11 @@ export function initFastReplySessionState(params: {
       : {}),
   };
   sessionStore[sessionKey] = sessionEntry;
+  const sessionEntryHandle = createReplySessionEntryHandle({
+    sessionEntry,
+    sessionKey,
+    sessionStore,
+  });
   const sessionCtx: TemplateContext = {
     ...ctx,
     SessionKey: sessionKey,
@@ -292,6 +300,7 @@ export function initFastReplySessionState(params: {
   return {
     sessionCtx,
     sessionEntry,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     sessionId,

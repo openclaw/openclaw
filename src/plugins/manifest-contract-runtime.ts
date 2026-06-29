@@ -1,5 +1,6 @@
+// Resolves manifest contracts into runtime-facing plugin capabilities.
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   hasManifestContractValue,
   listAvailableManifestContractPlugins,
@@ -12,10 +13,6 @@ export type ManifestContractRuntimePluginResolution = {
   bundledCompatPluginIds: string[];
 };
 
-const DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS = {
-  preferPersisted: false,
-} as const;
-
 export function resolveManifestContractRuntimePluginResolution(params: {
   cfg?: OpenClawConfig;
   contract: PluginManifestContractListKey;
@@ -24,7 +21,6 @@ export function resolveManifestContractRuntimePluginResolution(params: {
   const snapshot = loadPluginMetadataSnapshot({
     config: params.cfg ?? {},
     env: process.env,
-    ...DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS,
   });
   const allContractPlugins = snapshot.plugins.filter((plugin) =>
     hasManifestContractValue({

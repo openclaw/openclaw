@@ -1,3 +1,7 @@
+import { isCoreToolNameReplaySafe } from "../tool-replay-safety.js";
+/**
+ * Test fixtures for embedded-run overflow compaction scenarios.
+ */
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -33,7 +37,11 @@ export function makeCompactionSuccess(params: {
 export function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
-  const toolMetas = overrides.toolMetas ?? [];
+  const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
+    Object.assign({}, entry, {
+      replaySafe: entry.replaySafe ?? isCoreToolNameReplaySafe(entry.toolName),
+    }),
+  );
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
   const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
@@ -51,7 +59,6 @@ export function makeAttemptResult(
     promptErrorSource: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
-    toolMetas,
     acceptedSessionSpawns,
     lastAssistant: undefined,
     messagesSnapshot: [],
@@ -77,6 +84,7 @@ export function makeAttemptResult(
     messagingToolSentTargets,
     cloudCodeAssistFormatError: false,
     ...overrides,
+    toolMetas,
   };
 }
 

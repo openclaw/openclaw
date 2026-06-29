@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for embedded-agent message text utilities.
+ * Verifies visible text extraction, reasoning formatting, and thinking-tag promotion.
+ */
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,8 +14,12 @@ import {
 } from "./embedded-agent-utils.js";
 
 function makeAssistantMessage(
-  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
+  message: Omit<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason" | "content"
+  > &
     Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
+      content: unknown;
       phase?: "commentary" | "final_answer";
     },
 ): AssistantMessage {
@@ -29,7 +37,7 @@ function makeAssistantMessage(
     },
     stopReason: "stop",
     ...message,
-  };
+  } as unknown as AssistantMessage;
 }
 
 describe("extractAssistantText", () => {
@@ -786,6 +794,23 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe("");
   });
 
+  it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Legacy answer" },
+        {
+          type: "output_text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
   it("falls back to legacy unphased text when phased text is absent", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -794,6 +819,32 @@ describe("extractAssistantVisibleText", () => {
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string content", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: "Visible prefix <think>private reasoning tail",
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
+  });
+
+  it("preserves literal reasoning-looking tags in unphased visible text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before <think>literal tag text after",
+          textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
   });
 
   it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {

@@ -1,8 +1,9 @@
+// Control UI module implements custom theme behavior.
 import { z } from "zod";
 import { normalizeOptionalString } from "./string-coerce.ts";
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
-const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
+const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CUSTOM_THEME_STYLE_ID = "openclaw-custom-theme";
 const MAX_TWEAKCN_THEME_BYTES = 200_000;
 const MAX_CSS_TOKEN_LENGTH = 240;
@@ -618,7 +619,7 @@ export function syncCustomThemeStyleTag(theme: ImportedCustomTheme | null | unde
     style?.remove();
     return;
   }
-  let cssText = "";
+  let cssText;
   try {
     cssText = buildCustomThemeStyles(theme);
   } catch {

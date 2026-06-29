@@ -1,3 +1,4 @@
+// Telegram tests cover bot.mediaownloads media file path no file download plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
 import { setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
@@ -426,8 +427,8 @@ describe("telegram media groups", () => {
               },
             ],
             expectedReplyCount: 1,
-            assert: (replySpy: ReturnType<typeof vi.fn>) => {
-              const payload = replyPayload(replySpy);
+            assert: (replySpyLocal: ReturnType<typeof vi.fn>) => {
+              const payload = replyPayload(replySpyLocal);
               expect(payload?.Body).toContain("Here are my photos");
               expect(payload?.MediaPaths).toHaveLength(2);
             },
@@ -481,7 +482,9 @@ describe("telegram media groups", () => {
             delayMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
             expectedCount: scenario.expectedReplyCount,
           });
-          expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
+          await vi.waitFor(() =>
+            expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount),
+          );
 
           expect(runtimeError).not.toHaveBeenCalled();
           scenario.assert(replySpy);
@@ -568,7 +571,7 @@ describe("telegram media groups", () => {
           clearTimeout(timer.handle);
           await timer.callback();
         }
-        expect(replySpy).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
         const firstPayload = replyPayload(replySpy, 0);
         const secondPayload = replyPayload(replySpy, 1);
         expect([firstPayload.Body, secondPayload.Body]).toEqual(

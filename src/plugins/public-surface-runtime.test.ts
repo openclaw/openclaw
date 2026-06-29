@@ -1,3 +1,4 @@
+/** Verifies public-surface runtime artifact loading for bundled plugins. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,11 @@ import {
 } from "./public-surface-runtime.js";
 
 const tempDirs: string[] = [];
+const noBundledPluginOverrideEnv = {
+  ...process.env,
+  OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+} satisfies NodeJS.ProcessEnv;
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -111,6 +117,7 @@ describe("bundled plugin public surface runtime", () => {
         bundledPluginsDirMode: "auto",
         dirName: "demo",
         artifactBasename: "api.js",
+        env: noBundledPluginOverrideEnv,
       }),
     ).toBe(sourceModulePath);
   });

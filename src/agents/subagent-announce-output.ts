@@ -1,5 +1,10 @@
+/**
+ * Subagent completion output capture.
+ *
+ * Reads child session output, detects waiting states, and formats completion findings for announcements.
+ */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -15,7 +20,7 @@ import {
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
@@ -202,9 +207,10 @@ export async function readSubagentOutput(
   let messages: unknown[] | undefined;
   if (options?.sessionFile) {
     const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
-      sessionKey,
-      undefined,
-      options.sessionFile,
+      {
+        sessionFile: options.sessionFile,
+        sessionId: sessionKey,
+      },
       {
         mode: "recent",
         maxMessages: 100,
@@ -511,7 +517,13 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
   if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
+    const formattedThousands = (value / 1_000).toFixed(1);
+    // Keep the compact stats unit scheme stable when one-decimal rounding
+    // reaches the next unit, e.g. 999_999 -> 1000.0k.
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(value / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(value));
 }
@@ -535,7 +547,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }

@@ -1,5 +1,6 @@
+// Direct delivery tests cover isolated agent delivery through core channel targets.
 import "./isolated-agent.mocks.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -451,6 +452,55 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
         text: "topic 47 completion",
         messageThreadId: 47,
       },
+    });
+  });
+
+  it("does not report delivered when telegram announce produces no platform result", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "" }));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            plugin: createOutboundTestPlugin({
+              id: "telegram",
+              outbound: {
+                deliveryMode: "direct",
+                preferFinalAssistantVisibleText: true,
+                sendText,
+                resolveTarget: ({ to }) =>
+                  to?.trim()
+                    ? { ok: true, to: to.trim() }
+                    : { ok: false, error: new Error("target is required") },
+              },
+              messaging: {
+                parseExplicitTarget: ({ raw }) => ({ to: raw.trim() }),
+              },
+            }),
+            source: "test",
+          },
+        ]),
+      );
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "cron message with no platform receipt" }]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(res.delivery).toMatchObject({
+        fallbackUsed: true,
+        delivered: false,
+      });
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 

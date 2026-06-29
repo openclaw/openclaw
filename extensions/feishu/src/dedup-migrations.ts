@@ -1,3 +1,4 @@
+// Feishu plugin module implements dedup migrations behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -64,7 +65,7 @@ export const detectFeishuLegacyStateMigrations: BundledChannelLegacyStateMigrati
   stateDir,
 }) => {
   const dedupDir = path.join(stateDir, "feishu", "dedup");
-  let entries: fs.Dirent[] = [];
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dedupDir, { withFileTypes: true });
   } catch {

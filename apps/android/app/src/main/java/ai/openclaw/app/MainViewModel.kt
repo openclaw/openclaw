@@ -4,6 +4,8 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
@@ -14,6 +16,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,7 +24,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
+/**
+ * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(
   app: Application,
@@ -29,7 +36,11 @@ class MainViewModel(
   private val nodeApp = app as NodeApp
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
-  private var foreground = true
+
+  @Volatile private var foreground = false
+
+  @Volatile private var runtimeStartupQueued = false
+
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
@@ -39,6 +50,9 @@ class MainViewModel(
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
+  /**
+   * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
+   */
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
     val runtime = nodeApp.ensureRuntime()
@@ -47,6 +61,22 @@ class MainViewModel(
     return runtime
   }
 
+  /**
+   * Starts the node runtime off the main thread so fresh installs can render
+   * the shell before encrypted prefs, device identity, and gateway setup warm up.
+   */
+  private fun queueRuntimeStartup() {
+    if (runtimeRef.value != null || runtimeStartupQueued) return
+    runtimeStartupQueued = true
+    viewModelScope.launch(Dispatchers.Default) {
+      runCatching { ensureRuntime() }
+      runtimeStartupQueued = false
+    }
+  }
+
+  /**
+   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   */
   private fun <T> runtimeState(
     initial: T,
     selector: (NodeRuntime) -> StateFlow<T>,
@@ -81,7 +111,10 @@ class MainViewModel(
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
+  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
+    runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
+  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -139,7 +172,9 @@ class MainViewModel(
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
@@ -169,12 +204,9 @@ class MainViewModel(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
-
-  init {
-    if (prefs.onboardingCompleted.value) {
-      ensureRuntime()
-    }
-  }
+  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
+  val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
+  val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -185,6 +217,9 @@ class MainViewModel(
   val sms: SmsManager
     get() = ensureRuntime().sms
 
+  /**
+   * Attaches Activity-owned permission and lifecycle seams after runtime initialization.
+   */
   fun attachRuntimeUi(
     owner: LifecycleOwner,
     permissionRequester: PermissionRequester,
@@ -195,15 +230,15 @@ class MainViewModel(
     runtime.sms.attachPermissionRequester(permissionRequester)
   }
 
+  /**
+   * Starts runtime on foreground entry only after onboarding has completed.
+   */
   fun setForeground(value: Boolean) {
     foreground = value
-    val runtime =
-      if (value && prefs.onboardingCompleted.value) {
-        ensureRuntime()
-      } else {
-        runtimeRef.value
-      }
-    runtime?.setForeground(value)
+    if (value && prefs.onboardingCompleted.value) {
+      queueRuntimeStartup()
+    }
+    runtimeRef.value?.setForeground(value)
   }
 
   fun setDisplayName(value: String) {
@@ -254,10 +289,54 @@ class MainViewModel(
     prefs.setGatewayPassword(value)
   }
 
-  fun resetGatewaySetupAuth() {
-    ensureRuntime().resetGatewaySetupAuth()
+  /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
+  private fun resetGatewaySetupAuth() {
+    runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
   }
 
+  private fun resetGatewaySetupAuthWithoutRuntime() {
+    prefs.clearGatewaySetupAuth()
+    val deviceId = DeviceIdentityStore(nodeApp).loadOrCreate().deviceId
+    val deviceAuthStore = DeviceAuthStore(prefs)
+    deviceAuthStore.clearToken(deviceId, "node")
+    deviceAuthStore.clearToken(deviceId, "operator")
+  }
+
+  fun saveGatewayConfigAndConnect(
+    host: String,
+    port: Int,
+    tls: Boolean,
+    token: String,
+    bootstrapToken: String,
+    password: String,
+    resetSetupAuth: Boolean,
+  ) {
+    // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
+    // the whole sequence off the Compose thread so retries cannot trigger ANRs.
+    viewModelScope.launch(Dispatchers.Default) {
+      if (resetSetupAuth) {
+        resetGatewaySetupAuth()
+      }
+      prefs.setManualEnabled(true)
+      prefs.setManualHost(host)
+      prefs.setManualPort(port)
+      prefs.setManualTls(tls)
+      prefs.setGatewayBootstrapToken(bootstrapToken)
+      prefs.setGatewayToken(token)
+      prefs.setGatewayPassword(password)
+      ensureRuntime()
+        .connect(
+          GatewayEndpoint.manual(host = host, port = port),
+          NodeRuntime.GatewayConnectAuth(
+            token = token.ifEmpty { null },
+            bootstrapToken = bootstrapToken.ifEmpty { null },
+            password = password.ifEmpty { null },
+          ),
+        )
+    }
+  }
+
+  /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
       ensureRuntime()
@@ -265,19 +344,27 @@ class MainViewModel(
     prefs.setOnboardingCompleted(value)
   }
 
+  /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
-    runtimeRef.value?.disconnect()
-    resetGatewaySetupAuth()
-    _startOnboardingAtGatewaySetup.value = true
-    prefs.setOnboardingCompleted(false)
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.disconnect()
+      resetGatewaySetupAuth()
+      prefs.setOnboardingCompleted(false)
+      _startOnboardingAtGatewaySetup.value = true
+    }
   }
 
+  /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
   fun clearGatewaySetupStartRequest() {
     _startOnboardingAtGatewaySetup.value = false
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    ensureRuntime().setInstalledAppsSharingEnabled(value)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -315,6 +402,7 @@ class MainViewModel(
     ensureRuntime().setVoiceScreenActive(active)
   }
 
+  /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
     _requestedHomeDestination.value = HomeDestination.Chat
     if (request.autoSend) {
@@ -358,12 +446,28 @@ class MainViewModel(
     ensureRuntime().setSpeakerEnabled(enabled)
   }
 
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    prefs.setAppearanceThemeMode(mode)
+  }
+
   fun refreshGatewayConnection() {
-    ensureRuntime().refreshGatewayConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().refreshGatewayConnection()
+    }
+  }
+
+  fun startGatewayDiscovery() {
+    queueRuntimeStartup()
   }
 
   fun connect(endpoint: GatewayEndpoint) {
     ensureRuntime().connect(endpoint)
+  }
+
+  fun connectInBackground(endpoint: GatewayEndpoint) {
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().connect(endpoint)
+    }
   }
 
   fun connect(
@@ -434,6 +538,17 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshExecApprovals() {
+    ensureRuntime().refreshExecApprovals()
+  }
+
+  fun resolveExecApproval(
+    id: String,
+    decision: String,
+  ) {
+    ensureRuntime().resolveExecApproval(id = id, decision = decision)
   }
 
   fun refreshChannels() {

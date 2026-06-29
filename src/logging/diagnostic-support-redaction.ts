@@ -1,10 +1,12 @@
+// Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { asOptionalRecord } from "../shared/record-coerce.js";
 import { redactSensitiveText } from "./redact.js";
 
+// Redaction helpers for support bundles; preserve operational shape while removing private data.
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PAYLOAD_SUPPORT_FIELD_RE =
@@ -35,6 +37,7 @@ const MAX_SUPPORT_OBJECT_ENTRIES = 1000;
 const DEFAULT_TRUNCATION_SUFFIX = "...<truncated>";
 const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 
+/** Context needed to redact paths and environment-derived private prefixes. */
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
@@ -95,7 +98,7 @@ function createSupportRecord(): Record<string, unknown> {
 }
 
 function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function countOwnObjectEntries(record: Record<string, unknown>): number {
@@ -364,6 +367,7 @@ function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionCo
   });
 }
 
+/** Sanitizes general diagnostic snapshots while keeping bounded object/array structure. */
 export function sanitizeSupportSnapshotValue(
   value: unknown,
   redaction: SupportRedactionContext,
@@ -385,6 +389,7 @@ export function sanitizeSupportSnapshotValue(
   if (Array.isArray(value)) {
     const { count, items } = limitedSupportArray(value);
     if (key === "programArguments") {
+      // Command arguments get flag-aware redaction so "--token value" redacts the following item.
       return supportArrayResult(sanitizeCommandArguments(items, redaction), count);
     }
     return supportArrayResult(
@@ -410,6 +415,7 @@ export function sanitizeSupportSnapshotValue(
   return sanitized;
 }
 
+/** Sanitizes config-shaped values with stricter private field handling. */
 export function sanitizeSupportConfigValue(
   value: unknown,
   redaction: SupportRedactionContext,

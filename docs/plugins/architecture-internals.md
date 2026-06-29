@@ -312,6 +312,13 @@ If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
 that still runs on OpenClaw's normal inference loop.
 
+`resolveUsageAuth` decides whether OpenClaw should call `fetchUsageSnapshot` or
+fall back to generic credential resolution for usage/status surfaces. Return
+`{ token, accountId? }` when the provider has a usage credential, return
+`{ handled: true }` when provider-owned usage auth has handled the request and
+must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
+when the provider did not handle usage auth.
+
 ### Provider example
 
 ```ts
@@ -730,6 +737,10 @@ outbound host generic and use the messaging adapter surface for provider rules:
   should be treated as `direct`, `group`, or `channel` before directory lookup.
 - `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
   input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.reservedLiterals` lists bare words that are
+  channel/session references for that provider. Resolution preserves configured
+  directory entries before rejecting reserved literals, then fails closed on a
+  directory miss.
 - `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
   core needs a final provider-owned resolution after normalization or after a
   directory miss.
@@ -1014,10 +1025,10 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `plugins/installs.json` plugin index is the install
+surface. The persisted `installed_plugin_index` SQLite row is the install
 source of truth and can be refreshed without loading plugin runtime modules.
 Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` array is a rebuildable manifest view.
+invalid; its `plugins` payload is a rebuildable manifest view.
 
 ## Context engine plugins
 

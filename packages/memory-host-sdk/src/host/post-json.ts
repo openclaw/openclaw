@@ -1,7 +1,11 @@
+// Memory Host SDK module implements post json behavior.
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { readResponseJsonWithLimit, readResponseTextSnippet } from "./response-snippet.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
+// Shared JSON POST helper for guarded remote memory provider calls.
+
+/** POST JSON, parse bounded response JSON, and attach status metadata when requested. */
 export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
@@ -26,7 +30,7 @@ export async function postJson<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        const text = await readResponseTextSnippet(res);
+        const text = await readResponseTextSnippet(res, { signal: params.signal });
         const err = new Error(`${params.errorPrefix}: ${res.status} ${text}`) as Error & {
           status?: number;
         };
@@ -38,6 +42,7 @@ export async function postJson<T>(params: {
       const payload = await readResponseJsonWithLimit(res, {
         errorPrefix: params.errorPrefix,
         maxBytes: params.maxResponseBytes,
+        signal: params.signal,
       });
       return await params.parse(payload);
     },

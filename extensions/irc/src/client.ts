@@ -1,3 +1,4 @@
+// Irc plugin module implements client behavior.
 import net from "node:net";
 import tls from "node:tls";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -65,11 +66,14 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function buildFallbackNick(nick: string): string {
+let nickCollisionFallbackSeq = 0;
+
+export function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
-  const suffix = "_";
+  const seq = ++nickCollisionFallbackSeq;
+  const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
   if (base.length >= maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
@@ -376,7 +380,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               text,
               rawLine,
             }),
-          ).catch((error) => {
+          ).catch((error: unknown) => {
             fail(error);
           });
         }

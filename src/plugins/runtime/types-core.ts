@@ -1,3 +1,4 @@
+// Core runtime types define system, config, and task helper contracts for plugins.
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -57,6 +58,43 @@ type RuntimeReplaceConfigFileParams = {
   baseHash?: string;
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
+};
+type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionStoreReadParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  hydrateSkillPromptRefs?: boolean;
+  sessionKey: string;
+  readConsistency?: "latest";
+  storePath?: string;
+};
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreEntrySummary = {
+  sessionKey: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  fallbackEntry?: RuntimeSessionEntry;
+  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
+  preserveActivity?: boolean;
+  replaceEntry?: boolean;
+  update: (
+    entry: RuntimeSessionEntry,
+    context: { existingEntry?: RuntimeSessionEntry },
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+};
+type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
+  entry: RuntimeSessionEntry;
+};
+type RuntimeSessionStoreEntryUpdateParams = {
+  storePath: string;
+  sessionKey: string;
+  update: (
+    entry: RuntimeSessionEntry,
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  requireWriteSuccess?: boolean;
 };
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
@@ -204,19 +242,44 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
-      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
-      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
-      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      listSessionEntries: (
+        params?: RuntimeSessionStoreListParams,
+      ) => RuntimeSessionStoreEntrySummary[];
+      patchSessionEntry: (
+        params: RuntimeSessionStoreEntryPatchParams,
+      ) => Promise<RuntimeSessionEntry | null>;
+      upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       /**
        * @deprecated Use getSessionEntry/listSessionEntries for reads and
-       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
-       * mutable whole-store compatibility shape.
+       * patchSessionEntry/upsertSessionEntry for writes. This whole-store
+       * helper is kept only during the transition before SQLite migration.
+       * Callers must migrate away from reading sessions.json directly.
        */
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
+      /**
+       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+       * whole-store helper is kept only during the transition before SQLite
+       * migration. Callers must migrate away from writing sessions.json
+       * directly.
+       */
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
+      /**
+       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+       * whole-store helper is kept only during the transition before SQLite
+       * migration. Callers must migrate away from updating sessions.json
+       * directly.
+       */
       updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
-      updateSessionStoreEntry: typeof import("../../config/sessions/store.js").updateSessionStoreEntry;
+      updateSessionStoreEntry: (
+        params: RuntimeSessionStoreEntryUpdateParams,
+      ) => Promise<RuntimeSessionEntry | null>;
+      /**
+       * @deprecated Use getSessionEntry to read session metadata by
+       * agent/session identity. This file-path helper is kept only during the
+       * transition before SQLite migration. Callers must migrate away from
+       * resolving transcript file paths directly.
+       */
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
@@ -240,8 +303,8 @@ export type PluginRuntimeCore = {
   };
   media: {
     loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
-    detectMime: typeof import("../../media/mime.js").detectMime;
-    mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
+    detectMime: typeof import("@openclaw/media-core/mime").detectMime;
+    mediaKindFromMime: typeof import("@openclaw/media-core/constants").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
     getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
     resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
@@ -314,6 +377,16 @@ export type PluginRuntimeCore = {
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options?: Omit<
+        import("../../channels/message/ingress-queue.js").CreateChannelIngressQueueOptions,
+        "channelId"
+      >,
+    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+      TPayload,
+      TMetadata,
+      TCompletedMetadata
+    >;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;

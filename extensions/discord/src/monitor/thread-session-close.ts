@@ -1,5 +1,10 @@
+// Discord plugin module implements thread session close behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  listSessionEntries,
+  patchSessionEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
@@ -43,21 +48,32 @@ export async function closeDiscordThreadSessions(params: {
 
   let resetCount = 0;
 
-  await updateSessionStore(storePath, (store) => {
-    for (const [key, entry] of Object.entries(store)) {
-      if (!entry || !sessionKeyContainsThreadId(key)) {
-        continue;
-      }
-      if (entry.updatedAt === 0) {
-        continue;
-      }
-      // Setting updatedAt to 0 signals that this session is stale.
-      // evaluateSessionFreshness will create a new session on the next message.
-      entry.updatedAt = 0;
+  for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+    if (!sessionKeyContainsThreadId(sessionKey) || entry.updatedAt === 0) {
+      continue;
+    }
+    // Setting updatedAt to 0 signals that this session is stale.
+    // evaluateSessionFreshness will create a new session on the next message.
+    let resetEntry = false;
+    await patchSessionEntry({
+      storePath,
+      sessionKey,
+      replaceEntry: true,
+      update: (current) => {
+        if (current.updatedAt === 0) {
+          return null;
+        }
+        if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
+          return null;
+        }
+        resetEntry = true;
+        return { ...current, updatedAt: 0 };
+      },
+    });
+    if (resetEntry) {
       resetCount += 1;
     }
-    return resetCount;
-  });
+  }
 
   return resetCount;
 }

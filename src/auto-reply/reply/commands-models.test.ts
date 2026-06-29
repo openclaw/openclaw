@@ -1,3 +1,4 @@
+// Tests model command output, catalog loading, and provider auth status rendering.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -28,6 +29,16 @@ const modelProviderAuthMocks = vi.hoisted(() => {
   return state;
 });
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
+const pluginMetadataMocks = vi.hoisted(() => ({
+  snapshot: undefined as
+    | {
+        plugins: unknown[];
+        owners: {
+          cliBackends: Map<string, string>;
+        };
+      }
+    | undefined,
+}));
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -74,12 +85,15 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
     modelProviderAuthMocks.authenticatedProviders.has(provider),
   getCurrentProviderAuthState: () => null,
   clearCurrentProviderAuthState: () => undefined,
-  warmCurrentProviderAuthState: async () => undefined,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithRuntimeMock(params),
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -159,6 +173,7 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   normalizeProviderModelIdWithRuntimeMock.mockReset();
+  pluginMetadataMocks.snapshot = undefined;
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   const registry = createTestRegistry([
@@ -251,6 +266,12 @@ function firstAuthCheckerParams() {
   return modelProviderAuthMocks.createProviderAuthChecker.mock.calls[0]?.[0];
 }
 
+function preparedAuthCheckerParams() {
+  return modelProviderAuthMocks.createProviderAuthChecker.mock.calls
+    .map(([params]) => params)
+    .find((params) => params.allowPreparedRuntimeAuth === true);
+}
+
 describe("handleModelsCommand", () => {
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
@@ -263,7 +284,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
-    const authCheckerParams = firstAuthCheckerParams();
+    const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
@@ -271,15 +292,16 @@ describe("handleModelsCommand", () => {
     await handleModelsCommand(buildParams("/models"), true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
-    const authCheckerParams = firstAuthCheckerParams();
+    const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
     expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
+    expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
   });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
     try {
-      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => {}));
 
       const resultPromise = handleModelsCommand(buildParams("/models"), true);
       await vi.advanceTimersByTimeAsync(750);
@@ -299,6 +321,25 @@ describe("handleModelsCommand", () => {
     await handleModelsCommand(buildParams("/models openai all"), true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+  });
+
+  it("reuses the current plugin metadata snapshot for read-only catalog loading", async () => {
+    const metadataSnapshot = {
+      plugins: [],
+      owners: {
+        cliBackends: new Map<string, string>(),
+      },
+    };
+    pluginMetadataMocks.snapshot = metadataSnapshot;
+
+    await handleModelsCommand(buildParams("/models"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnly: true,
+        metadataSnapshot,
+      }),
+    );
   });
 
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
@@ -352,12 +393,12 @@ describe("handleModelsCommand", () => {
   it("does not re-add the default provider when provider visibility is restricted", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       { provider: "vllm", id: "llama-local", name: "Llama Local" },
       { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai-codex", "vllm"]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai", "vllm"]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -365,7 +406,7 @@ describe("handleModelsCommand", () => {
           defaults: {
             model: { primary: "anthropic/claude-opus-4-5" },
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
               "vllm/*": {},
             },
           },
@@ -374,8 +415,8 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
-    expect(result?.reply?.text).toContain("- openai-codex (2)");
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");
   });
@@ -446,6 +487,50 @@ describe("handleModelsCommand", () => {
       "claude-sonnet-4-5",
       "claude-sonnet-4-6",
     ]);
+  });
+
+  it("does not treat standalone CLI backends as canonical provider aliases", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "acme-cli",
+          pluginId: "acme",
+          config: { command: "acme" },
+          bundleMcp: false,
+        },
+      ],
+    });
+    pluginMetadataMocks.snapshot = {
+      plugins: [],
+      owners: {
+        cliBackends: new Map([["acme-cli", "acme"]]),
+      },
+    };
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "acme-cli", id: "acme-model", name: "Acme Model" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "acme-cli"]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.byProvider.has("acme-cli")).toBe(false);
   });
 
   it("keeps non-CLI configured provider model lists scoped to user config", async () => {
@@ -744,7 +829,7 @@ describe("handleModelsCommand", () => {
 
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
       { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
       { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
     ]);
@@ -752,11 +837,11 @@ describe("handleModelsCommand", () => {
       agents: {
         defaults: {
           model: {
-            primary: "openai-codex/gpt-5.4",
+            primary: "openai/gpt-5.4",
             fallbacks: ["deepseek-v4-flash", "deepseek-v4-pro"],
           },
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
@@ -764,7 +849,7 @@ describe("handleModelsCommand", () => {
 
     const data = await buildModelsProviderData(cfg as OpenClawConfig);
 
-    expect([...(data.byProvider.get("openai-codex") ?? [])]).toEqual(["gpt-5.4"]);
+    expect([...(data.byProvider.get("openai") ?? [])]).toEqual(["gpt-5.4"]);
     expect([...(data.byProvider.get("deepseek") ?? [])].toSorted()).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
@@ -803,31 +888,27 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with canonical and legacy auth provider ids", async () => {
-    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
-      "oauth (openai-codex:user@example.com)",
-    );
+  it("labels OpenAI provider pages with the canonical auth provider id", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("oauth (openai:user@example.com)");
 
     const result = await handleModelsCommand(
       buildParams("/models openai", {
         auth: {
           order: {
-            openai: ["openai-codex:user@example.com"],
+            openai: ["openai:user@example.com"],
           },
         },
       }),
       true,
     );
 
-    expect(result?.reply?.text).toContain(
-      "Models (openai · 🔑 oauth (openai-codex:user@example.com))",
-    );
+    expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai:user@example.com))");
     const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
       ([params]) => (params as { provider?: string }).provider === "openai",
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex", "openai"],
+      acceptedProviderIds: ["openai"],
     });
   });
 

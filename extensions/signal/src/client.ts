@@ -1,3 +1,4 @@
+// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
@@ -125,7 +126,6 @@ function requestSignalHttpText(
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     let settled = false;
-    let request: ClientRequest | undefined;
     const deadline = setTimeout(() => {
       request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -140,7 +140,7 @@ function requestSignalHttpText(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     const resolveOnce = (response: SignalHttpResponse) => {
       if (settled) {
@@ -151,7 +151,7 @@ function requestSignalHttpText(
       resolve(response);
     };
     const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
-    request = client.request(
+    const request: ClientRequest | undefined = client.request(
       url,
       {
         method: options.method,
@@ -267,7 +267,6 @@ function openSignalEventStream(
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
-    let request: ClientRequest;
     const effectiveTimeoutMs = normalizeSignalSseTimeoutMs(timeoutMs);
     const headerDeadline =
       effectiveTimeoutMs === null
@@ -293,9 +292,9 @@ function openSignalEventStream(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
-    request = client.request(
+    const request: ClientRequest = client.request(
       url,
       {
         method: "GET",
@@ -433,4 +432,18 @@ export async function streamSignalEvents(params: {
   }
 
   flushEvent();
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

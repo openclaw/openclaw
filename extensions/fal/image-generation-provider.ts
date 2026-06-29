@@ -1,3 +1,4 @@
+// Fal provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
@@ -11,6 +12,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
@@ -512,8 +514,8 @@ async function fetchImageBuffer(
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     return {
       buffer: await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`fal generated image download exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`fal generated image download exceeds ${maxBytesLocal} bytes`),
       }),
       mimeType,
     };
@@ -644,7 +646,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
 
-        const payload = parseFalImageGenerationResponse(await response.json());
+        const payload = parseFalImageGenerationResponse(
+          await readProviderJsonResponse(response, "fal.image-generation"),
+        );
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
         for (const entry of payload.images) {

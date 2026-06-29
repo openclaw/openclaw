@@ -1,3 +1,4 @@
+// Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
@@ -17,6 +18,69 @@ import type {
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
 const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
+// Cap captured response bodies so debug proxy capture cannot be turned into an
+// out-of-memory vector. The patched global fetch tees every outbound response
+// through clone(), so a single large (or hostile, effectively endless) provider
+// response would otherwise be buffered fully into memory just to record it.
+const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
+
+// Reads a cloned capture response body under a byte cap. Returns truncated=true
+// (and discards the partial buffer) once the cap is exceeded so oversized or
+// hostile/endless bodies are recorded as metadata-only instead of buffered.
+//
+// Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
+// the body here is one branch of a Response.clone() tee whose sibling (the
+// caller-facing response) is still live, and cancelling such a branch never
+// settles (it only resolves once BOTH branches cancel). Awaiting it would hang
+// the capture pipeline and retain the buffered prefix forever, so we cancel
+// fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
+async function readCapturedResponseBodyBounded(
+  response: Response,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; truncated: boolean }> {
+  const clone = response.clone();
+  const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body || typeof body.getReader !== "function") {
+    // Non-streaming clone (e.g. test doubles): bounded arrayBuffer fallback.
+    const bytes = Buffer.from(await clone.arrayBuffer());
+    return bytes.length > maxBytes
+      ? { buffer: Buffer.alloc(0), truncated: true }
+      : { buffer: bytes, truncated: false };
+  }
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value?.length) {
+        continue;
+      }
+      if (total + value.length > maxBytes) {
+        truncated = true;
+        break;
+      }
+      chunks.push(Buffer.from(value));
+      total += value.length;
+    }
+  } finally {
+    if (truncated) {
+      void reader.cancel().catch(() => undefined);
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      // Some non-compliant/mocked streams reject releaseLock; ignore.
+    }
+  }
+  return truncated
+    ? { buffer: Buffer.alloc(0), truncated: true }
+    : { buffer: Buffer.concat(chunks, total), truncated: false };
+}
 const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -40,6 +104,8 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
+// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
+// redacting sensitive headers and persisting bodies in capture_blobs.
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
@@ -54,7 +120,7 @@ type DebugProxyCaptureStoreLike = Pick<
 >;
 
 export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: (dbPath: string, blobDir: string) => DebugProxyCaptureStoreLike;
+  getStore?: () => DebugProxyCaptureStoreLike;
   closeStore?: typeof closeDebugProxyCaptureStore;
   persistEventPayload?: (
     store: DebugProxyCaptureStoreLike,
@@ -129,6 +195,8 @@ function redactedCaptureHeaders(
     headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
   const redacted: Record<string, string> = {};
   for (const [name, value] of entries) {
+    // Header names are matched exactly and by sensitive fragments because
+    // providers use many token/key naming variants.
     redacted[name] = isSensitiveCaptureHeaderName(name) ? REDACTED_CAPTURE_HEADER_VALUE : value;
   }
   return redacted;
@@ -171,6 +239,8 @@ function installDebugProxyGlobalFetchPatch(
   if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
+  // Patch only once per target and keep the original fetch for deterministic
+  // teardown in tests and nested capture sessions.
   const fetchImpl = fetchTarget.fetch;
   const originalFetch = fetchImpl.bind(fetchTarget);
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
@@ -214,7 +284,7 @@ function installDebugProxyGlobalFetchPatch(
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = runtime.getStore(settings.dbPath, settings.blobDir);
+        const store = runtime.getStore();
         const parsed = new URL(url);
         store.recordEvent({
           sessionId: settings.sessionId,
@@ -242,6 +312,7 @@ function installDebugProxyGlobalFetchPatch(
   };
   const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
   if (typeof mockState === "object" && mockState !== null) {
+    // Preserve Vitest mock metadata when patching mocked fetch targets.
     (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
   }
   fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
@@ -270,19 +341,19 @@ export function initializeDebugProxyCapture(
   if (!settings.enabled) {
     return;
   }
-  resolveRuntimeDeps(deps).getStore(settings.dbPath, settings.blobDir).upsertSession({
+  resolveRuntimeDeps(deps).getStore().upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
-    dbPath: settings.dbPath,
-    blobDir: settings.blobDir,
   });
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
+// Finalization closes the session and restores the fetch patch before closing
+// the cached store, preventing later normal requests from being captured.
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -292,7 +363,7 @@ export function finalizeDebugProxyCapture(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
+  runtime.getStore().endSession(settings.sessionId);
   uninstallDebugProxyGlobalFetchPatch(deps);
   runtime.closeStore();
 }
@@ -316,7 +387,7 @@ export function captureHttpExchange(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore(settings.dbPath, settings.blobDir);
+  const store = runtime.getStore();
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
@@ -349,11 +420,10 @@ export function captureHttpExchange(
     metaJson: runtime.safeJsonString(params.meta),
     ...requestPayload,
   });
-  const cloneable =
-    params.response &&
-    typeof params.response.clone === "function" &&
-    typeof params.response.arrayBuffer === "function";
-  if (!cloneable) {
+  // Records the response status/headers without a body. Used both when a
+  // Response-like object cannot be cloned and when capturing the body would be
+  // unsafe (over the cap), so the exchange is still observable without OOM risk.
+  const recordResponseMetadataOnly = (bodyCapture: "unavailable" | "too-large") => {
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,
@@ -374,16 +444,42 @@ export function captureHttpExchange(
         params.response.headers && typeof params.response.headers.entries === "function"
           ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
           : undefined,
-      metaJson: runtime.safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
+      metaJson: runtime.safeJsonString({ ...params.meta, bodyCapture }),
     });
+  };
+  const cloneable =
+    params.response &&
+    typeof params.response.clone === "function" &&
+    typeof params.response.arrayBuffer === "function";
+  if (!cloneable) {
+    // Some Response-like objects cannot be cloned. Still record status/headers
+    // rather than forcing capture to consume or mutate the original response.
+    recordResponseMetadataOnly("unavailable");
     return;
   }
-  void params.response
-    .clone()
-    .arrayBuffer()
-    .then((buffer) => {
+  // Fast path: when the provider declares an oversized Content-Length, skip the
+  // body entirely instead of buffering it. Missing/chunked lengths fall through
+  // to the bounded streaming read below, which cancels on overflow.
+  const declaredLength = Number(
+    typeof params.response.headers?.get === "function"
+      ? params.response.headers.get("content-length")
+      : undefined,
+  );
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_CAPTURED_RESPONSE_BODY_BYTES) {
+    recordResponseMetadataOnly("too-large");
+    return;
+  }
+  void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
+    .then(({ buffer, truncated }) => {
+      if (truncated) {
+        // Body exceeded the cap mid-stream (chunked / understated length). The
+        // bounded reader already cancelled the clone and discarded the partial
+        // buffer; record metadata only instead of persisting an oversized blob.
+        recordResponseMetadataOnly("too-large");
+        return;
+      }
       const responsePayload = runtime.persistEventPayload(store, {
-        data: Buffer.from(buffer),
+        data: buffer,
         contentType: params.response.headers.get("content-type") ?? undefined,
       });
       store.recordEvent({
@@ -404,7 +500,7 @@ export function captureHttpExchange(
         ...responsePayload,
       });
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       store.recordEvent({
         ...createHttpCaptureEventBase({
           settings,
@@ -421,6 +517,8 @@ export function captureHttpExchange(
     });
 }
 
+// Websocket seams call this directly because Node fetch patching cannot observe
+// frame traffic.
 export function captureWsEvent(params: {
   url: string;
   direction: "outbound" | "inbound" | "local";
@@ -435,7 +533,7 @@ export function captureWsEvent(params: {
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const store = getDebugProxyCaptureStore();
   const url = new URL(params.url);
   const payload = persistEventPayload(store, {
     data: params.payload,

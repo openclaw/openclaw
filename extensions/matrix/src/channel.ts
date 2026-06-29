@@ -1,3 +1,4 @@
+// Matrix plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -31,7 +32,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
@@ -335,6 +339,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -542,9 +547,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg, accountId }) =>
+            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
               (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg,
+                cfg: cfgLocal,
                 accountId,
               }),
             probeMatrix: async (params) =>

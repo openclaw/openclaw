@@ -1,10 +1,19 @@
 #!/usr/bin/env -S node --import tsx
+// Telegram User Crabbox Proof script supports OpenClaw repository automation.
 
-import { type ChildProcess, spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
+import {
+  type ChildProcess,
+  spawn,
+  spawnSync,
+  type SpawnOptionsWithoutStdio,
+} from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
@@ -145,6 +154,10 @@ const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
 export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
 export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
+export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
 export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = process.env): number {
@@ -223,15 +236,47 @@ function trimToValue(value: string | undefined) {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+const positiveIntegerPattern = /^[1-9]\d*$/u;
+const SHORT_OPTION_TOKENS = new Set(["-h"]);
+
+function isMissingOptionValue(value: string | undefined) {
+  return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
+}
+
 function parsePositiveInteger(value: string, label: string) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const trimmed = value.trim();
+  if (!positiveIntegerPattern.test(trimmed)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
     throw new Error(`${label} must be a positive integer.`);
   }
   return parsed;
 }
 
-function parseArgs(argv: string[]): Options {
+function resolveTelegramProofTimerTimeoutMs(value: number) {
+  return clampTimerTimeoutMs(value) ?? 1;
+}
+
+function parsePositiveTimerMs(value: string, label: string) {
+  return resolveTelegramProofTimerTimeoutMs(parsePositiveInteger(value, label));
+}
+
+function parseTcpPort(value: string, label: string) {
+  const parsed = parsePositiveInteger(value, label);
+  if (parsed > 65_535) {
+    throw new Error(`${label} must be a TCP port from 1 to 65535.`);
+  }
+  return parsed;
+}
+
+function createTelegramProofRunId() {
+  return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
+}
+
+export function parseArgs(argvInput: string[]): Options {
+  let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
     "finish",
@@ -245,7 +290,6 @@ function parseArgs(argv: string[]): Options {
     "view",
   ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
     crabboxClass: "standard",
     command,
@@ -259,7 +303,7 @@ function parseArgs(argv: string[]): Options {
     keepBox: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
-    outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
+    outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
     previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
@@ -282,12 +326,19 @@ function parseArgs(argv: string[]): Options {
     argv = argv.slice(0, commandSeparator);
   }
   let expectWasPassed = false;
+  const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = () => {
+    const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (isMissingOptionValue(value)) {
         usage();
+      }
+      if (!options.repeatable) {
+        if (seenSingleValueOptions.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueOptions.add(arg);
       }
       index += 1;
       return value;
@@ -307,9 +358,9 @@ function parseArgs(argv: string[]): Options {
         opts.expect = [];
         expectWasPassed = true;
       }
-      opts.expect.push(readValue());
+      opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
-      opts.gatewayPort = parsePositiveInteger(readValue(), "--gateway-port");
+      opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -317,7 +368,7 @@ function parseArgs(argv: string[]): Options {
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
     } else if (arg === "--mock-port") {
-      opts.mockPort = parsePositiveInteger(readValue(), "--mock-port");
+      opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
     } else if (arg === "--message-id") {
@@ -363,7 +414,7 @@ function parseArgs(argv: string[]): Options {
     } else if (arg === "--text") {
       opts.text = readValue();
     } else if (arg === "--timeout-ms") {
-      opts.timeoutMs = parsePositiveInteger(readValue(), "--timeout-ms");
+      opts.timeoutMs = parsePositiveTimerMs(readValue(), "--timeout-ms");
     } else if (arg === "--ttl") {
       opts.ttl = readValue();
     } else if (arg === "--user-driver-script") {
@@ -560,7 +611,133 @@ function commandFailureOutput(stdout: string, stderr: string): string {
   return `${stdoutTail}${stderr}`;
 }
 
-function runCommand(params: {
+function timedOutError(message: string) {
+  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+const activeCommandChildren = new Set<ChildProcess>();
+let commandCleanupHandlersInstalled = false;
+
+type CommandTreeTarget = Pick<ChildProcess, "kill" | "pid">;
+
+export function signalCommandTree(
+  child: CommandTreeTarget,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: typeof spawnSync;
+    useProcessGroup?: boolean;
+  } = {},
+) {
+  if (child.pid && useProcessGroup) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
+function commandProcessTreeAlive(child: ChildProcess) {
+  if (!child.pid || process.platform === "win32") {
+    return child.exitCode === null && child.signalCode === null;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error && typeof error === "object" && "code" in error && error.code === "EPERM";
+  }
+}
+
+async function waitForCommandProcessTreeExit(child: ChildProcess, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!commandProcessTreeAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !commandProcessTreeAlive(child);
+}
+
+async function finishTimedOutCommandProcessTree(
+  child: ChildProcess,
+  options: {
+    forceKillAt: number | undefined;
+    timeoutKillGraceMs: number;
+  },
+) {
+  if (!commandProcessTreeAlive(child)) {
+    activeCommandChildren.delete(child);
+    return;
+  }
+  const graceRemainingMs =
+    options.forceKillAt === undefined
+      ? options.timeoutKillGraceMs
+      : Math.max(0, options.forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForCommandProcessTreeExit(child, graceRemainingMs);
+  }
+  if (commandProcessTreeAlive(child)) {
+    signalCommandTree(child, "SIGKILL");
+    await waitForCommandProcessTreeExit(child, options.timeoutKillGraceMs);
+  }
+  activeCommandChildren.delete(child);
+}
+
+function untrackCommandChild(child: ChildProcess) {
+  if (!commandProcessTreeAlive(child)) {
+    activeCommandChildren.delete(child);
+  }
+}
+
+function signalActiveCommandChildren(signal: NodeJS.Signals) {
+  for (const child of activeCommandChildren) {
+    signalCommandTree(child, signal);
+  }
+}
+
+function installCommandCleanupHandlers() {
+  if (commandCleanupHandlersInstalled) {
+    return;
+  }
+  commandCleanupHandlersInstalled = true;
+  process.once("exit", () => {
+    signalActiveCommandChildren("SIGTERM");
+  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      signalActiveCommandChildren(signal);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
+export function runCommand(params: {
   args: string[];
   command: string;
   cwd: string;
@@ -568,6 +745,8 @@ function runCommand(params: {
   outputFile?: string;
   stdio?: "inherit" | "pipe";
   stdin?: string;
+  timeoutKillGraceMs?: number;
+  timeoutMs?: number;
 }) {
   return new Promise<CommandResult>((resolve, reject) => {
     if (params.outputFile) {
@@ -575,12 +754,47 @@ function runCommand(params: {
     }
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
+      detached: process.platform !== "win32",
       env: params.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    activeCommandChildren.add(child);
+    installCommandCleanupHandlers();
     let stdout = "";
     let stderr = "";
+    let settled = false;
     let stdoutLimitError: string | null = null;
+    let timeoutError: Error | null = null;
+    let forceKillAt: number | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timeoutMs = resolveTelegramProofTimerTimeoutMs(params.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    const timeoutKillGraceMs = resolveTelegramProofTimerTimeoutMs(
+      params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
+    );
+    const clearTimers = () => {
+      clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      timeoutError = timedOutError(
+        `${params.command} ${params.args.join(" ")} timed out after ${timeoutMs}ms\n${commandFailureOutput(
+          stdout,
+          stderr,
+        )}`,
+      );
+      signalCommandTree(child, "SIGTERM");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
+      killTimer = setTimeout(() => {
+        signalCommandTree(child, "SIGKILL");
+      }, timeoutKillGraceMs);
+      killTimer.unref?.();
+    }, timeoutMs);
+    timeout.unref?.();
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       if (params.outputFile) {
@@ -592,7 +806,7 @@ function runCommand(params: {
         const appended = appendCommandStdout(stdout, chunk);
         if (!appended.ok) {
           stdoutLimitError = appended.message;
-          child.kill("SIGKILL");
+          signalCommandTree(child, "SIGKILL");
         } else {
           stdout = appended.value;
         }
@@ -611,8 +825,35 @@ function runCommand(params: {
         process.stderr.write(text);
       }
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      untrackCommandChild(child);
+      clearTimers();
+      reject(error);
+    });
     child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      untrackCommandChild(child);
+      if (timeoutError) {
+        const error = timeoutError;
+        clearTimers();
+        void finishTimedOutCommandProcessTree(child, {
+          forceKillAt,
+          timeoutKillGraceMs,
+        }).then(
+          () => reject(error),
+          (cleanupError: unknown) =>
+            reject(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))),
+        );
+        return;
+      }
+      clearTimers();
       if (stdoutLimitError) {
         reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
         return;
@@ -669,11 +910,14 @@ function waitForOutput(
   timeoutMs: number,
 ) {
   return new Promise<void>((resolve, reject) => {
+    const resolvedTimeoutMs = resolveTelegramProofTimerTimeoutMs(timeoutMs);
     const timeout = setTimeout(() => {
       reject(
-        new Error(`${label} did not become ready within ${timeoutMs}ms\n${output().slice(-4000)}`),
+        new Error(
+          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${output().slice(-4000)}`,
+        ),
       );
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     const onData = () => {
       if (pattern.test(output())) {
         cleanup();
@@ -702,7 +946,7 @@ function waitForOutput(
 }
 
 function killTree(child: ChildProcess | undefined) {
-  if (!child || child.killed || child.exitCode !== null) {
+  if (!child) {
     return;
   }
   if (!child.pid) {
@@ -724,9 +968,7 @@ function killPidTree(pid: number | undefined) {
   } catch {
     try {
       process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
+    } catch {}
   }
 }
 
@@ -753,6 +995,22 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function waitForChildExit(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
+  return new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+}
+
 export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
   let stat: fs.Stats;
   try {
@@ -766,7 +1024,7 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(logPath, "r");
-  let bytesRead = 0;
+  let bytesRead;
   try {
     bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
   } finally {
@@ -787,7 +1045,9 @@ export async function waitForLog(
     if (pattern.test(text)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
@@ -915,50 +1175,122 @@ function writeSutConfig(params: {
   return { configPath, stateDir, tempRoot, workspace };
 }
 
-async function startLocalSut(params: {
-  gatewayPort: number;
-  groupId: string;
-  mockResponseText: string;
-  mockPort: number;
-  outputDir: string;
-  sutToken: string;
-  testerId: string;
-  repoRoot: string;
+type StartLocalSutDeps = {
+  createGatewaySpawnSpec?: typeof createOpenClawGatewaySpawnSpec;
+  drainUpdates?: typeof drainSutUpdates;
+  spawnLoggedCommand?: typeof spawnLogged;
+  waitForOutputReady?: typeof waitForOutput;
+  writeConfig?: typeof writeSutConfig;
+};
+
+export async function startLocalSut(
+  params: {
+    gatewayPort: number;
+    groupId: string;
+    mockResponseText: string;
+    mockPort: number;
+    outputDir: string;
+    sutToken: string;
+    testerId: string;
+    repoRoot: string;
+  },
+  deps: StartLocalSutDeps = {},
+) {
+  const drainUpdates = deps.drainUpdates ?? drainSutUpdates;
+  const writeConfig = deps.writeConfig ?? writeSutConfig;
+  const spawnLoggedCommand = deps.spawnLoggedCommand ?? spawnLogged;
+  const waitForOutputReady = deps.waitForOutputReady ?? waitForOutput;
+  const createGatewaySpawnSpec = deps.createGatewaySpawnSpec ?? createOpenClawGatewaySpawnSpec;
+  let gateway: ReturnType<typeof spawnLogged> | undefined;
+  let mock: ReturnType<typeof spawnLogged> | undefined;
+  try {
+    const drained = await drainUpdates(params.sutToken);
+    const config = writeConfig(params);
+    const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
+    mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
+      cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+    });
+    await waitForOutputReady(
+      mock.child,
+      /mock-openai listening/u,
+      () => mock.output,
+      "mock-openai",
+      10_000,
+    );
+    const gatewaySpec = createGatewaySpawnSpec({
+      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      gatewayPort: params.gatewayPort,
+      repoRoot: params.repoRoot,
+    });
+    gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    await waitForOutputReady(
+      gateway.child,
+      /\[gateway\] ready/u,
+      () => gateway.output,
+      "gateway",
+      60_000,
+    );
+    return {
+      ...config,
+      drained,
+      gateway: gateway.child,
+      get gatewayLog() {
+        return gateway.output;
+      },
+      mock: mock.child,
+      get mockLog() {
+        return mock.output;
+      },
+      requestLog,
+    };
+  } catch (error) {
+    killTree(gateway?.child);
+    killTree(mock?.child);
+    throw error;
+  }
+}
+
+export async function recordProbeVideo(params: {
+  crabboxBin: string;
+  cwd: string;
+  durationSeconds: number;
+  leaseId: string;
+  outputPath: string;
+  provider: string;
+  runProbe: () => Promise<void>;
+  startDelayMs?: number;
+  target: string;
 }) {
-  const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
-  const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-  const mock = spawnLogged("node", ["scripts/e2e/mock-openai-server.mjs"], {
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-  });
-  await waitForOutput(
-    mock.child,
-    /mock-openai listening/u,
-    () => mock.output,
-    "mock-openai",
-    10_000,
-  );
-  const gatewaySpec = createOpenClawGatewaySpawnSpec({
-    env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    gatewayPort: params.gatewayPort,
-    repoRoot: params.repoRoot,
-  });
-  const gateway = spawnLogged(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
-  await waitForOutput(gateway.child, /\[gateway\] ready/u, () => gateway.output, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gateway: gateway.child,
-    get gatewayLog() {
-      return gateway.output;
-    },
-    mock: mock.child,
-    get mockLog() {
-      return mock.output;
-    },
-    requestLog,
-  };
+  let recording: ChildProcess | undefined;
+  try {
+    recording = spawn(
+      params.crabboxBin,
+      [
+        "artifacts",
+        "video",
+        "--provider",
+        params.provider,
+        "--target",
+        params.target,
+        "--id",
+        params.leaseId,
+        "--duration",
+        `${params.durationSeconds}s`,
+        "--output",
+        params.outputPath,
+      ],
+      { cwd: params.cwd, stdio: "inherit" },
+    );
+    await sleep(params.startDelayMs ?? 3_000);
+    await params.runProbe();
+    const recordCode = await waitForChildExit(recording);
+    if (recordCode !== 0) {
+      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
+    }
+  } finally {
+    killTree(recording);
+  }
 }
 
 async function startLocalSutDaemon(params: {
@@ -1211,6 +1543,7 @@ async function runRemoteCommand(params: {
   cwd: string;
   outputFile?: string;
   stdio?: "inherit" | "pipe";
+  timeoutMs?: number;
 }) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -1221,7 +1554,9 @@ async function runRemoteCommand(params: {
       if (attempt === 4 || !isTransientSshFailure(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 3000);
+      });
     }
   }
   throw lastError;
@@ -1251,7 +1586,7 @@ async function sshRun(
   root: string,
   inspect: CrabboxInspect,
   remoteCommand: string,
-  options: { outputFile?: string } = {},
+  options: { outputFile?: string; timeoutMs?: number } = {},
 ) {
   const ssh = sshArgs(inspect);
   return await runRemoteCommand({
@@ -1260,12 +1595,13 @@ async function sshRun(
     cwd: root,
     outputFile: options.outputFile,
     stdio: "inherit",
+    timeoutMs: options.timeoutMs,
   });
 }
 
-function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
-  const tdlibSha256 = JSON.stringify(params.tdlibSha256 ?? "");
-  const tdlibUrl = JSON.stringify(params.tdlibUrl ?? "");
+export function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
+  const tdlibSha256 = shellQuote(params.tdlibSha256 ?? "");
+  const tdlibUrl = shellQuote(params.tdlibUrl ?? "");
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
@@ -1337,22 +1673,27 @@ TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py
 `;
 }
 
-function renderLaunchDesktop() {
+export function renderLaunchDesktop() {
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
 export DISPLAY="\${DISPLAY:-:99}"
+print_desktop_log_tail() {
+  local log_file="$root/telegram-desktop.log"
+  [ -f "$log_file" ] || return 0
+  tail -c 262144 "$log_file" >&2 || true
+}
 pkill -f "$root/Telegram/Telegram" >/dev/null 2>&1 || true
 rm -rf "$root/desktop/tdata"
 nohup "$root/Telegram/Telegram" -workdir "$root/desktop" >"$root/telegram-desktop.log" 2>&1 &
 pid=$!
 sleep 8
 if ! kill -0 "$pid" >/dev/null 2>&1; then
-  cat "$root/telegram-desktop.log" >&2
+  print_desktop_log_tail
   exit 1
 fi
 if ! wmctrl -l | grep -i telegram >/dev/null 2>&1; then
-  cat "$root/telegram-desktop.log" >&2
+  print_desktop_log_tail
   exit 1
 fi
 `;
@@ -1412,10 +1753,10 @@ sleep 6
 `;
 }
 
-function renderSelectDesktopChat(params: { chatTitle: string }) {
+export function renderSelectDesktopChat(params: { chatTitle: string }) {
   return `#!/usr/bin/env bash
 set -euo pipefail
-chat_title=${JSON.stringify(params.chatTitle)}
+chat_title=${shellQuote(params.chatTitle)}
 export DISPLAY="\${DISPLAY:-:99}"
 win="$(wmctrl -l | awk 'tolower($0) ~ /telegram/ {print $1; exit}')"
 test -n "$win"
@@ -1434,7 +1775,7 @@ sleep 1
 `;
 }
 
-function renderRemoteProbe(params: {
+export function renderRemoteProbe(params: {
   expect: string[];
   outputPath?: string;
   sutUsername: string;
@@ -1454,12 +1795,12 @@ function renderRemoteProbe(params: {
   for (const expected of params.expect) {
     args.push("--expect", expected);
   }
-  const escapedArgs = args.map((arg) => JSON.stringify(arg)).join(" ");
+  const escapedArgs = args.map(shellQuote).join(" ");
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
 export TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver"
-export TELEGRAM_USER_DRIVER_SUT_USERNAME=${JSON.stringify(params.sutUsername)}
+export TELEGRAM_USER_DRIVER_SUT_USERNAME=${shellQuote(params.sutUsername)}
 python3 "$root/user-driver.py" ${escapedArgs}
 `;
 }
@@ -1656,6 +1997,45 @@ function writeSession(pathname: string, session: SessionFile) {
   fs.chmodSync(pathname, 0o600);
 }
 
+const FULL_ARTIFACT_JSON_NAMES = new Set([
+  "probe.json",
+  "status.json",
+  "telegram-user-crabbox-proof-summary.json",
+  "telegram-user-crabbox-session-summary.json",
+]);
+const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const FULL_ARTIFACT_PROOF_REPORT = "telegram-user-crabbox-proof.md";
+const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
+
+function isFullArtifactJsonName(name: string) {
+  return FULL_ARTIFACT_JSON_NAMES.has(name) || TIMESTAMPED_PROBE_ARTIFACT_JSON.test(name);
+}
+
+export function stageFullSessionArtifacts(outputDir: string) {
+  if (!fs.existsSync(path.join(outputDir, FULL_ARTIFACT_PROOF_REPORT))) {
+    throw new Error(`Missing proof report. Run finish first: ${FULL_ARTIFACT_PROOF_REPORT}`);
+  }
+
+  const publishDir = path.join(outputDir, "publish-full-artifacts");
+  fs.rmSync(publishDir, { force: true, recursive: true });
+  fs.mkdirSync(publishDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const extension = path.extname(entry.name);
+    const isPublishableArtifact =
+      FULL_ARTIFACT_FILE_EXTENSIONS.has(extension) || isFullArtifactJsonName(entry.name);
+    if (!isPublishableArtifact) {
+      continue;
+    }
+    fs.copyFileSync(path.join(outputDir, entry.name), path.join(publishDir, entry.name));
+  }
+
+  return publishDir;
+}
+
 function readSession(root: string, opts: Options, outputDir: string) {
   const pathname = sessionPath(root, opts, outputDir);
   if (!fs.existsSync(pathname)) {
@@ -1710,7 +2090,9 @@ async function writeRemoteSessionScripts(params: {
     selectChatScript,
     `${REMOTE_ROOT}/select-desktop-chat.sh`,
   );
-  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+    timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+  });
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
@@ -1719,7 +2101,7 @@ async function writeRemoteSessionScripts(params: {
     params.inspect,
     `cat >${REMOTE_ROOT}/env.sh <<'EOF'
 export TELEGRAM_USER_DRIVER_STATE_DIR=${REMOTE_ROOT}/user-driver
-export TELEGRAM_USER_DRIVER_SUT_USERNAME=${params.sutUsername}
+export TELEGRAM_USER_DRIVER_SUT_USERNAME=${shellQuote(params.sutUsername)}
 EOF
 `,
   );
@@ -1749,7 +2131,7 @@ async function stopRemoteRecording(root: string, inspect: CrabboxInspect, sessio
     root,
     inspect,
     `set -euo pipefail
-pid_file=${JSON.stringify(session.recorder.pidFile)}
+pid_file=${shellQuote(session.recorder.pidFile)}
 if [ -s "$pid_file" ]; then
   pid="$(cat "$pid_file")"
   kill -INT "$pid" >/dev/null 2>&1 || true
@@ -2186,7 +2568,7 @@ async function publishSessionArtifacts(root: string, opts: Options, outputDir: s
   );
   const publishGifPath = fs.existsSync(croppedMotionGifPath) ? croppedMotionGifPath : motionGifPath;
   const publishDir = opts.publishFullArtifacts
-    ? session.outputDir
+    ? stageFullSessionArtifacts(session.outputDir)
     : path.join(session.outputDir, "publish-gif-only");
   if (!opts.publishFullArtifacts) {
     if (!fs.existsSync(publishGifPath)) {
@@ -2384,7 +2766,9 @@ async function main() {
     await scpToRemote(root, inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
     await scpToRemote(root, inspect, selectChatScript, `${REMOTE_ROOT}/select-desktop-chat.sh`);
     await scpToRemote(root, inspect, probeScript, `${REMOTE_ROOT}/remote-probe.sh`);
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+      timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+    });
 
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
@@ -2408,30 +2792,18 @@ async function main() {
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
     const videoPath = path.join(outputDir, "telegram-user-crabbox-proof.mp4");
-    const recording = spawn(
-      opts.crabboxBin,
-      [
-        "artifacts",
-        "video",
-        "--provider",
-        opts.provider,
-        "--target",
-        opts.target,
-        "--id",
-        leaseId,
-        "--duration",
-        `${opts.recordSeconds}s`,
-        "--output",
-        videoPath,
-      ],
-      { cwd: root, stdio: "inherit" },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => recording.on("exit", resolve));
-    if (recordCode !== 0) {
-      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
-    }
+    await recordProbeVideo({
+      crabboxBin: opts.crabboxBin,
+      cwd: root,
+      durationSeconds: opts.recordSeconds,
+      leaseId,
+      outputPath: videoPath,
+      provider: opts.provider,
+      runProbe: async () => {
+        await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
+      },
+      target: opts.target,
+    });
     const motionVideoPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.mp4");
     const motionGifPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.gif");
     summary.mediaPreview = await createMotionPreview({

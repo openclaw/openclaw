@@ -1,3 +1,4 @@
+// Generates setup codes used to pair external channels with OpenClaw.
 import os from "node:os";
 import {
   isCarrierGradeNatIpv4Address,
@@ -7,6 +8,10 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -20,10 +25,9 @@ import {
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
+  resolveTailnetHostWithRunner,
+  resolveTailscalePublishedHost,
+} from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
   url: string;
@@ -327,7 +331,18 @@ async function resolveGatewayUrl(
     if (!host) {
       return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
     }
-    return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
+    const publishedHost = resolveTailscalePublishedHost({
+      tailscaleMode,
+      tailnetHost: host,
+      serviceName: cfg.gateway?.tailscale?.serviceName,
+    });
+    if (!publishedHost) {
+      return {
+        error:
+          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
+      };
+    }
+    return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
   if (remoteUrl) {

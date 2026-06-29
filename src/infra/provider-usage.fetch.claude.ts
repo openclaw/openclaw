@@ -1,5 +1,8 @@
+// Fetches Claude provider usage windows.
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -84,6 +87,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!orgRes.ok) {
+    await discardUsageResponseBody(orgRes);
     return null;
   }
 
@@ -104,6 +108,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
+    await discardUsageResponseBody(usageRes);
     return null;
   }
 
@@ -147,9 +152,9 @@ export async function fetchClaudeUsage(
   if (!res.ok) {
     let message: string | undefined;
     try {
-      const data = (await res.json()) as {
+      const data = await readProviderJsonResponse<{
         error?: { message?: unknown } | null;
-      };
+      }>(res, "Anthropic usage error");
       const raw = data?.error?.message;
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();

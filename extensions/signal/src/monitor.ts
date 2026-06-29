@@ -1,3 +1,4 @@
+// Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -38,6 +39,10 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
+import {
+  addSignalApprovalReactionHintToStructuredPayload,
+  registerSignalApprovalReactionTargetForDeliveredPayload,
+} from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -85,7 +90,7 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
     runEventTask(task: () => Promise<void>): void {
       const trackedTask = Promise.resolve()
         .then(task)
-        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .catch((err: unknown) => runtime.error?.(`event handler failed: ${String(err)}`))
         .finally(() => inFlight.delete(trackedTask));
       inFlight.add(trackedTask);
     },
@@ -353,7 +358,7 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverReplies(params: {
+export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
@@ -368,32 +373,79 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
-    const reply = resolveSendableOutboundReplyParts(payload);
+    const deliveryResults: Array<{
+      channel: "signal";
+      messageId: string;
+      meta: { signalVisibleText: string };
+    }> = [];
+    const deliveredPayload =
+      addSignalApprovalReactionHintToStructuredPayload({
+        cfg: params.cfg,
+        accountId,
+        to: target,
+        payload,
+        targetAuthor: account,
+      }) ?? payload;
+    const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    const recordDeliveryResult = (
+      result: Awaited<ReturnType<typeof sendMessageSignal>>,
+      visibleText: string,
+    ) => {
+      const messageId =
+        typeof result?.messageId === "string" && result.messageId.trim()
+          ? result.messageId.trim()
+          : null;
+      if (messageId) {
+        deliveryResults.push({
+          channel: "signal",
+          messageId,
+          meta: { signalVisibleText: visibleText },
+        });
+      }
+    };
     const delivered = await deliverTextOrMediaReply({
-      payload,
+      payload: deliveredPayload,
       text: reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
-        await sendMessageSignal(target, chunk, {
-          cfg: params.cfg,
-          baseUrl,
-          account,
-          maxBytes,
-          accountId,
-        });
+        recordDeliveryResult(
+          await sendMessageSignal(target, chunk, {
+            cfg: params.cfg,
+            baseUrl,
+            account,
+            maxBytes,
+            accountId,
+          }),
+          chunk,
+        );
       },
       sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSignal(target, caption ?? "", {
-          cfg: params.cfg,
-          baseUrl,
-          account,
-          mediaUrl,
-          maxBytes,
-          accountId,
-        });
+        const visibleText = caption ?? "";
+        recordDeliveryResult(
+          await sendMessageSignal(target, visibleText, {
+            cfg: params.cfg,
+            baseUrl,
+            account,
+            mediaUrl,
+            maxBytes,
+            accountId,
+          }),
+          visibleText,
+        );
       },
     });
     if (delivered !== "empty") {
+      registerSignalApprovalReactionTargetForDeliveredPayload({
+        cfg: params.cfg,
+        target: {
+          channel: "signal",
+          to: target,
+          accountId,
+        },
+        payload: deliveredPayload,
+        results: deliveryResults,
+        targetAuthor: account,
+      });
       runtime.log?.(`delivered reply to ${target}`);
     }
   }

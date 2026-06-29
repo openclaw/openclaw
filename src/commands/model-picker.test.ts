@@ -1,8 +1,10 @@
+// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -349,15 +351,10 @@ afterEach(() => {
 });
 
 describe("promptDefaultModel", () => {
-  it("adds runtime-route hints for canonical and legacy OpenAI Codex models", async () => {
+  it("adds runtime-route hints for canonical OpenAI models", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "openai-codex",
         id: "gpt-5.5",
         name: "GPT-5.5",
       },
@@ -377,8 +374,6 @@ describe("promptDefaultModel", () => {
     const options = pickerOptions(select as MockCallSource);
     const canonical = requireOption(options, "openai/gpt-5.5");
     expect(canonical.hint).toContain("Codex runtime route");
-    const legacy = requireOption(options, "openai-codex/gpt-5.5");
-    expect(legacy.hint).toContain("legacy Codex OAuth route");
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
@@ -434,7 +429,7 @@ describe("promptDefaultModel", () => {
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
-      { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
 
     const select = vi.fn(async (params) => params.initialValue as never);
@@ -453,7 +448,6 @@ describe("promptDefaultModel", () => {
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3.1-pro-preview",
-      "openai-codex/gpt-5.5",
     ]);
   });
 
@@ -703,7 +697,7 @@ describe("promptDefaultModel", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -714,7 +708,7 @@ describe("promptDefaultModel", () => {
       allowKeep: true,
       includeManual: true,
       ignoreAllowlist: true,
-      preferredProvider: "openai-codex",
+      preferredProvider: "openai",
       browseCatalogOnDemand: true,
     });
 
@@ -766,12 +760,12 @@ describe("promptDefaultModel", () => {
   it("loads the full model catalog when browsing without a preferred provider", async () => {
     loadModelCatalog.mockResolvedValue([
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5",
         name: "GPT-5.5",
       },
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5-pro",
         name: "GPT-5.5 Pro",
       },
@@ -781,7 +775,7 @@ describe("promptDefaultModel", () => {
       .mockResolvedValueOnce("__browse__")
       .mockImplementationOnce(async (params) => {
         const option = params.options.find(
-          (entry: { value: string }) => entry.value === "openai-codex/gpt-5.5-pro",
+          (entry: { value: string }) => entry.value === "openai/gpt-5.5-pro",
         );
         return option?.value ?? params.initialValue;
       });
@@ -789,7 +783,7 @@ describe("promptDefaultModel", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -803,7 +797,7 @@ describe("promptDefaultModel", () => {
       browseCatalogOnDemand: true,
     });
 
-    expect(result.model).toBe("openai-codex/gpt-5.5-pro");
+    expect(result.model).toBe("openai/gpt-5.5-pro");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(loadPreferredProviderPickerCatalog).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2);
@@ -813,12 +807,12 @@ describe("promptDefaultModel", () => {
   it("loads the preferred provider catalog when the user chooses to browse", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5",
         name: "GPT-5.5",
       },
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5-pro",
         name: "GPT-5.5 Pro",
       },
@@ -828,7 +822,7 @@ describe("promptDefaultModel", () => {
       .mockResolvedValueOnce("__browse__")
       .mockImplementationOnce(async (params) => {
         const option = params.options.find(
-          (entry: { value: string }) => entry.value === "openai-codex/gpt-5.5-pro",
+          (entry: { value: string }) => entry.value === "openai/gpt-5.5-pro",
         );
         return option?.value ?? params.initialValue;
       });
@@ -836,7 +830,7 @@ describe("promptDefaultModel", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -847,14 +841,14 @@ describe("promptDefaultModel", () => {
       allowKeep: true,
       includeManual: true,
       ignoreAllowlist: true,
-      preferredProvider: "openai-codex",
+      preferredProvider: "openai",
       browseCatalogOnDemand: true,
     });
 
-    expect(result.model).toBe("openai-codex/gpt-5.5-pro");
+    expect(result.model).toBe("openai/gpt-5.5-pro");
     expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
       cfg: config,
-      preferredProvider: "openai-codex",
+      preferredProvider: "openai",
       agentDir: expect.stringContaining("agents/main/agent"),
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
@@ -906,6 +900,52 @@ describe("promptDefaultModel", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "nvidia/moonshotai/kimi-k2.5",
     ]);
+  });
+
+  it("preselects the first live provider row when keep-current is disabled", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "z-ai/glm-5.1",
+        name: "GLM 5.1",
+      },
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "NVIDIA Nemotron 3 Super 120B",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-ultra-550b-a55b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("nvidia/z-ai/glm-5.1");
+    expect(pickerParams(select as MockCallSource).initialValue).toBe("nvidia/z-ai/glm-5.1");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "nvidia/z-ai/glm-5.1",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+    ]);
+    expect(
+      requireOption(pickerOptions(select as MockCallSource), "nvidia/nemotron-3-ultra-550b-a55b")
+        .hint,
+    ).toBe("current (not in catalog)");
   });
 
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {
@@ -1430,6 +1470,64 @@ describe("promptModelAllowlist", () => {
 
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["openai/gpt-5.5", "openai/gpt-5.4-mini"]);
+  });
+
+  it("includes stale configured preferred provider models in the scoped cleanup", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openrouter",
+        id: "meta-llama/llama-3.3-70b:free",
+        name: "Llama 3.3 70B",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
+    const staleModel = "openrouter/elephant-alpha";
+    const multiselect = vi.fn(async (params: WizardMultiSelectParams) =>
+      params.options.map((option) => option.value).filter((value) => value === activeModel),
+    );
+    const prompter = makePrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            [activeModel]: { alias: "llama" },
+            [staleModel]: { alias: "elephant" },
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openrouter",
+    });
+
+    const options = pickerOptions(multiselect as MockCallSource);
+    expect(optionValues(options)).toEqual([activeModel, staleModel]);
+    expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
+    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
+    expect(result).toEqual({
+      models: [activeModel],
+      scopeKeys: [activeModel, staleModel],
+    });
+
+    const next = applyModelAllowlist(config, result.models ?? [], {
+      scopeKeys: result.scopeKeys,
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      [activeModel]: { alias: "llama" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+    });
   });
 
   it("shows configured preferred provider models when the catalog has no entries", async () => {
@@ -1966,7 +2064,7 @@ describe("promptModelAllowlist", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -1974,20 +2072,16 @@ describe("promptModelAllowlist", () => {
     const result = await promptModelAllowlist({
       config,
       prompter,
-      preferredProvider: "openai-codex",
+      preferredProvider: "openai",
       loadCatalog: false,
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
-      "openai-codex/gpt-5.5",
-    ]);
-    expect(pickerParams(multiselect as MockCallSource).initialValues).toEqual([
-      "openai-codex/gpt-5.5",
-    ]);
+    expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual(["openai/gpt-5.5"]);
+    expect(pickerParams(multiselect as MockCallSource).initialValues).toEqual(["openai/gpt-5.5"]);
     expect(result).toEqual({
-      models: ["openai-codex/gpt-5.5"],
-      scopeKeys: ["openai-codex/gpt-5.5"],
+      models: ["openai/gpt-5.5"],
+      scopeKeys: ["openai/gpt-5.5"],
     });
   });
 
@@ -1997,7 +2091,7 @@ describe("promptModelAllowlist", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -2005,21 +2099,19 @@ describe("promptModelAllowlist", () => {
     const result = await promptModelAllowlist({
       config,
       prompter,
-      allowedKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
-      preferredProvider: "openai-codex",
+      allowedKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
+      preferredProvider: "openai",
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
-      "openai-codex/gpt-5.5",
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.5",
+      "openai/gpt-5.4",
     ]);
-    expect(pickerParams(multiselect as MockCallSource).initialValues).toEqual([
-      "openai-codex/gpt-5.5",
-    ]);
+    expect(pickerParams(multiselect as MockCallSource).initialValues).toEqual(["openai/gpt-5.5"]);
     expect(result).toEqual({
-      models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
-      scopeKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
+      models: ["openai/gpt-5.5", "openai/gpt-5.4"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4"],
     });
   });
 });

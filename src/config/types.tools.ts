@@ -1,6 +1,7 @@
+// Defines tool availability and allowlist configuration types.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
@@ -8,18 +9,25 @@ import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
+  /** Channel/provider id to match before running media or link understanding. */
   channel?: string;
+  /** Direct/group classification from the channel runtime, when available. */
   chatType?: ChatType;
+  /** Attachment or link key prefix used for narrow per-source routing. */
   keyPrefix?: string;
 };
 
 export type MediaUnderstandingScopeRule = {
+  /** Policy applied when match criteria select this scope rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: MediaUnderstandingScopeMatch;
 };
 
 export type MediaUnderstandingScopeConfig = {
+  /** Fallback action when no scope rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/block rules; first matching rule wins. */
   rules?: MediaUnderstandingScopeRule[];
 };
 
@@ -196,8 +204,8 @@ export type ToolSearchConfig =
   | {
       /** Enable compact search/call cataloging for large tool sets. */
       enabled?: boolean;
-      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
-      mode?: "code" | "tools";
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+      mode?: "code" | "tools" | "directory";
       /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
       codeTimeoutMs?: number;
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
@@ -238,6 +246,7 @@ export type CodeModeConfig =
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
+  /** Exact tool names allowed after the selected profile is applied. */
   allow?: string[];
   /**
    * Additional allowlist entries merged into the effective allowlist.
@@ -246,14 +255,18 @@ export type ToolPolicyConfig = {
    * users to replace/duplicate an existing allowlist or profile.
    */
   alsoAllow?: string[];
+  /** Exact tool names denied after allow/profile expansion; deny wins. */
   deny?: string[];
+  /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
 };
 
 export type GroupToolPolicyConfig = {
+  /** Sender-specific allowlist entries merged into the group tool policy. */
   allow?: string[];
   /** Additional allowlist entries merged into allow. */
   alsoAllow?: string[];
+  /** Sender-specific deny entries; deny wins over allow/profile policy. */
   deny?: string[];
 };
 
@@ -273,6 +286,8 @@ export function parseToolsBySenderTypedKey(
     if (!lowered.startsWith(prefix)) {
       continue;
     }
+    // Preserve the original value casing after the typed prefix; usernames and
+    // display names can be case-sensitive in channel-specific matching code.
     return {
       type,
       value: trimmed.slice(prefix.length),
@@ -496,7 +511,6 @@ export type MemorySearchConfig = {
   /** Index storage configuration. */
   store?: {
     driver?: "sqlite";
-    path?: string;
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";
@@ -607,7 +621,7 @@ export type ToolsConfig = {
       openaiCodex?: {
         /** Enable native Codex web search for eligible models. */
         enabled?: boolean;
-        /** Use cached or live external web access. Default: "cached". */
+        /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
         /** Optional allowlist of domains passed to the native Codex tool. */
         allowedDomains?: string[];

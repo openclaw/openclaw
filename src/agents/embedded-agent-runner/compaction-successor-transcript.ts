@@ -1,10 +1,14 @@
+/**
+ * Rotates compacted sessions into successor transcript files when configured.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveTimestampMsToIsoString } from "../../shared/number-coercion.js";
-import { type CompactionEntry, type SessionEntry, type SessionHeader } from "../sessions/index.js";
+import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
+import { stripThinkingSignaturesFromMessage } from "./thinking.js";
 import {
   readTranscriptFileState,
   TranscriptFileState,
@@ -113,15 +117,75 @@ function buildSuccessorEntries(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
 
   const summarizedBranchIds = new Set<string>();
+  const preCompactionKeptBranchIds = new Set<string>();
+  let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = branch[index];
     if (!entry) {
       continue;
     }
     if (compaction.firstKeptEntryId && entry.id === compaction.firstKeptEntryId) {
-      break;
+      foundFirstKept = true;
     }
-    summarizedBranchIds.add(entry.id);
+    if (foundFirstKept) {
+      preCompactionKeptBranchIds.add(entry.id);
+    } else {
+      summarizedBranchIds.add(entry.id);
+    }
+  }
+
+  // Preserve the last assistant message before firstKeptEntryId so the successor
+  // transcript keeps a compactionSummary → assistant → user structure instead of
+  // dropping the assistant reply (issue #76729).
+  // Skip for hardened manual compaction boundaries where firstKeptEntryId already
+  // points to the compaction entry itself (all pre-compaction content is
+  // intentionally excluded).
+  const isHardenedBoundary = compaction.firstKeptEntryId === compaction.id;
+  let preservedAssistantId: string | undefined;
+  let preservedAssistantIndex = -1;
+  let firstKeptIndex = -1;
+  if (!isHardenedBoundary) {
+    for (let index = latestCompactionIndex - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (
+        entry &&
+        summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        entry.message.role === "assistant"
+      ) {
+        preservedAssistantId = entry.id;
+        preservedAssistantIndex = index;
+        break;
+      }
+    }
+  }
+  if (compaction.firstKeptEntryId) {
+    firstKeptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
+  }
+  const branchIndexById = new Map(branch.map((entry, index) => [entry.id, index]));
+  const preservedPreCompactionIds = new Set<string>();
+  if (preservedAssistantId) {
+    preservedPreCompactionIds.add(preservedAssistantId);
+    const assistant = branch[preservedAssistantIndex];
+    if (assistant?.type === "message" && assistant.message.role === "assistant") {
+      const toolCallIds = new Set(
+        assistant.message.content
+          .filter((block) => block.type === "toolCall")
+          .map((block) => block.id),
+      );
+      for (
+        let index = preservedAssistantIndex + 1;
+        index >= 0 && index < firstKeptIndex;
+        index += 1
+      ) {
+        const entry = branch[index];
+        if (entry?.type === "message" && entry.message.role === "toolResult") {
+          if (toolCallIds.has(entry.message.toolCallId)) {
+            preservedPreCompactionIds.add(entry.id);
+          }
+        }
+      }
+    }
   }
 
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
@@ -133,15 +197,35 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
-  const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
+  const keptPreCompactionEntries = branch
+    .slice(0, latestCompactionIndex)
+    .filter((entry) => !summarizedBranchIds.has(entry.id));
+  const postCompactionEntries = branch.slice(latestCompactionIndex + 1);
+  const duplicateUserMessageIds = new Set<string>([
+    ...collectDuplicateUserMessageEntryIdsForCompaction(keptPreCompactionEntries),
+    ...collectDuplicateUserMessageEntryIdsForCompaction(postCompactionEntries),
+  ]);
   for (const entry of allEntries) {
+    const branchIndex = branchIndexById.get(entry.id) ?? -1;
+    const summarizedContextMarker =
+      branchIndex > preservedAssistantIndex &&
+      branchIndex < firstKeptIndex &&
+      (entry.type === "custom_message" || entry.type === "branch_summary");
     if (
-      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+      (summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        !preservedPreCompactionIds.has(entry.id)) ||
+      (summarizedBranchIds.has(entry.id) && summarizedContextMarker) ||
       staleStateEntryIds.has(entry.id) ||
       duplicateUserMessageIds.has(entry.id)
     ) {
       removedIds.add(entry.id);
     }
+  }
+  // The preserved assistant reply is pre-compaction content that needs thinking
+  // signature stripping, same as other pre-compaction kept entries.
+  for (const entryId of preservedPreCompactionIds) {
+    preCompactionKeptBranchIds.add(entryId);
   }
   for (const entry of allEntries) {
     if (entry.type === "label" && removedIds.has(entry.targetId)) {
@@ -171,9 +255,30 @@ function buildSuccessorEntries(params: {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }
 
-    keptEntries.push(
-      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry),
-    );
+    const reparented =
+      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    // Strip thinking signatures only from pre-compaction kept entries. Pre-compaction
+    // signatures are bound to the original context prefix; the successor file has a different
+    // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
+    // Post-compaction entries were generated in the new context and have valid signatures.
+    // Move the compaction boundary back to the preserved turn so its complete
+    // assistant/tool-result sequence is included in the successor context.
+    let transformed: SessionEntry = reparented;
+    if (reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)) {
+      transformed = {
+        ...reparented,
+        message: stripThinkingSignaturesFromMessage(reparented.message),
+      };
+    }
+    if (
+      reparented.type === "compaction" &&
+      reparented.id === compaction.id &&
+      preservedAssistantId &&
+      reparented.firstKeptEntryId !== reparented.id
+    ) {
+      transformed = { ...reparented, firstKeptEntryId: preservedAssistantId };
+    }
+    keptEntries.push(transformed);
   }
 
   return orderSuccessorEntries({

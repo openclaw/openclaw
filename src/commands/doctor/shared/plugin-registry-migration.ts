@@ -1,3 +1,4 @@
+// Doctor migration from legacy shipped plugin install config into persisted install registry.
 import fs from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -25,6 +26,9 @@ import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
+const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  openai: ["openai-codex"],
+};
 
 export type PluginRegistryInstallMigrationPreflightAction =
   | "disabled"
@@ -32,9 +36,13 @@ export type PluginRegistryInstallMigrationPreflightAction =
   | "migrate";
 
 export type PluginRegistryInstallMigrationPreflight = {
+  /** Migration action selected before reading or writing registry state. */
   action: PluginRegistryInstallMigrationPreflightAction;
+  /** Persisted plugin index path that migration will inspect or write. */
   filePath: string;
+  /** True when deprecated force env requested migration despite existing registry. */
   force: boolean;
+  /** Deprecation warnings for env toggles that should be shown to users. */
   deprecationWarnings: readonly string[];
 };
 
@@ -68,6 +76,7 @@ function forceDeprecationWarning(): string {
   return `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated and will be removed after the plugin registry migration rollout; use doctor registry repair once available.`;
 }
 
+/** Decide whether plugin install registry migration should run for this environment. */
 export function preflightPluginRegistryInstallMigration(
   params: PluginRegistryInstallMigrationParams = {},
 ): PluginRegistryInstallMigrationPreflight {
@@ -150,6 +159,7 @@ function createMigrationPluginIdNormalizer(
       ...(plugin.setup?.cliBackends ?? []),
       ...Object.keys(plugin.modelCatalog?.providers ?? {}),
       ...(plugin.legacyPluginIds ?? []),
+      ...(DOCTOR_PLUGIN_ID_ALIASES[plugin.id] ?? []),
     ]) {
       const normalizedAlias = normalizeRegistryReference(alias);
       if (normalizedAlias && !aliases.has(normalizedAlias)) {
@@ -277,6 +287,7 @@ function listMigrationRelevantPluginRecords(params: {
   });
 }
 
+/** Persist a migrated plugin install registry from legacy config/install records when needed. */
 export async function migratePluginRegistryForInstall(
   params: PluginRegistryInstallMigrationParams = {},
 ): Promise<PluginRegistryInstallMigrationResult> {

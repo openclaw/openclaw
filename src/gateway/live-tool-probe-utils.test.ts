@@ -1,3 +1,6 @@
+/**
+ * Tests for nonce matching and retry heuristics used by live tool probes.
+ */
 import { describe, expect, it } from "vitest";
 import {
   hasExpectedSingleNonce,
@@ -5,7 +8,7 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 
 describe("live tool probe utils", () => {
   describe("nonce matching", () => {

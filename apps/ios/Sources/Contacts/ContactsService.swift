@@ -202,10 +202,4 @@ final class ContactsService: ContactsServicing {
             phoneNumbers: contact.phoneNumbers.map(\.value.stringValue),
             emails: contact.emailAddresses.map { String($0.value) })
     }
-
-    #if DEBUG
-    static func _test_matches(contact: CNContact, phoneNumbers: [String], emails: [String]) -> Bool {
-        self.matchContacts(contacts: [contact], phoneNumbers: phoneNumbers, emails: emails) != nil
-    }
-    #endif
 }

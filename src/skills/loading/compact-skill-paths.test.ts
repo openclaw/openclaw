@@ -1,6 +1,8 @@
+// Compact skill path tests cover short path formatting for skill prompt payloads.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { testing as workspaceSkillsTesting, buildWorkspaceSkillsPrompt } from "./workspace.js";
 
@@ -49,6 +51,84 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("~/");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("A test skill for path compaction");
+  });
+
+  it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {
+    const root = path.parse(os.homedir()).root;
+    const osHome = path.join(root, "data");
+    const stateDir = path.join(osHome, ".openclaw");
+    const skillDir = path.join(stateDir, "skills", "world-cup-soccer-openclaw-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    const prompt = withEnv(
+      {
+        HOME: osHome,
+        OPENCLAW_HOME: osHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "world-cup-soccer-openclaw-skill",
+          description: "World Cup standings lookup",
+        }),
+    );
+
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
+  });
+
+  it("does not compact explicit state-root plugin skill paths to OS-home tilde paths", () => {
+    const root = path.parse(os.homedir()).root;
+    const osHome = path.join(root, "data");
+    const stateDir = path.join(osHome, ".openclaw");
+    const skillDir = path.join(stateDir, "plugin-skills", "calendar-plugin-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    const prompt = withEnv(
+      {
+        HOME: osHome,
+        OPENCLAW_HOME: osHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "calendar-plugin-skill",
+          description: "Calendar plugin skill",
+        }),
+    );
+
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("~/.openclaw/plugin-skills/calendar-plugin-skill/SKILL.md");
+  });
+
+  it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
+    const home = os.homedir();
+    const stateDir = path.join(home, ".openclaw");
+    const skillDir = path.join(stateDir, "skills", "home-managed-skill");
+
+    const prompt = withEnv(
+      {
+        HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_HOME: undefined,
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(home, "workspace"),
+          skillDir,
+          name: "home-managed-skill",
+          description: "Home managed skill",
+        }),
+    );
+
+    expect(prompt).toContain("<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>");
+    expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
   });
 
   it("normalizes compacted Windows skill locations to forward slashes", () => {

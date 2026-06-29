@@ -1,8 +1,13 @@
+// Failover policy tests cover the embedded run decision table for retry,
+// profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
   it("escalates retry-limit exhaustion for replay-safe failover reasons", () => {
+    // Retry-limit exhaustion is only a model-fallback signal when the carried
+    // reason is known to be safe to replay against a different model.
     expect(
       resolveRunFailoverDecision({
         stage: "retry_limit",
@@ -12,6 +17,21 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "fallback_model",
       reason: "rate_limit",
+    });
+  });
+
+  it("escalates retry-limit for model_not_found when fallback is configured", () => {
+    // model_not_found should trigger fallback to configured alternatives
+    // when the primary model is decommissioned by the provider.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
     });
   });
 
@@ -27,7 +47,21 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("returns error payload for model_not_found when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
   it("prefers prompt-side profile rotation before fallback", () => {
+    // Prompt construction can fail before any model output exists, so rotate
+    // the current provider profile before spending the configured fallback.
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -97,6 +131,8 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("ignores stale classified assistant-side 429 text without error stopReason", () => {
+    // Classifiers may see old assistant text in the transcript. Without an
+    // actual failure signal, stale billing/rate-limit text is not failover.
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
@@ -257,6 +293,48 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back for opencode-go provider-owned stalled stream errors after rotation is exhausted", () => {
+    const assistantError = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+      content: [],
+      timestamp: 0,
+    };
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBe("timeout");
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
   it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
@@ -299,6 +377,8 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("does not rotate harness-owned assistant timeouts", () => {
+    // Harness-owned transports already implement their own retry envelope;
+    // core failover should not double-rotate on those synthetic timeouts.
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
@@ -520,6 +600,44 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("falls back on fallback-safe harness-owned prompt timeouts", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces fallback-safe harness-owned prompt timeouts when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
         profileRotated: true,
       }),
     ).toEqual({

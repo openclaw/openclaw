@@ -1,3 +1,5 @@
+// Tool invoke cron regression tests cover HTTP tool invocation for cron/gateway
+// tools with lightweight mocks around auth, config, and before-tool hooks.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,7 +91,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });
@@ -108,7 +110,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server?.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server?.close(() => resolve());
+  });
   server = undefined;
 });
 

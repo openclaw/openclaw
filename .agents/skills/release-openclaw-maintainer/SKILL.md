@@ -10,12 +10,19 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 ## Respect release guardrails
 
 - Do not change version numbers without explicit operator approval.
+- Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
+- Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
+- Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
 - Ask permission before any npm publish or release step.
 - This skill should be sufficient to drive the normal release flow end-to-end.
 - Use the private maintainer release docs for credentials, recovery steps, and mac signing/notary specifics, and use `docs/reference/RELEASING.md` for public policy.
 - Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
+- Do not edit the root `README.md` as release prep, release closeout, or a
+  substitute for release notes. Package-root README validation is a hard
+  packaging gate, but a release only changes README content when an actual
+  user-facing documentation contract changed.
 - Normal release work happens on a branch cut from `main`, not directly on
-  `main`. Use `release/YYYY.M.D` for the branch name.
+  `main`. Use `release/YYYY.M.PATCH` for the branch name.
 - If the operator asks for a release without saying stable/full, default to
   beta only. Continue from beta to stable only when the operator explicitly asks
   for the full release or an automated beta-and-stable train.
@@ -49,17 +56,21 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   the next beta number until the matching npm package has actually published.
   If a published beta needs a fix, commit the fix on the release branch and
   increment to the next `-beta.N`.
-- For a beta release train, run the fast local preflight first, publish the
-  beta to npm `beta`, then run the expensive published-package roster focused
-  on install/update/Docker/Parallels/NPM Telegram. If anything fails, fix it on
-  the release branch, commit/push/pull, increment beta number, and repeat. Run
-  the full expensive roster at least once before stable/latest promotion; for
-  later beta attempts, rerun only lanes whose evidence changed unless the fix
-  touches broad release, install/update, plugin, Docker, Parallels, or live QA
-  behavior. After each beta is published, scan current `main` once for critical
-  fixes that landed after the release branch cut and backport only important
-  low-risk fixes. Operators may authorize up to 4 autonomous beta attempts;
-  after 4 failed beta attempts, stop and report.
+- For a beta release train, keep Full Release Validation as a pre-publish gate
+  unless the operator explicitly waives it. Run the fast local preflight, npm
+  preflight, full release validation, and performance in parallel where safe.
+  If anything fails before npm publish, fix it on the release branch,
+  forward-port the fix to `main`, move the unpublished beta tag/prerelease to
+  the fixed commit, and rerun the affected pre-publish gates. If anything fails
+  after npm publish, fix it, forward-port to `main`, increment beta number, and
+  repeat. After each beta publish, run the published-package roster focused on
+  install/update/Docker/Parallels/NPM Telegram. For later beta attempts, rerun
+  only lanes whose evidence changed unless the fix touches broad release,
+  install/update, plugin, Docker, Parallels, or live QA behavior. After each
+  beta is live, scan current `main` once for critical fixes that landed after
+  the release branch cut and backport only important low-risk fixes. Operators
+  may authorize up to 4 autonomous beta attempts; after 4 failed beta attempts,
+  stop and report.
 - As soon as the release candidate SHA exists, dispatch `OpenClaw Performance`
   with `target_ref=<release-sha>` in parallel with the other release work. Do
   not wait for full release validation to start the performance signal.
@@ -69,6 +80,44 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   or clawgrit reports. Report regressions explicitly. A major regression is a
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
+- Heal CI before tagging or publishing. The exact candidate SHA must have green
+  `Full Release Validation`, including the root Dockerfile/install-smoke path.
+  Treat a red Docker, package, or release workflow lane as a release-branch
+  defect until the smallest correct fix is landed and proven; do not waive it
+  because npm preflight or another sibling lane passed.
+- Keep the canonical `scripts/pr` runner authoritative for prepare and merge
+  artifacts. A release-gate policy change may use focused candidate tests and
+  exact-SHA hosted CI for proof, but never route `prepare-*` or `merge-*`
+  through PR-controlled scripts or synthesize prepare artifacts to bootstrap
+  the change. If the current canonical gate cannot validate the new policy,
+  stop for explicit maintainer direction rather than weakening that boundary.
+- In maintainer Testbox mode, use `OPENCLAW_TESTBOX=1 scripts/pr prepare-run
+<PR>` only after the exact PR head has passed `CI` and every scheduled
+  hosted gate. For a workflow change, that means `Blacksmith Testbox`,
+  `Blacksmith ARM Testbox`, `Blacksmith Build Artifacts Testbox`, and
+  `Workflow Sanity`; only gates GitHub actually scheduled for that exact head
+  are required. This preserves the canonical prepare artifacts while avoiding
+  a redundant broad local suite. A
+  literal `CHANGELOG.md`-only head gets a clean diff check instead because
+  those workflows intentionally do not dispatch. Documentation and README
+  changes still require CI. If `merge-run` requires a mainline sync, run
+  `OPENCLAW_TESTBOX=1 scripts/pr prepare-sync-head <PR>`, wait for those hosted
+  gates on the newly pushed SHA, then run `prepare-run` again.
+- If an exact PR-head CI run has no active jobs because Blacksmith capacity is
+  stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
+  the PR head branch:
+  `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+  Use it only for an observed provider queue stall, never for failed CI or as a
+  routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
+  pass on that exact SHA; the native hosted-gate verifier rejects generic manual
+  CI runs. If `Blacksmith Build Artifacts Testbox` is the only remaining
+  required gate and it is still queued without a runner, the same completed
+  fallback CI may cover it because its `build-artifacts` job builds, packages,
+  and smoke tests those artifacts. The verifier records that coverage. Never
+  use this coverage when the artifact workflow has started, failed, been
+  cancelled, or been skipped. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr
+prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
@@ -88,10 +137,38 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 ## Keep release channel naming aligned
 
 - `stable`: tagged releases only, published to npm `beta` by default; operators may target npm `latest` explicitly or promote later
-- `beta`: prerelease tags like `vYYYY.M.D-beta.N`, with npm dist-tag `beta`
+- `beta`: prerelease tags like `vYYYY.M.PATCH-beta.N`, with npm dist-tag `beta`
 - Prefer `-beta.N`; do not mint new `-1` or `-2` beta suffixes
 - `dev`: moving head on `main`
 - When using a beta Git tag, publish npm with the matching beta version suffix so the plain version is not consumed or blocked
+
+## Close stable releases on main
+
+Stable publication is not complete until `main` carries the actual shipped release state.
+
+1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+   forward-port real fixes that are absent from `main`. Do not blindly merge
+   release-only compatibility, test, or validation adapters into newer `main`.
+2. Set `main` to the shipped stable version, not a speculative next train. Run
+   `pnpm release:prep` after the root version change, then
+   `pnpm deps:shrinkwrap:generate`.
+3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
+   tagged release branch. Include the stable `appcast.xml` update when the mac
+   release published one.
+4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
+   section to `main` until the operator explicitly starts that release train.
+5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
+   contains the shipped version and changelog before calling the stable release
+   done.
+6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
+   `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
+   `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
+   shipped version, changelog, and appcast after stable publication, then binds
+   immutable evidence to the published tag. Do not declare stable complete
+   until it writes the immutable closeout manifest to the GitHub release. The
+   drill must be within 90 days; manual dispatch is only for repair/replay, and
+   private rollback commands remain in the maintainer-only runbook.
 
 ## Handle versions and release files consistently
 
@@ -104,12 +181,13 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   - `docs/install/updating.md`
   - Peekaboo Xcode project and plist version fields
 - Before creating a release tag, make every version location above match the version encoded by that tag.
-- For fallback correction tags like `vYYYY.M.D-N`, the repo version locations still stay at `YYYY.M.D`.
+- For fallback correction tags like `vYYYY.M.PATCH-N`, the repo version locations still stay at `YYYY.M.PATCH`.
 - “Bump version everywhere” means all version locations above except `appcast.xml`.
 - Release signing and notary credentials live outside the repo in the private maintainer docs.
-- Every stable OpenClaw release ships the npm package and macOS app together.
-  Beta releases normally ship npm/package artifacts first and skip mac app
-  build/sign/notarize unless the operator requests mac beta validation.
+- Every stable OpenClaw release ships the npm package, macOS app, and signed
+  Windows Hub installers together. Beta releases normally ship npm/package
+  artifacts first and skip native app build/sign/notarize/promote unless the
+  operator requests native beta validation.
 - Do not let the slower macOS signing/notary path block npm publication once
   the npm preflight has passed. Keep mac validation/publish running in
   parallel, publish npm from the successful npm preflight, then start published
@@ -124,21 +202,45 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   tagged commit when the delta is mac packaging, signing, workflow, or
   validation-only release machinery. If mac packaging needs release-branch-only
   fixes after the stable npm package or GitHub tag is already published, do not
-  create a `vYYYY.M.D-N` correction tag just to change the workflow source.
-  Dispatch the private mac workflows for the original `tag=vYYYY.M.D` with
-  `source_ref=release/YYYY.M.D` and `public_release_branch=release/YYYY.M.D`;
+  create a `vYYYY.M.PATCH-N` correction tag just to change the workflow source.
+  Dispatch the release-ops mac workflows for the original `tag=vYYYY.M.PATCH`
+  with `source_ref=release/YYYY.M.PATCH` and
+  `public_release_branch=release/YYYY.M.PATCH`;
   provenance checks must prove the source SHA descends from the tag and
-  validation/preflight use the same source. Reserve `vYYYY.M.D-N` correction
+  validation/preflight use the same source. Reserve `vYYYY.M.PATCH-N` correction
   tags for emergency hotfixes that must publish a new npm package/release
   identity, not for ordinary mac-only packaging recovery.
 - The production Sparkle feed lives at `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`, and the canonical published file is `appcast.xml` on `main` in the `openclaw` repo.
 - That shared production Sparkle feed is stable-only. Beta mac releases may
   upload assets to the GitHub prerelease, but they must not replace the shared
   `appcast.xml` unless a separate beta feed exists.
-- For fallback correction tags like `vYYYY.M.D-N`, the repo version still stays
-  at `YYYY.M.D`, but the mac release must use a strictly higher numeric
+- For fallback correction tags like `vYYYY.M.PATCH-N`, the repo version still stays
+  at `YYYY.M.PATCH`, but the mac release must use a strictly higher numeric
   `APP_BUILD` / Sparkle build than the original release so existing installs
   see it as newer.
+- Stable Windows Hub release closeout requires the signed
+  `OpenClawCompanion-Setup-x64.exe`, `OpenClawCompanion-Setup-arm64.exe`, and
+  `OpenClawCompanion-SHA256SUMS.txt` assets on the canonical
+  `openclaw/openclaw` GitHub Release. Pass the exact signed
+  `openclaw/openclaw-windows-node` release tag as `windows_node_tag` to
+  `OpenClaw Release Publish`, together with the candidate-approved
+  `windows_node_installer_digests` map; it prevalidates the published source
+  release and required installers against that map before any publish child,
+  dispatches the public `Windows Node Release` workflow while the OpenClaw
+  release is still a draft, carries those pinned source asset digests
+  unchanged, verifies the expected OpenClaw Foundation Authenticode signer on
+  Windows, re-downloads and checksum-verifies the promoted asset contract, and
+  blocks publication until the canonical asset contract is present. Use direct
+  `Windows Node Release` dispatch only for recovery, always with an exact tag,
+  never `latest`, and the explicit `expected_installer_digests` JSON map from
+  the approved source release. Recovery rejects unexpected
+  `OpenClawCompanion-*` target asset names, then replaces the expected contract
+  assets with the pinned source bytes.
+- Website Windows Hub download links should target exact canonical
+  `openclaw/openclaw/releases/download/vYYYY.M.PATCH/...` assets for the current
+  stable release, or `releases/latest/download/...` only after verifying the
+  redirect resolves to that same tag, so the installable signed Windows artifact
+  is visible from both the GitHub release page and openclaw.ai.
 
 ## Build changelog-backed release notes
 
@@ -148,12 +250,20 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   section from history, not existing notes. Use the last reachable stable or
   beta release tag as the base, then inspect every commit through the target
   release SHA.
+- Generate `$openclaw-changelog-update`'s full contribution manifest before
+  the editorial rewrite. It is the required source for `### Highlights`,
+  `### Changes`, and `### Fixes`; do not preserve old grouped prose without
+  comparing it to the manifest's PRs, contributors, direct commits, and
+  unlinked commits.
 - The changelog rewrite is not optional for beta reruns: any `beta.N` after a
-  rebase or backport must refresh the same stable-base `## YYYY.M.D` section
+  rebase or backport must refresh the same stable-base `## YYYY.M.PATCH` section
   before the new version/tag commit.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
+- Keep direct commits in the generated manifest and use them to shape grouped
+  user outcomes, but never dump them into `CHANGELOG.md` or GitHub release
+  bodies. The public complete record is PR-first and exhaustive for PRs.
 - Prefer PR bodies, issue links, review proof, and commit bodies over commit
   subjects alone. If a commit fixed an issue directly, the commit body should
   name the user-visible behavior, affected surface, issue ref, and credited
@@ -169,11 +279,43 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   `#issue`, `(#PR)`, `Fixes #...`, and every human `Thanks @...` handle.
   Multiple thanks in one bullet are expected when multiple contributor PRs are
   grouped.
+- Highlights earn their place only when they are a visible capability/workflow
+  unlock, a material reliability or safety repair, a broad user-facing
+  improvement, or a release-defining integration/compatibility change. Keep
+  five to eight user-outcome bullets; omit tests, CI, refactors, docs, and
+  implementation trivia unless their outcome materially affects users.
+- Do not give `docs`, `test`, `refactor`, `ci`, `build`, `chore`, or `style`
+  PRs/direct commits their own Highlights, Changes, or Fixes entry. They remain
+  accounted for in the PR record or manifest, but are not product release
+  content. Treat explicit internal title signals such as `QA`, `lint`, or
+  `testing` the same way even when the PR has no conventional prefix.
+- Use the generated `### Complete contribution record` as PR-first accounting:
+  every merged source PR appears once with author/co-author credit, including
+  PRs identified only by an explicit active-commit `#NNN` reference after a
+  cherry-pick or squash. Keep issues inline as `#NNN` in titles and grouped
+  prose; do not create a linked-issues inventory or a direct-commit listing.
+  When grouped prose names a PR, keep every contributor and linked-reporter
+  credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
-  or editing a release, extract from `## YYYY.M.D` through the line before the
+  or editing a release, extract from `## YYYY.M.PATCH` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- GitHub limits release bodies to 125,000 characters. If a historical
+  `### Release verification` tail would exceed that cap, omit the tail and keep
+  the complete changelog section; do not truncate the contribution record.
+- Before publishing or closing a release, run
+  `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
+  and beta release tag in the train. Do not publish or leave a page live when
+  it is missing a source-history reference, eligible human credit, or the
+  complete matching changelog body.
+- To update an existing GitHub Release body, resolve the numeric release id and
+  patch that resource with the notes file as the `body` field:
+  `gh api repos/openclaw/openclaw/releases/tags/vYYYY.M.PATCH --jq .id`, then
+  `gh api -X PATCH repos/openclaw/openclaw/releases/<id> -F body=@/tmp/notes.md`.
+  Do not trust `gh release edit --notes-file` or `--input` JSON if verification
+  disagrees; verify with `gh api repos/openclaw/openclaw/releases/<id>` because
+  the tag lookup and `gh release view` can lag or show stale body text.
 - When preparing release notes, scan `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` for compatibility records
   with `warningStarts` or `removeAfter` within 7 days after the release date.
@@ -182,10 +324,10 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   record's `docsPath` or `/plugins/compatibility` when no more specific
   deprecation page exists.
 - When cutting a mac release with a beta GitHub prerelease:
-  - tag `vYYYY.M.D-beta.N` from the release commit
-  - create a prerelease titled `openclaw YYYY.M.D-beta.N`
+  - tag `vYYYY.M.PATCH-beta.N` from the release commit
+  - create a prerelease titled `openclaw YYYY.M.PATCH-beta.N`
   - use release notes from the stable base `CHANGELOG.md` version section
-    (`## YYYY.M.D`), not a beta-specific heading
+    (`## YYYY.M.PATCH`), not a beta-specific heading
   - attach at least the zip and dSYM zip, plus dmg if available
 - Keep the top version entries in `CHANGELOG.md` sorted by impact:
   - `### Changes` first
@@ -195,10 +337,10 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 
 Use the OpenClaw account's existing release-post style:
 
-- Format: `OpenClaw YYYY.M.D 🦞` or `🦞 OpenClaw YYYY.M.D is live`, blank line,
+- Format: `OpenClaw YYYY.M.PATCH 🦞` or `🦞 OpenClaw YYYY.M.PATCH is live`, blank line,
   then 3-4 emoji-led bullets, blank line, one short punchline, then the release
   link.
-- For beta: say `OpenClaw YYYY.M.D-beta.N 🦞` or `OpenClaw YYYY.M.D beta N is
+- For beta: say `OpenClaw YYYY.M.PATCH-beta.N 🦞` or `OpenClaw YYYY.M.PATCH beta N is
 live`; keep it clearly beta and avoid implying stable promotion.
 - Lead with user-visible capabilities, then important integrations, then
   reliability/security/install fixes. Compress "lots of fixes" into one
@@ -283,6 +425,7 @@ Upgrade with the beta channel.
 Before tagging or publishing, run:
 
 ```bash
+pnpm release:fast-pretag-check
 pnpm check:architecture
 pnpm build
 pnpm ui:build
@@ -291,6 +434,38 @@ pnpm release:check
 pnpm test:install:smoke
 ```
 
+- Treat `pnpm release:fast-pretag-check` as a hard packaging gate. Every
+  publishable plugin must have a non-empty package-root `README.md`, build its
+  package-local runtime, and pass the npm and ClawHub release metadata checks
+  before a tag or publish workflow can start. Do not defer README, entrypoint,
+  or packed-artifact failures to postpublish verification.
+- Before tagging, require green CI for the exact release-candidate SHA, not an
+  earlier branch SHA. Heal every related red CI, release-check, packaging, or
+  root-Dockerfile lane on the release branch, forward-port the fix to `main`,
+  and rerun the affected exact-SHA gates. Never waive a red Docker lane because
+  npm preflight passed.
+- Root Dockerfile proof is mandatory before every beta and stable tag. Run the
+  release `install-smoke` group or equivalent root Dockerfile build for the
+  exact candidate SHA and require it to pass. The tag-triggered Docker Release
+  workflow is post-tag publishing, not the first valid proof that the root
+  Dockerfile can build.
+- Before tagging, diff publishable plugin package manifests against the last
+  reachable stable/beta release tag. For every newly publishable package
+  (`openclaw.release.publishToNpm: true` or `publishToClawHub: true`) whose
+  package name did not exist in the base tag, verify the target registry package
+  already exists in npm/ClawHub or stop and help the owner mint/prepublish the
+  package first. Do not hide or disable release surfaces just to unblock a
+  train unless the owner explicitly decides the plugin should not ship in that
+  release; first-package registry ownership is release prep, not product
+  rollback. The mint/prepublish path must either be the real release publish
+  path for the auto-bumped beta version, or a deliberately non-consuming
+  registry-prep step that cannot occupy the next beta version/tag. Confirm
+  registry owner, npm scope/package-creation permission, provenance path, and
+  first-package publish plan before the full release publish continues. Useful
+  npm probe:
+  `npm view <package-name> version dist-tags --json --prefer-online`; a 404 for
+  a package newly added to the release is a release-prep blocker, not something
+  to discover from the publish job.
 - Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
   It starts a local OTLP/HTTP trace receiver, runs QA-lab's
   `otel-trace-smoke`, and checks span names plus content/identifier redaction
@@ -309,8 +484,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
 
 - This verifies the published registry install path in a fresh temp prefix.
-- For stable correction releases like `YYYY.M.D-N`, it also verifies the
-  upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
+- For stable correction releases like `YYYY.M.PATCH-N`, it also verifies the
+  upgrade path from `YYYY.M.PATCH` to `YYYY.M.PATCH-N` so a correction publish cannot
   silently leave existing global installs on the old base stable payload.
 - Treat install smoke as a pack-budget gate too. `pnpm test:install:smoke`
   now fails the candidate update tarball when npm reports an oversized
@@ -405,8 +580,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Actual npm install/update phases are capped at 5 minutes. If `npm install -g`, installer package install, or `openclaw update` takes longer than 300s in release e2e, stop treating the run as healthy progress and debug the installer/updater or harness.
 - Serialize host build/package mutations ahead of VM lanes. Finish `pnpm build`, `pnpm ui:build`, `pnpm release:check`, install smoke, and any Docker/package-prep lanes before starting Parallels `npm pack` lanes; otherwise `dist` can disappear during VM pack prep and produce false failures.
 - Include mac release readiness in preflight by running the public validation
-  workflow in `openclaw/openclaw` and the real mac preflight in
-  `openclaw/releases-private` for every release.
+  workflow in `openclaw/openclaw` and the release-ops mac preflight in
+  `openclaw/releases` for every release.
 - Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
 - The workflows remain tag-based. The agent is responsible for making sure
   preflight runs complete successfully before any publish run starts.
@@ -434,16 +609,16 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ## Use the right auth flow
 
 - OpenClaw publish uses GitHub trusted publishing.
-- Stable npm promotion from `beta` to `latest` uses the private
-  `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
-  workflow because `npm dist-tag` management needs `NPM_TOKEN`, while the
-  public npm release workflow stays OIDC-only.
-- Prefer fixing the private workflow token path over any local 1Password
-  fallback. The desired setup is a granular npm token stored as the private
+- Stable npm promotion from `beta` to `latest` uses the restricted release-ops
+  `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
+  because `npm dist-tag` management needs `NPM_TOKEN`, while the public npm
+  release workflow stays OIDC-only.
+- Prefer fixing the release-ops workflow token path over any local 1Password
+  fallback. The desired setup is a granular npm token stored as the release-ops
   repo's `NPM_TOKEN` secret, scoped to the `openclaw` package with read/write
   and 2FA bypass for automation.
-- If the private dist-tag workflow cannot promote because `NPM_TOKEN` is absent
-  or stale, use the local tmux + 1Password fallback:
+- If the release-ops dist-tag workflow cannot promote because `NPM_TOKEN` is
+  absent or stale, use the local tmux + 1Password fallback:
   - Start or reuse a tmux session so interactive `npm login` and OTP prompts
     are observable and recoverable.
   - Hard rule: never run `op` directly in the main agent shell during release
@@ -457,83 +632,100 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `npm login --auth-type=legacy`, then confirm `npm whoami` reports
     `steipete`.
   - Promote with a fresh OTP:
-    `npm dist-tag add openclaw@YYYY.M.D latest --otp "$OTP"`.
+    `npm dist-tag add openclaw@YYYY.M.PATCH latest --otp "$OTP"`.
   - Verify with a cache-bypassed registry read, for example:
     `npm view openclaw dist-tags --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`
     and `npm view openclaw@latest version dist.tarball --json --prefer-online`.
-- Direct stable publishes can also use that private dist-tag workflow to point
-  `beta` at the already-published `latest` version when the operator wants both
-  tags aligned immediately.
+- Direct stable publishes can also use that release-ops dist-tag workflow to
+  point `beta` at the already-published `latest` version when the operator wants
+  both tags aligned immediately.
 - The publish run must be started manually with `workflow_dispatch`.
-- The npm workflow and the private mac publish workflow accept
+- The npm workflow and the release-ops mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Real npm publish requires a prior successful npm preflight run id so the
-  publish job promotes the prepared tarball instead of rebuilding it.
-- Real private mac publish requires a prior successful private mac preflight
-  run id so the publish job promotes the prepared artifacts instead of
+- Real npm publish requires a prior successful npm preflight run id and the
+  successful Full Release Validation run id for the same tag/SHA so the publish
+  job promotes the prepared tarball instead of rebuilding it and attaches the
+  correct release evidence.
+- Real release-ops mac publish requires a prior successful release-ops mac
+  preflight run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
-- The private mac workflow also accepts `smoke_test_only=true` for branch-safe
+- The release-ops mac workflow also accepts `smoke_test_only=true` for branch-safe
   workflow smoke tests that use ad-hoc signing, skip notarization, skip shared
   appcast generation, and do not prove release readiness.
 - `preflight_only=true` on the npm workflow is also the right way to validate an
   existing tag after publish; it should keep running the build checks even when
   the npm version is already published.
+- npm registry metadata is eventually consistent immediately after trusted
+  publishing. Keep postpublish `npm view` checks on bounded `--prefer-online`
+  retries, and carry that verified tarball/integrity metadata into later proof
+  steps instead of reading the registry again. If the OpenClaw npm child
+  succeeded but the parent publish workflow failed on an immediate exact-version
+  `E404`, verify the exact version with a cache-bypassed registry read, run the
+  standalone postpublish verifier and the full beta verifier with the original
+  successful child run IDs, then finalize the draft, dependency evidence asset,
+  and release proof manually. Never rerun the publish workflow for that
+  already-published version.
 - npm validation-only preflight may still be dispatched from ordinary branches
   when testing workflow changes before merge. Release checks and real publish
-  use only `main` or `release/YYYY.M.D`.
+  use only `main` or `release/YYYY.M.PATCH`.
 - `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
   public validation-only handoff. It validates the tag/release state and points
-  operators to the private repo. It still rebuilds the JS outputs needed for
+  operators to the release-ops repo. It still rebuilds the JS outputs needed for
   release validation, but it does not sign, notarize, or publish macOS
   artifacts.
-- `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
-  is the required private mac validation lane for `swift test`; keep it green
+- `openclaw/releases/.github/workflows/openclaw-macos-validate.yml` is the
+  required release-ops mac validation lane for `swift test`; keep it green
   before any real stable mac publish run starts.
 - Real mac preflight and real mac publish both use
-  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`.
-- The private mac validation lane runs on GitHub's standard macOS runner.
-- The private mac preflight path runs on GitHub's xlarge macOS runner and uses
+  `openclaw/releases/.github/workflows/openclaw-macos-publish.yml`.
+- The release-ops mac validation lane runs on GitHub's standard macOS runner.
+- The release-ops mac preflight path runs on GitHub's xlarge macOS runner and uses
   a SwiftPM cache because the build/sign/notarize/package path is CPU-heavy.
-- Private mac preflight uploads notarized build artifacts as workflow artifacts
-  instead of uploading public GitHub release assets.
-- Private smoke-test runs upload ad-hoc, non-notarized build artifacts as
+- Release-ops mac preflight uploads notarized build artifacts as workflow
+  artifacts instead of uploading public GitHub release assets.
+- Release-ops smoke-test runs upload ad-hoc, non-notarized build artifacts as
   workflow artifacts and intentionally skip stable `appcast.xml` generation.
-- For stable releases, npm preflight, public mac validation, private mac
-  validation, and private mac preflight must all pass before any real publish
-  run starts. For beta releases, npm preflight plus the selected Docker,
-  install/update, Parallels, and release-check lanes are sufficient unless mac
-  beta validation was explicitly requested.
+- For stable releases, npm preflight, Full Release Validation, public mac
+  validation, release-ops mac validation, and release-ops mac preflight must all
+  pass before any real publish run starts. For beta releases, npm preflight and
+  Full Release Validation must pass before npm publish unless the operator
+  explicitly waives the full gate; mac beta validation is still only required
+  when requested.
 - Real publish runs may be dispatched from `main` or from a
-  `release/YYYY.M.D` branch. For release-branch runs, the tag must be contained
+  `release/YYYY.M.PATCH` branch. For release-branch runs, the tag must be contained
   in that release branch, and the real publish must reuse a successful preflight
   from the same branch.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses
-  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
-  private mac preflight artifact preparation and real publish artifact
+  `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for
+  release-ops mac preflight artifact preparation and real publish artifact
   promotion.
-- Real private mac publish uploads the packaged `.zip`, `.dmg`, and
+- Real release-ops mac publish uploads the packaged `.zip`, `.dmg`, and
   `.dSYM.zip` assets to the existing GitHub release in `openclaw/openclaw`
   automatically when `OPENCLAW_PUBLIC_REPO_RELEASE_TOKEN` is present in the
-  private repo `mac-release` environment.
+  release-ops repo `mac-release` environment.
 - For stable releases, the agent must also download the signed
-  `macos-appcast-<tag>` artifact from the successful private mac workflow and
-  then update `appcast.xml` on `main`.
+  `macos-appcast-<tag>` artifact from the successful release-ops mac workflow
+  and then update `appcast.xml` on `main`.
 - For beta mac releases, do not update the shared production `appcast.xml`
   unless a separate beta Sparkle feed exists.
-- The private repo targets a dedicated `mac-release` environment. If the GitHub
-  plan does not yet support required reviewers there, do not assume the
-  environment alone is the approval boundary; rely on private repo access and
+- The release-ops repo targets a dedicated `mac-release` environment. If the
+  GitHub plan does not yet support required reviewers there, do not assume the
+  environment alone is the approval boundary; rely on restricted repo access and
   CODEOWNERS until those settings can be enabled.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for the OpenClaw package
   publish path; package publishing uses trusted publishing.
 - Use `NPM_TOKEN` only for explicit npm dist-tag management modes, because npm
   does not support trusted publishing for `npm dist-tag add`.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
-- Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
+- Publishable plugins that are new to npm require owner-led first-package
+  minting before the full release publish. Do not consume the next beta version
+  with an ad-hoc manual package publish; use the release-owned auto-bumped
+  version path, or a non-consuming registry setup/preflight step. Bundled
+  disk-tree-only plugins stay unpublished.
 
 ## Fallback local mac publish
 
@@ -573,8 +765,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 4. Pull latest `main` and confirm current `main` CI is green.
 5. Run `/changelog` for the stable base target version on `main`, commit the
    changelog rewrite immediately, push, and pull/rebase. For beta releases,
-   keep the changelog heading as `## YYYY.M.D`, not `## YYYY.M.D-beta.N`.
-6. Create `release/YYYY.M.D` from that post-changelog `main` commit.
+   keep the changelog heading as `## YYYY.M.PATCH`, not `## YYYY.M.PATCH-beta.N`.
+6. Create `release/YYYY.M.PATCH` from that post-changelog `main` commit.
 7. Make every repo version location match the beta tag before creating it.
 8. Commit release preparation changes on the release branch and push the branch.
 9. Immediately dispatch Actions > `OpenClaw Performance` from `main` with
@@ -582,15 +774,18 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    off, live OpenAI off, and regression failure off. Let it run in parallel
    with preflight and validation work.
 10. Run the fast local beta preflight from the release branch before any npm
-    preflight or publish. Keep expensive Docker, Parallels, and published-package
-    install/update lanes for after the beta is live unless the operator asks to
-    run them before beta publication.
+    preflight or publish. Require exact-SHA CI and root Dockerfile install-smoke
+    to be green before tagging. Keep the remaining expensive Docker, Parallels,
+    and published-package install/update lanes for after the beta is live unless
+    the operator asks to run them before beta publication.
 11. For beta releases, skip mac app build/sign/notarize unless beta scope or a
     release blocker specifically requires it. For stable releases, include the
     mac app, signing, notarization, and appcast path.
 12. Confirm the target npm version is not already published.
 13. Create and push the git tag from the release branch.
-14. Create or refresh the matching GitHub release.
+14. Do not create or publish the matching GitHub release page yet. The real
+    publish workflow creates or undrafts it only after postpublish verification
+    and release evidence upload pass.
 15. Dispatch Actions > `QA-Lab - All Lanes` against the release tag and wait
     for the mock parity, live Matrix, and live Telegram credentialed-channel
     lanes to pass.
@@ -606,28 +801,46 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 18. For stable releases, start `.github/workflows/macos-release.yml` in
     `openclaw/openclaw` and wait for the public validation-only run to pass.
 19. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
-    with the same tag and wait for the private mac validation lane to pass.
+    `openclaw/releases/.github/workflows/openclaw-macos-validate.yml` with the
+    same tag and wait for the release-ops mac validation lane to pass.
 20. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    with `preflight_only=true` and wait for it to pass. Save that run id because
-    the real publish requires it to reuse the notarized mac artifacts.
+    `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` with
+    `preflight_only=true` and wait for it to pass. Save that run id because the
+    real publish requires it to reuse the notarized mac artifacts.
 21. If any preflight or validation run fails, fix the issue on a new commit,
-    delete the tag and matching GitHub release, recreate them from the fixed
-    commit, and rerun all relevant preflights from scratch before continuing.
-    Never reuse old preflight results after the commit changes. For pushed or
-    published beta tags, do not delete/recreate; increment to the next beta tag.
-    For preflight-only failures where npm did not publish the beta version,
-    delete/recreate the same beta tag and prerelease at the fixed commit instead
-    of skipping a prerelease number.
-22. Start `.github/workflows/openclaw-npm-release.yml` from the same branch with
+    delete the tag and any accidental draft/incomplete GitHub release, recreate
+    the tag from the fixed commit, and rerun all relevant preflights from
+    scratch before continuing. Never reuse old preflight results after the
+    commit changes. Once the npm version exists, do not rerun the publish
+    workflow for that same version; finalize the existing draft/evidence state
+    manually or cut a correction tag. For pushed or published beta tags, do not
+    delete/recreate; increment to the next beta tag. For preflight-only failures
+    where npm did not publish the beta version, delete/recreate the same beta
+    tag and any accidental draft/incomplete prerelease at the fixed commit
+    instead of skipping a prerelease number.
+22. Start `.github/workflows/openclaw-release-publish.yml` from the same branch with
     the same tag for the real publish, choose `npm_dist_tag` (`beta` default,
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
-    `preflight_run_id`.
+    `preflight_run_id` plus the successful `full_release_validation_run_id`.
+    For stable publish, also pass the exact non-prerelease
+    `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
+    candidate-approved installer digest map as `windows_node_installer_digests`.
 23. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-24. Run postpublish verification:
+24. Wait for the real publish workflow to run postpublish verification,
+    create or update the GitHub release as a draft, upload dependency evidence,
+    promote and verify the required Windows Hub assets for stable releases,
+    append release verification proof, and only then undraft/publish it. If a
+    waited plugin publish or Windows Hub promotion fails after OpenClaw npm
+    succeeds, the workflow keeps the release draft with OpenClaw npm evidence
+    and exits red; do not undraft until the gap is repaired. The standalone
+    verifier command remains the first recovery probe:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
+    For a failed postpublish parent after successful publish children, also run
+    `pnpm release:verify-beta -- <published-version> ... --skip-github-release`
+    with the original child run IDs and an evidence output path before manually
+    recreating the workflow's draft, dependency evidence asset, proof section,
+    and publish step.
 25. Run the post-published beta verification roster. First scan current `main`
     for critical fixes that landed after the release branch cut; backport only
     important low-risk fixes before starting expensive lanes, or increment to
@@ -649,28 +862,29 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     promotion roster when the matching beta already carried the full confidence
     pass: published npm postpublish verify, Docker install/update smoke,
     macOS-only Parallels install/update smoke, and required QA signal.
-    Then start the private
-    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
-    workflow to promote that stable version from `beta` to `latest`, then
-    verify `latest` now points at that version.
+    Then start the restricted release-ops
+    `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
+    to promote that stable version from `beta` to `latest`, then verify
+    `latest` now points at that version.
 29. If the stable release was published directly to `latest` and `beta` should
-    follow it, start that same private dist-tag workflow to point `beta` at the
-    stable version, then verify both `latest` and `beta` point at that version.
+    follow it, start that same release-ops dist-tag workflow to point `beta` at
+    the stable version, then verify both `latest` and `beta` point at that
+    version.
 30. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    for the real publish with the successful private mac `preflight_run_id` and
-    wait for success.
-31. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+    `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for the
+    real publish with the successful release-ops mac `preflight_run_id` and wait
+    for success.
+31. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
 32. For stable releases, download `macos-appcast-<tag>` from the successful
-    private mac run, update `appcast.xml` on `main`, and verify the feed. Merge
-    or cherry-pick release branch changes back to `main` after stable succeeds.
+    release-ops mac run, update `appcast.xml` on `main`, verify the feed, then
+    complete the **Close stable releases on main** gate.
 33. For beta releases, publish the mac assets only when intentionally requested;
     expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-34. After publish, verify npm and the attached release artifacts.
+34. After stable main closeout, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

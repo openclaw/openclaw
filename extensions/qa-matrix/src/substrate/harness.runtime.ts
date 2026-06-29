@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements harness behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -50,9 +51,17 @@ function buildVersionsUrl(baseUrl: string) {
 }
 
 async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) {
-  return await fetchImpl(buildVersionsUrl(baseUrl))
-    .then((response) => response.ok)
-    .catch(() => false);
+  let response: Awaited<ReturnType<FetchLike>> | undefined;
+  try {
+    response = await fetchImpl(buildVersionsUrl(baseUrl));
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    try {
+      await response?.body?.cancel?.();
+    } catch {}
+  }
 }
 
 async function withMatrixQaHarnessTimeout<T>(

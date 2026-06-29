@@ -1,3 +1,4 @@
+/** CLI runner for node-host stdin/stdout command dispatch. */
 import fs from "node:fs";
 import {
   GATEWAY_CLIENT_MODES,
@@ -28,6 +29,7 @@ import {
 } from "./plugin-node-host.js";
 
 export { buildNodeInvokeResultParams };
+export { buildNodeEventParams } from "./invoke.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;

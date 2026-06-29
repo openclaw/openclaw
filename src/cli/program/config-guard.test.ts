@@ -1,8 +1,10 @@
+// Config guard tests cover program-level config checks before command execution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -71,10 +73,8 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 
 describe("ensureConfigReady", () => {
   const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
-  const originalHome = process.env.HOME;
-  const originalOpenClawHome = process.env.OPENCLAW_HOME;
-  const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   const tempRoots: string[] = [];
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -100,8 +100,8 @@ describe("ensureConfigReady", () => {
   function useTempOpenClawHome(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
-    process.env.OPENCLAW_HOME = root;
-    delete process.env.OPENCLAW_STATE_DIR;
+    setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
   }
 
@@ -111,6 +111,13 @@ describe("ensureConfigReady", () => {
     fs.writeFileSync(markerPath, "");
   }
 
+  function writePendingTaskSidecarArchiveMarker(root: string): void {
+    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(`${markerPath}.migrated`, "");
+    fs.writeFileSync(`${markerPath}-wal`, "");
+  }
+
   function writeStateMarker(root: string, relativePath: string): void {
     const markerPath = path.join(root, ".openclaw", relativePath);
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -118,13 +125,9 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
+    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -137,21 +140,8 @@ describe("ensureConfigReady", () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
-    if (originalOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
-    if (originalOpenClawStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -166,6 +156,11 @@ describe("ensureConfigReady", () => {
     {
       name: "skips doctor flow for update status",
       commandPath: ["update", "status"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for agent without legacy state",
+      commandPath: ["agent"],
       expectedDoctorCalls: 0,
     },
     {
@@ -198,6 +193,19 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
+    const root = useTempOpenClawHome();
+    writePendingTaskSidecarArchiveMarker(root);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it("runs doctor flow for legacy sessions without task sidecars", async () => {
     const root = useTempOpenClawHome();
     fs.mkdirSync(path.join(root, ".openclaw", "sessions"), { recursive: true });
@@ -207,11 +215,48 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
+  it("runs doctor flow before agent commands when the legacy plugin install index exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+    const root = useTempOpenClawHome();
+    const stateDir = path.join(root, "custom-state");
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    writeStateMarker(root, "exec-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
+    ["Discord thread bindings", "discord/thread-bindings.json"],
     ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
+    ["Telegram update offset", "telegram/update-offset-default.json"],
+    ["Telegram sticker cache", "telegram/sticker-cache.json"],
+    ["Telegram thread bindings", "telegram/thread-bindings-default.json"],
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
+    ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
+    ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
+    ["iMessage catchup cursor", "imessage/catchup/default__37a8eec1ce19.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();
@@ -225,9 +270,9 @@ describe("ensureConfigReady", () => {
   it("uses shared tilde expansion for OPENCLAW_HOME in the startup detector", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
     tempRoots.push(root);
-    process.env.HOME = root;
-    process.env.OPENCLAW_HOME = "~/svc";
-    delete process.env.OPENCLAW_STATE_DIR;
+    setTestEnvValue("HOME", root);
+    setTestEnvValue("OPENCLAW_HOME", "~/svc");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     writeLegacyTaskSidecarMarker(path.join(root, "svc"));
 
     await runEnsureConfigReady(["status"]);

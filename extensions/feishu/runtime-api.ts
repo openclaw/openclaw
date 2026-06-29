@@ -18,7 +18,11 @@ export type {
   ReplyPayload,
 } from "openclaw/plugin-sdk/core";
 export type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/core";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export type RuntimeEnv = {
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  exit: (code: number) => void;
+};
 export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
   DEFAULT_ACCOUNT_ID,
@@ -39,10 +43,7 @@ export {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
-export {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 export { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 export { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";

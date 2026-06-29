@@ -1,3 +1,7 @@
+/**
+ * Runtime SDK helpers for agent harness task persistence and completion delivery.
+ */
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -14,7 +18,6 @@ import {
   resolveSubagentCompletionOrigin,
 } from "../agents/subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../agents/subagent-announce-origin.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -37,6 +40,7 @@ type RecordTaskRunProgressParams = Parameters<typeof recordTaskRunProgressByRunI
 type FinalizeTaskRunParams = Parameters<typeof finalizeTaskRunByRunId>[0];
 type SetDeliveryStatusParams = Parameters<typeof setDetachedTaskDeliveryStatusByRunId>[0];
 
+/** Scope and naming options used to bind task operations to one requester session. */
 export type AgentHarnessTaskRuntimeScopeParams = {
   runtime: AgentHarnessTaskRuntimeId;
   scope: AgentHarnessTaskRuntimeScope;
@@ -44,6 +48,7 @@ export type AgentHarnessTaskRuntimeScopeParams = {
   runIdPrefix?: string;
 };
 
+/** Create-task params with runtime and requester scope supplied by the scoped task runtime. */
 export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
   CreateRunningTaskRunParams,
   "runtime" | "taskKind" | "requesterSessionKey" | "ownerKey" | "scopeKind"
@@ -51,23 +56,28 @@ export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
   runId: string;
 };
 
+/** Progress params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedRecordTaskRunProgressParams = Omit<
   RecordTaskRunProgressParams,
   "runtime" | "sessionKey"
 >;
 
+/** Finalization params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedFinalizeTaskRunParams = Omit<
   FinalizeTaskRunParams,
   "runtime" | "sessionKey"
 >;
 
+/** Delivery-status params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
   SetDeliveryStatusParams,
   "runtime" | "sessionKey"
 >;
 
+/** Scoped task runtime that prevents callers from mutating tasks outside their harness scope. */
 export type AgentHarnessTaskRuntime = {
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
+  tryCreateRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord | null;
   recordTaskRunProgressByRunId(params: AgentHarnessScopedRecordTaskRunProgressParams): TaskRecord[];
   finalizeTaskRunByRunId(params: AgentHarnessScopedFinalizeTaskRunParams): TaskRecord[];
   setDetachedTaskDeliveryStatusByRunId(
@@ -76,14 +86,17 @@ export type AgentHarnessTaskRuntime = {
   listTaskRecords(): TaskRecord[];
 };
 
+/** Completion states a harness task can report to its requester. */
 export type AgentHarnessCompletionStatus = "succeeded" | "failed" | "cancelled";
 
+/** Delivery result returned after routing a harness task completion announcement. */
 export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
 >;
 
 const AGENT_HARNESS_COMPLETION_SOURCE_TOOL = "agent_harness_task";
 
+/** Creates a task runtime whose run ids and task records are constrained to one scope. */
 export function createAgentHarnessTaskRuntime(
   params: AgentHarnessTaskRuntimeScopeParams,
 ): AgentHarnessTaskRuntime {
@@ -93,18 +106,28 @@ export function createAgentHarnessTaskRuntime(
   const taskKind = normalizeOptionalString(params.taskKind);
   const runIdPrefix = normalizeOptionalString(params.runIdPrefix);
   const assertRunId = (runId: string) => assertScopedRunId(runId, runIdPrefix);
+  const tryCreateRunningTaskRun = (
+    taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): TaskRecord | null => {
+    assertRunId(taskParams.runId);
+    return createRunningTaskRun({
+      ...taskParams,
+      runtime,
+      ...(taskKind ? { taskKind } : {}),
+      requesterSessionKey,
+      ownerKey: requesterSessionKey,
+      scopeKind: "session",
+    });
+  };
   return {
     createRunningTaskRun(taskParams) {
-      assertRunId(taskParams.runId);
-      return createRunningTaskRun({
-        ...taskParams,
-        runtime,
-        ...(taskKind ? { taskKind } : {}),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-        scopeKind: "session",
-      });
+      const task = tryCreateRunningTaskRun(taskParams);
+      if (!task) {
+        throw new Error("Task persistence failed.");
+      }
+      return task;
     },
+    tryCreateRunningTaskRun,
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
       return recordTaskRunProgressByRunId({
@@ -142,6 +165,7 @@ export function createAgentHarnessTaskRuntime(
   };
 }
 
+/** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessTaskCompletion(params: {
   scope: AgentHarnessTaskRuntimeScope;
   childSessionKey: string;
@@ -229,6 +253,7 @@ function mapHarnessCompletionStatus(
   return "error";
 }
 
+/** Returns true when completion delivery reached a persistent direct or steered path. */
 export function isDurableAgentHarnessCompletionDelivery(
   delivery: AgentHarnessCompletionDelivery,
 ): boolean {

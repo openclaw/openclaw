@@ -1,3 +1,4 @@
+// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -68,13 +69,14 @@ function loadOnboardConfigModule(): Promise<OnboardConfigModule> {
 }
 
 async function writeWizardConfigFile(
-  config: OpenClawConfig,
+  configInput: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
   } = {},
 ): Promise<OpenClawConfig> {
+  let config = configInput;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     const migrationBaseConfig = opts.migrationBaseConfig;
@@ -221,13 +223,20 @@ async function requireRiskAcknowledgement(params: {
 
 export async function runSetupWizard(
   opts: OnboardOptions,
-  runtime: RuntimeEnv | undefined,
+  runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  let runtime = runtimeInput;
   runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
+  await prompter.note(
+    t("wizard.setup.durationNote", {
+      command: formatCliCommand("openclaw configure"),
+    }),
+    t("wizard.setup.durationTitle"),
+  );
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readSetupConfigFileSnapshot();
@@ -243,10 +252,10 @@ export async function runSetupWizard(
   let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
-    opts: { allowConfigSizeDrop?: boolean } = {},
+    optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) =>
     await writeWizardConfigFile(config, {
-      ...opts,
+      ...optsLocal,
       migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
       onPendingPluginInstallMigration: () => {
         pendingPluginInstallMigrationBaseConfig = undefined;
@@ -621,7 +630,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);
@@ -725,6 +734,7 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: true,
+      preserveExistingDefaultModel: true,
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
@@ -865,7 +875,7 @@ export async function runSetupWizard(
   });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
-  const { launchedTui } = await finalizeSetupWizard({
+  await finalizeSetupWizard({
     flow: wizardFlow,
     opts,
     baseConfig,
@@ -875,7 +885,4 @@ export async function runSetupWizard(
     prompter,
     runtime,
   });
-  if (launchedTui) {
-    return;
-  }
 }

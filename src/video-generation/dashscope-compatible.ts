@@ -1,3 +1,7 @@
+// DashScope-compatible video provider adapts DashScope-style generation APIs.
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -5,14 +9,12 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,
@@ -21,6 +23,8 @@ import type {
   VideoGenerationSourceAsset,
 } from "./types.js";
 
+// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
+// poll task status, then download generated video URLs with byte limits.
 export const DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL = "wan2.6-t2v";
 export const DASHSCOPE_WAN_VIDEO_MODELS = [
   DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
@@ -100,6 +104,8 @@ export function buildDashscopeVideoGenerationInput(params: {
   const unsupported = [...(params.req.inputImages ?? []), ...(params.req.inputVideos ?? [])].some(
     (asset) => !asset.url?.trim() && asset.buffer,
   );
+  // DashScope accepts remote references in this path; buffer uploads require a
+  // different provider-specific flow, so fail before silently dropping refs.
   if (unsupported) {
     throw new Error(
       `${params.providerLabel} video generation currently requires remote http(s) URLs for reference images/videos.`,
@@ -157,6 +163,8 @@ export function buildDashscopeVideoGenerationParameters(
   return Object.keys(parameters).length > 0 ? parameters : undefined;
 }
 
+// DashScope may return videos in results[] or a top-level output.video_url.
+// De-dupe so downstream downloads produce one asset per unique URL.
 export function extractDashscopeVideoUrls(payload: DashscopeVideoGenerationResponse): string[] {
   const urls = [
     ...(payload.output?.results?.map((entry) => entry.video_url).filter(Boolean) ?? []),
@@ -192,11 +200,16 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
       provider: params.providerLabel,
       requestFailedMessage: `${params.providerLabel} video-generation task poll failed`,
     });
-    const payload = (await response.json()) as DashscopeVideoGenerationResponse;
+    const payload = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+      response,
+      `${params.providerLabel} video-generation task poll`,
+    );
     const status = payload.output?.task_status?.trim().toUpperCase();
     if (status === "SUCCEEDED") {
       return payload;
     }
+    // Terminal failure statuses carry provider messages; nonterminal statuses
+    // continue until the shared operation deadline or max poll attempts wins.
     if (status === "FAILED" || status === "CANCELED") {
       throw new Error(
         payload.output?.message?.trim() ||
@@ -257,7 +270,10 @@ export async function runDashscopeVideoGenerationTask(params: {
 
   try {
     await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`);
-    const submitted = (await response.json()) as DashscopeVideoGenerationResponse;
+    const submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+      response,
+      `${params.providerLabel} video generation`,
+    );
     const taskId = submitted.output?.task_id?.trim();
     if (!taskId) {
       throw new Error(`${params.providerLabel} video generation response missing task_id`);
@@ -299,6 +315,8 @@ export async function runDashscopeVideoGenerationTask(params: {
   }
 }
 
+// Downloads task result URLs into generated video assets. The byte limit comes
+// from OpenClaw media config so provider URLs cannot overfill memory.
 export async function downloadDashscopeGeneratedVideos(params: {
   providerLabel: string;
   urls: string[];

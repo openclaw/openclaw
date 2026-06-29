@@ -311,7 +311,8 @@ The branch already has a real shared SQLite base:
   `delivery_queue_entries`, `model_capability_cache`,
   `workspace_setup_state`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
-  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
+  `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
+  `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
   `subagent_runs`, `migration_runs`, and `backup_runs`.
 - Arbitrary plugin-owned state does not get host-owned typed tables. Installed
   plugins use `plugin_state_entries` for versioned JSON payloads and
@@ -381,15 +382,16 @@ The branch already has a real shared SQLite base:
   exact transcript event row.
 - Memory-core indexes now use explicit agent-database tables
   `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, and
-  `memory_embedding_cache`; optional FTS/vector side indexes use the same
-  `memory_index_*` prefix instead of generic `meta`, `files`, `chunks`, or
-  `chunks_vec` tables. `memory_index_sources` is keyed by
-  `(source_kind, source_key)` and carries optional `session_id` ownership, so
-  session-derived sources and chunks cascade when a session is deleted. Cached
-  chunk embeddings are stored as Float32 SQLite BLOBs, not JSON text arrays.
-  These tables are derived/search cache, not canonical transcript storage; they
-  can be deleted and rebuilt from `sessions`, `transcript_events`, and memory
-  workspace files.
+  `memory_embedding_cache`, with `memory_index_state` tracking revision changes.
+  Optional FTS/vector side indexes are named `memory_index_chunks_fts` and
+  `memory_index_chunks_vec` instead of generic `meta`, `files`, `chunks`,
+  `chunks_fts`, or `chunks_vec` tables. The canonical names retain the current
+  path/source row shape and serialized embedding compatibility. These tables
+  are derived/search cache, not canonical transcript storage; they can be
+  deleted and rebuilt from memory workspace files and configured sources.
+  Opening a shipped generic-name memory index migrates its metadata, sources,
+  chunks, and embedding cache into the canonical tables; derived FTS/vector
+  tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
   `subagents/runs.json` file is doctor migration input only.
@@ -456,6 +458,10 @@ The branch already has a real shared SQLite base:
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
+- GitHub Copilot compaction no longer writes `openclaw-compaction-*.json`
+  workspace sidecars. The harness calls the SDK history compaction RPC for the
+  tracked SDK session, and OpenClaw keeps durable session/transcript state in
+  SQLite instead of compatibility marker files.
 - The shared Swift runtime (`OpenClawKit`) uses the same
   `state/openclaw.sqlite` rows for device identity and device auth. macOS app
   helpers import the shared SQLite helpers instead of owning a second JSON or
@@ -873,9 +879,9 @@ sessionId}` and session key context.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
   plugin code uses SQLite row helpers and scope values.
 - The public `session-store-runtime` SDK surface now only exports session row
-  and transcript row helpers. Raw SQLite database open/path and close/reset
-  helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
-  longer pull the deprecated broad testing barrel for database cleanup.
+  and transcript row helpers. Focused SQLite schema/path/transaction helpers
+  live in `sqlite-runtime`; raw open/close/reset helpers remain local-only for
+  first-party tests.
 - Legacy `.jsonl` trajectory/checkpoint filename classifiers now live in the
   doctor legacy session-file module. Core session validation no longer imports
   file-artifact helpers to decide normal SQLite session ids.
@@ -997,10 +1003,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - The generic plugin SDK persistent-dedupe helper no longer exposes file-shaped
   options. Callers provide SQLite scope keys and durable dedupe rows live in
   shared plugin state.
-- Microsoft Teams SSO and delegated OAuth tokens moved from locked JSON files
-  to SQLite plugin state. Doctor imports `msteams-sso-tokens.json` and
-  `msteams-delegated.json`, rebuilds canonical SSO token keys from payloads,
-  and removes the source files.
+- Microsoft Teams SSO tokens moved from locked JSON files to SQLite plugin
+  state. Doctor imports `msteams-sso-tokens.json`, rebuilds canonical SSO token
+  keys from payloads, and removes the source file. Delegated OAuth tokens stay
+  on their existing private credential-file boundary.
 - Matrix sync cache state moved from `bot-storage.json` to SQLite plugin
   state. Doctor imports legacy raw or wrapped sync payloads and removes the
   source file. Active Matrix and QA Matrix clients pass a SQLite sync-store root
@@ -1092,9 +1098,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files and removes
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
-- If doctor cannot safely translate legacy `notify: true` webhook fallback
-  without replacing an explicit delivery target, it records a warning and leaves
-  the legacy source in place instead of publishing a lossy SQLite row.
+- Gateway startup ignores legacy `notify: true` markers in the runtime
+  projection. Doctor translates them into explicit SQLite delivery when
+  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
+  them with a warning when the configured webhook is invalid.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared
@@ -1399,22 +1406,13 @@ create` validates the written archive by default; `--no-verify` is the
   explicit `dbPath`.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
-  source that reintroduces transcript bridge contracts such as
-  `transcriptLocator`, `sqlite-transcript://...`, `sessionFile`, or
-  `storePath`, and scans tests for those bridge-contract names too. It also
-  bans `SessionManager.open(...)` and the old static SessionManager facades so
-  runtime and tests cannot silently re-create a file-backed session opener or
-  file-era session discovery. It also bans the old session JSONL downloader
-  hook/class from export UI. It also bans sidecar-shaped plugin-state/task
-  SQLite helper names; tests should assert `databasePath` and the shared
-  `state/openclaw.sqlite` location instead of pretending those features own
-  separate SQLite files. It also bans the old generic memory index SQL table
-  names (`meta`, `files`, `chunks`, `chunks_vec`,
-  `chunks_fts`, `embedding_cache`) in runtime source so the agent database keeps
-  its explicit `memory_index_*` schema. It also bans embedding TEXT schemas and
-  embedding JSON-array writes so vectors stay compact SQLite BLOBs. Migration,
-  doctor, import, and explicit non-session export code remain allowed. The
-  guard now also covers runtime `cache/*.json` stores, generic
+  source that reintroduces the retired transcript bridge markers
+  `transcriptLocator` or `sqlite-transcript://...`. Migration, doctor, import,
+  and explicit non-session export code remain allowed. Broader legacy contract
+  names such as `sessionFile`, `storePath`, and old `SessionManager` file-era
+  facades still have current owners and need separate migration guard work
+  before they can become a required preflight check. The guard now also covers
+  runtime `cache/*.json` stores, generic
   `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
   restart and lock sidecars, Voice Wake settings, plugin binding approvals,
   installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity
@@ -1494,10 +1492,11 @@ vfs_entries(namespace, path, kind, content_blob, metadata_json, updated_at)
 tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
 run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
 trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
-memory_index_meta(meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
-memory_index_sources(source_kind, source_key, path, session_id, hash, mtime, size)
-memory_index_chunks(id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
+memory_index_meta(key, value)
+memory_index_sources(path, source, hash, mtime, size)
+memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
+memory_index_state(id, revision)
 cache_entries(scope, key, value_json, blob, expires_at, updated_at)
 ```
 
@@ -1606,13 +1605,13 @@ Move these into the global database:
   `reply-cache`, `sent-echoes`) instead of `imessage/catchup/*.json`,
   `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl`; the iMessage
   doctor/setup migration imports and removes the legacy files.
-- Microsoft Teams conversations, polls, delegated tokens, pending uploads, and
-  feedback learnings now use SQLite plugin state/blob namespaces
-  (`conversations`, `polls`, `delegated-tokens`, `pending-uploads`,
+- Microsoft Teams conversations, polls, SSO tokens, and feedback learnings now
+  use SQLite plugin state namespaces (`conversations`, `polls`, `sso-tokens`,
   `feedback-learnings`) instead of `msteams-conversations.json`,
-  `msteams-polls.json`, `msteams-delegated.json`,
-  `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
-  doctor/setup migration imports and removes the legacy files.
+  `msteams-polls.json`, `msteams-sso-tokens.json`, and `*.learnings.json`; the
+  Microsoft Teams doctor/setup migration imports and archives the legacy files.
+  Pending uploads are a short-lived SQLite cache and old JSON cache files are
+  not migrated.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
   startup verification cooldown state, credentials, recovery keys, and SDK
   IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
@@ -1667,6 +1666,8 @@ Move these into agent databases:
 - ACP replay ledger sessions. Done for runtime writes via
   `acp_replay_sessions` and `acp_replay_events`; legacy `acp/event-ledger.json`
   remains only as doctor input.
+- ACP session metadata. Done for runtime writes via `acp_sessions`; legacy
+  `entry.acp` blocks in `sessions.json` are doctor migration input only.
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars are doctor
@@ -1723,9 +1724,12 @@ Keep shared coordination state in `state/openclaw.sqlite`:
   `media_blobs` and removes the source files after successful row writes.
 - Debug proxy capture sessions, events, and payload blobs. Done: captures live
   in the shared state DB and open through the shared state DB bootstrap, schema,
-  WAL, and busy-timeout settings. There is no debug proxy runtime sidecar DB
-  override, blob directory, or proxy-capture-only generated schema/codegen
-  target.
+  WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
+  `capture_blobs.data`; there is no debug proxy runtime sidecar DB override,
+  blob directory, or proxy-capture-only generated schema/codegen target.
+  Doctor/startup migration imports shipped `debug-proxy/capture.sqlite` rows
+  and referenced payload blobs, including active legacy DB/blob environment
+  overrides, then archives those sources while leaving CA certificates intact.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.
@@ -2182,8 +2186,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Microsoft Teams `msteams-conversations.json`
 - Microsoft Teams `msteams-polls.json`
 - Microsoft Teams `msteams-sso-tokens.json`
-- Microsoft Teams `msteams-delegated.json`
-- Microsoft Teams `msteams-pending-uploads.json`
 - Microsoft Teams `*.learnings.json`
 - Matrix `bot-storage.json`
 - Matrix `sync-store.json`

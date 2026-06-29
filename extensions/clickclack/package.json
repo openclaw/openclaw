@@ -1,13 +1,12 @@
 {
   "name": "@openclaw/clickclack",
-  "version": "2026.5.30",
-  "private": true,
+  "version": "2026.6.10",
   "description": "OpenClaw ClickClack channel plugin",
   "type": "module",
   "exports": {
-    ".": "./index.ts",
-    "./api.js": "./api.ts",
-    "./runtime-api.js": "./runtime-api.ts"
+    ".": "./dist/index.js",
+    "./api.js": "./dist/api.js",
+    "./runtime-api.js": "./dist/runtime-api.js"
   },
   "dependencies": {
     "ws": "8.21.0",
@@ -15,10 +14,10 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.30"
+    "openclaw": ">=2026.6.10"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -45,6 +44,28 @@
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
       }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/clickclack",
+      "npmSpec": "@openclaw/clickclack",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.10"
+    },
+    "build": {
+      "openclawVersion": "2026.6.10",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   }
 }

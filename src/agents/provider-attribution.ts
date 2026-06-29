@@ -1,12 +1,17 @@
+/**
+ * Provider endpoint attribution and request capability resolver.
+ *
+ * Classifies provider routes so transports know which attribution headers, payload features, and endpoint policies apply.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -23,6 +28,7 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
+/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -37,9 +43,12 @@ export type ProviderAttributionPolicy = {
 
 type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
 
+/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
+/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
+/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -53,7 +62,7 @@ export type ProviderEndpointClass =
   | "modelstudio-native"
   | "nvidia-native"
   | "openai-public"
-  | "openai-codex"
+  | "openai"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
@@ -66,12 +75,14 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
+/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
+/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -80,6 +91,7 @@ export type ProviderRequestPolicyInput = {
   capability?: ProviderRequestCapability;
 };
 
+/** Provider policy facts consumed by transports before constructing a request. */
 export type ProviderRequestPolicyResolution = {
   provider?: string;
   policy?: ProviderAttributionPolicy;
@@ -95,13 +107,16 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
+/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
+/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
+/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -134,14 +149,9 @@ const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
 ]);
-const OPENAI_RESPONSES_PROVIDERS = new Set([
-  "openai",
-  "openai-codex",
-  "azure-openai",
-  "azure-openai-responses",
-]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "anthropic-public",
   "cerebras-native",
@@ -154,7 +164,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "modelstudio-native",
   "nvidia-native",
   "openai-public",
-  "openai-codex",
+  "openai",
   "opencode-native",
   "azure-openai",
   "openrouter",
@@ -437,7 +447,6 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
   }
   switch (provider) {
     case "openai":
-    case "openai-codex":
     case "azure-openai":
     case "azure-openai-responses":
       return "openai-family";
@@ -452,7 +461,7 @@ function isOpenAIResponsesApi(api: string | null | undefined): boolean {
 }
 
 function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolean {
-  return provider === "openai" || provider === "openai-codex";
+  return provider === "openai";
 }
 
 export function resolveProviderAttributionIdentity(
@@ -603,19 +612,8 @@ export function resolveProviderAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
   const normalized = normalizeProviderId(provider ?? "");
-  const canonical = normalized === "openai-codex" ? "openai" : normalized;
+  const canonical = normalized === "openai" ? "openai" : normalized;
   return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
-}
-
-export function resolveProviderAttributionHeaders(
-  provider?: string | null,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  const policy = resolveProviderAttributionPolicy(provider, env);
-  if (!policy?.enabledByDefault) {
-    return undefined;
-  }
-  return policy.headers;
 }
 
 export function resolveProviderRequestPolicy(
@@ -629,10 +627,10 @@ export function resolveProviderRequestPolicy(
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "azure-openai";
   const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
+  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
   const usesXaiNativeAttributionHost = endpointClass === "xai-native";
@@ -685,13 +683,6 @@ export function resolveProviderRequestPolicy(
   };
 }
 
-export function resolveProviderRequestAttributionHeaders(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  return resolveProviderRequestPolicy(input, env).attributionHeaders;
-}
-
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -712,7 +703,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "modelstudio-native" ||
     endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
@@ -750,8 +741,8 @@ export function resolveProviderRequestCapabilities(
         api === "openai-responses" &&
         endpointClass === "openai-public") ||
       (isCanonicalOrLegacyOpenAIProvider(provider) &&
-        (api === "openai-codex-responses" || api === "openai-responses") &&
-        endpointClass === "openai-codex"),
+        (api === "openai-chatgpt-responses" || api === "openai-responses") &&
+        endpointClass === "openai"),
     supportsOpenAIReasoningCompatPayload:
       provider !== undefined &&
       api !== undefined &&
@@ -761,7 +752,7 @@ export function resolveProviderRequestCapabilities(
         provider === "azure-openai-responses") &&
       (api === "openai-completions" ||
         api === "openai-responses" ||
-        api === "openai-codex-responses" ||
+        api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&

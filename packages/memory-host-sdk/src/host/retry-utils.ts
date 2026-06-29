@@ -1,5 +1,7 @@
+// Memory Host SDK helper module supports retry utils behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 
+/** Retry timing configuration with optional jitter. */
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -7,6 +9,7 @@ export type RetryConfig = {
   jitter?: number;
 };
 
+/** Retry callback payload. */
 export type RetryInfo = {
   attempt: number;
   maxAttempts: number;
@@ -15,6 +18,7 @@ export type RetryInfo = {
   label?: string;
 };
 
+/** Retry options for retryAsync. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
@@ -30,7 +34,9 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
@@ -57,6 +63,7 @@ function resolveAttempts(value: unknown, fallback: number): number {
   return Math.max(1, value);
 }
 
+/** Resolve retry settings with clamped positive timeout values. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
@@ -85,6 +92,7 @@ function applyJitter(delayMs: number, jitter: number): number {
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
+/** Run an async operation with exponential backoff retry handling. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
@@ -104,7 +112,7 @@ export async function retryAsync<T>(
         await sleep(resolveSafeTimeoutDelayMs(initialDelayMs * 2 ** i, { minMs: 0 }));
       }
     }
-    throw lastErr ?? new Error("Retry failed");
+    throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
   }
 
   const options = attemptsOrOptions;
@@ -149,5 +157,19 @@ export async function retryAsync<T>(
     }
   }
 
-  throw lastErr ?? new Error("Retry failed");
+  throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

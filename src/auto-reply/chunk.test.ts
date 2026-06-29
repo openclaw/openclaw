@@ -1,3 +1,4 @@
+/** Tests text chunking helpers used by auto-reply delivery. */
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
@@ -337,7 +338,7 @@ describe("resolveTextChunkLimit", () => {
       expected: 4000,
     },
     {
-      name: "honors webchat textChunkLimit override from config",
+      name: "ignores retired webchat textChunkLimit channel config",
       cfg: {
         channels: {
           webchat: { textChunkLimit: 16000 },
@@ -346,7 +347,7 @@ describe("resolveTextChunkLimit", () => {
       provider: "webchat" as const,
       accountId: undefined,
       options: undefined,
-      expected: 16000,
+      expected: 4000,
     },
     {
       name: "falls back to default when webchat has no override",
@@ -512,6 +513,19 @@ describe("chunkByNewline", () => {
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
     expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
+
+  it("does not split surrogate pairs when hard-splitting an over-long line", () => {
+    // An emoji-dense line with no break point forces the raw head cut at an odd code-unit offset;
+    // it must back off to a code-point boundary so no chunk ends in a high (or starts with a low)
+    // surrogate — the same contract the recursive chunkText path already honors.
+    const text = "😀".repeat(30);
+    const chunks = chunkByNewline(text, 11);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+  });
 });
 
 describe("chunkTextWithMode", () => {
@@ -593,6 +607,20 @@ describe("chunkMarkdownTextWithMode", () => {
       "Gamma",
     ]);
   });
+
+  it("does not split surrogate pairs at hard length boundaries", () => {
+    const text = `a${"😀".repeat(20_000)}`;
+    const chunks = chunkMarkdownTextWithMode(text, 32_768, "length");
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+  });
+
+  it("keeps an astral character whole when a positive hard limit starts on its pair", () => {
+    expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
+  });
 });
 
 describe("resolveChunkMode", () => {
@@ -618,10 +646,29 @@ describe("resolveChunkMode", () => {
     { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
     {
+      cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
+      provider: "imessage",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: {
+        channels: {
+          imessage: {
+            streaming: { chunkMode: "length" as const },
+            accounts: { personal: { streaming: { chunkMode: "newline" as const } } },
+          },
+        },
+      },
+      provider: "imessage",
+      accountId: "personal",
+      expected: "newline",
+    },
+    {
       cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
       provider: "webchat",
       accountId: undefined,
-      expected: "newline",
+      expected: "length",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

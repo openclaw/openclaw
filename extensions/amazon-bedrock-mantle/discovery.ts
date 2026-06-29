@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
+ * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
+ */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -22,6 +26,7 @@ const DEFAULT_COST = {
 const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
+/** Config auth marker meaning Mantle should mint runtime bearer tokens from IAM. */
 export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +157,7 @@ export function getCachedIamToken(region: string): string | undefined {
   return getCachedIamTokenEntry(region)?.token;
 }
 
+/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
@@ -179,12 +185,14 @@ export async function resolveMantleRuntimeBearerToken(params: {
     return undefined;
   }
   const refreshed = getCachedIamTokenEntry(region, now);
+  const expiresAt =
+    refreshed?.expiresAt ?? resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
   return {
     apiKey: refreshed?.token ?? token,
-    expiresAt: refreshed?.expiresAt ?? now + IAM_TOKEN_TTL_MS,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Reset the IAM token cache (for testing). */
+/** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
 }
@@ -239,7 +247,7 @@ type MantleDiscoveryConfig = {
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
-/** Clear the discovery cache (for testing). */
+/** Clear the Mantle discovery cache for tests. */
 export function resetMantleDiscoveryCacheForTest(): void {
   discoveryCache.clear();
 }
@@ -259,6 +267,7 @@ export function resetMantleDiscoveryCacheForTest(): void {
  * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
  * Returns an empty array if the request fails (no permission, network error, etc.).
  */
+/** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
@@ -332,6 +341,7 @@ export async function discoverMantleModels(params: {
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
+/** Resolve implicit Mantle provider config from env, IAM token support, and discovery. */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   pluginConfig?: { discovery?: MantleDiscoveryConfig };
@@ -394,6 +404,17 @@ export async function resolveImplicitMantleProvider(params: {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     },
+    {
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
   ];
   const allModels = [...models, ...claudeModels];
 
@@ -406,6 +427,7 @@ export async function resolveImplicitMantleProvider(params: {
   };
 }
 
+/** Merge an implicit Mantle provider catalog with explicit user config. */
 export function mergeImplicitMantleProvider(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;

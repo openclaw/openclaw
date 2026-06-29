@@ -1,3 +1,4 @@
+// Msteams plugin module implements send context behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveChannelMediaMaxBytes,
@@ -17,7 +18,7 @@ import {
   validateMSTeamsProactiveServiceUrlBoundary,
   type MSTeamsSdkCloudOptions,
 } from "./cloud.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
@@ -159,7 +160,7 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createMSTeamsConversationStoreFs();
+  const store = createMSTeamsConversationStoreState();
 
   // Parse recipient and find conversation reference
   const recipient = parseRecipient(params.to);

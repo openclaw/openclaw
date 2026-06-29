@@ -1,3 +1,4 @@
+// Google Meet helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asNullableRecord as asRecord,
@@ -11,7 +12,7 @@ type LegacyConfigRule = {
 };
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {

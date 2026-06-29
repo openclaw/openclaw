@@ -1,3 +1,4 @@
+// Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
@@ -396,6 +397,20 @@ describe("matrix CLI verification commands", () => {
     expect(process.exitCode).toBe(1);
     expect(consoleErrorMock).toHaveBeenCalledWith(
       "Self-verification failed: --timeout-ms must be an integer",
+    );
+    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-positive Matrix self-verification timeout values", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "self", "--timeout-ms", "-1"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Self-verification failed: --timeout-ms must be a positive integer",
     );
     expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
   });
@@ -1073,6 +1088,34 @@ describe("matrix CLI verification commands", () => {
     expect(console.log).toHaveBeenCalledWith(
       "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:ops",
     );
+  });
+
+  it("rejects negative Matrix initial sync limits at the CLI boundary", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "account",
+        "add",
+        "--homeserver",
+        "https://matrix.example.org",
+        "--user-id",
+        "@ops:example.org",
+        "--password",
+        "secret",
+        "--initial-sync-limit",
+        "-1",
+      ],
+      { from: "user" },
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Account setup failed: --initial-sync-limit must be a non-negative integer",
+    );
+    expect(matrixSetupValidateInputMock).not.toHaveBeenCalled();
+    expect(matrixRuntimeReplaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("enables E2EE and bootstraps verification from matrix account add", async () => {

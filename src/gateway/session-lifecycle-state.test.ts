@@ -1,10 +1,84 @@
+/**
+ * Session lifecycle state derivation tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   deriveGatewaySessionLifecycleSnapshot,
   derivePersistedSessionLifecyclePatch,
+  isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 
+type PersistedLifecycleInput = Parameters<typeof derivePersistedSessionLifecyclePatch>[0];
+type PersistedLifecycleData = PersistedLifecycleInput["event"]["data"];
+type PersistedLifecyclePatch = NonNullable<ReturnType<typeof derivePersistedSessionLifecyclePatch>>;
+type PersistedLifecycleStatus = PersistedLifecyclePatch["status"];
+
+type PersistedLifecycleCase = {
+  name: string;
+  data: PersistedLifecycleData;
+  status: PersistedLifecycleStatus;
+  abortedLastRun: boolean;
+};
+
+function terminalPatch(
+  startedAt: number,
+  endedAt: number,
+  status: PersistedLifecycleStatus,
+  abortedLastRun: boolean,
+): PersistedLifecyclePatch {
+  return {
+    updatedAt: endedAt,
+    status,
+    startedAt,
+    endedAt,
+    runtimeMs: endedAt - startedAt,
+    abortedLastRun,
+  };
+}
+
+function expectPersistedLifecyclePatch(options: {
+  entry?: Partial<PersistedLifecycleInput["entry"]>;
+  data: PersistedLifecycleData;
+  runId?: string;
+  lifecycleGeneration?: string;
+  expected: ReturnType<typeof derivePersistedSessionLifecyclePatch>;
+}): void {
+  expect(
+    derivePersistedSessionLifecyclePatch({
+      entry: {
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        ...options.entry,
+      },
+      event: {
+        ts: 2_000,
+        runId: options.runId,
+        lifecycleGeneration: options.lifecycleGeneration,
+        data: options.data,
+      },
+    }),
+  ).toEqual(options.expected);
+}
+
 describe("session lifecycle state", () => {
+  it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: "old-id", currentSessionId: "new-id" }),
+    ).toBe(true);
+  });
+
+  it("applies lifecycle events whose owning sessionId matches the current row", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: "same-id", currentSessionId: "same-id" }),
+    ).toBe(false);
+  });
+
+  it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
+    expect(
+      isStaleLifecycleEventForSession({ owningSessionId: undefined, currentSessionId: "new-id" }),
+    ).toBe(false);
+  });
+
   it("reactivates completed sessions on lifecycle start", () => {
     expect(
       deriveGatewaySessionLifecycleSnapshot({
@@ -62,168 +136,279 @@ describe("session lifecycle state", () => {
   });
 
   it("maps aborted stop reasons to killed", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
+    expectPersistedLifecyclePatch({
+      entry: { startedAt: 1_100 },
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+        stopReason: "aborted",
+      },
+      expected: terminalPatch(1_100, 1_800, "killed", true),
+    });
+  });
+
+  it("persists restart terminal lifecycle when no recovery marker exists", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: false,
+      },
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+        endedAt: 1_800,
+      },
+      expected: terminalPatch(1_050, 1_800, "killed", true),
+    });
+  });
+
+  it("preserves restart recovery state through late interrupted-run lifecycle events", () => {
+    for (const data of [
+      {
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+      },
+      {
+        phase: "error",
+        aborted: true,
+        stopReason: "restart",
+        error: "request aborted",
+      },
+    ] as const) {
+      expectPersistedLifecyclePatch({
         entry: {
-          updatedAt: 1_000,
-          startedAt: 1_100,
+          status: "running",
+          abortedLastRun: true,
+          restartRecoveryRuns: [
+            {
+              runId: "restart-run",
+              lifecycleGeneration: "pre-restart",
+            },
+          ],
         },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            endedAt: 1_800,
-            stopReason: "aborted",
+        runId: "restart-run",
+        lifecycleGeneration: "pre-restart",
+        data,
+        expected: {},
+      });
+    }
+  });
+
+  it.each([
+    {
+      name: "user cancellation",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "aborted",
+        endedAt: 1_800,
+      } as const,
+      expected: {
+        ...terminalPatch(1_050, 1_800, "killed", true),
+        restartRecoveryRuns: undefined,
+      },
+    },
+    {
+      name: "provider timeout",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        endedAt: 1_800,
+      } as const,
+      expected: {
+        ...terminalPatch(1_050, 1_800, "timeout", false),
+        restartRecoveryRuns: undefined,
+      },
+    },
+  ])("persists $name terminal state despite a restart marker", ({ data, expected }) => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
           },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_800,
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data,
+      expected,
+    });
+  });
+
+  it("preserves restart recovery state through a delayed lifecycle start", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "start",
+        startedAt: 1_500,
+      },
+      expected: {},
+    });
+  });
+
+  it("persists successful marked-run completion and removes its recovery marker", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+      },
+      expected: {
+        ...terminalPatch(1_050, 1_800, "done", false),
+        restartRecoveryRuns: undefined,
+      },
+    });
+  });
+
+  it("keeps session recovery active while another marked run remains", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "completed-run",
+            lifecycleGeneration: "pre-restart",
+          },
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "completed-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+      },
+      expected: {
+        restartRecoveryRuns: [
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+    });
+  });
+
+  it("persists lifecycle events from a recovery run with a different run id", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "shared-idempotency-key",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "shared-idempotency-key",
+      lifecycleGeneration: "post-restart",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+      },
+      expected: terminalPatch(1_050, 1_800, "done", false),
+    });
+  });
+
+  it.each<PersistedLifecycleCase>([
+    {
+      name: "maps aborted lifecycle end events without stopReason to timeout",
+      data: {
+        phase: "end",
+        endedAt: 1_550,
+        aborted: true,
+      },
+      status: "timeout",
+      abortedLastRun: false,
+    },
+    {
+      name: "keeps provider hard timeouts stronger than rpc cancellation metadata",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        endedAt: 1_550,
+      },
+      status: "timeout",
+      abortedLastRun: false,
+    },
+    {
+      name: "maps non-hard rpc lifecycle aborts to killed sessions",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 1_550,
+      },
       status: "killed",
-      startedAt: 1_100,
-      endedAt: 1_800,
-      runtimeMs: 700,
       abortedLastRun: true,
-    });
-  });
-
-  it("maps aborted lifecycle end events without stopReason to timeout", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          startedAt: 1_050,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            endedAt: 1_550,
-            aborted: true,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_550,
+    },
+    {
+      name: "maps provider timeout lifecycle errors to timed out sessions",
+      data: {
+        phase: "error",
+        error: "provider request timed out",
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        endedAt: 1_550,
+      },
       status: "timeout",
-      startedAt: 1_050,
-      endedAt: 1_550,
-      runtimeMs: 500,
       abortedLastRun: false,
-    });
-  });
-
-  it("keeps provider hard timeouts stronger than rpc cancellation metadata", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          startedAt: 1_050,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            aborted: true,
-            stopReason: "rpc",
-            timeoutPhase: "provider",
-            providerStarted: true,
-            endedAt: 1_550,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_550,
+    },
+    {
+      name: "maps provider timeout lifecycle end metadata to timed out sessions",
+      data: {
+        phase: "end",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        endedAt: 1_550,
+      },
       status: "timeout",
-      startedAt: 1_050,
-      endedAt: 1_550,
-      runtimeMs: 500,
       abortedLastRun: false,
-    });
-  });
-
-  it("maps non-hard rpc lifecycle aborts to killed sessions", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          startedAt: 1_050,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            aborted: true,
-            stopReason: "rpc",
-            timeoutPhase: "queue",
-            providerStarted: false,
-            endedAt: 1_550,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_550,
-      status: "killed",
-      startedAt: 1_050,
-      endedAt: 1_550,
-      runtimeMs: 500,
-      abortedLastRun: true,
-    });
-  });
-
-  it("maps provider timeout lifecycle errors to timed out sessions", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          startedAt: 1_050,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "error",
-            error: "provider request timed out",
-            livenessState: "blocked",
-            timeoutPhase: "provider",
-            providerStarted: true,
-            endedAt: 1_550,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_550,
-      status: "timeout",
-      startedAt: 1_050,
-      endedAt: 1_550,
-      runtimeMs: 500,
-      abortedLastRun: false,
-    });
-  });
-
-  it("maps provider timeout lifecycle end metadata to timed out sessions", () => {
-    expect(
-      derivePersistedSessionLifecyclePatch({
-        entry: {
-          updatedAt: 1_000,
-          startedAt: 1_050,
-        },
-        event: {
-          ts: 2_000,
-          data: {
-            phase: "end",
-            timeoutPhase: "provider",
-            providerStarted: true,
-            endedAt: 1_550,
-          },
-        },
-      }),
-    ).toEqual({
-      updatedAt: 1_550,
-      status: "timeout",
-      startedAt: 1_050,
-      endedAt: 1_550,
-      runtimeMs: 500,
-      abortedLastRun: false,
+    },
+  ])("$name", ({ data, status, abortedLastRun }) => {
+    expectPersistedLifecyclePatch({
+      data,
+      expected: terminalPatch(1_050, 1_550, status, abortedLastRun),
     });
   });
 });

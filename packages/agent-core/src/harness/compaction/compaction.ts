@@ -1,21 +1,26 @@
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFn,
-  Usage,
+// Agent Core module implements compaction behavior.
+import {
+  resolveClaudeFable5ModelIdentity,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  type StreamFn,
+  type Usage,
 } from "../../../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
+  asAgentMessage,
   convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
+  type HarnessMessage,
 } from "../messages.js";
 import { buildSessionContext } from "../session/session.js";
 import {
@@ -83,19 +88,23 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
     return entry.message;
   }
   if (entry.type === "custom_message") {
-    return createCustomMessage(
-      entry.customType,
-      entry.content,
-      entry.display,
-      entry.details,
-      entry.timestamp,
+    return asAgentMessage(
+      createCustomMessage(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+        entry.timestamp,
+      ),
     );
   }
   if (entry.type === "branch_summary") {
-    return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+    return asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
   }
   if (entry.type === "compaction") {
-    return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
+    return asAgentMessage(
+      createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+    );
   }
   return undefined;
 }
@@ -235,27 +244,39 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const IMAGE_BLOCK_CHARS = 4800;
+
+function countContentBlockChars(content: Array<{ type: string; text?: string }>): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "text" && block.text) {
+      chars += block.text.length;
+    } else if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    }
+  }
+  return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
+  const harnessMessage = message as HarnessMessage;
 
-  switch (message.role) {
+  switch (harnessMessage.role) {
     case "user": {
-      const content = (message as { content: string | Array<{ type: string; text?: string }> })
-        .content;
+      const content = (
+        harnessMessage as { content: string | Array<{ type: string; text?: string }> }
+      ).content;
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-        }
+        chars = countContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
     case "assistant": {
-      const assistant = message;
+      const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
           chars += block.text.length;
@@ -269,27 +290,20 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "custom":
     case "toolResult": {
-      if (typeof message.content === "string") {
-        chars = message.content.length;
+      if (typeof harnessMessage.content === "string") {
+        chars = harnessMessage.content.length;
       } else {
-        for (const block of message.content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-          if (block.type === "image") {
-            chars += 4800;
-          }
-        }
+        chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
     case "bashExecution": {
-      chars = message.command.length + message.output.length;
+      chars = harnessMessage.command.length + harnessMessage.output.length;
       return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = message.summary.length;
+      chars = harnessMessage.summary.length;
       return Math.ceil(chars / 4);
     }
   }
@@ -306,7 +320,7 @@ function findValidCutPoints(
     const entry = entries[i];
     switch (entry.type) {
       case "message": {
-        const role = entry.message.role;
+        const role = (entry.message as HarnessMessage).role;
         switch (role) {
           case "bashExecution":
           case "custom":
@@ -351,7 +365,7 @@ export function findTurnStartIndex(
       return i;
     }
     if (entry.type === "message") {
-      const role = entry.message.role;
+      const role = (entry.message as HarnessMessage).role;
       if (role === "user" || role === "bashExecution") {
         return i;
       }
@@ -393,9 +407,10 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
-      for (let c = 0; c < cutPoints.length; c++) {
-        if (cutPoints[c] >= i) {
-          cutIndex = cutPoints[c];
+      cutIndex = cutPoints[cutPoints.length - 1];
+      for (const cutPoint of cutPoints) {
+        if (cutPoint >= i) {
+          cutIndex = cutPoint;
           break;
         }
       }
@@ -508,8 +523,11 @@ function createSummarizationOptions(
   thinkingLevel: ThinkingLevel | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
-    options.reasoning = thinkingLevel;
+  const fableReasoning =
+    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+    resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if ((model.reasoning || fableReasoning) && thinkingLevel) {
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   return options;
 }

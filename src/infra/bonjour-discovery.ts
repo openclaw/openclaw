@@ -1,6 +1,10 @@
+// Discovers gateways over Bonjour and normalizes service records.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { parseStrictInteger } from "./parse-finite-number.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
@@ -58,15 +62,7 @@ export function resolveGatewayDiscoveryEndpoint(
   };
 }
 
-export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
-}
-
-export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
-}
-
-export type GatewayBonjourDiscoverOpts = {
+type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
   wideAreaDomain?: string | null;
@@ -548,8 +544,8 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       current.gatewayPort = parsePortOrUndefined(txt.gatewayPort);
       current.sshPort = parsePortOrUndefined(txt.sshPort);
       if (txt.gatewayTls) {
-        const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
-        current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
+        const rawLocal = normalizeOptionalLowercaseString(txt.gatewayTls);
+        current.gatewayTls = rawLocal === "1" || rawLocal === "true" || rawLocal === "yes";
       }
       if (txt.gatewayTlsSha256) {
         current.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;

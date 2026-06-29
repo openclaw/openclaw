@@ -1,7 +1,14 @@
+// Subagent control tests cover sending, steering, killing, and admin cleanup of
+// child runs recorded in the subagent registry and session store.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -30,6 +37,8 @@ vi.mock("./run-wait.js", () => {
     limit?: number;
     callGateway?: (request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>;
   }) => {
+    // The real helper snapshots assistant fingerprints so a steer command only
+    // reports new replies, not the baseline text that existed before steering.
     const history = await params.callGateway?.({
       method: "chat.history",
       params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
@@ -111,17 +120,38 @@ vi.mock("./run-wait.js", () => {
 function setSubagentControlDepsForTest(
   overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
+  // Tests use real JSON store mutation to catch persisted cleanup/kill state,
+  // while swapping process-owned queues and embedded-run aborts for fakes.
   testing.setDepsForTest({
     abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-    updateSessionStore: async <T>(
-      storePath: string,
-      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    patchSessionEntry: async (
+      scope: SessionAccessScope,
+      patcher: (
+        entry: SessionEntry,
+        context: SessionEntryPatchContext,
+      ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+      options: SessionEntryPatchOptions = {},
     ) => {
-      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
-      const result = await mutator(store);
-      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
-      return result;
+      if (!scope.storePath) {
+        return null;
+      }
+      const store = JSON.parse(fs.readFileSync(scope.storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      const entry = store[scope.sessionKey];
+      if (!entry) {
+        return null;
+      }
+      const patch = await patcher(entry, { existingEntry: { ...entry } });
+      if (!patch) {
+        return entry;
+      }
+      const next = options.replaceEntry ? (patch as SessionEntry) : { ...entry, ...patch };
+      store[scope.sessionKey] = next;
+      fs.writeFileSync(scope.storePath, JSON.stringify(store, null, 2), "utf-8");
+      return next;
     },
     ...overrides,
   });
@@ -633,7 +663,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     setSubagentControlDepsForTest({
-      updateSessionStore: async () => {
+      patchSessionEntry: async () => {
         throw new Error("session store unavailable");
       },
     });
@@ -1372,9 +1402,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     setSubagentControlDepsForTest({
-      callGateway: async <T = Record<string, unknown>>(
-        request: CallGatewayOptions,
-      ) => {
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
         }
@@ -1418,5 +1446,68 @@ describe("steerControlledSubagentRun", () => {
       label: "yielded steer task",
       text: "steered yielded steer task.",
     });
+  });
+
+  it("rotates the child session when restarting a previously active session", async () => {
+    const childSessionKey = "agent:main:subagent:active-steer-worker";
+    const storePath = writeSessionStoreFixture("steer-restart-session", {
+      [childSessionKey]: {
+        sessionId: "old-child-session",
+        updatedAt: Date.now(),
+      },
+    });
+    const agentCalls: CallGatewayOptions[] = [];
+    addSubagentRunForTests({
+      runId: "run-active-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          agentCalls.push(request);
+          return { runId: "run-active-steer-restarted" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(storePath),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-active-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "active steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "updated direction",
+    });
+
+    expect(result.status).toBe("accepted");
+    expect(result.sessionId).toBeTypeOf("string");
+    expect(result.sessionId).not.toBe("old-child-session");
+    const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
+    expect(agentParams?.sessionId).toBe(result.sessionId);
   });
 });

@@ -1,8 +1,9 @@
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
@@ -28,6 +29,7 @@ import {
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -41,6 +43,10 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+
+beforeAll(async () => {
+  await preloadRunEmbeddedAttemptForTests();
+});
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 type ToolResultGuardInstallParams = {
@@ -67,6 +73,8 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
 }
 
 function sumToolResultTextChars(messages: AgentMessage[]): number {
+  // Context-engine budget tests need deterministic text size accounting for
+  // toolResult blocks.
   return messages.reduce((sum, message) => {
     if (message.role !== "toolResult") {
       return sum;
@@ -126,6 +134,8 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 function trackSessionWriteLocks(): string[] {
+  // Context-engine finalization writes should release and reacquire transcript
+  // locks in a predictable order.
   const events: string[] = [];
   hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
     const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
@@ -167,6 +177,8 @@ async function runBootstrap(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
+  // Shared bootstrap harness keeps session identifiers stable across context
+  // engine implementations.
   await runAttemptContextEngineBootstrap({
     hadSessionFile: true,
     contextEngine,
@@ -224,6 +236,43 @@ async function finalizeTurn(
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
+  let toolSearchControlsCase: Record<string, unknown>;
+
+  beforeAll(async () => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+    hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+    hoisted.detectAndLoadPromptImagesMock.mockClear();
+    const setupTempPaths: string[] = [];
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: {
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+        },
+        sessionKey,
+        tempPaths: setupTempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          config: {
+            tools: {
+              toolSearch: true,
+            },
+          } as OpenClawConfig,
+        },
+      });
+
+      toolSearchControlsCase = mockParams(
+        hoisted.createOpenClawCodingToolsMock,
+        0,
+        "createOpenClawCodingTools options",
+      );
+    } finally {
+      await cleanupTempPaths(setupTempPaths);
+      clearMemoryPluginState();
+      vi.restoreAllMocks();
+    }
+  });
+
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -238,6 +287,47 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
+    expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
+    expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("keeps client tool names out of context engine capability guidance", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: { enabled: true, mode: "directory" },
+          },
+        } as OpenClawConfig,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "memory_search",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    const availableTools = assembleParams.availableTools;
+    expect(availableTools).toBeInstanceOf(Set);
+    expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
+  it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
         assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
@@ -247,8 +337,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         disableTools: false,
         config: {
-          tools: {
-            toolSearch: true,
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
           },
         } as OpenClawConfig,
       },
@@ -261,7 +355,72 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "createOpenClawCodingTools options",
     );
     expect(options.includeToolSearchControls).toBe(true);
-    expect(options.toolSearchCatalogRef).toEqual({});
+    const optionsConfig = requireRecord(options.config, "createOpenClawCodingTools config");
+    const toolsConfig = requireRecord(
+      optionsConfig.tools,
+      "createOpenClawCodingTools tools config",
+    );
+    expect(toolsConfig.toolSearch).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+  });
+
+  it("keeps Tool Search controls off for lean message-tool-only delivery", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "message",
+        label: "Message",
+        description: "Send a visible reply.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "sent" }),
+      },
+      {
+        name: "browser",
+        label: "Browser",
+        description: "Open a browser session.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "opened" }),
+      },
+    ]);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.includeToolSearchControls).toBe(false);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    expect(customTools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {
@@ -274,8 +433,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         execute: async () => ({ text: "ok" }),
       },
       {
-        name: "dofbot_move_angles",
-        label: "Dofbot Move Angles",
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
         description: "Move robot joints.",
         parameters: {
           type: "object",
@@ -356,7 +515,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "gateway",
           id: "gpt-5.5",
           contextWindow: 8192,
@@ -413,6 +572,193 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("keeps newly generated thinking after repairing rejected Anthropic replay", async () => {
+    const { SessionManager: ActualSessionManager } =
+      await vi.importActual<typeof import("../../sessions/index.js")>("../../sessions/index.js");
+    const staleAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "historical stale thinking",
+          thinkingSignature: "stale-signature",
+        },
+        { type: "text", text: "historical answer" },
+      ],
+      stopReason: "stop",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      timestamp: 2,
+    } as AgentMessage;
+    const sessionMessages = [
+      { role: "user", content: "historical question", timestamp: 1 } as AgentMessage,
+      staleAssistant,
+    ];
+    const sessionManager = ActualSessionManager.inMemory();
+    const appendSessionMessage = (message: AgentMessage) =>
+      sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+    for (const message of sessionMessages) {
+      appendSessionMessage(message);
+    }
+    const retryAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "fresh valid retry thinking",
+          thinkingSignature: "fresh-valid-signature",
+        },
+        { type: "text", text: "retry answer" },
+      ],
+      stopReason: "stop",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      timestamp: 4,
+    } as AgentMessage;
+    const providerContexts: AgentMessage[][] = [];
+    const afterTurn = vi.fn(async (_params: { messages: AgentMessage[] }) => {});
+
+    hoisted.sessionManagerOpenMock.mockReturnValue(sessionManager);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          contextWindow: 128_000,
+          input: ["text"],
+        } as never,
+        runtimePlan: {
+          prompt: {
+            resolveSystemPromptContribution: () => undefined,
+          },
+          transcript: {
+            resolvePolicy: () => ({
+              sanitizeMode: "full",
+              sanitizeToolCallIds: true,
+              preserveNativeAnthropicToolUseIds: false,
+              repairToolUseResultPairing: true,
+              preserveSignatures: true,
+              sanitizeThinkingSignatures: false,
+              dropThinkingBlocks: false,
+              dropReasoningFromHistory: false,
+              applyGoogleTurnOrdering: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+              allowSyntheticToolResults: false,
+            }),
+          },
+          transport: {
+            extraParams: {},
+            resolveExtraParams: () => ({}),
+          },
+          tools: {
+            normalize: (tools: unknown[]) => tools,
+            logDiagnostics: () => {},
+          },
+          auth: {
+            providerForAuth: "anthropic",
+            authProfileProviderForAuth: "",
+            forwardedAuthProfileId: undefined,
+          },
+          delivery: {
+            isSilentPayload: () => false,
+            resolveFollowupRoute: () => undefined,
+          },
+          outcome: {
+            classifyRunResult: () => undefined,
+          },
+          observability: {
+            resolvedRef: "anthropic/claude-sonnet-4-6",
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-6",
+            modelApi: "anthropic-messages",
+          },
+        } as never,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
+        let streamCalls = 0;
+        session.agent.streamFn = async (_model, context) => {
+          streamCalls += 1;
+          providerContexts.push([
+            ...((context as { messages?: AgentMessage[] } | undefined)?.messages ?? []),
+          ]);
+          if (streamCalls === 1) {
+            throw new Error("invalid signature in thinking block");
+          }
+          return {
+            async result() {
+              return retryAssistant;
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async (prompt, options) => {
+          options?.preflightResult?.(true);
+          const userMessage = {
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+            timestamp: 3,
+          } as AgentMessage;
+          session.messages = [...session.messages, userMessage];
+          appendSessionMessage(userMessage);
+          const stream = await session.agent.streamFn?.(
+            {} as never,
+            { messages: session.messages } as never,
+            {},
+          );
+          const assistantMessage = await (
+            stream as { result: () => Promise<AgentMessage> }
+          ).result();
+          session.messages = [...session.messages, assistantMessage];
+          appendSessionMessage(assistantMessage);
+        };
+        return session;
+      },
+    });
+
+    const firstProviderContext = providerContexts[0] ?? [];
+    const retryProviderContext = providerContexts[1] ?? [];
+    expect(JSON.stringify(firstProviderContext)).toContain("stale-signature");
+    expect(JSON.stringify(retryProviderContext)).not.toContain("stale-signature");
+
+    const finalMessages = sessionManager.buildSessionContext().messages;
+    expect(JSON.stringify(finalMessages[1])).not.toContain("historical stale thinking");
+    expect(JSON.stringify(finalMessages.at(-1))).toContain("fresh valid retry thinking");
+    expect(JSON.stringify(finalMessages.at(-1))).toContain("fresh-valid-signature");
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "thinking",
+                thinking: "fresh valid retry thinking",
+                thinkingSignature: "fresh-valid-signature",
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {
@@ -1720,6 +2066,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
+  it("repairs tool-result pairing after context engine assembly", async () => {
+    let promptMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "assembled context", timestamp: 1 },
+            {
+              role: "toolResult",
+              toolCallId: "call_orphan",
+              toolUseId: "call_orphan",
+              toolName: "read",
+              content: [{ type: "text", text: "orphaned result" }],
+              timestamp: 2,
+            },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        promptMessages = session.messages.map((message) => message as AgentMessage);
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(promptMessages).toContainEqual(
+      expect.objectContaining({ role: "user", content: "assembled context" }),
+    );
+    expect(promptMessages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(JSON.stringify(promptMessages)).not.toContain("orphaned result");
+  });
+
   it("honors context engines that opt into preassembly overflow authority", async () => {
     const lockEvents = trackSessionWriteLocks();
     let sawPrompt = false;
@@ -1795,9 +2179,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const lastCall = hoisted.preemptiveCompactionCalls.at(-1);
     expect(lastCall).toHaveProperty("unwindowedMessages");
     const unwindowed = (lastCall as { unwindowedMessages?: AgentMessage[] }).unwindowedMessages;
-    // The snapshot must reflect the true pre-assembly state, not the in-place
-    // windowed array that assemble mutated.
-    expect(unwindowed).toEqual([preassemblyMarker]);
+    // The snapshot must reflect the true pre-assembly state after LLM-boundary
+    // stamping, not the in-place windowed array that assemble mutated.
+    expect(unwindowed).toHaveLength(1);
+    const [unwindowedMessage] = unwindowed ?? [];
+    expect(unwindowedMessage).toMatchObject({ role: "user", timestamp: 1 });
+    const unwindowedContent = (unwindowedMessage as { content?: unknown } | undefined)?.content;
+    expect(unwindowedContent).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] /),
+    );
+    expect(unwindowedContent).toContain(hugeHistory);
+    expect(unwindowedContent).not.toContain("windowed");
+  });
+
+  it("passes the boundary-stamped current prompt to llm_input hooks", async () => {
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "llm_input"),
+      runLlmInput,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+    });
+
+    const params = mockParams(runLlmInput as MockCallSource, 0, "llm_input params");
+    expect(params.prompt).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] hello$/),
+    );
   });
 
   it("keeps gateway model runs independent from agent context and session history", async () => {
@@ -1872,6 +2283,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(afterTurn).not.toHaveBeenCalled();
     expect(runBeforePromptBuild).not.toHaveBeenCalled();
     expect(runLlmInput).not.toHaveBeenCalled();
+  });
+
+  it("flushes the embedded session transcript before afterTurn", async () => {
+    const events: string[] = [];
+    const afterTurn = vi.fn(async () => {
+      events.push("afterTurn");
+    });
+    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+      events.push("flush");
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ afterTurn }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        suppressNextUserMessagePersistence: true,
+        transcriptPrompt: "",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    const afterTurnIndex = events.indexOf("afterTurn");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(afterTurnIndex).not.toBe(-1);
+    expect(events.slice(0, afterTurnIndex)).toContain("flush");
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -2429,7 +2870,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
-  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+  it("preserves the cacheable prefix while bounding current prompt results", async () => {
     const toolText = "process output ".repeat(70);
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 8; index += 1) {
@@ -2469,7 +2910,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           agents: {
             defaults: {
               contextLimits: {
-                toolResultMaxChars: 1_000,
+                toolResultMaxChars: 2_000,
               },
             },
             list: [{ id: "main" }],
@@ -2491,6 +2932,18 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           };
         };
         session.prompt = async (_prompt, options) => {
+          for (let index = 0; index < 8; index += 1) {
+            session.messages.push({
+              role: "toolResult",
+              toolCallId: `current_call_${index}`,
+              toolName: "process",
+              content: [
+                { type: "text", text: `current ${index}: ${"current output ".repeat(300)}` },
+              ],
+              isError: false,
+              timestamp: 100 + index,
+            } as AgentMessage);
+          }
           promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
           options?.preflightResult?.(true);
           await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
@@ -2502,8 +2955,13 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
     expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
-    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
-    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    const submittedCurrentPromptMessages = submittedMessages.slice(sessionMessages.length);
+    expect(
+      submittedMessages
+        .filter((message) => message.role === "toolResult")
+        .every((message) => sumToolResultTextChars([message]) <= 2_000),
+    ).toBe(true);
+    expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");

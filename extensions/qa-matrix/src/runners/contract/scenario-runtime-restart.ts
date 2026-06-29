@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime restart behavior.
 import {
   MATRIX_QA_HOMESERVER_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
@@ -373,6 +374,8 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     await rewriteMatrixSyncStoreCursor({
       cursor: staleCursor,
       pathname: syncStore.pathname,
+      source: syncStore.source,
+      stateKey: syncStore.stateKey,
     });
   });
 

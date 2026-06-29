@@ -56,7 +56,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -91,7 +91,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const defaultBaseline = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
@@ -179,7 +179,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -245,7 +245,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -260,7 +260,7 @@ jobs:
         run: pnpm build
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -437,8 +437,17 @@ jobs:
             echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
           fi
 
-          baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_status_reaction_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence.json"
+              return
+            fi
+            jq -r '.scenarios[0].status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_status_reaction_status baseline)"
+          candidate_status="$(read_discord_status_reaction_status candidate)"
 
           jq -n \
             --arg baseline_status "$baseline_status" \
@@ -526,17 +535,17 @@ jobs:
       - name: Upload Mantis status reaction artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-discord-status-reactions-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -581,7 +590,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { owner, repo } = context.repo;

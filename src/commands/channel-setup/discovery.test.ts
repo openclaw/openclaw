@@ -1,3 +1,4 @@
+// Channel setup discovery tests cover visible setup choices from bundled, installed, and trusted catalog sources.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
 
@@ -30,6 +31,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
+  listRawChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
 }));
 
 vi.mock("../../channels/chat-meta.js", () => ({

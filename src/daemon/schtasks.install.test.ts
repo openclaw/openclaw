@@ -1,10 +1,17 @@
+// Windows schtasks install tests cover scheduled task installation behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import {
+  installScheduledTask,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+  uninstallScheduledTask,
+} from "./schtasks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
+import { buildServiceEnvironment } from "./service-env.js";
 
 const schtasksCalls: string[][] = [];
 const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
@@ -73,13 +80,13 @@ describe("installScheduledTask", () => {
     });
   }
 
-  function expectInitialTaskQueries(): void {
+  function expectInitialTaskQueries(taskName = "OpenClaw Gateway"): void {
     expect(schtasksCalls[0]).toEqual(["/Query"]);
-    expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+    expect(schtasksCalls[1]).toEqual(["/Query", "/TN", taskName]);
   }
 
-  function expectTaskRunCall(index: number): void {
-    expect(schtasksCalls[index]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+  function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
+    expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
   }
 
   it("writes quoted set assignments and escapes metacharacters", async () => {
@@ -238,6 +245,83 @@ describe("installScheduledTask", () => {
       expect(launcher).toContain(scriptPath);
       expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
       expectTaskRunCall(3);
+    });
+  });
+
+  it("uses the hidden launcher for generated Windows gateway service installs", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+      const callerEnv: Record<string, string | undefined> = {
+        ...env,
+        HOME: env.USERPROFILE,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway",
+      };
+      const gatewayEnv = buildServiceEnvironment({
+        env: callerEnv,
+        port: 18789,
+        platform: "win32",
+      });
+
+      expect(callerEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+      expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+      expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+
+      const { scriptPath } = await installScheduledTask({
+        env: callerEnv,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          ...gatewayEnv,
+          USERDOMAIN: "EVIL",
+          USERNAME: "mallory",
+        },
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const script = await fs.readFile(scriptPath, "utf8");
+      const launcher = await fs.readFile(launcherPath, "utf8");
+
+      expect(schtasksCalls[2]?.slice(0, 5)).toEqual([
+        "/Create",
+        "/F",
+        "/TN",
+        "OpenClaw Custom Gateway",
+        "/XML",
+      ]);
+      expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
+      const captured = xmlPayloadCaptures.find((entry) => entry.index === 2);
+      expect(captured?.xml).toContain("gateway.vbs</Command>");
+      expect(script).toContain('set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Custom Gateway"');
+      expect(launcher).toContain("WScript.Shell");
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expectTaskRunCall(3, "OpenClaw Custom Gateway");
+    });
+  });
+
+  it("removes a generated hidden launcher when the caller env lacks its marker", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+      const scriptPath = resolveTaskScriptPath(env);
+      const parsedScriptPath = path.parse(scriptPath);
+      const launcherPath = path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`);
+      await fs.mkdir(parsedScriptPath.dir, { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\n", "utf8");
+      await fs.writeFile(launcherPath, 'CreateObject("WScript.Shell")\n', "utf8");
+
+      await uninstallScheduledTask({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      const remaining: string[] = [];
+      for (const candidate of [scriptPath, launcherPath]) {
+        try {
+          await fs.access(candidate);
+          remaining.push(candidate);
+        } catch {}
+      }
+      expect(remaining).toEqual([]);
     });
   });
 

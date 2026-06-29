@@ -1,4 +1,6 @@
+// Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
+import type { ChatQueueItem } from "../ui-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -8,7 +10,9 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
-import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
+import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -17,9 +21,11 @@ export type BuildChatItemsProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  queue?: ChatQueueItem[];
   showToolCalls: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
+  historyRenderLimit?: number;
 };
 
 function appendCanvasBlockToAssistantMessage(
@@ -92,7 +98,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (!normalized) {
     return null;
   }
-  const cards = extractToolCards(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -187,13 +193,17 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
+        ? (normalized.senderLabel ?? null)
+        : null;
     const timestamp = normalized.timestamp || Date.now();
+    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -222,7 +232,116 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function isPendingSendMessage(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+function sourceMessageId(message: unknown): string | null {
+  const record = asRecord(message);
+  if (!record) {
+    return null;
+  }
+  const openclawId = asRecord(record["__openclaw"])?.id;
+  if (typeof openclawId === "string" && openclawId.trim()) {
+    return openclawId.trim();
+  }
+  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
+  if (messageId) {
+    return messageId;
+  }
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  return id || null;
+}
+
+function collapseDuplicateSourceKey(message: unknown): string | null {
+  if (isPendingSendMessage(message)) {
+    return null;
+  }
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return null;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (role !== "assistant") {
+    return null;
+  }
+  const id = sourceMessageId(message);
+  return id ? `${role}:${id}` : null;
+}
+
+function prefersNativeChatSurface(message: unknown): boolean {
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return false;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripSenderLabelPrefix(text: string, senderLabel: string): string {
+  const label = senderLabel.trim();
+  if (!label) {
+    return text;
+  }
+  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`), "");
+}
+
+function sourceDuplicateDisplayParts(message: unknown): {
+  role: string;
+  senderLabel: string;
+  text: string;
+} | null {
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return null;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (role !== "assistant") {
+    return null;
+  }
+  const textParts: string[] = [];
+  for (const block of normalized.content) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      return null;
+    }
+    textParts.push(block.text);
+  }
+  const text = textParts.join("\n");
+  if (!text.trim()) {
+    return null;
+  }
+  return {
+    role,
+    senderLabel: (normalized.senderLabel ?? "").trim(),
+    text,
+  };
+}
+
+function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage: unknown): boolean {
+  const previous = sourceDuplicateDisplayParts(previousMessage);
+  const next = sourceDuplicateDisplayParts(nextMessage);
+  if (!previous || !next || previous.role !== next.role) {
+    return false;
+  }
+  if (Boolean(previous.senderLabel) === Boolean(next.senderLabel)) {
+    return false;
+  }
+  const labeled = previous.senderLabel ? previous : next;
+  const native = previous.senderLabel ? next : previous;
+  return (
+    labeled.text === native.text ||
+    stripSenderLabelPrefix(labeled.text, labeled.senderLabel) === native.text
+  );
+}
+
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
+  if (isPendingSendMessage(message)) {
+    return null;
+  }
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
     return null;
@@ -245,28 +364,50 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (!text) {
     return null;
   }
-  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
+  const senderLabel =
+    role === "user" || role === "assistant" ? (normalized.senderLabel ?? "").trim() : "";
   return `${role}:${senderLabel}:${text}`;
 }
 
 function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
+  let previousSourceKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousSignature = null;
+      previousSourceKey = null;
       continue;
     }
     const signature = collapseDuplicateDisplaySignature(item.message);
+    const sourceKey = collapseDuplicateSourceKey(item.message);
     const previous = collapsed[collapsed.length - 1];
-    if (signature && previousSignature === signature && previous?.kind === "message") {
+    if (
+      sourceKey &&
+      previousSourceKey === sourceKey &&
+      previous?.kind === "message" &&
+      isSameSourceRelayNativeDuplicate(previous.message, item.message)
+    ) {
+      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
+        collapsed[collapsed.length - 1] = item;
+        previousSignature = signature;
+      }
+      continue;
+    }
+    if (
+      signature &&
+      previousSignature === signature &&
+      previous?.kind === "message" &&
+      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
+    ) {
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
       continue;
     }
     collapsed.push(item);
     previousSignature = signature;
+    previousSourceKey = sourceKey;
   }
 
   return collapsed;
@@ -277,7 +418,9 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget);
+  const role = normalizeRoleForGrouping(normalized.role);
+  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
+  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
 }
 
 function sanitizeStreamText(text: string): string {
@@ -285,11 +428,32 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
-function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
-  if (!previousText || !text.startsWith(previousText)) {
-    return text;
+function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
+    return false;
   }
-  return text.slice(previousText.length).trimStart();
+  return (
+    item.sendState === "waiting-model" ||
+    item.sendState === "sending" ||
+    item.sendState === "waiting-reconnect"
+  );
+}
+
+function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
+  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
+  if (content.length === 0) {
+    return null;
+  }
+  return {
+    role: "user",
+    content,
+    timestamp: item.createdAt,
+    __openclaw: {
+      kind: "pending-send",
+      id: item.id,
+      state: item.sendState,
+    },
+  };
 }
 
 function rawMessageTimestamp(message: unknown): number | null {
@@ -311,6 +475,19 @@ function chatItemTimestamp(item: ChatItem): number | null {
       return null;
   }
   return null;
+}
+
+function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
 }
 
 function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
@@ -433,7 +610,18 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): number {
+function resolveHistoryRenderLimit(limit: number | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return CHAT_HISTORY_RENDER_LIMIT;
+  }
+  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+}
+
+function resolveHistoryStartIndex(
+  messages: unknown[],
+  showToolCalls: boolean,
+  renderLimit: number,
+): number {
   let visibleCount = 0;
   let renderChars = 0;
   let startIndex = messages.length;
@@ -442,7 +630,7 @@ function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): 
     if (isHiddenToolMessage(message, showToolCalls)) {
       continue;
     }
-    if (visibleCount >= CHAT_HISTORY_RENDER_LIMIT) {
+    if (visibleCount >= renderLimit) {
       break;
     }
     const remainingBudget = Math.max(1, CHAT_HISTORY_RENDER_CHAR_BUDGET - renderChars + 1);
@@ -459,6 +647,7 @@ function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): 
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -470,7 +659,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls);
+  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
   const hiddenHistoryCount = countVisibleHistoryMessages(
     history.slice(0, historyStart),
     props.showToolCalls,
@@ -535,6 +724,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: msg,
     });
   }
+  const queuedSends = Array.isArray(props.queue) ? props.queue : [];
+  for (const queued of queuedSends) {
+    if (!shouldRenderQueuedSendInThread(queued)) {
+      continue;
+    }
+    const message = queuedSendThreadMessage(queued);
+    if (!message) {
+      continue;
+    }
+    const searchQuery = props.searchQuery ?? "";
+    if (
+      props.searchOpen &&
+      searchQuery.trim() &&
+      !messageMatchesSearchQuery(message, searchQuery)
+    ) {
+      continue;
+    }
+    items.push({
+      kind: "message",
+      key: `pending-send:${queued.id}`,
+      message,
+    });
+  }
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
@@ -589,13 +801,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
     if (visibleText.length > 0) {
       if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
           text: visibleText,
-          startedAt: props.streamStartedAt ?? Date.now(),
+          startedAt,
           isStreaming: true,
         });
       }

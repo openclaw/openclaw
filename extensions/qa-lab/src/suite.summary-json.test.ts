@@ -1,4 +1,6 @@
+// Qa Lab tests cover suite.summary json plugin behavior.
 import { describe, expect, it } from "vitest";
+import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import { buildQaSuiteSummaryJson } from "./suite.js";
 
 describe("buildQaSuiteSummaryJson", () => {
@@ -32,7 +34,40 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
     expect(json.run.fastMode).toBe(true);
     expect(json.run.concurrency).toBe(2);
+    expect(json.run.channelDriver).toBeNull();
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
+  });
+
+  it("records Crabline channel-driver metadata when selected", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+    });
+
+    expect(json.run.channelDriver).toBe("crabline");
+    expect(json.run.channel).toBe("telegram");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-fake-provider-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
+  });
+
+  it("records declarative non-Crabline channel-driver metadata", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriver: "live",
+    });
+
+    expect(json.run.channelDriver).toBe("live");
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
   });
 
   it("includes scenarioIds in run metadata when provided", () => {
@@ -54,7 +89,7 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
-    // A CLI path that omits --scenario passes an empty array to runQaSuite.
+    // A CLI path that omits --scenario passes an empty array to runQaFlowSuite.
     // The summary must encode that as null so downstream parity/report
     // tooling doesn't interpret a full run as an explicit empty selection.
     const json = buildQaSuiteSummaryJson({
@@ -100,6 +135,34 @@ describe("buildQaSuiteSummaryJson", () => {
       passed: 1,
       failed: 1,
     });
+  });
+
+  it("preserves the evidence summary when provided", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
+          surface: "dm",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      generatedAt: "2026-04-11T00:05:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      evidence,
+    });
+
+    expect(json.evidence).toEqual(evidence);
   });
 
   it("preserves scenario-level runtime parity payloads", () => {

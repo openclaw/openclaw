@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+/**
+ * Pre-auth WebSocket connection-budget regression tests.
+ */
+import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { createPreauthConnectionBudget } from "./preauth-connection-budget.js";
 
 describe("createPreauthConnectionBudget", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("caps connections with a finite configured limit", () => {
     const budget = createPreauthConnectionBudget(2);
 
@@ -36,21 +36,23 @@ describe("createPreauthConnectionBudget", () => {
   });
 
   it("accepts strict plus-signed env limits", () => {
-    vi.stubEnv("OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP", "+02");
-    const budget = createPreauthConnectionBudget();
+    withEnv({ OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "+02" }, () => {
+      const budget = createPreauthConnectionBudget();
 
-    expect(budget.acquire("127.0.0.1")).toBe(true);
-    expect(budget.acquire("127.0.0.1")).toBe(true);
-    expect(budget.acquire("127.0.0.1")).toBe(false);
+      expect(budget.acquire("127.0.0.1")).toBe(true);
+      expect(budget.acquire("127.0.0.1")).toBe(true);
+      expect(budget.acquire("127.0.0.1")).toBe(false);
+    });
   });
 
   it("ignores non-decimal env limits", () => {
-    vi.stubEnv("OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP", "0x2");
-    const budget = createPreauthConnectionBudget();
+    withEnv({ OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "0x2" }, () => {
+      const budget = createPreauthConnectionBudget();
 
-    for (let i = 0; i < 32; i += 1) {
-      expect(budget.acquire("127.0.0.1")).toBe(true);
-    }
-    expect(budget.acquire("127.0.0.1")).toBe(false);
+      for (let i = 0; i < 32; i += 1) {
+        expect(budget.acquire("127.0.0.1")).toBe(true);
+      }
+      expect(budget.acquire("127.0.0.1")).toBe(false);
+    });
   });
 });

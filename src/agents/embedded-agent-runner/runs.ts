@@ -1,11 +1,14 @@
+/**
+ * Manages active embedded-agent run handles, queues, aborts, and waiters.
+ */
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   queueReplyRunMessage,
-  resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -18,7 +21,7 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
@@ -27,14 +30,12 @@ import {
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
-  type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
@@ -43,10 +44,10 @@ export {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+  resolveActiveEmbeddedRunSessionId,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
-  type EmbeddedRunModelSwitchRequest,
 } from "./run-state.js";
 
 export type EmbeddedAgentQueueFailureReason =
@@ -435,11 +436,11 @@ function prepareEmbeddedAgentQueueMessage(
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting" },
+  opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -452,7 +453,7 @@ export function abortEmbeddedAgentRun(
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
     try {
-      handle.abort();
+      handle.abort(opts?.reason);
     } catch (err) {
       diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
       return false;
@@ -471,7 +472,7 @@ export function abortEmbeddedAgentRun(
       }
       diag.debug(params.formatDebugMessage(id));
       try {
-        handle.abort();
+        handle.abort(opts?.reason);
         aborted = true;
       } catch (err) {
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
@@ -516,6 +517,14 @@ export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return active;
 }
 
+export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
+  if (active) {
+    diag.debug(`run compact abort check: sessionId=${sessionId} active=true`);
+  }
+  return active;
+}
+
 export function isEmbeddedAgentRunStreaming(sessionId: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -544,17 +553,6 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   );
 }
 
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
-  );
-}
-
 export function resolveActiveEmbeddedRunSessionIdBySessionFile(
   sessionFile: string,
 ): string | undefined {
@@ -565,44 +563,6 @@ export function getActiveEmbeddedRunSnapshot(
   sessionId: string,
 ): ActiveEmbeddedRunSnapshot | undefined {
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
-}
-
-export function requestEmbeddedRunModelSwitch(
-  sessionId: string,
-  request: EmbeddedRunModelSwitchRequest,
-): boolean {
-  const normalizedSessionId = sessionId.trim();
-  const provider = request.provider.trim();
-  const model = request.model.trim();
-  if (!normalizedSessionId || !provider || !model) {
-    return false;
-  }
-  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.set(normalizedSessionId, {
-    provider,
-    model,
-    authProfileId: normalizeOptionalString(request.authProfileId),
-    authProfileIdSource: normalizeOptionalString(request.authProfileId)
-      ? request.authProfileIdSource
-      : undefined,
-  });
-  diag.debug(
-    `model switch requested: sessionId=${normalizedSessionId} provider=${provider} model=${model}`,
-  );
-  return true;
-}
-
-export function consumeEmbeddedRunModelSwitch(
-  sessionId: string,
-): EmbeddedRunModelSwitchRequest | undefined {
-  const normalizedSessionId = sessionId.trim();
-  if (!normalizedSessionId) {
-    return undefined;
-  }
-  const request = EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.get(normalizedSessionId);
-  if (request) {
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(normalizedSessionId);
-  }
-  return request;
 }
 
 /**
@@ -616,7 +576,7 @@ export async function waitForActiveEmbeddedRuns(
   opts?: { pollMs?: number },
 ): Promise<{ drained: boolean }> {
   const pollMsRaw = opts?.pollMs ?? 250;
-  const pollMs = Math.max(10, Math.floor(pollMsRaw));
+  const pollMs = resolveTimerTimeoutMs(pollMsRaw, 250, 10);
   if (timeoutMs !== undefined && timeoutMs <= 0) {
     return { drained: getActiveEmbeddedRunCount() === 0 };
   }
@@ -637,7 +597,9 @@ export async function waitForActiveEmbeddedRuns(
       );
       return { drained: false };
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, pollMs);
+    });
   }
 }
 
@@ -665,7 +627,7 @@ export function waitForEmbeddedAgentRunEnd(
           diag.warn(`wait timeout: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
           resolve(false);
         },
-        Math.max(100, timeoutMs),
+        resolveTimerTimeoutMs(timeoutMs, 100, 100),
       ),
     };
     waiters.add(waiter);
@@ -777,7 +739,6 @@ export function clearActiveEmbeddedRun(
   if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId, sessionFile);
     logSessionStateChange({
@@ -806,7 +767,6 @@ export function forceClearEmbeddedAgentRun(
   if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
@@ -834,7 +794,6 @@ export const testing = {
     ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };
 export { testing as __testing };

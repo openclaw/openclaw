@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Generates Kysely database types from the SQLite schema.
 import fs from "node:fs";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
@@ -30,8 +31,8 @@ function toInterfaceName(tableName) {
     .join("");
 }
 
-function columnBaseType(columnType) {
-  const normalized = columnType.toUpperCase();
+function columnBaseType(columnTypeLocal) {
+  const normalized = columnTypeLocal.toUpperCase();
   if (normalized.includes("BLOB")) {
     return "Uint8Array";
   }

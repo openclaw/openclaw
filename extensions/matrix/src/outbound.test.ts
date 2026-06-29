@@ -1,3 +1,4 @@
+// Matrix tests cover outbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -230,7 +231,7 @@ describe("matrixOutbound cfg threading", () => {
 
     expect(rendered?.text).toBe("---");
     expect(
-      (rendered?.channelData?.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
+      (rendered!.channelData!.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
         "com.openclaw.presentation"
       ],
     ).toEqual({

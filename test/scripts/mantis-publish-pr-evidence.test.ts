@@ -1,3 +1,4 @@
+// Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -152,7 +153,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "content-type": "image/png",
       "x-amz-date": expect.any(String),
     });
-    expect((requests[0]?.headers as Record<string, string>).authorization).toContain(
+    expect((requests[0].headers as Record<string, string>).authorization).toContain(
       "Credential=access/",
     );
     expect(String(requests[4]?.body)).toContain(

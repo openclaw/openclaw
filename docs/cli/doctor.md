@@ -40,11 +40,14 @@ openclaw doctor
 openclaw doctor --lint
 openclaw doctor --lint --json
 openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --deep
 openclaw doctor --fix
 openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
+openclaw doctor --post-upgrade
+openclaw doctor --post-upgrade --json
 ```
 
 For channel-specific permissions, use the channel probes instead of `doctor`:
@@ -68,8 +71,10 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--allow-exec`: allow doctor to execute configured exec SecretRefs while verifying secrets
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--json`: with `--lint`, emit JSON findings instead of human output
+- `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
+- `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
+- `--all`: with `--lint`, run all registered checks, including opt-in checks excluded from the default automation set
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
 
@@ -79,13 +84,14 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 It uses the structured health-check path, does not prompt, and does not repair
 or rewrite config/state. Use it in CI, preflight scripts, and review workflows
 when you want machine-readable findings instead of guided repair prompts.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and `--skip`
 are only accepted with `--lint`.
 
 ```bash
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
+openclaw doctor --lint --all
 openclaw doctor --lint --allow-exec
 openclaw doctor --lint --only core/doctor/gateway-config --json
 ```
@@ -126,6 +132,13 @@ Exit behavior:
 `--severity-min` controls both visible findings and the exit threshold. For
 example, `openclaw doctor --lint --severity-min error` can print no findings and
 exit `0` even when lower-severity `info` or `warning` findings exist.
+
+`--all` controls which checks are selected before severity filtering. The
+default lint run is the stable automation gate and excludes checks that are
+intentionally opt-in because they are deep, historical, or more likely to
+surface repairable legacy residue. Use `--all` when you want the complete lint
+inventory without listing each check id. `--only <id>` remains the most precise
+selector and can run any registered check by id.
 
 ## Structured Health Checks
 
@@ -169,10 +182,12 @@ A finding includes:
 | `ocPath`          | Precise `oc://` address when a check can point to one. |
 | `fixHint`         | Suggested operator action or repair summary.           |
 
-This release registers the modernized core doctor checks on the structured
-health path. The `openclaw/plugin-sdk/health` subpath exposes the same
-contract for bundled follow-up consumers, but plugin-backed checks only run
-after their owning package registers them in the active command path.
+Modernized core doctor checks stay attached to the ordered doctor contribution
+that owns their human `doctor` / `doctor --fix` behavior. The shared structured
+health registry is the extension point: bundled and plugin-backed checks run
+after core doctor checks once their owning package registers them in the active
+command path. The `openclaw/plugin-sdk/health` subpath exposes the same
+contract for those extension consumers.
 
 ## Check Selection
 
@@ -181,12 +196,23 @@ Use `--only` and `--skip` when a workflow wants a focused gate:
 ```bash
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
+openclaw doctor --lint --all --skip core/doctor/session-locks
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only`
 id is not registered, no check runs for that id; use the command's `checksRun`
 and `checksSkipped` fields to verify a focused gate is selecting the checks you
 expect.
+
+## Post-upgrade mode
+
+`openclaw doctor --post-upgrade` runs plugin compatibility probes intended to be
+chained after a build or upgrade. Findings are emitted to stdout; the command
+exits with code 1 if any finding has `level: "error"`. Add `--json` to receive a
+machine-readable envelope (`{ probesRun, findings }`) suitable for CI, the
+community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the
+installed plugin index is missing or malformed, JSON mode still emits that
+envelope with a `plugin.index_unavailable` error finding.
 
 Notes:
 
@@ -199,7 +225,7 @@ Notes:
 - Modernized health checks can expose a `repair()` path for `doctor --fix`; checks that do not expose one continue through the existing doctor repair flow.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
-- Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and can rewrite them in place before the scheduler has to auto-normalize them at runtime.
+- Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and rewrites them before importing canonical rows into SQLite.
 - Doctor reports cron jobs with explicit `payload.model` overrides, including provider namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
 - On Linux, doctor warns when the user's crontab still runs legacy `~/.openclaw/bin/ensure-whatsapp.sh`; that script is no longer maintained and can log false WhatsApp gateway outages when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
@@ -217,7 +243,7 @@ Notes:
 - Doctor removes retired `plugins.entries.codex.config.codexDynamicToolsProfile`; Codex app-server always keeps Codex-native workspace tools native.
 - Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment because bins, env vars, config, or OS requirements are missing. `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead when you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
-- If legacy sandbox registry files (`~/.openclaw/sandbox/containers.json` or `~/.openclaw/sandbox/browsers.json`) are present, doctor reports them; `openclaw doctor --fix` migrates valid entries into sharded registry directories and quarantines invalid legacy files.
+- If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `openclaw doctor --fix` migrates valid entries into SQLite and quarantines invalid legacy files.
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials. For exec-backed SecretRefs, doctor skips execution unless `--allow-exec` is present.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
 - After state-directory migrations, doctor warns when enabled default Telegram or Discord accounts depend on env fallback and `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` is unavailable to the doctor process.

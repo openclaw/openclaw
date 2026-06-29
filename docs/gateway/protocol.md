@@ -348,7 +348,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
       Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
-    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping. Dreaming-aware clients may also pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to a selected agent workspace; omitting `agentId` keeps the default-agent fallback and aggregates configured Dreaming workspaces.
+    - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }` params for selected-agent Dreaming views/actions. When `agentId` is omitted, they operate on the configured default agent workspace.
     - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
     - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one
       agent, or `agentScope: "all"` to list configured agents together.
@@ -404,12 +405,14 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
     - `config.get` returns the current config snapshot and hash.
     - `config.set` writes a validated config payload.
-    - `config.patch` merges a partial config update.
+    - `config.patch` merges a partial config update. Destructive array
+      replacement requires the affected path in `replacePaths`; nested arrays
+      under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates from the control plane use a detached managed-service handoff instead of replacing the package tree inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
-    - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates and supervised git-checkout updates from the control plane use a detached managed-service handoff instead of replacing the package tree or mutating checkout/build output inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. An unavailable handoff means OpenClaw lacks a safe supervisor boundary or durable service identity, such as `OPENCLAW_SYSTEMD_UNIT` for systemd. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
+    - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
   </Accordion>
@@ -441,6 +444,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+    - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Clients pass `sessionKey`, optional `agentId` when the session selection is agent-scoped, plus a transcript `messageId` previously surfaced through `chat.history`, and the Gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
+    - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request.
 
   </Accordion>
 
@@ -538,7 +543,9 @@ runtime state.
 `TaskSummary` includes `id`, `status`, and optional metadata such as `kind`,
 `runtime`, `title`, `agentId`, `sessionKey`, `childSessionKey`, `ownerKey`,
 `runId`, `taskId`, `flowId`, `parentTaskId`, `sourceId`, timestamps, progress,
-terminal summary, and sanitized error text.
+terminal summary, and sanitized error text. `agentId` identifies the agent
+executing the task; `sessionKey` and `ownerKey` preserve requester and control
+context.
 
 ### Operator helper methods
 
@@ -578,6 +585,9 @@ terminal summary, and sanitized error text.
     `idempotencyKey` are optional.
   - If both `sessionKey` and `agentId` are present, the resolved session agent must match
     `agentId`.
+  - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
+    owner/admin identity (`operator.admin`) even though the `tools.invoke`
+    method itself is `operator.write`.
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
     `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
     bypassing the gateway tool policy pipeline.
@@ -610,8 +620,11 @@ terminal summary, and sanitized error text.
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
+    Older clients may still send `dangerouslyForceUnsafeInstall`; this field is
+    deprecated, accepted only for protocol compatibility, and ignored. Use
+    `security.installPolicy` for operator-owned install decisions.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.
@@ -770,16 +783,19 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
-  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
-    gateway token/password.
-- Omitting device identity has scope consequences. When a Control UI connection
-  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
-  clears self-declared scopes to an empty set for token, password, and
-  trusted-proxy auth. The connection is allowed on explicit trust paths, but
-  scope-gated methods fail. The exception is local Control UI token/password
-  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
-  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
-  break-glass scope-preservation path.
+  - direct-loopback `gateway-client` backend RPCs on the reserved internal
+    helper path.
+- Omitting device identity has scope consequences. When a device-less operator
+  connection is allowed through an explicit trust path, OpenClaw still clears
+  self-declared scopes to an empty set unless that path has a named
+  scope-preservation exception. Scope-gated methods then fail with
+  `missing scope`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
+  break-glass scope-preservation path. It does not grant scopes to arbitrary
+  custom backend or CLI-shaped WebSocket clients.
+- The reserved direct-loopback `gateway-client` backend helper path preserves
+  scopes only for internal local control-plane RPCs; custom backend IDs do not
+  receive this exception.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

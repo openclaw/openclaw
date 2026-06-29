@@ -6,7 +6,12 @@
  */
 
 import type { Server } from "node:http";
+import { toErrorObject } from "../../../infra/errors.js";
 import {
+  generateOAuthState,
+  generatePKCE,
+  oauthErrorHtml,
+  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -16,8 +21,6 @@ import {
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
 } from "./abort.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
@@ -326,7 +329,7 @@ export async function loginAnthropic(options: {
           manualInput = input;
           server.cancelWait();
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           manualError = err instanceof Error ? err : new Error(String(err));
           server.cancelWait();
         });
@@ -357,7 +360,7 @@ export async function loginAnthropic(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw manualError;
+          throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
           const parsed = parseOAuthAuthorizationInput(manualInput);

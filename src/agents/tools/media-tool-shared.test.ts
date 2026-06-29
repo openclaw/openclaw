@@ -1,7 +1,10 @@
+// Shared media tool tests cover root separation, provider availability, and
+// model-registry normalization for generation/understanding tools.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
@@ -57,10 +60,6 @@ function createModelRegistryStub(resolve: (provider: string, modelId: string) =>
 }
 
 describe("resolveMediaToolLocalRoots", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("does not widen default local roots from media sources", () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
@@ -68,13 +67,13 @@ describe("resolveMediaToolLocalRoots", () => {
     const moviesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const roots = resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
-      path.join(picturesDir, "photo.png"),
-      pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
-      "/top-level-file.png",
-    ]);
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+        "/top-level-file.png",
+      ]),
+    );
 
     const normalizedRoots = roots.map(normalizeHostPath);
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
@@ -85,6 +84,8 @@ describe("resolveMediaToolLocalRoots", () => {
   });
 
   it("keeps channel inbound attachment roots separate from local roots", () => {
+    // Inbound channel roots may include broad chat attachment folders; keep them
+    // out of local filesystem allowlists unless the channel context asks.
     const accountRoot = path.join("/tmp", "openclaw-imessage-work");
     const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
     const cfg = {
@@ -150,6 +151,8 @@ describe("resolveModelFromRegistry", () => {
   });
 
   it("falls back to provider-prefixed custom model IDs", () => {
+    // Custom providers can store ids with provider prefixes; try both forms so
+    // callers can pass the short local model id.
     const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
     const { calls, registry } = createModelRegistryStub((_, modelId) =>
       modelId === "kimchi/claude-opus-4-6" ? foundModel : null,

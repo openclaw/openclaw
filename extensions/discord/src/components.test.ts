@@ -1,4 +1,6 @@
+// Discord tests cover components plugin behavior.
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
@@ -377,6 +379,36 @@ describe("discord component registry", () => {
     expect(typeof sharedEntry?.expiresAt).toBe("number");
 
     second.clearDiscordComponentEntries();
+  });
+
+  it("expires component entries registered while the process clock is invalid", () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
+        modals: [],
+        ttlMs: 1000,
+      });
+
+      expect(resolveDiscordComponentEntry({ id: "btn_invalid_clock", consume: false })).toBeNull();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("expires component entries whose calculated expiry exceeds the Date range", () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
+        modals: [],
+        ttlMs: 1000,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(resolveDiscordComponentEntry({ id: "btn_overflow", consume: false })).toBeNull();
   });
 
   it("persists component and modal entries when runtime state is available", async () => {

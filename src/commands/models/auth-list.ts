@@ -1,4 +1,5 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+/** Command helpers for listing saved model auth profiles. */
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth,
@@ -8,12 +9,11 @@ import {
   type AuthProfileStore,
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
-import { resolveKnownAgentId } from "./shared.js";
+import { resolveModelsTargetAgent } from "./shared.js";
 
 type AuthProfileSummary = {
   id: string;
@@ -32,7 +32,7 @@ function resolveProviderFilter(rawProvider: string | undefined): {
   externalCliProvider: string | undefined;
   matches: (profile: AuthProfileSummary) => boolean;
 } {
-  const provider = rawProvider?.trim() ? normalizeProviderId(rawProvider) : undefined;
+  const provider = rawProvider?.trim() ? resolveProviderIdForAuth(rawProvider) : undefined;
   if (!provider) {
     return {
       provider: undefined,
@@ -40,30 +40,11 @@ function resolveProviderFilter(rawProvider: string | undefined): {
       matches: () => true,
     };
   }
-  if (provider === "openai") {
-    return {
-      provider,
-      externalCliProvider: "openai",
-      matches: (profile) => profile.provider === "openai" || profile.provider === "openai-codex",
-    };
-  }
   return {
     provider,
     externalCliProvider: provider,
     matches: (profile) => profile.provider === provider,
   };
-}
-
-function resolveTargetAgent(
-  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
-  raw?: string,
-): {
-  agentId: string;
-  agentDir: string;
-} {
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
 }
 
 function formatTimestamp(value: number | undefined): string | undefined {
@@ -86,7 +67,7 @@ function summarizeProfile(params: {
   const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
   return {
     id: params.profileId,
-    provider: normalizeProviderId(params.profile.provider),
+    provider: resolveProviderIdForAuth(params.profile.provider),
     type: params.profile.type,
     label: resolveAuthProfileDisplayLabel({
       cfg: params.cfg,
@@ -115,12 +96,13 @@ function formatProfileLine(profile: AuthProfileSummary): string {
   return `- ${profile.label} [${details.join("; ")}]`;
 }
 
+/** Lists auth profiles for the selected agent, optionally filtered by provider. */
 export async function modelsAuthListCommand(
   opts: { provider?: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
-  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
   const providerFilter = resolveProviderFilter(opts.provider);
   const store = ensureAuthProfileStore(
     agentDir,
@@ -158,7 +140,7 @@ export async function modelsAuthListCommand(
   }
 
   runtime.log(`Agent: ${agentId}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   if (providerFilter.provider) {
     runtime.log(`Provider: ${providerFilter.provider}`);
   }

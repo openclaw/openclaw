@@ -1,5 +1,10 @@
-import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "../media/inline-image-data-url.js";
-import { isRecord } from "../shared/record-coerce.js";
+/**
+ * Sanitizes OpenAI Responses payloads before transport. Invalid inline images
+ * are replaced with text placeholders so the request remains valid and
+ * auditable.
+ */
+import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "@openclaw/media-core/inline-image-data-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
@@ -29,6 +34,7 @@ function sanitizeValue(value: unknown): unknown {
   return next;
 }
 
+/** Sanitize inline image fields inside a Responses API payload. */
 export function sanitizeResponsesImagePayload<T extends Record<string, unknown>>(params: T): T {
   if (!Array.isArray(params.input)) {
     return params;
@@ -37,12 +43,4 @@ export function sanitizeResponsesImagePayload<T extends Record<string, unknown>>
     ...params,
     input: sanitizeValue(params.input),
   };
-}
-
-export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
-  return sanitizeSharedInlineImageDataUrl(imageUrl);
-}
-
-export function invalidInlineImageText(label: string): string {
-  return `[${label}] ${IMAGE_OMITTED_TEXT}`;
 }

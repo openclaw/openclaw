@@ -1,3 +1,4 @@
+// Voice Call tests cover cli plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import { testing } from "./cli.js";
@@ -69,5 +70,12 @@ describe("voice-call CLI timeout helpers", () => {
     expect(testing.resolveVoiceCallDeadlineMs(Number.MAX_SAFE_INTEGER, 10_000)).toBe(
       10_000 + MAX_TIMER_TIMEOUT_MS,
     );
+  });
+
+  it("caps gateway continue poll timeouts from async operation payloads", () => {
+    expect(
+      testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.MAX_SAFE_INTEGER }, 45_000),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.NaN }, 45_000)).toBe(45_000);
   });
 });

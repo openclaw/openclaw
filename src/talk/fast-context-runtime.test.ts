@@ -1,5 +1,6 @@
+// Fast context runtime tests cover timeout and fast context generation behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const mocks = vi.hoisted(() => ({
   getActiveMemorySearchManager: vi.fn(),

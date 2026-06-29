@@ -47,12 +47,16 @@ Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active 
 
 <ParamField path="security" type="'deny' | 'allowlist' | 'full'">
 Ignored for normal tool calls. `gateway` / `node` security is controlled by
-`tools.exec.security` and `~/.openclaw/exec-approvals.json`; elevated mode can
+`tools.exec.security` and the host approvals file; elevated mode can
 force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Approval prompt behavior for `gateway` / `node` execution.
+The baseline ask mode comes from `tools.exec.ask` and host approvals.
+For channel-origin model calls, per-call `ask` is ignored when the
+effective host ask is `off`; otherwise it can only harden to a stricter
+mode. Trusted internal/API callers that construct exec tools with an
+explicit `ask` value are unchanged.
 </ParamField>
 
 <ParamField path="node" type="string">
@@ -71,7 +75,7 @@ Notes:
 - `tools.exec.mode` is the normalized policy knob. Values are `deny`, `allowlist`, `ask`, `auto`, and `full`. `auto` runs deterministic allowlist/safe-bin matches directly and routes every remaining exec approval case through OpenClaw's native auto reviewer before asking a human. `ask` / `ask=always` still asks a human every time.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
-- `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
+- `gateway`/`node` approvals are controlled by the host approvals file.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - `exec host=node` is the only shell-execution path for nodes; the legacy `nodes.run` wrapper has been removed.
@@ -80,9 +84,16 @@ Notes:
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, then PATH),
   then falls back to Windows PowerShell 5.1.
+- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable
+  aliases/functions and a small safe environment set from shell startup files into
+  `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command.
+  Secret-looking variables are excluded; sandbox and node exec do not use this snapshot. Set
+  `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
+- For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in
+  `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
 - `openclaw channels login` is blocked from `exec` because it is an interactive channel-auth flow; run it in a terminal on the gateway host, or use the channel-native login tool from chat when one exists.
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto`
   resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently
@@ -105,7 +116,7 @@ Notes:
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
 - `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
 - `tools.exec.ask` (default: `off`)
-- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
+- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host approvals file; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
 - In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)

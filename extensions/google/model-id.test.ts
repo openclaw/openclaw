@@ -1,3 +1,4 @@
+// Google tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./api.js";
 
@@ -39,5 +40,10 @@ describe("google model id helpers", () => {
   it("keeps GA gemini-3.1-flash-lite unchanged and maps old preview name to GA", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite-preview")).toBe("gemini-3.1-flash-lite");
+  });
+
+  it("maps the old Gemma 4 26B shorthand to Google's canonical API id", () => {
+    expect(normalizeGoogleModelId("gemma-4-26b")).toBe("gemma-4-26b-a4b-it");
+    expect(normalizeGoogleModelId("google/gemma-4-26b")).toBe("google/gemma-4-26b-a4b-it");
   });
 });

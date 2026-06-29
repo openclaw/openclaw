@@ -1,3 +1,4 @@
+// Setup wizard tests cover end-to-end onboarding prompt flows.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -508,6 +509,35 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
+
+  it("shows setup duration expectations before the security acknowledgement", async () => {
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ note, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runSetupWizard(
+      {
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const calls = getWizardNoteCalls(note);
+    expect(calls[0]?.[1]).toBe("Setup timeline");
+    expect(calls[0]?.[0]).toContain("model/auth, workspace, Gateway, channels");
+    expect(calls[0]?.[0]).toContain("openclaw configure");
+    expect(calls[1]?.[1]).toBe("Security disclaimer");
+  });
+
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -944,7 +974,7 @@ describe("runSetupWizard", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
             },
           },
         },
@@ -958,7 +988,7 @@ describe("runSetupWizard", () => {
       {
         acceptRisk: true,
         flow: "quickstart",
-        authChoice: "openai-codex-api-key",
+        authChoice: "openai-chatgpt-api-key",
         openaiApiKey: "sk-flag-value",
         installDaemon: false,
         skipChannels: true,
@@ -973,9 +1003,54 @@ describe("runSetupWizard", () => {
     );
 
     expect(applyAuthChoice).toHaveBeenCalledTimes(1);
-    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai auth choice");
     const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
     expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
+  it("passes preserveExistingDefaultModel to applyAuthChoice to protect existing default model", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "google-api-key",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "google auth choice");
+    // Preserve the user's existing default model when a new provider is
+    // configured through the setup wizard, matching the contract already
+    // used in configure.gateway-auth.ts. Without this flag, configuring a
+    // paid Google Gemini key would silently overwrite the user's default
+    // model, causing existing heartbeat turns to consume paid API quota.
+    expect((call as { preserveExistingDefaultModel?: boolean }).preserveExistingDefaultModel).toBe(
+      true,
+    );
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
@@ -1238,13 +1313,13 @@ describe("runSetupWizard", () => {
     resolvePluginProvidersRuntime.mockClear();
     resolveManifestProviderAuthChoice.mockReturnValue({
       pluginId: "openai",
-      providerId: "openai-codex",
+      providerId: "openai",
       methodId: "oauth",
-      choiceId: "openai-codex",
+      choiceId: "openai",
       choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
-      id: "openai-codex",
+      id: "openai",
       label: "OpenAI Codex",
       auth: [
         {
@@ -1260,7 +1335,7 @@ describe("runSetupWizard", () => {
         },
       ],
     });
-    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai");
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
@@ -1281,7 +1356,7 @@ describe("runSetupWizard", () => {
     expectRecordFields(
       getMockCallArg(resolvePluginSetupProvider, 0, 0, "plugin setup provider"),
       {
-        provider: "openai-codex",
+        provider: "openai",
         pluginIds: ["openai"],
       },
       "plugin setup provider params",

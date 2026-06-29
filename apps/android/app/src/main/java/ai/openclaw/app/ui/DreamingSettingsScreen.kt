@@ -5,8 +5,7 @@ import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
-import ai.openclaw.app.ui.design.ClawStatus
-import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway dreaming state and recent dream diary entries. */
 @Composable
 internal fun DreamingSettingsScreen(
   viewModel: MainViewModel,
@@ -91,19 +91,19 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       Column {
-        DreamingHealthRow(
+        ClawStatusRow(
           title = "Memory Store",
           value = if (summary.storeHealthy) "Healthy" else "Needs attention",
           healthy = summary.storeHealthy,
         )
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        DreamingHealthRow(
+        ClawStatusRow(
           title = "Signal Index",
           value = if (summary.phaseSignalHealthy) "Healthy" else "Needs attention",
           healthy = summary.phaseSignalHealthy,
         )
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        DreamingHealthRow(
+        ClawStatusRow(
           title = "Promoted",
           value = "${summary.promotedToday} today · ${summary.promotedTotal} total",
           healthy = true,
@@ -111,23 +111,6 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
       }
     }
     DreamDiaryPanel(summary = summary)
-  }
-}
-
-@Composable
-private fun DreamingHealthRow(
-  title: String,
-  value: String,
-  healthy: Boolean,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Box(modifier = Modifier.size(7.dp))
-    Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    ClawStatusPill(text = value, status = if (healthy) ClawStatus.Success else ClawStatus.Warning)
   }
 }
 
@@ -187,6 +170,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
   }
 }
 
+/** Formats the next dreaming cycle as a compact relative label. */
 private fun formatDreamingNextRun(nextRunAtMs: Long?): String {
   val next = nextRunAtMs ?: return "Not scheduled"
   val deltaMinutes = ((next - System.currentTimeMillis()) / 60_000L).coerceAtLeast(0L)

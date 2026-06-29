@@ -1,5 +1,9 @@
+// Media Understanding Common module implements provider supports behavior.
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
+// Capability checks for media-understanding provider objects.
+
+/** Return true when a provider exposes the method for a media capability. */
 export function providerSupportsCapability(
   provider: MediaUnderstandingProvider | undefined,
   capability: MediaUnderstandingCapability,

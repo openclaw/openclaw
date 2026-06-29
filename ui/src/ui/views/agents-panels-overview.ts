@@ -1,3 +1,4 @@
+// Control UI view renders agents panels overview screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -83,6 +84,7 @@ export function renderAgentOverview(params: {
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   const disabled = !configForm || configLoading || configSaving;
+  const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const removeChip = (index: number) => {
     const next = fallbackChips.filter((_, i) => i !== index);
@@ -127,6 +129,10 @@ export function renderAgentOverview(params: {
         <div class="agent-kv">
           <div class="label">Runtime</div>
           <div class="mono">${runtime}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">${t("agents.context.thinkingDefault")}</div>
+          <div class="mono">${thinkingDefault}</div>
         </div>
         <div class="agent-kv">
           <div class="label">Skills Filter</div>

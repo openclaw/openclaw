@@ -1,3 +1,4 @@
+// Anthropic tests cover stream wrappers plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,7 @@ import {
   createAnthropicServiceTierWrapper,
   createAnthropicThinkingPrefillWrapper,
   resolveAnthropicBetas,
+  resolveAnthropicFastMode,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
@@ -171,6 +173,10 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
+
+  it("ignores unresolved auto fast mode at the provider boundary", () => {
+    expect(resolveAnthropicFastMode({ fastMode: "auto" })).toBeUndefined();
+  });
 });
 
 describe("createAnthropicThinkingPrefillWrapper", () => {
@@ -279,6 +285,19 @@ describe("Anthropic service_tier payload wrappers", () => {
       enabled: false,
     });
     expect(payload?.service_tier).toBe("standard_only");
+  });
+
+  it("fast mode resolves dynamic service_tier for each stream call", () => {
+    let enabled = true;
+    const first = runPayloadWrapper({ apiKey: "sk-ant-api03-test-key" }, (base) =>
+      createAnthropicFastModeWrapper(base, () => enabled),
+    );
+    enabled = false;
+    const second = runPayloadWrapper({ apiKey: "sk-ant-api03-test-key" }, (base) =>
+      createAnthropicFastModeWrapper(base, () => enabled),
+    );
+    expect(first?.service_tier).toBe("auto");
+    expect(second?.service_tier).toBe("standard_only");
   });
 
   it("explicit service tier injects service_tier=standard_only for regular API keys", () => {

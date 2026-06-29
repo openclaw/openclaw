@@ -1,3 +1,4 @@
+// Status reaction tests cover generic reaction selection and update behavior for channel replies.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   resolveToolEmoji,
@@ -110,21 +111,6 @@ function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emo
   }
   return count;
 }
-
-function countCallsForMethodAndEmoji(
-  calls: Array<{ method: string; emoji: string }>,
-  method: string,
-  emoji: string,
-) {
-  let count = 0;
-  for (const call of calls) {
-    if (call.method === method && call.emoji === emoji) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function expectArrayContainsAll(values: readonly string[], expected: readonly string[]) {
   expected.forEach((value) => {
     expect(values).toContain(value);

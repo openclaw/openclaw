@@ -1,7 +1,10 @@
+/**
+ * Converts inline provider model config into runtime model definitions.
+ */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -10,7 +13,10 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
 
-export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+/**
+ * Normalizes inline `models.providers` config into runtime model entries.
+ */
+type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
   api?: Api;
   provider: string;
   baseUrl?: string;
@@ -32,6 +38,7 @@ export type InlineProviderConfig = {
   localService?: ModelProviderConfig["localService"];
 };
 
+/** Returns a supported transport API id from raw config values. */
 export function normalizeResolvedTransportApi(
   api: unknown,
 ): ModelDefinitionConfig["api"] | undefined {
@@ -42,7 +49,7 @@ export function normalizeResolvedTransportApi(
     case "google-generative-ai":
     case "google-vertex":
     case "ollama":
-    case "openai-codex-responses":
+    case "openai-chatgpt-responses":
     case "openai-completions":
     case "openai-responses":
     case "azure-openai-responses":
@@ -52,6 +59,7 @@ export function normalizeResolvedTransportApi(
   }
 }
 
+/** Sanitizes configured provider/model headers before they enter runtime model metadata. */
 export function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -65,6 +73,8 @@ export function sanitizeModelHeaders(
       continue;
     }
     if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+      // Catalog/runtime model records are inspectable. Secret-ref markers are resolved later during
+      // auth setup, so inline provider discovery must not expose them as literal headers.
       continue;
     }
     next[headerName] = headerValue;
@@ -94,6 +104,7 @@ function isLegacyFoundryVisionModelCandidate(params: {
   );
 }
 
+/** Resolves model input modalities with Foundry legacy vision-model compatibility. */
 export function resolveProviderModelInput(params: {
   provider?: string;
   modelId?: string;
@@ -127,6 +138,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
+/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {

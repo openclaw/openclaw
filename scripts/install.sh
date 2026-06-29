@@ -524,6 +524,15 @@ run_quiet_step() {
     return 1
 }
 
+run_required_step() {
+    local title="$1"
+    shift
+    if run_quiet_step "$title" "$@"; then
+        return 0
+    fi
+    exit 1
+}
+
 cleanup_legacy_submodules() {
     local repo_dir="$1"
     local legacy_dir="$repo_dir/Peekaboo"
@@ -1647,10 +1656,6 @@ ensure_macos_default_node_active() {
     return 1
 }
 
-ensure_macos_node22_active() {
-    ensure_macos_default_node_active "$@"
-}
-
 ensure_default_node_active_shell() {
     promote_supported_node_binary || true
     if node_is_at_least_required; then
@@ -1747,9 +1752,9 @@ finish_linux_node_install() {
 install_node_with_apk() {
     ui_info "Installing Node.js via apk (Alpine Linux detected)"
     if is_root; then
-        run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" apk add --no-cache nodejs npm
     else
-        run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+        run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm
     fi
 
     activate_supported_node_on_path || true
@@ -1763,9 +1768,9 @@ install_node_with_apk() {
     ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
     ui_info "Trying Alpine nodejs-current package"
     if is_root; then
-        run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
     else
-        run_quiet_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
+        run_required_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
     fi
 
     activate_supported_node_on_path || true
@@ -1810,9 +1815,9 @@ install_node() {
         if command -v pacman &> /dev/null || is_arch_linux; then
             ui_info "Installing Node.js via pacman (Arch-based distribution detected)"
             if is_root; then
-                run_quiet_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
             else
-                run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
+                run_required_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
             finish_linux_node_install
             return 0
@@ -1827,35 +1832,35 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" apt_get_install nodejs
+                run_required_step "Configuring NodeSource repository" sudo -E bash "$tmp"
+                run_required_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" dnf install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" bash "$tmp"
+                run_required_step "Installing Node.js" yum install -y -q nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
             fi
         else
             ui_error "Could not detect package manager"
@@ -1879,19 +1884,6 @@ check_git() {
 
 is_root() {
     [[ "$(id -u)" -eq 0 ]]
-}
-
-# Run a command with sudo only if not already root
-maybe_sudo() {
-    if is_root; then
-        # Skip -E flag when root (env is already preserved)
-        if [[ "${1:-}" == "-E" ]]; then
-            shift
-        fi
-        "$@"
-    else
-        sudo "$@"
-    fi
 }
 
 require_sudo() {
@@ -2119,6 +2111,15 @@ EOF
 }
 
 run_pnpm() {
+    if [[ "${PNPM_CMD[*]}" == "corepack pnpm" && "${1:-}" == "-C" && -n "${2:-}" ]]; then
+        local repo_dir="$2"
+        shift 2
+        if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
+            ensure_pnpm
+        fi
+        (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
+        return
+    fi
     if ! pnpm_cmd_is_ready; then
         ensure_pnpm
     fi
@@ -2251,6 +2252,10 @@ activate_repo_pnpm_version() {
         ui_info "Activating repo pnpm ${version}"
         corepack prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
         refresh_shell_command_cache
+        if [[ "$(cd "$repo_dir" && corepack pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+            set_pnpm_cmd corepack pnpm
+            return 0
+        fi
         detect_pnpm_cmd || true
     fi
 }
@@ -2995,7 +3000,7 @@ refresh_gateway_service_if_loaded() {
     if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
         ui_success "Gateway service restarted"
     else
-        ui_warn "Gateway service restart failed; continuing"
+        ui_warn "Gateway service restart failed; continuing. Run: openclaw gateway restart"
         return 0
     fi
 

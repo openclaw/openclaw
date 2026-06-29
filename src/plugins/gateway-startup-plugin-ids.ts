@@ -1,5 +1,14 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+/** Resolves plugin ids that should load during Gateway startup. */
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -12,29 +21,35 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import { buildModelCatalogMergeKey } from "../model-catalog/refs.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
+import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
 } from "./gateway-startup-speech-providers.js";
-import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  createInstalledPluginIndexScopeLookup,
+  type InstalledPluginIndexScopeLookup,
+} from "./installed-plugin-index-scope-lookup.js";
+import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshotPluginIdScope } from "./plugin-metadata-snapshot.types.js";
 import {
   createPluginRegistryIdNormalizer,
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { normalizePluginIdScope } from "./plugin-scope.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -59,10 +74,23 @@ const CORE_BUILT_IN_MODEL_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
   "mistral-conversations",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openai-completions",
   "openai-responses",
 ]);
+
+function sortUniquePluginIds(values: Iterable<string>): string[] {
+  return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+function normalizePluginsConfigForInstalledIndex(
+  config: OpenClawConfig["plugins"] | undefined,
+  lookup: InstalledPluginIndexScopeLookup,
+) {
+  return normalizePluginsConfigWithResolver(config, lookup.normalizePluginId);
+}
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
@@ -85,15 +113,85 @@ function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boole
   return plugin.startup.memory;
 }
 
-function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
   const dreamingConfig = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(config),
     cfg: config,
   });
   if (!dreamingConfig.enabled) {
+    return undefined;
+  }
+  if (!resolveGatewayStartupDreamingSelectedPluginId(config)) {
+    return undefined;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
+  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
+  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+    ? selectedPluginId
+    : undefined;
+}
+
+function blocksPluginStartup(params: {
+  pluginId: string;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  return (
+    params.pluginsConfig.deny.includes(params.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.pluginId) ||
+    params.pluginsConfig.entries[params.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.pluginId]?.enabled === false
+  );
+}
+
+function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+  selectedMemoryPluginId?: string;
+  index: { plugins: readonly InstalledPluginIndexRecord[] };
+  platform?: NodeJS.Platform;
+}): Set<string> {
+  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
+  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
+  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
     return new Set();
   }
-  return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
+  if (
+    !params.selectedMemoryPluginId ||
+    params.selectedMemoryPluginId !== dreamingSelectedPluginId ||
+    params.selectedMemoryPluginId === engineId ||
+    blocksPluginStartup({
+      pluginId: engineId,
+      pluginsConfig: params.pluginsConfig,
+      activationSourcePlugins: params.activationSourcePlugins,
+    })
+  ) {
+    return new Set();
+  }
+  const selectedPlugin = params.index.plugins.find(
+    (plugin) => plugin.pluginId === params.selectedMemoryPluginId,
+  );
+  const sidecarPlugin = params.index.plugins.find((plugin) => plugin.pluginId === engineId);
+  if (!selectedPlugin?.startup.memory || !sidecarPlugin?.startup.memory) {
+    return new Set();
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: selectedPlugin.pluginId,
+    origin: selectedPlugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled ? new Set([engineId]) : new Set();
 }
 
 function resolveMemorySlotStartupPluginId(params: {
@@ -204,7 +302,17 @@ function hasConfiguredActivationPath(params: {
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
 }): boolean {
-  const paths = params.manifest?.activation?.onConfigPaths;
+  return hasConfiguredActivationPathPatterns({
+    paths: params.manifest?.activation?.onConfigPaths,
+    config: params.config,
+  });
+}
+
+function hasConfiguredActivationPathPatterns(params: {
+  paths: readonly string[] | undefined;
+  config: OpenClawConfig;
+}): boolean {
+  const paths = params.paths;
   if (!paths?.length) {
     return false;
   }
@@ -214,6 +322,28 @@ function hasConfiguredActivationPath(params: {
       pathPattern,
     }).some((match) => isConfigActivationValueEnabled(match.value)),
   );
+}
+
+function addConfiguredActivationPathPluginIds(
+  target: Set<string>,
+  params: {
+    activationSourceConfig: OpenClawConfig;
+    index: InstalledPluginIndex;
+  },
+): void {
+  for (const plugin of params.index.plugins) {
+    if (plugin.origin !== "bundled") {
+      continue;
+    }
+    if (
+      hasConfiguredActivationPathPatterns({
+        paths: plugin.startup.configPaths,
+        config: params.activationSourceConfig,
+      })
+    ) {
+      target.add(plugin.pluginId);
+    }
+  }
 }
 
 function manifestOwnsConfiguredSpeechProvider(params: {
@@ -424,6 +554,708 @@ function collectConfiguredVoiceProviderIds(config: OpenClawConfig): ConfiguredVo
   };
 }
 
+// Explicit memory provider startup pulls plugin-owned providers into Gateway
+// boot. Missing/"auto" stays lazy, and "none" disables provider-backed embeddings.
+const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(["auto", "none"]);
+
+function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized || undefined;
+}
+
+function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
+  const normalized = normalizeMemoryEmbeddingProviderIdValue(value);
+  return normalized && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(normalized)
+    ? normalized
+    : undefined;
+}
+
+function readMemorySearchEnabled(
+  memorySearch: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const enabled = memorySearch?.enabled;
+  return typeof enabled === "boolean" ? enabled : undefined;
+}
+
+function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
+  return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
+}
+
+export type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
+
+export type ConfiguredMemoryEmbeddingStartupProviderOwner = {
+  /** Raw memory-search provider id as configured (normalized). */
+  configuredId: string;
+  /**
+   * Adapter ids a plugin can own for this provider: the configured id plus its
+   * `models.providers.<id>.api` owner when a custom provider maps to one.
+   */
+  ownerIds: ReadonlySet<string>;
+  source: MemoryEmbeddingStartupProviderSource;
+};
+
+/**
+ * Resolve a configured memory embedding provider id to the adapter id(s) a
+ * plugin manifest contract or runtime registry can own. Mirrors runtime
+ * `getConfiguredMemoryEmbeddingProvider`: the raw id maps to a direct adapter,
+ * and a custom `models.providers.<id>` entry additionally maps to its `api`
+ * owner adapter (`provider: "ollama-5080"` with `api: "ollama"` -> "ollama").
+ * Both candidates are returned so matching covers the direct adapter and the
+ * API owner without the runtime adapter registry.
+ */
+function resolveMemoryEmbeddingProviderOwnerIds(
+  providerId: string,
+  config: OpenClawConfig,
+): string[] {
+  const ownerIds = [providerId];
+  const genericOwnerId = normalizeOptionalLowercaseString(
+    resolveConfiguredGenericEmbeddingProviderId(providerId, config),
+  );
+  if (genericOwnerId && genericOwnerId !== providerId) {
+    ownerIds.push(genericOwnerId);
+  }
+  const ownerApi = normalizeOptionalLowercaseString(
+    findNormalizedProviderValue(config.models?.providers, providerId)?.api,
+  );
+  if (ownerApi && ownerApi !== providerId) {
+    ownerIds.push(ownerApi);
+  }
+  return ownerIds;
+}
+
+function resolveEffectiveMemoryEmbeddingProviderEntries(
+  defaults: Record<string, unknown> | undefined,
+  override: Record<string, unknown> | undefined,
+): Array<{
+  configuredId: string;
+  source: MemoryEmbeddingStartupProviderSource;
+}> {
+  const enabled = readMemorySearchEnabled(override) ?? readMemorySearchEnabled(defaults) ?? true;
+  if (!enabled) {
+    return [];
+  }
+  const rawProvider = normalizeMemoryEmbeddingProviderIdValue(
+    override?.provider ?? defaults?.provider,
+  );
+  const effectiveProvider = rawProvider === "auto" || !rawProvider ? "openai" : rawProvider;
+  if (effectiveProvider === "none") {
+    return [];
+  }
+  const entries: Array<{
+    configuredId: string;
+    source: MemoryEmbeddingStartupProviderSource;
+  }> = [];
+  const provider =
+    rawProvider && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(rawProvider)
+      ? rawProvider
+      : undefined;
+  if (provider) {
+    entries.push({ configuredId: provider, source: "provider" });
+  }
+  const fallback = normalizeExplicitMemoryEmbeddingProviderId(
+    override?.fallback ?? defaults?.fallback ?? "none",
+  );
+  if (fallback && fallback !== effectiveProvider) {
+    entries.push({ configuredId: fallback, source: "fallback" });
+  }
+  return entries;
+}
+
+/**
+ * Collect explicit memory embedding provider owners required by startup. The
+ * resolver mirrors runtime memory-search inheritance for enablement, primary
+ * provider, and fallback provider, then maps custom `models.providers` ids to
+ * their API-owner adapter ids.
+ */
+export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
+  config: OpenClawConfig,
+): ConfiguredMemoryEmbeddingStartupProviderOwner[] {
+  if (isMemorySlotExplicitlyDisabled(config)) {
+    return [];
+  }
+  const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
+  const defaultsBlock = config.agents?.defaults?.memorySearch;
+  const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
+  const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
+    for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
+      defaults,
+      override,
+    )) {
+      const key = `${source}\0${configuredId}`;
+      if (byConfiguredIdAndSource.has(key)) {
+        continue;
+      }
+      byConfiguredIdAndSource.set(key, {
+        configuredId,
+        ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
+        source,
+      });
+    }
+  };
+  addEffectiveProviders(undefined);
+  const agents = config.agents?.list;
+  const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
+  if (agentEntries.length === 0) {
+    return [...byConfiguredIdAndSource.values()];
+  }
+  for (const agent of agentEntries) {
+    addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
+  }
+  return [...byConfiguredIdAndSource.values()];
+}
+
+/**
+ * Collect configured memory embedding provider ids that map to a plugin-owned
+ * memory embedding provider contract, including the resolved `api` owner for
+ * custom `models.providers` ids so the owning plugin loads at startup.
+ */
+export function collectConfiguredMemoryEmbeddingProviderIds(
+  config: OpenClawConfig,
+): ReadonlySet<string> {
+  const providerIds = new Set<string>();
+  for (const provider of collectConfiguredMemoryEmbeddingStartupProviderOwners(config)) {
+    for (const ownerId of provider.ownerIds) {
+      providerIds.add(ownerId);
+    }
+  }
+  return providerIds;
+}
+
+/**
+ * Report configured memory embedding providers that no loaded plugin can serve.
+ * A provider is unregistered only when none of its resolved adapter ids (the
+ * configured id and its `models.providers.<id>.api` owner) was registered, so
+ * custom providers warn when their API-owner plugin is missing but stay quiet
+ * once that plugin loads.
+ */
+export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
+  config: OpenClawConfig;
+  registeredProviderIds: ReadonlySet<string>;
+}): Array<{ configuredId: string; source: MemoryEmbeddingStartupProviderSource }> {
+  const configured = collectConfiguredMemoryEmbeddingStartupProviderOwners(params.config);
+  if (configured.length === 0) {
+    return [];
+  }
+  const registered = new Set(
+    [...params.registeredProviderIds]
+      .map((id) => normalizeOptionalLowercaseString(id))
+      .filter((id): id is string => Boolean(id)),
+  );
+  return configured
+    .filter((provider) => ![...provider.ownerIds].some((ownerId) => registered.has(ownerId)))
+    .map((provider) => ({ configuredId: provider.configuredId, source: provider.source }))
+    .toSorted(
+      (left, right) =>
+        left.configuredId.localeCompare(right.configuredId) ||
+        left.source.localeCompare(right.source),
+    );
+}
+
+function addPluginConfigEntryIds(
+  target: Set<string>,
+  plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>,
+): void {
+  for (const [pluginId, entry] of Object.entries(plugins.entries)) {
+    if (entry?.enabled !== false) {
+      target.add(pluginId);
+    }
+  }
+}
+
+function addConfiguredSlotPluginIds(
+  target: Set<string>,
+  params: {
+    activationSourceConfig: OpenClawConfig;
+    activationSourcePlugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    lookup: InstalledPluginIndexScopeLookup;
+  },
+): void {
+  const memorySlot = resolveMemorySlotStartupPluginId({
+    activationSourceConfig: params.activationSourceConfig,
+    activationSourcePlugins: params.activationSourcePlugins,
+    normalizePluginId: params.lookup.normalizePluginId,
+  });
+  if (memorySlot) {
+    target.add(memorySlot);
+  }
+  const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
+    activationSourceConfig: params.activationSourceConfig,
+    activationSourcePlugins: params.activationSourcePlugins,
+    normalizePluginId: params.lookup.normalizePluginId,
+  });
+  if (contextEngineSlot) {
+    target.add(contextEngineSlot);
+  }
+}
+
+function collectConfiguredStartupChannelIds(params: {
+  activationSourceConfig: OpenClawConfig;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  return sortUniquePluginIds([
+    ...listPotentialEnabledChannelIds(params.config, params.env),
+    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env),
+  ]);
+}
+
+function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): string[] {
+  const channelIds: string[] = [];
+  const pushTarget = (target: unknown) => {
+    if (typeof target !== "string") {
+      return;
+    }
+    const normalized = normalizeOptionalLowercaseString(target);
+    if (!normalized || normalized === "last" || normalized === "none") {
+      return;
+    }
+    channelIds.push(normalized);
+  };
+  pushTarget(config.agents?.defaults?.heartbeat?.target);
+  if (Array.isArray(config.agents?.list)) {
+    for (const agent of config.agents.list) {
+      pushTarget(agent?.heartbeat?.target);
+    }
+  }
+  return sortUniquePluginIds(channelIds);
+}
+
+function collectValidationChannelConfigIds(config: OpenClawConfig): string[] {
+  const channels = isRecord(config.channels) ? config.channels : null;
+  if (!channels) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => channelId !== "defaults" && channelId !== "modelByChannel")
+    .map((channelId) => normalizeOptionalLowercaseString(channelId) ?? "")
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function collectConfigValidationChannelIds(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  return sortUniquePluginIds([
+    ...collectValidationChannelConfigIds(params.config),
+    ...collectConfiguredStartupChannelIds({
+      config: params.config,
+      activationSourceConfig: params.config,
+      env: params.env,
+    }),
+    ...collectValidationHeartbeatTargetChannelIds(params.config),
+  ]);
+}
+
+function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
+  const configuredWebSearchProviderIds = collectConfiguredWebSearchProviderIds(config);
+  const configuredGenerationProviderIds = collectConfiguredGenerationProviderIds(config);
+  const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(config);
+  return sortUniquePluginIds([
+    ...collectConfiguredSpeechProviderIds(config),
+    ...configuredWebSearchProviderIds,
+    ...configuredGenerationProviderIds.imageGenerationProviders,
+    ...configuredGenerationProviderIds.videoGenerationProviders,
+    ...configuredGenerationProviderIds.musicGenerationProviders,
+    ...configuredVoiceProviderIds.speechProviders,
+    ...configuredVoiceProviderIds.realtimeTranscriptionProviders,
+    ...configuredVoiceProviderIds.realtimeVoiceProviders,
+    ...collectConfiguredMemoryEmbeddingProviderIds(config),
+  ]);
+}
+
+function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[] {
+  const providerIds: string[] = [];
+  const pushProviderId = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizeOptionalLowercaseString(value);
+    if (normalized) {
+      providerIds.push(normalized);
+    }
+  };
+  const profiles = config.auth?.profiles;
+  if (profiles && typeof profiles === "object") {
+    for (const profile of Object.values(profiles)) {
+      if (isRecord(profile)) {
+        pushProviderId(profile.provider);
+      }
+    }
+  }
+  const providers = config.models?.providers;
+  if (providers && typeof providers === "object") {
+    for (const providerId of Object.keys(providers)) {
+      pushProviderId(providerId);
+    }
+  }
+  for (const ref of collectConfiguredModelRefs(config)) {
+    const slashIndex = ref.value.indexOf("/");
+    if (slashIndex > 0) {
+      pushProviderId(ref.value.slice(0, slashIndex));
+    }
+  }
+  pushProviderId(config.tools?.web?.search?.provider);
+  pushProviderId(config.tools?.web?.fetch?.provider);
+  return sortUniquePluginIds(providerIds);
+}
+
+function collectValidationConfiguredShorthandModelIds(config: OpenClawConfig): string[] {
+  return sortUniquePluginIds(
+    collectConfiguredModelRefs(config)
+      .map((ref) => ref.value)
+      .filter((ref) => !ref.includes("/"))
+      .map((ref) => splitTrailingAuthProfile(ref).model.trim())
+      .filter(Boolean),
+  );
+}
+
+function addRequiredAgentHarnessPluginIds(
+  target: Set<string>,
+  params: {
+    activationSourceConfig: OpenClawConfig;
+    config: OpenClawConfig;
+    index: InstalledPluginIndex;
+    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    activationSource: {
+      plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+      rootConfig?: OpenClawConfig;
+    };
+    env: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+  },
+): void {
+  const requiredAgentHarnessRuntimes = new Set(
+    collectConfiguredAgentHarnessRuntimes(params.activationSourceConfig, {
+      includeImplicitRuntimePreferences: false,
+    }),
+  );
+  if (requiredAgentHarnessRuntimes.size === 0) {
+    return;
+  }
+  for (const plugin of params.index.plugins) {
+    if (
+      canStartRequiredAgentHarnessPlugin({
+        plugin,
+        pluginsConfig: params.pluginsConfig,
+        activationSource: params.activationSource,
+        config: params.config,
+        requiredAgentHarnessRuntimes,
+        platform: params.platform,
+      })
+    ) {
+      target.add(plugin.pluginId);
+    }
+  }
+}
+
+export function resolveGatewayStartupMetadataPluginIds(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  index: InstalledPluginIndex;
+  platform?: NodeJS.Platform;
+}): string[] | undefined {
+  const lookup = createInstalledPluginIndexScopeLookup(params.index);
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
+  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
+  const activationSourcePlugins = normalizePluginsConfigForInstalledIndex(
+    activationSourceConfig.plugins,
+    lookup,
+  );
+  if (!pluginsConfig.enabled || !activationSourcePlugins.enabled) {
+    return [];
+  }
+  if (
+    params.config.plugins?.bundledDiscovery === "compat" ||
+    activationSourceConfig.plugins?.bundledDiscovery === "compat"
+  ) {
+    return undefined;
+  }
+  if (pluginsConfig.allow.length === 0 && activationSourcePlugins.allow.length === 0) {
+    return undefined;
+  }
+
+  const scope = new Set<string>([...pluginsConfig.allow, ...activationSourcePlugins.allow]);
+  addPluginConfigEntryIds(scope, pluginsConfig);
+  addPluginConfigEntryIds(scope, activationSourcePlugins);
+
+  const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
+    activationSourceConfig,
+    activationSourcePlugins,
+    normalizePluginId: lookup.normalizePluginId,
+  });
+  addConfiguredSlotPluginIds(scope, {
+    activationSourceConfig,
+    activationSourcePlugins,
+    lookup,
+  });
+  for (const pluginId of resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource: {
+      plugins: activationSourcePlugins,
+      rootConfig: activationSourceConfig,
+    },
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
+  })) {
+    scope.add(pluginId);
+  }
+  if (!lookup.hasCompleteConfigPathActivationMetadata()) {
+    return undefined;
+  }
+  addConfiguredActivationPathPluginIds(scope, {
+    activationSourceConfig,
+    index: params.index,
+  });
+
+  const configuredChannelIds = collectConfiguredStartupChannelIds({
+    config: params.config,
+    activationSourceConfig,
+    env: params.env,
+  });
+  if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
+    return undefined;
+  }
+  lookup.addDirectChannelOwners(scope, configuredChannelIds);
+
+  const configuredProviderIds = sortUniquePluginIds([
+    ...collectConfiguredProviderIds(params.config),
+    ...collectConfiguredProviderIds(activationSourceConfig),
+    ...collectValidationConfiguredProviderIds(params.config),
+    ...collectValidationConfiguredProviderIds(activationSourceConfig),
+  ]);
+  if (!lookup.canResolveDirectProviderIds(configuredProviderIds, scope)) {
+    return undefined;
+  }
+  lookup.addDirectProviderOwners(scope, configuredProviderIds);
+
+  const configuredShorthandModelIds = sortUniquePluginIds([
+    ...collectValidationConfiguredShorthandModelIds(params.config),
+    ...collectValidationConfiguredShorthandModelIds(activationSourceConfig),
+  ]);
+  if (!lookup.hasShorthandModelOwners(configuredShorthandModelIds)) {
+    return undefined;
+  }
+  lookup.addShorthandModelOwners(scope, configuredShorthandModelIds);
+
+  addRequiredAgentHarnessPluginIds(scope, {
+    activationSourceConfig,
+    config: params.config,
+    index: params.index,
+    pluginsConfig,
+    activationSource: {
+      plugins: activationSourcePlugins,
+      rootConfig: activationSourceConfig,
+    },
+    env: params.env,
+    platform: params.platform,
+  });
+
+  const deniedPluginIds = new Set([...pluginsConfig.deny, ...activationSourcePlugins.deny]);
+  for (const pluginId of deniedPluginIds) {
+    scope.delete(pluginId);
+  }
+  for (const [pluginId, entry] of Object.entries(pluginsConfig.entries)) {
+    if (entry?.enabled === false) {
+      scope.delete(pluginId);
+    }
+  }
+  for (const [pluginId, entry] of Object.entries(activationSourcePlugins.entries)) {
+    if (entry?.enabled === false) {
+      scope.delete(pluginId);
+    }
+  }
+  if (!lookup.hasInstalledPluginIds(scope)) {
+    return undefined;
+  }
+  return sortUniquePluginIds(scope);
+}
+
+export function createGatewayStartupMetadataPluginIdScope(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): PluginMetadataSnapshotPluginIdScope {
+  const configuredChannelIds = collectConfiguredStartupChannelIds({
+    config: params.config,
+    activationSourceConfig: params.activationSourceConfig ?? params.config,
+    env: params.env,
+  });
+  return {
+    key: hashJson({
+      kind: "gateway-startup",
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig ?? null,
+      configuredChannelIds,
+      platform: params.platform ?? null,
+    }),
+    resolve: ({ index }) =>
+      resolveGatewayStartupMetadataPluginIds({
+        config: params.config,
+        ...(params.activationSourceConfig !== undefined
+          ? { activationSourceConfig: params.activationSourceConfig }
+          : {}),
+        env: params.env,
+        index,
+        ...(params.platform !== undefined ? { platform: params.platform } : {}),
+      }),
+  };
+}
+
+function addValidationPluginConfigReferences(
+  target: Set<string>,
+  params: {
+    config: OpenClawConfig;
+    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    normalizePluginId: (pluginId: string) => string;
+  },
+): void {
+  for (const pluginId of params.pluginsConfig.allow) {
+    target.add(pluginId);
+  }
+  for (const pluginId of params.pluginsConfig.deny) {
+    target.add(pluginId);
+  }
+  for (const pluginId of Object.keys(params.pluginsConfig.entries)) {
+    target.add(pluginId);
+  }
+  const rawSlots = isRecord(params.config.plugins?.slots) ? params.config.plugins.slots : {};
+  const hasExplicitMemorySlot = Object.hasOwn(rawSlots, "memory");
+  const memorySlot = hasExplicitMemorySlot ? params.pluginsConfig.slots.memory : undefined;
+  if (typeof memorySlot === "string") {
+    target.add(params.normalizePluginId(memorySlot));
+  }
+  const hasExplicitContextEngineSlot = Object.hasOwn(rawSlots, "contextEngine");
+  const contextEngineSlot = hasExplicitContextEngineSlot
+    ? params.pluginsConfig.slots.contextEngine
+    : undefined;
+  if (typeof contextEngineSlot === "string" && contextEngineSlot !== "legacy") {
+    target.add(params.normalizePluginId(contextEngineSlot));
+  }
+}
+
+export function resolveConfigValidationMetadataPluginIds(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  index: InstalledPluginIndex;
+  platform?: NodeJS.Platform;
+}): string[] | undefined {
+  const lookup = createInstalledPluginIndexScopeLookup(params.index);
+  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
+  if (params.config.plugins?.bundledDiscovery === "compat" || pluginsConfig.loadPaths.length > 0) {
+    return undefined;
+  }
+
+  const scope = new Set<string>();
+  addValidationPluginConfigReferences(scope, {
+    config: params.config,
+    pluginsConfig,
+    normalizePluginId: lookup.normalizePluginId,
+  });
+  if (!lookup.hasCompleteConfigPathActivationMetadata()) {
+    return undefined;
+  }
+  addConfiguredActivationPathPluginIds(scope, {
+    activationSourceConfig: params.config,
+    index: params.index,
+  });
+
+  const configuredChannelIds = collectConfigValidationChannelIds({
+    config: params.config,
+    env: params.env,
+  });
+  if (!lookup.hasChannelContributionOwners(configuredChannelIds)) {
+    return undefined;
+  }
+  lookup.addChannelContributionOwners(scope, configuredChannelIds);
+
+  const configuredProviderIds = collectValidationConfiguredProviderIds(params.config);
+  if (!lookup.hasProviderContributionOwners(configuredProviderIds)) {
+    return undefined;
+  }
+  lookup.addProviderContributionOwners(scope, configuredProviderIds);
+
+  const configuredShorthandModelIds = collectValidationConfiguredShorthandModelIds(params.config);
+  if (!lookup.hasShorthandModelOwners(configuredShorthandModelIds)) {
+    return undefined;
+  }
+  lookup.addShorthandModelOwners(scope, configuredShorthandModelIds);
+
+  addRequiredAgentHarnessPluginIds(scope, {
+    activationSourceConfig: params.config,
+    config: params.config,
+    index: params.index,
+    pluginsConfig,
+    activationSource: {
+      plugins: pluginsConfig,
+      rootConfig: params.config,
+    },
+    env: params.env,
+    platform: params.platform,
+  });
+
+  if (!lookup.hasInstalledPluginIds(scope)) {
+    return undefined;
+  }
+  return sortUniquePluginIds(scope);
+}
+
+export function createConfigValidationMetadataPluginIdScope(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): PluginMetadataSnapshotPluginIdScope {
+  const configuredChannelIds = collectConfigValidationChannelIds({
+    config: params.config,
+    env: params.env,
+  });
+  const configuredProviderIds = collectValidationConfiguredProviderIds(params.config);
+  const configuredShorthandModelIds = collectValidationConfiguredShorthandModelIds(params.config);
+  return {
+    key: hashJson({
+      kind: "config-validation",
+      config: params.config,
+      configuredChannelIds,
+      configuredProviderIds,
+      configuredShorthandModelIds,
+      platform: params.platform ?? null,
+    }),
+    resolve: ({ index }) =>
+      resolveConfigValidationMetadataPluginIds({
+        config: params.config,
+        env: params.env,
+        index,
+        ...(params.platform !== undefined ? { platform: params.platform } : {}),
+      }),
+  };
+}
+
+export function isMetadataSnapshotScopedForGatewayStartup(params: {
+  metadataSnapshot: Pick<PluginMetadataSnapshot, "index" | "pluginIds">;
+  pluginIdScope: PluginMetadataSnapshotPluginIdScope;
+}): boolean {
+  const expectedPluginIds = normalizePluginIdScope(
+    params.pluginIdScope.resolve({ index: params.metadataSnapshot.index }),
+  );
+  const snapshotPluginIds = normalizePluginIdScope(params.metadataSnapshot.pluginIds);
+  if (expectedPluginIds === undefined || snapshotPluginIds === undefined) {
+    return expectedPluginIds === undefined && snapshotPluginIds === undefined;
+  }
+  if (expectedPluginIds.length === 0) {
+    return snapshotPluginIds.length === 0;
+  }
+  const snapshotPluginIdSet = new Set(snapshotPluginIds);
+  return expectedPluginIds.every((pluginId) => snapshotPluginIdSet.has(pluginId));
+}
+
 function manifestOwnsConfiguredGenerationProvider(params: {
   manifest: PluginManifestRecord | undefined;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
@@ -472,6 +1304,23 @@ function manifestOwnsConfiguredVoiceProvider(params: {
     }
   }
   return false;
+}
+
+function manifestOwnsConfiguredMemoryEmbeddingProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredMemoryEmbeddingProviderIds.size === 0) {
+    return false;
+  }
+  const embeddingProviderIds = [
+    ...(params.manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ...(params.manifest?.contracts?.embeddingProviders ?? []),
+  ];
+  return embeddingProviderIds.some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredMemoryEmbeddingProviderIds.has(normalized) : false;
+  });
 }
 
 function canStartConfiguredGenerationProviderPlugin(params: {
@@ -570,6 +1419,52 @@ function canStartConfiguredVoiceProviderPlugin(params: {
     activationState.enabled &&
     (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
   );
+}
+
+function canStartConfiguredMemoryEmbeddingProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredMemoryEmbeddingProvider({
+      manifest: params.manifest,
+      configuredMemoryEmbeddingProviderIds: params.configuredMemoryEmbeddingProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled;
 }
 
 function canStartConfiguredModelProviderPlugin(params: {
@@ -874,6 +1769,49 @@ function canStartExplicitHookPlugin(params: {
   return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
 }
 
+function canStartTrustedToolPolicyPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
+}): boolean {
+  if ((params.manifest?.contracts?.trustedToolPolicies?.length ?? 0) === 0) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
+}
+
 function canStartConfiguredChannelPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
@@ -1041,22 +1979,13 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
-  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromPrepared({
-    config: params.config,
-    index: params.index,
-    configuredChannelIds,
-    pluginsConfig,
-    activationSource: {
-      plugins: pluginsConfig,
-      rootConfig: params.config,
-    },
-    manifestLookup,
-    platform: params.platform,
-  });
+  const explicitlyDisabledChannelIds = new Set(
+    listExplicitlyDisabledChannelIdsForConfig(params.config),
+  );
+  const configuredDeferredChannelPluginIds: string[] = [];
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
@@ -1067,6 +1996,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(activationSourceConfig);
+  const configuredMemoryEmbeddingProviderIds =
+    collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -1075,159 +2006,233 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource,
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
+  });
   const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
     normalizePluginId,
   });
-  const pluginIds = params.index.plugins
-    .filter((plugin) => {
-      const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
-      if (
-        hasConfiguredStartupChannel({
-          plugin,
-          manifestLookup,
-          configuredChannelIds,
-        })
-      ) {
-        return canStartConfiguredChannelPlugin({
-          plugin,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          manifestLookup,
-          platform: params.platform,
-        });
-      }
-      if (
-        canStartRequiredAgentHarnessPlugin({
-          plugin,
-          pluginsConfig,
-          activationSource,
-          config: params.config,
-          requiredAgentHarnessRuntimes,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredRootPlugin({
-          plugin,
-          manifest,
-          config: activationSourceConfig,
-          pluginsConfig,
-          activationSourcePlugins,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredSpeechProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredSpeechProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredWebSearchProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredWebSearchProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredModelProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredModelProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredGenerationProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredGenerationProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredVoiceProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredVoiceProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartExplicitHookPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          activationSourcePlugins,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        !shouldConsiderForGatewayStartup({
-          plugin,
-          manifest,
-          startupDreamingPluginIds,
-          memorySlotStartupPluginId,
-          contextEngineSlotStartupPluginId,
-        })
-      ) {
-        return false;
-      }
-      const activationState = resolveEffectivePluginActivationState({
-        id: plugin.pluginId,
-        origin: plugin.origin,
-        config: pluginsConfig,
-        rootConfig: params.config,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+  const pluginIds: string[] = [];
+  for (const plugin of params.index.plugins) {
+    const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
+    const hasEnabledManifestChannel =
+      manifest?.channels?.some((channelId) => {
+        const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+        return normalizedChannelId ? !explicitlyDisabledChannelIds.has(normalizedChannelId) : false;
+      }) ?? false;
+    // Non-bundled plugin that explicitly declares channels and is enabled
+    // in plugins.entries must be treated as a configured startup channel
+    // even when the channel itself is not listed in config.channels.
+    // Published install flows configure channels via plugins.entries, and
+    // the channel config may only have {enabled: true} which does not
+    // produce a `configuredChannelIds` entry.
+    const hasExplicitlyEnabledNonBundledChannel =
+      plugin.origin !== "bundled" &&
+      hasEnabledManifestChannel &&
+      pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
+      !pluginsConfig.deny.includes(plugin.pluginId);
+    if (
+      hasConfiguredStartupChannel({
+        plugin,
+        manifestLookup,
+        configuredChannelIds,
+      }) ||
+      hasExplicitlyEnabledNonBundledChannel
+    ) {
+      const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
+        plugin,
+        config: params.config,
+        pluginsConfig,
         activationSource,
+        manifestLookup,
+        platform: params.platform,
       });
-      if (!activationState.enabled) {
-        return false;
+      if (canStartConfiguredChannel) {
+        pluginIds.push(plugin.pluginId);
+        if (plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen) {
+          configuredDeferredChannelPluginIds.push(plugin.pluginId);
+        }
       }
-      if (plugin.origin !== "bundled") {
-        return activationState.explicitlyEnabled;
-      }
-      return activationState.source === "explicit" || activationState.source === "default";
-    })
-    .map((plugin) => plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartRequiredAgentHarnessPlugin({
+        plugin,
+        pluginsConfig,
+        activationSource,
+        config: params.config,
+        requiredAgentHarnessRuntimes,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredRootPlugin({
+        plugin,
+        manifest,
+        config: activationSourceConfig,
+        pluginsConfig,
+        activationSourcePlugins,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredSpeechProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredSpeechProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredWebSearchProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredWebSearchProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredModelProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredModelProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredGenerationProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredGenerationProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredVoiceProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredVoiceProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredMemoryEmbeddingProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredMemoryEmbeddingProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartExplicitHookPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        activationSourcePlugins,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartTrustedToolPolicyPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      !shouldConsiderForGatewayStartup({
+        plugin,
+        manifest,
+        startupDreamingPluginIds,
+        memorySlotStartupPluginId,
+        contextEngineSlotStartupPluginId,
+      })
+    ) {
+      continue;
+    }
+    if (startupDreamingPluginIds.has(plugin.pluginId)) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    const activationState = resolveEffectivePluginActivationState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      config: pluginsConfig,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+      activationSource,
+    });
+    if (!activationState.enabled) {
+      continue;
+    }
+    if (
+      plugin.origin !== "bundled"
+        ? activationState.explicitlyEnabled
+        : activationState.source === "explicit" || activationState.source === "default"
+    ) {
+      pluginIds.push(plugin.pluginId);
+    }
+  }
   return {
     channelPluginIds,
     configuredDeferredChannelPluginIds,
@@ -1256,14 +2261,27 @@ export function loadGatewayStartupPluginPlan(params: {
   platform?: NodeJS.Platform;
 }): GatewayStartupPluginPlan {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
+  const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+    ...(params.platform !== undefined ? { platform: params.platform } : {}),
+  });
   const metadataSnapshot =
     params.metadataSnapshot &&
     isPluginMetadataSnapshotCompatible({
       snapshot: params.metadataSnapshot,
       config: snapshotConfig,
       env: params.env,
+      allowScopedSnapshot: true,
       workspaceDir: params.workspaceDir,
       index: params.index,
+    }) &&
+    isMetadataSnapshotScopedForGatewayStartup({
+      metadataSnapshot: params.metadataSnapshot,
+      pluginIdScope,
     })
       ? params.metadataSnapshot
       : resolvePluginMetadataSnapshot({
@@ -1272,6 +2290,7 @@ export function loadGatewayStartupPluginPlan(params: {
           env: params.env,
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
+          pluginIdScope,
         });
   return resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,

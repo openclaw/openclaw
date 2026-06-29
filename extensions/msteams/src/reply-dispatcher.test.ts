@@ -1,3 +1,4 @@
+// Msteams tests cover reply dispatcher plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
@@ -108,7 +109,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   let lastStreamMock: StreamMock | undefined;
 
   function createDispatcher(
-    conversationType: string = "personal",
+    conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
     extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
   ) {
@@ -425,6 +426,36 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
     await dispatcher.replyOptions.onToolStart?.({ name: "web_search" });
     expect(getStreamMock().update).toHaveBeenCalled();
+  });
+
+  it("replaces command progress items with matching command output", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onItemEvent?.({
+      itemId: "tool:call-1",
+      toolCallId: "call-1",
+      kind: "command",
+      name: "exec",
+      progressText: "install dependencies",
+    });
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "tool:call-1-output",
+      toolCallId: "call-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+
+    const lastUpdate = getStreamMock().update.mock.calls.at(-1)?.[0];
+    expect(lastUpdate).toContain("install dependencies");
+    expect(lastUpdate).not.toContain("completed");
   });
 
   it("replaces reasoning progress snapshots in progress mode", async () => {

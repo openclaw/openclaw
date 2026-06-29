@@ -1,7 +1,13 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+// Minimax tests cover speech provider plugin behavior.
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -16,6 +22,26 @@ function clearMinimaxAuthEnv() {
   delete process.env.MINIMAX_OAUTH_TOKEN;
   delete process.env.MINIMAX_CODE_PLAN_KEY;
   delete process.env.MINIMAX_CODING_API_KEY;
+}
+
+function minimaxPortalStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "minimax-portal:test": {
+        type: "token",
+        provider: "minimax-portal",
+        token: "portal-token",
+      },
+    },
+  };
+}
+
+function seedMinimaxPortalProfile(agentDir: string) {
+  saveAuthProfileStore(minimaxPortalStore(), agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 describe("buildMinimaxSpeechProvider", () => {
@@ -71,6 +97,24 @@ describe("buildMinimaxSpeechProvider", () => {
     const savedEnv = { ...process.env };
     let tempStateDir: string;
     let tempAgentDir: string;
+    let tokenPlanEnvConfigured = false;
+
+    beforeAll(() => {
+      const previous = process.env.MINIMAX_CODING_API_KEY;
+      try {
+        process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
+        tokenPlanEnvConfigured = provider.isConfigured({
+          providerConfig: {},
+          timeoutMs: 30000,
+        });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MINIMAX_CODING_API_KEY;
+        } else {
+          process.env.MINIMAX_CODING_API_KEY = previous;
+        }
+      }
+    });
 
     beforeEach(async () => {
       tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-auth-"));
@@ -79,9 +123,11 @@ describe("buildMinimaxSpeechProvider", () => {
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
       process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
       clearMinimaxAuthEnv();
+      clearRuntimeAuthProfileStoreSnapshots();
     });
 
     afterEach(async () => {
+      clearRuntimeAuthProfileStoreSnapshots();
       process.env = { ...savedEnv };
       await rm(tempStateDir, { recursive: true, force: true });
     });
@@ -102,24 +148,11 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("returns true when a MiniMax Token Plan env var is set", () => {
-      process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+      expect(tokenPlanEnvConfigured).toBe(true);
     });
 
     it("returns true when a MiniMax portal auth profile is available", async () => {
-      await writeFile(
-        path.join(tempAgentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "minimax-portal:test": {
-              type: "token",
-              provider: "minimax-portal",
-              token: "portal-token",
-            },
-          },
-        }),
-      );
+      seedMinimaxPortalProfile(tempAgentDir);
 
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
@@ -151,7 +184,7 @@ describe("buildMinimaxSpeechProvider", () => {
               model: "speech-01-240228",
               voiceId: "Chinese (Mandarin)_Warm_Girl",
               speed: 1.5,
-              vol: 2.0,
+              vol: 2,
               pitch: 3,
             },
           },
@@ -163,7 +196,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Warm_Girl");
       expect(config.speed).toBe(1.5);
-      expect(config.vol).toBe(2.0);
+      expect(config.vol).toBe(2);
       expect(config.pitch).toBe(3);
     });
 
@@ -342,6 +375,7 @@ describe("buildMinimaxSpeechProvider", () => {
         OPENCLAW_STATE_DIR: tempStateDir,
       };
       clearMinimaxAuthEnv();
+      clearRuntimeAuthProfileStoreSnapshots();
       vi.stubGlobal("fetch", vi.fn());
       transcodeAudioBufferToOpusMock.mockReset();
     });
@@ -349,6 +383,7 @@ describe("buildMinimaxSpeechProvider", () => {
     afterEach(async () => {
       globalThis.fetch = savedFetch;
       process.env = { ...savedEnv };
+      clearRuntimeAuthProfileStoreSnapshots();
       vi.restoreAllMocks();
       await rm(tempStateDir, { recursive: true, force: true });
     });
@@ -373,7 +408,7 @@ describe("buildMinimaxSpeechProvider", () => {
       return JSON.parse(init.body) as Record<string, unknown>;
     }
 
-    it("makes correct API call and decodes hex response", async () => {
+    it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
@@ -402,6 +437,8 @@ describe("buildMinimaxSpeechProvider", () => {
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
+      expect(body.stream).toBe(false);
+      expect(body.output_format).toBe("hex");
       expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
         "English_expressive_narrator",
       );
@@ -520,19 +557,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("uses a minimax-portal auth profile before env API keys", async () => {
       process.env.MINIMAX_API_KEY = "sk-env";
-      await writeFile(
-        path.join(tempAgentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "minimax-portal:test": {
-              type: "token",
-              provider: "minimax-portal",
-              token: "portal-token",
-            },
-          },
-        }),
-      );
+      seedMinimaxPortalProfile(tempAgentDir);
       const hexAudio = Buffer.from("audio").toString("hex");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),

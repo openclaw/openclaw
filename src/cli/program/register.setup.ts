@@ -1,9 +1,11 @@
+// Setup command registration: baseline setup by default, onboarding wizard when wizard flags appear.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 
+/** Register the `setup` command and route wizard-style invocations to onboarding. */
 export function registerSetupCommand(program: Command): void {
   program
     .command("setup")
@@ -24,6 +26,11 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option("--non-interactive", "Run onboarding without prompts", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
     .option("--mode <mode>", "Onboard mode: local|remote")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
     .option("--import-source <path>", "Source agent home for --import-from")
@@ -36,6 +43,7 @@ export function registerSetupCommand(program: Command): void {
         const hasWizardFlags = hasExplicitOptions(command, [
           "wizard",
           "nonInteractive",
+          "acceptRisk",
           "mode",
           "importFrom",
           "importSource",
@@ -43,12 +51,14 @@ export function registerSetupCommand(program: Command): void {
           "remoteUrl",
           "remoteToken",
         ]);
+        // Any onboarding-only flag means the user intended the wizard path even without --wizard.
         if (opts.wizard || hasWizardFlags) {
           const { setupWizardCommand } = await import("../../commands/onboard.js");
           await setupWizardCommand(
             {
               workspace: opts.workspace as string | undefined,
               nonInteractive: Boolean(opts.nonInteractive),
+              acceptRisk: Boolean(opts.acceptRisk),
               mode: opts.mode as "local" | "remote" | undefined,
               importFrom: opts.importFrom as string | undefined,
               importSource: opts.importSource as string | undefined,

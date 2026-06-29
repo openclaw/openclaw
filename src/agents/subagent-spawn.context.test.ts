@@ -1,6 +1,6 @@
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
@@ -12,7 +12,9 @@ type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 describe("sessions_spawn context modes", () => {
   const storePath = "/tmp/subagent-context-session-store.json";
   const callGatewayMock = vi.fn();
+  const loadSessionStoreMock = vi.fn();
   const updateSessionStoreMock = vi.fn();
+  const forkSessionEntryFromParentMock = vi.fn();
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
@@ -23,7 +25,9 @@ describe("sessions_spawn context modes", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
+      loadSessionStoreMock,
       updateSessionStoreMock,
+      forkSessionEntryFromParentMock,
       forkSessionFromParentMock,
       ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
@@ -33,7 +37,9 @@ describe("sessions_spawn context modes", () => {
 
   beforeEach(() => {
     callGatewayMock.mockReset();
+    loadSessionStoreMock.mockReset();
     updateSessionStoreMock.mockReset();
+    forkSessionEntryFromParentMock.mockReset();
     forkSessionFromParentMock.mockReset();
     ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
@@ -42,12 +48,78 @@ describe("sessions_spawn context modes", () => {
   });
 
   function usePersistentStoreMock(store: SessionStore) {
+    loadSessionStoreMock.mockReturnValue(store);
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
       if (typeof mutator !== "function") {
         throw new Error("missing session store mutator");
       }
       return await mutator(store);
     });
+    forkSessionEntryFromParentMock.mockImplementation(
+      async (params: {
+        agentId: string;
+        fallbackEntry?: Record<string, unknown>;
+        parentStoreKeys?: string[];
+        sessionKey: string;
+        sessionsDir?: string;
+      }) => {
+        const parentEntry = params.parentStoreKeys
+          ?.map((key) => store[key])
+          .find((entry): entry is Record<string, unknown> => Boolean(entry));
+        const maxTokens = 100_000;
+        const parentTokens = parentEntry?.totalTokens;
+        if (
+          typeof parentTokens === "number" &&
+          Number.isFinite(parentTokens) &&
+          parentTokens > maxTokens
+        ) {
+          const sessionEntry = {
+            ...params.fallbackEntry,
+            ...store[params.sessionKey],
+          };
+          return {
+            status: "skipped",
+            reason: "decision-skip",
+            parentEntry,
+            sessionEntry,
+            decision: {
+              status: "skip",
+              reason: "parent-too-large",
+              maxTokens,
+              parentTokens,
+              message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+            },
+          };
+        }
+        const fork = await forkSessionFromParentMock({
+          parentEntry,
+          agentId: params.agentId,
+          sessionsDir: params.sessionsDir,
+        });
+        if (!fork) {
+          return { status: "failed" };
+        }
+        const sessionEntry = {
+          ...params.fallbackEntry,
+          ...store[params.sessionKey],
+          sessionId: fork.sessionId,
+          sessionFile: fork.sessionFile,
+          forkedFromParent: true,
+        };
+        store[params.sessionKey] = sessionEntry;
+        return {
+          status: "forked",
+          fork,
+          parentEntry,
+          sessionEntry,
+          decision: {
+            status: "fork",
+            maxTokens,
+            ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+          },
+        };
+      },
+    );
   }
 
   function requireAcceptedResult(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
@@ -152,6 +224,28 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionKey).toBe("main");
     expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(result));
     expect(prepareContext.contextMode).toBe("isolated");
+  });
+
+  it("keeps lightContext isolated spawns out of context-engine preparation", async () => {
+    const store: SessionStore = {
+      main: { sessionId: "parent-session-id", updatedAt: 1 },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "clean worker", context: "isolated", lightContext: true },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(ensureContextEnginesInitializedMock).not.toHaveBeenCalled();
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+    const agentRequest = requireGatewayRequest("agent");
+    expect(agentRequest.params?.bootstrapContextMode).toBe("lightweight");
   });
 
   it("caps oversized context engine subagent TTLs at the timer-safe ceiling", async () => {

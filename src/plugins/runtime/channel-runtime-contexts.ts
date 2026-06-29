@@ -1,10 +1,11 @@
+// Channel runtime context helpers build plugin runtime context for channel execution.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelRuntimeContextEvent,
   ChannelRuntimeContextKey,
   ChannelRuntimeContextRegistry,
 } from "../../channels/plugins/channel-runtime-surface.types.js";
 import { createSubsystemLogger } from "../../logging.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type StoredRuntimeContext = {
   token: symbol;
@@ -69,6 +70,7 @@ function doesRuntimeContextWatcherMatch(params: {
   return true;
 }
 
+/** Creates the in-memory channel runtime context registry used by plugin runtime surfaces. */
 export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegistry {
   const runtimeContexts = new Map<string, StoredRuntimeContext>();
   const runtimeContextWatchers = new Set<{

@@ -1,3 +1,4 @@
+// Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
@@ -97,8 +98,7 @@ export function resolveLineAccount(params: {
   const accountId = normalizeSharedAccountId(params.accountId ?? resolveDefaultLineAccountId(cfg));
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
-  const accountConfig =
-    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
+  const accountConfig = resolveAccountEntry(accounts, accountId);
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -125,9 +125,9 @@ export function resolveLineAccount(params: {
     ...accountConfig,
   };
 
-  const enabled =
-    accountConfig?.enabled ??
-    (accountId === DEFAULT_ACCOUNT_ID ? (lineConfig?.enabled ?? true) : false);
+  const baseEnabled = lineConfig?.enabled !== false;
+  const accountEnabled = accountConfig?.enabled !== false;
+  const enabled = baseEnabled && accountEnabled;
 
   const name =
     accountConfig?.name ?? (accountId === DEFAULT_ACCOUNT_ID ? lineConfig?.name : undefined);

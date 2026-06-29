@@ -1,3 +1,4 @@
+// Memory Core tests cover search manager plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -139,7 +140,7 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./search-manager.js";
-const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
+const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -147,7 +148,7 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
 function createQmdCfg(
   agentId: string,
-  workspace: string = "/tmp/workspace",
+  workspace = "/tmp/workspace",
   qmd: Record<string, unknown> = {},
 ): OpenClawConfig {
   return {
@@ -325,6 +326,33 @@ describe("getMemorySearchManager caching", () => {
 
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(1);
+    expect(first.debug?.managerCacheState).toBe("cached-full-miss");
+    expect(second.debug?.managerCacheState).toBe("cached-full-hit");
+    expect(first.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
+  });
+
+  it("keeps the cached QMD manager active when the caller cancels a search", async () => {
+    const agentId = "cancelled-search";
+    const cfg = createQmdCfg(agentId);
+    const controller = new AbortController();
+    const abortError = new Error("memory_search timed out after 15s");
+    mockPrimary.search.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+
+    const first = await getMemorySearchManager({ cfg, agentId });
+    const firstManager = requireManager(first);
+    await expect(firstManager.search("hello", { signal: controller.signal })).rejects.toBe(
+      abortError,
+    );
+
+    expect(mockPrimary.close).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    const second = await getMemorySearchManager({ cfg, agentId });
+    expect(second.manager).toBe(first.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
@@ -338,9 +366,11 @@ describe("getMemorySearchManager caching", () => {
       errorMessage: "qmd query failed",
     });
 
-    const fallbackResults = await firstManager.search("hello");
+    const controller = new AbortController();
+    const fallbackResults = await firstManager.search("hello", { signal: controller.signal });
     expect(fallbackResults).toHaveLength(1);
     expect(fallbackResults[0]?.path).toBe("MEMORY.md");
+    expect(fallbackSearch).toHaveBeenCalledWith("hello", { signal: controller.signal });
 
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);
@@ -363,6 +393,30 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).not.toHaveBeenCalled();
     expect(mockMemoryIndexGet).toHaveBeenCalled();
     expect(searchResults).toHaveLength(1);
+  });
+
+  it("returns the qmd startup failure when builtin fallback is unavailable", async () => {
+    const cfg = createQmdCfg("missing-qmd-no-builtin");
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      reason: "binary",
+      error: "spawn qmd ENOENT",
+    });
+    mockMemoryIndexGet.mockRejectedValueOnce(
+      new Error(
+        'Memory search unavailable: embedding provider "openai" is configured but unavailable.',
+      ),
+    );
+
+    const result = await getMemorySearchManager({ cfg, agentId: "missing-qmd-no-builtin" });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toContain("qmd binary unavailable (qmd): spawn qmd ENOENT");
+    expect(result.error).toContain(
+      'builtin fallback unavailable: Memory search unavailable: embedding provider "openai" is configured but unavailable.',
+    );
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
   });
 
   it("treats legacy qmd unavailable results without a reason as binary failures", async () => {
@@ -756,6 +810,10 @@ describe("getMemorySearchManager caching", () => {
     const fullManager = requireManager(full);
     const cliManager = requireManager(cli);
 
+    expect(cli.debug?.managerCacheState).toBe("transient-cli");
+    expect(full.debug?.managerCacheState).toBe("cached-full-miss");
+    expect(full.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(cli.debug?.qmdIdentityHash).toBe(full.debug?.qmdIdentityHash);
     expect(cliManager).toBe(cliPrimary);
     expect(cliManager).not.toBe(fullManager);
     const fullCreateParams = qmdCreateParams();

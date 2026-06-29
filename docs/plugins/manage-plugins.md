@@ -110,6 +110,13 @@ When you pass a plugin id, OpenClaw reuses the tracked install spec. Stored
 dist-tags such as `@beta` and exact pinned versions continue to be used on
 later `update <plugin-id>` runs.
 
+`openclaw plugins update --all` is the bulk maintenance path. It still respects
+ordinary tracked install specs, but trusted official OpenClaw plugin records can
+sync to the current official catalog target instead of staying on a stale exact
+official package. If `update.channel` is set to `beta`, that bulk official sync
+uses the beta-channel context. Use a targeted `update <plugin-id>` when you
+intentionally want to keep an exact or tagged official spec untouched.
+
 For npm installs, you can pass an explicit package spec to switch the tracked
 record:
 
@@ -152,6 +159,10 @@ the install instead.
 | local path  | You are developing or testing a plugin on the same machine                  | `openclaw plugins install --link ./my-plugin`                  |
 | npm pack    | You are proving a local package artifact through npm install semantics      | `openclaw plugins install npm-pack:<path.tgz>`                 |
 | marketplace | You are installing a Claude-compatible marketplace plugin                   | `openclaw plugins install <plugin> --marketplace <source>`     |
+
+Managed local path installs must be plugin directories or archives. Put
+standalone plugin files in `plugins.load.paths` instead of installing them with
+`plugins install`.
 
 ## Publish plugins
 

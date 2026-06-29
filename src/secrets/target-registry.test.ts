@@ -1,3 +1,4 @@
+/** Tests secret target registry matching and docs coverage. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -37,6 +38,19 @@ describe("secret target registry", () => {
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
+  });
+
   it("returns null when no config target path matches", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
@@ -73,6 +87,7 @@ describe("secret target registry", () => {
   it("derives bundled plugin SecretInput contract target paths from plugin manifests", () => {
     const coreTargetIds = new Set(getCoreSecretTargetRegistry().map((entry) => entry.id));
     expect(coreTargetIds.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
+    expect(coreTargetIds.has("plugins.entries.codex.config.appServer.authToken")).toBe(false);
 
     const target = resolveConfigSecretTargetByPath([
       "plugins",
@@ -86,5 +101,30 @@ describe("secret target registry", () => {
     ]);
 
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
+
+    const codexAuthTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "codex",
+      "config",
+      "appServer",
+      "authToken",
+    ]);
+    expect(codexAuthTarget?.entry?.id).toBe(
+      "plugins.entries.codex.config.appServer.authToken",
+    );
+
+    const codexHeaderTarget = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "codex",
+      "config",
+      "appServer",
+      "headers",
+      "x-codex-client-session-token",
+    ]);
+    expect(codexHeaderTarget?.entry?.id).toBe(
+      "plugins.entries.codex.config.appServer.headers.*",
+    );
   });
 });

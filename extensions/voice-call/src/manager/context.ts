@@ -1,4 +1,5 @@
-import type { VoiceCallConfig } from "../config.js";
+// Voice Call plugin module implements context behavior.
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
 
@@ -20,6 +21,7 @@ type CallManagerRuntimeState = {
 type CallManagerRuntimeDeps = {
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
+  coreSession?: VoiceCallCoreSessionConfig;
   storePath: string;
   webhookUrl: string | null;
 };

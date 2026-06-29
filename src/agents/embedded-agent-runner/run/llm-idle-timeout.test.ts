@@ -1,12 +1,18 @@
-import type { AssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+// LLM idle-timeout tests cover timeout selection and stream wrapping for
+// embedded provider calls, including local-provider and cron exceptions.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../../../shared/number-coercion.js";
-import {
-  DEFAULT_LLM_IDLE_TIMEOUT_MS,
-  resolveLlmIdleTimeoutMs,
-  streamWithIdleTimeout,
-} from "./llm-idle-timeout.js";
+import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
+import type { StreamFn } from "../../runtime/index.js";
+import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -36,8 +42,153 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
-  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  it("caps explicit cron run timeouts so stream stalls can reach model fallbacks", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+      CRON_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("uses shorter explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 30_000 })).toBe(30_000);
+  });
+
+  it("honors explicit cron run timeouts for local provider model calls", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it.each([
+    ["ollama", "http://ollama-host:11434"],
+    ["ollama-beelink", "http://ollama-host:11434"],
+    ["lmstudio", "http://lmstudio-box:1234/v1"],
+    ["lmstudio-mac", "http://lmstudio-box:1234/v1"],
+    ["vllm", "http://vllm-rig:8000/v1"],
+    ["sglang", "http://sglang-rig:30000/v1"],
+  ])(
+    "honors explicit cron run timeouts for self-hosted provider %s hostname %s",
+    (provider, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, baseUrl },
+        }),
+      ).toBe(600_000);
+    },
+  );
+
+  it("honors explicit cron run timeouts for explicit local host aliases", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl: "http://host.docker.internal:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors explicit cron run timeouts for custom local provider markers on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          gpu: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: "custom-local",
+            models: [],
+          },
+          "local-ollama": {
+            baseUrl: "http://ollama-box:11434",
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "gpu", baseUrl: "http://gpu-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "local-ollama", baseUrl: "http://ollama-box:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors explicit cron run timeouts for provider-owned local services on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://ds4-box:8000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/opt/ds4/ds4-server",
+              healthUrl: "http://ds4-box:8000/v1/models",
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ds4", baseUrl: "http://ds4-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it.each([
+    ["openai", "openai/gpt-5.5", "http://api:8080/v1"],
+    ["custom-proxy", "custom-proxy/gpt-5.5", "http://gateway:4000/v1"],
+    ["ollama-cloud", "ollama-cloud/kimi-k2.6", "http://ollama-host:11434"],
+  ])(
+    "keeps the cron stall cap for cloud provider %s routed through single-label host %s",
+    (provider, id, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, id, baseUrl },
+        }),
+      ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
+
+  it("keeps the cron stall cap for remote or cloud hostnames", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "openai", id: "openai/gpt-5.5", baseUrl: "https://api.openai.com/v1" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ollama", id: "ollama/gpt-oss:cloud", baseUrl: "http://ollama-host" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
@@ -92,22 +243,70 @@ describe("resolveLlmIdleTimeoutMs", () => {
     );
   });
 
+  it("does not bound explicit run timeout by agents.defaults.timeoutSeconds", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 45 } },
+    } as OpenClawConfig;
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        modelRequestTimeoutMs: 300_000,
+        runTimeoutMs: 180_000,
+      }),
+    ).toBe(180_000);
+  });
+
+  it("honors provider request timeout when run timeout is the NO_TIMEOUT sentinel", () => {
+    // Regression: when `runTimeoutSeconds` is treated as 0, `resolveAgentTimeoutMs`
+    // hands back the max timer sentinel. An explicit per-model idle timeout
+    // must still take effect: "run is unlimited" does not imply "skip
+    // chunk-level hang detection".
+    expect(
+      resolveLlmIdleTimeoutMs({
+        modelRequestTimeoutMs: 180_000,
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(180_000);
+  });
+
+  it("does not bound provider request timeout by agent default when run timeout is no-timeout", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 45 } },
+    } as OpenClawConfig;
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        modelRequestTimeoutMs: 180_000,
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(180_000);
+  });
+
   it("uses provider request timeout for cron model calls", () => {
     expect(resolveLlmIdleTimeoutMs({ trigger: "cron", modelRequestTimeoutMs: 300_000 })).toBe(
       300_000,
     );
   });
 
-  it("disables the default idle timeout for cron when no timeout is configured", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(0);
+  it("uses the default idle timeout for cron cloud model calls when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
 
     const cfg = { agents: { defaults: {} } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("keeps cron local provider model calls opted out of the implicit idle watchdog", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(0);
   });
 
   it.each([
@@ -136,6 +335,8 @@ describe("resolveLlmIdleTimeoutMs", () => {
     "http://[feab:cd::1]:11434",
     "http://[febf::1]:11434",
   ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
+    // Local/self-hosted providers can run much slower than hosted APIs, so the
+    // default idle watchdog is disabled unless an explicit timeout is present.
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
 
@@ -252,8 +453,9 @@ describe("streamWithIdleTimeout", () => {
     vi.useRealTimers();
   });
 
-  // Helper to create a mock async iterable
   function createMockAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
+    // Keep the stream fixture deterministic so timer tests only cover wrapper
+    // behavior, not async generator scheduling.
     return {
       [Symbol.asyncIterator]() {
         let index = 0;
@@ -295,12 +497,12 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ api: "openai", requestTimeoutMs: 1000 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
 
-  it("keeps model request timeouts that are shorter than the idle watchdog", () => {
+  it("preserves explicit model request timeouts", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);
@@ -311,7 +513,7 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ requestTimeoutMs: 250 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
@@ -357,9 +559,11 @@ describe("streamWithIdleTimeout", () => {
     let streamSignal: AbortSignal | undefined;
     const baseFn = vi.fn((_model, _context, options) => {
       streamSignal = options?.signal;
+      // Simulate providers that hang during stream creation but honor abort
+      // once the idle watchdog fires.
       return new Promise<AssistantMessageEventStream>((_resolve, reject) => {
         streamSignal?.addEventListener("abort", () => {
-          reject(streamSignal?.reason);
+          reject(toLintErrorObject(streamSignal?.reason, "Non-Error rejection"));
         });
       });
     });
@@ -427,7 +631,9 @@ describe("streamWithIdleTimeout", () => {
         return {
           async next() {
             if (count < 3) {
-              await new Promise((r) => setTimeout(r, 10)); // 10ms delay
+              await new Promise((r) => {
+                setTimeout(r, 10);
+              }); // 10ms delay
               return { done: false, value: { text: String(count++) } };
             }
             return { done: true, value: undefined };
@@ -460,6 +666,37 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
+  it("treats quarantined provider events as stream activity", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
+      requestSignal = options?.signal;
+      const stream = createAssistantMessageEventStream();
+      setTimeout(() => {
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+      }, 120);
+      return stream;
+    });
+    const wrapped = streamWithIdleTimeout(baseFn, 50);
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AssistantMessageEventStream;
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    await vi.advanceTimersByTimeAsync(120);
+
+    await expect(next).resolves.toEqual({
+      done: false,
+      value: { type: "text_delta", contentIndex: 0, delta: "done" },
+    });
+    await iterator.return?.();
+  });
+
   it("calls timeout hook on idle timeout", async () => {
     vi.useFakeTimers();
     const slowStream = createNeverYieldingStream();
@@ -487,3 +724,19 @@ describe("streamWithIdleTimeout", () => {
     expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  // Abort reasons can be arbitrary values; normalize them into Error objects
+  // so rejection assertions and provider wrappers see a stable shape.
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

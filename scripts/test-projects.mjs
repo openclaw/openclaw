@@ -1,3 +1,5 @@
+// Dispatches Vitest project shards for explicit targets, changed files, or the
+// full local suite.
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { formatMs } from "./lib/check-timing-summary.mjs";
@@ -26,15 +28,18 @@ import {
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
+  formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
+  resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
   shouldRetryVitestNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
+import { forceKillVitestProcessGroup } from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -85,7 +90,7 @@ function runVitestSpec(spec) {
   }
   let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
-    const { child, teardown } = spawnWatchedVitestProcess({
+    const { child, getForwardedSignal, teardown } = spawnWatchedVitestProcess({
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
       label: spec.config,
@@ -101,6 +106,12 @@ function runVitestSpec(spec) {
     child.on("exit", (code, signal) => {
       teardown();
       cleanupVitestRunSpec(spec);
+      const forwardedSignal = getForwardedSignal();
+      if (forwardedSignal) {
+        forceKillVitestProcessGroup(child);
+        resolve({ code: 143, noOutputTimedOut, signal: forwardedSignal });
+        return;
+      }
       resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
     });
 
@@ -167,6 +178,14 @@ function isFullExtensionsProjectRun(specs) {
         fullExtensionProjectConfigs.has(spec.config),
     )
   );
+}
+
+function printNoChangedTestTargets(args, cwd, baseEnv) {
+  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, undefined, { env: baseEnv });
+  const skippedBroadFallbackPaths = plan?.skippedBroadFallbackPaths ?? [];
+  for (const line of formatNoChangedTestTargetLines(skippedBroadFallbackPaths)) {
+    console.error(line);
+  }
 }
 
 async function runVitestSpecsParallel(specs, concurrency) {
@@ -263,7 +282,7 @@ async function main() {
   );
 
   if (runSpecs.length === 0) {
-    console.error("[test] no changed test targets; skipping Vitest.");
+    printNoChangedTestTargets(args, process.cwd(), baseEnv);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
   }
@@ -378,8 +397,10 @@ function printTestSummary(status, shardCount, durationMs, detail) {
   );
 }
 
-main().catch((error) => {
-  releaseLockOnce();
-  console.error(error);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    releaseLockOnce();
+    console.error(error);
+    process.exit(1);
+  },
+);

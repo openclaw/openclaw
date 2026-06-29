@@ -1,12 +1,78 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { resolveGatewayTokenForUrlEdit } from "../storage.ts";
 import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
   shouldShowPairingHint,
 } from "./overview-hints.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("resolveGatewayTokenForUrlEdit", () => {
+  it("preserves the current token for same normalized gateway endpoint edits", () => {
+    expect(
+      resolveGatewayTokenForUrlEdit(
+        "wss://gateway.example/openclaw",
+        " wss://gateway.example/openclaw/ ",
+        "abc123",
+      ),
+    ).toBe("abc123");
+  });
+
+  it("loads a scoped token when the normalized gateway endpoint changes", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    sessionStorage.setItem(
+      "openclaw.control.token.v1:wss://other-gateway.example/openclaw",
+      "other-token",
+    );
+
+    expect(
+      resolveGatewayTokenForUrlEdit(
+        "wss://gateway.example/openclaw",
+        "wss://other-gateway.example/openclaw/",
+        "abc123",
+      ),
+    ).toBe("other-token");
+  });
+
+  it("clears the token when the changed gateway endpoint has no scoped token", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+
+    expect(
+      resolveGatewayTokenForUrlEdit(
+        "wss://gateway.example/openclaw",
+        "wss://other-gateway.example/openclaw",
+        "abc123",
+      ),
+    ).toBe("");
+  });
+
+  it("does not restore legacy durable tokens when the gateway endpoint changes", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://other-gateway.example/openclaw",
+        token: "legacy-durable-token",
+      }),
+    );
+
+    expect(
+      resolveGatewayTokenForUrlEdit(
+        "wss://gateway.example/openclaw",
+        "wss://other-gateway.example/openclaw",
+        "abc123",
+      ),
+    ).toBe("");
+  });
+});
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {

@@ -1,10 +1,11 @@
+// Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
@@ -22,10 +23,12 @@ type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
+// Clone config fragments before patching so mutation preparation never aliases callers.
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** Builds an RFC-7396-style merge patch between source and target config values. */
 export function createMergePatch(base: unknown, target: unknown): unknown {
   if (!isRecord(base) || !isRecord(target)) {
     return cloneUnknown(target);
@@ -77,15 +80,27 @@ export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown)
   return next;
 }
 
-function hasOwnIncludeKey(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$include");
+function hasOwnValidIncludeDirective(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || !Object.hasOwn(value, "$include")) {
+    return false;
+  }
+  const includeValue = value.$include;
+  return (
+    typeof includeValue === "string" ||
+    (Array.isArray(includeValue) && includeValue.every((entry) => typeof entry === "string"))
+  );
 }
 
 function collectIncludeOwnedPaths(value: unknown, path: string[] = []): string[][] {
+  if (Array.isArray(value)) {
+    return value.flatMap((child, index) =>
+      collectIncludeOwnedPaths(child, [...path, String(index)]),
+    );
+  }
   if (!isRecord(value)) {
     return [];
   }
-  if (hasOwnIncludeKey(value)) {
+  if (hasOwnValidIncludeDirective(value)) {
     return [path];
   }
   return Object.entries(value).flatMap(([key, child]) =>
@@ -93,22 +108,88 @@ function collectIncludeOwnedPaths(value: unknown, path: string[] = []): string[]
   );
 }
 
-function patchTouchesPath(patch: unknown, path: string[]): boolean {
-  if (path.length === 0) {
-    return isRecord(patch) ? Object.keys(patch).length > 0 : true;
+function collectMutableSiblingPathsAtInclude(rootAuthoredConfig: unknown, includePath: string[]) {
+  const includeValue = getPathValue(rootAuthoredConfig, includePath);
+  if (!hasOwnValidIncludeDirective(includeValue)) {
+    return [];
   }
-  if (!isRecord(patch)) {
-    return true;
-  }
-  const [head, ...tail] = path;
-  if (!Object.prototype.hasOwnProperty.call(patch, head)) {
-    return false;
-  }
-  return patchTouchesPath(patch[head], tail);
+  return Object.keys(includeValue).flatMap((key) =>
+    key === "$include" || isBlockedObjectKey(key) ? [] : [[...includePath, key]],
+  );
+}
+
+function isMutableSiblingPathAtInclude(
+  rootAuthoredConfig: unknown,
+  includePath: string[],
+  path: string[],
+): boolean {
+  return collectMutableSiblingPathsAtInclude(rootAuthoredConfig, includePath).some(
+    (siblingPath) => {
+      if (!pathStartsWith(path, siblingPath)) {
+        return false;
+      }
+      const nestedIncludePaths = collectIncludeOwnedPaths(
+        getPathValue(rootAuthoredConfig, siblingPath),
+        siblingPath,
+      );
+      return !nestedIncludePaths.some(
+        (nestedIncludePath) =>
+          pathStartsWith(path, nestedIncludePath) || pathStartsWith(nestedIncludePath, path),
+      );
+    },
+  );
 }
 
 function formatConfigPath(path: string[]): string {
   return path.length > 0 ? path.join(".") : "<root>";
+}
+
+function findContainingArrayPath(root: unknown, path: string[]): string[] | undefined {
+  let current = root;
+  const currentPath: string[] = [];
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      return currentPath;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+    currentPath.push(segment);
+  }
+  return undefined;
+}
+
+function hasChangedEquivalentArraySibling(
+  value: unknown,
+  nextValue: unknown,
+  index: number,
+): boolean {
+  if (!Array.isArray(value) || !Array.isArray(nextValue) || index >= value.length) {
+    return false;
+  }
+  return value.some(
+    (item, itemIndex) =>
+      itemIndex !== index &&
+      isDeepStrictEqual(item, value[index]) &&
+      !isDeepStrictEqual(nextValue[itemIndex], item),
+  );
+}
+
+function hasNewEquivalentArraySibling(value: unknown, nextValue: unknown, index: number): boolean {
+  if (!Array.isArray(value) || !Array.isArray(nextValue) || index >= value.length) {
+    return false;
+  }
+  const includedValue = value[index];
+  if (!isDeepStrictEqual(nextValue[index], includedValue)) {
+    return false;
+  }
+  return nextValue.some(
+    (item, itemIndex) =>
+      itemIndex !== index &&
+      isDeepStrictEqual(item, includedValue) &&
+      !isDeepStrictEqual(value[itemIndex], includedValue),
+  );
 }
 
 function getPathValue(value: unknown, path: string[]): unknown {
@@ -166,18 +247,26 @@ function pathOverlapsAny(path: string[], candidates: readonly string[][] | undef
 }
 
 function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolean {
-  return collectIncludeOwnedPaths(rootAuthoredConfig).some(
-    (includePath) => pathStartsWith(path, includePath) || pathStartsWith(includePath, path),
-  );
+  return collectIncludeOwnedPaths(rootAuthoredConfig).some((includePath) => {
+    const overlapsInclude = pathStartsWith(path, includePath) || pathStartsWith(includePath, path);
+    if (!overlapsInclude) {
+      return false;
+    }
+    return !isMutableSiblingPathAtInclude(rootAuthoredConfig, includePath, path);
+  });
 }
 
 function findOverlappingIncludeOwnedPath(
   rootAuthoredConfig: unknown,
   path: string[],
 ): string[] | undefined {
-  return collectIncludeOwnedPaths(rootAuthoredConfig).find(
-    (includePath) => pathStartsWith(path, includePath) || pathStartsWith(includePath, path),
-  );
+  return collectIncludeOwnedPaths(rootAuthoredConfig).find((includePath) => {
+    const overlapsInclude = pathStartsWith(path, includePath) || pathStartsWith(includePath, path);
+    if (!overlapsInclude) {
+      return false;
+    }
+    return !isMutableSiblingPathAtInclude(rootAuthoredConfig, includePath, path);
+  });
 }
 
 function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
@@ -202,11 +291,20 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
 }
 
 function deletePathValue(value: unknown, path: string[]): unknown {
-  if (path.length === 0 || !isRecord(value)) {
+  if (path.length === 0) {
     return value;
   }
   const [head, ...tail] = path;
-  if (!Object.prototype.hasOwnProperty.call(value, head)) {
+  if (Array.isArray(value)) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined || index >= value.length || tail.length === 0) {
+      return value;
+    }
+    const next = [...value];
+    next[index] = deletePathValue(value[index], tail);
+    return next;
+  }
+  if (!isRecord(value) || !Object.hasOwn(value, head)) {
     return value;
   }
   const next: Record<string, unknown> = { ...value };
@@ -259,7 +357,7 @@ function preserveAuthoredAgentParams(params: {
   }
 
   let next = params.persistedCandidate;
-  if (Object.prototype.hasOwnProperty.call(defaults, "params")) {
+  if (Object.hasOwn(defaults, "params")) {
     next = preserveSourceValueAtPath({
       ...params,
       persistedCandidate: next,
@@ -272,8 +370,9 @@ function preserveAuthoredAgentParams(params: {
   if (!isRecord(models)) {
     return next;
   }
+  const nextModels = getPathValue(params.nextConfig, ["agents", "defaults", "models"]);
   for (const [modelId, modelEntry] of Object.entries(models)) {
-    if (!isRecord(modelEntry) || !Object.prototype.hasOwnProperty.call(modelEntry, "params")) {
+    if (!isRecord(modelEntry) || !Object.hasOwn(modelEntry, "params")) {
       continue;
     }
     const modelPath = [
@@ -282,6 +381,14 @@ function preserveAuthoredAgentParams(params: {
       "models",
       normalizeAgentModelRefForConfig(modelId) || modelId,
     ];
+    const normalizedModelId = modelPath.at(-1);
+    if (
+      isRecord(nextModels) &&
+      normalizedModelId &&
+      !Object.hasOwn(nextModels, normalizedModelId)
+    ) {
+      continue;
+    }
     const paramsPath = [...modelPath, "params"];
     if (modelPath.at(-1) !== modelId) {
       next = deletePathValue(next, ["agents", "defaults", "models", modelId]);
@@ -477,23 +584,201 @@ function normalizeModelRefsForWrite(
   );
 }
 
+type IncludeSiblingProjection =
+  | { ok: true; present: false }
+  | { ok: true; present: true; value: unknown }
+  | { ok: false };
+
+function projectRootAuthoredIncludeSibling(params: {
+  authored: unknown;
+  baseline: unknown;
+  next: unknown;
+  baselinePresent: boolean;
+  nextPresent: boolean;
+}): IncludeSiblingProjection {
+  if (
+    params.nextPresent &&
+    params.baselinePresent &&
+    isDeepStrictEqual(params.next, params.baseline)
+  ) {
+    return { ok: true, present: true, value: cloneUnknown(params.authored) };
+  }
+  if (!params.nextPresent) {
+    return collectIncludeOwnedPaths(params.authored).length > 0
+      ? { ok: false }
+      : { ok: true, present: false };
+  }
+  if (!params.baselinePresent) {
+    return { ok: true, present: true, value: cloneUnknown(params.next) };
+  }
+  if (hasOwnValidIncludeDirective(params.authored)) {
+    return { ok: false };
+  }
+  if (Array.isArray(params.authored)) {
+    return Array.isArray(params.next)
+      ? { ok: false }
+      : { ok: true, present: true, value: cloneUnknown(params.next) };
+  }
+  if (!isRecord(params.authored)) {
+    return { ok: true, present: true, value: cloneUnknown(params.next) };
+  }
+  if (!isRecord(params.next)) {
+    return collectIncludeOwnedPaths(params.authored).length > 0
+      ? { ok: false }
+      : { ok: true, present: true, value: cloneUnknown(params.next) };
+  }
+  if (!isRecord(params.baseline)) {
+    return { ok: true, present: true, value: cloneUnknown(params.next) };
+  }
+
+  const value: Record<string, unknown> = cloneUnknown(params.authored);
+  const keys = new Set([
+    ...Object.keys(params.authored),
+    ...Object.keys(params.baseline),
+    ...Object.keys(params.next),
+  ]);
+  for (const key of keys) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    const authoredPresent = Object.hasOwn(params.authored, key);
+    const baselinePresent = Object.hasOwn(params.baseline, key);
+    const nextPresent = Object.hasOwn(params.next, key);
+    if (!authoredPresent) {
+      if (
+        baselinePresent &&
+        nextPresent &&
+        isDeepStrictEqual(params.baseline[key], params.next[key])
+      ) {
+        continue;
+      }
+      if (!nextPresent) {
+        return { ok: false };
+      }
+      if (
+        baselinePresent &&
+        Array.isArray(params.baseline[key]) &&
+        Array.isArray(params.next[key])
+      ) {
+        return { ok: false };
+      }
+    }
+    const projected = projectRootAuthoredIncludeSibling({
+      authored: authoredPresent ? params.authored[key] : {},
+      baseline: params.baseline[key],
+      next: params.next[key],
+      baselinePresent,
+      nextPresent,
+    });
+    if (!projected.ok) {
+      return projected;
+    }
+    if (projected.present) {
+      value[key] = projected.value;
+    } else {
+      delete value[key];
+    }
+  }
+  return { ok: true, present: true, value };
+}
+
 function preserveUntouchedIncludes(params: {
-  patch: unknown;
+  runtimeConfig: unknown;
+  sourceConfig: unknown;
+  nextConfig: unknown;
   rootAuthoredConfig: unknown;
   persistedCandidate: unknown;
 }): unknown {
   let next = params.persistedCandidate;
   for (const includePath of collectIncludeOwnedPaths(params.rootAuthoredConfig)) {
-    if (patchTouchesPath(params.patch, includePath)) {
+    const containingArrayPath = findContainingArrayPath(params.rootAuthoredConfig, includePath);
+    const includeIsArrayEntry =
+      containingArrayPath !== undefined && includePath.length === containingArrayPath.length + 1;
+    // Whole-entry array includes keep their positional ownership while allowing
+    // unrelated sibling edits. Nested array includes require the array unchanged.
+    const comparisonPath = includeIsArrayEntry ? includePath : (containingArrayPath ?? includePath);
+    const mutableSiblingPaths = collectMutableSiblingPathsAtInclude(
+      params.rootAuthoredConfig,
+      includePath,
+    );
+    const relativeMutableSiblingPaths = mutableSiblingPaths.map((path) =>
+      path.slice(comparisonPath.length),
+    );
+    const omitMutableSiblingValues = (value: unknown) =>
+      relativeMutableSiblingPaths.reduce((current, path) => deletePathValue(current, path), value);
+    const nextValue = omitMutableSiblingValues(getPathValue(params.nextConfig, comparisonPath));
+    const sourceValue = omitMutableSiblingValues(getPathValue(params.sourceConfig, comparisonPath));
+    const runtimeValue = omitMutableSiblingValues(
+      getPathValue(params.runtimeConfig, comparisonPath),
+    );
+    if (!isDeepStrictEqual(nextValue, sourceValue) && !isDeepStrictEqual(nextValue, runtimeValue)) {
       throw new Error(
         `Config write would flatten $include-owned config at ${formatConfigPath(
           includePath,
         )}; edit that include file directly or remove the $include first.`,
       );
     }
-    next = setPathValue(next, includePath, getPathValue(params.rootAuthoredConfig, includePath));
+    if (includeIsArrayEntry) {
+      const index = parseArrayIndexPathSegment(includePath.at(-1) ?? "");
+      const nextArray = getPathValue(params.nextConfig, containingArrayPath);
+      const sourceArray = getPathValue(params.sourceConfig, containingArrayPath);
+      const runtimeArray = getPathValue(params.runtimeConfig, containingArrayPath);
+      if (
+        index !== undefined &&
+        (hasChangedEquivalentArraySibling(sourceArray, nextArray, index) ||
+          hasChangedEquivalentArraySibling(runtimeArray, nextArray, index) ||
+          hasNewEquivalentArraySibling(sourceArray, nextArray, index) ||
+          hasNewEquivalentArraySibling(runtimeArray, nextArray, index))
+      ) {
+        throw new Error(
+          `Config write would flatten $include-owned config at ${formatConfigPath(
+            includePath,
+          )}; edit that include file directly or remove the $include first.`,
+        );
+      }
+    }
+    let authoredIncludeValue = getPathValue(params.rootAuthoredConfig, includePath);
+    for (const siblingPath of mutableSiblingPaths) {
+      const relativeSiblingPath = siblingPath.slice(includePath.length);
+      const nextPresent = hasPathValue(params.nextConfig, siblingPath);
+      const projectAgainst = (baselineConfig: unknown) =>
+        projectRootAuthoredIncludeSibling({
+          authored: getPathValue(params.rootAuthoredConfig, siblingPath),
+          baseline: getPathValue(baselineConfig, siblingPath),
+          next: getPathValue(params.nextConfig, siblingPath),
+          baselinePresent: hasPathValue(baselineConfig, siblingPath),
+          nextPresent,
+        });
+      const sourceProjection = projectAgainst(params.sourceConfig);
+      const projection = sourceProjection.ok
+        ? sourceProjection
+        : projectAgainst(params.runtimeConfig);
+      if (!projection.ok) {
+        throw new Error(
+          `Config write would flatten $include-owned config at ${formatConfigPath(
+            includePath,
+          )}; edit that include file directly or remove the $include first.`,
+        );
+      }
+      authoredIncludeValue = projection.present
+        ? setPathValue(authoredIncludeValue, relativeSiblingPath, projection.value)
+        : deletePathValue(authoredIncludeValue, relativeSiblingPath);
+    }
+    next = setPathValue(next, includePath, authoredIncludeValue);
   }
   return next;
+}
+
+export function preserveIncludeOwnedConfigForWrite(params: {
+  runtimeConfig: unknown;
+  sourceConfig: unknown;
+  nextConfig: unknown;
+  rootAuthoredConfig: unknown;
+}): unknown {
+  return preserveUntouchedIncludes({
+    ...params,
+    persistedCandidate: params.nextConfig,
+  });
 }
 
 function hasPathValue(value: unknown, path: readonly string[]): boolean {
@@ -511,7 +796,7 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  if (isBlockedObjectKey(head) || !Object.prototype.hasOwnProperty.call(value, head)) {
+  if (isBlockedObjectKey(head) || !Object.hasOwn(value, head)) {
     return false;
   }
   return tail.length === 0 || hasPathValue(value[head], tail);
@@ -554,7 +839,7 @@ function mergeMissingExplicitValues(
     if (isBlockedObjectKey(key)) {
       continue;
     }
-    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+    if (!Object.hasOwn(next, key)) {
       next[key] = cloneUnknown(childExplicitValue);
       changed = true;
       continue;
@@ -623,7 +908,9 @@ export function resolvePersistCandidateForWrite(params: {
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const persistedBase = preserveUntouchedIncludes({
-    patch,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.sourceConfig,
+    nextConfig: params.nextConfig,
     rootAuthoredConfig,
     persistedCandidate: applyMergePatch(projectedSource, patch),
   });
@@ -656,7 +943,7 @@ function readRootSchemaUri(value: unknown): string | undefined {
 }
 
 function hasOwnRootSchemaKey(value: unknown): boolean {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$schema");
+  return isRecord(value) && Object.hasOwn(value, "$schema");
 }
 
 function preserveRootSchemaUri(params: {
@@ -711,7 +998,7 @@ function isWritePlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
@@ -913,8 +1200,12 @@ export function restoreEnvRefsFromMap(
   path: string,
   envRefMap: Map<string, string>,
   changedPaths: Set<string>,
+  identityRestoredPaths: ReadonlySet<string> = new Set(),
 ): unknown {
   if (typeof value === "string") {
+    if (identityRestoredPaths.has(path)) {
+      return value;
+    }
     if (!isPathChanged(path, changedPaths)) {
       const original = envRefMap.get(path);
       if (original !== undefined) {
@@ -926,7 +1217,13 @@ export function restoreEnvRefsFromMap(
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item, index) => {
-      const updated = restoreEnvRefsFromMap(item, `${path}[${index}]`, envRefMap, changedPaths);
+      const updated = restoreEnvRefsFromMap(
+        item,
+        `${path}[${index}]`,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
       if (updated !== item) {
         changed = true;
       }
@@ -939,7 +1236,13 @@ export function restoreEnvRefsFromMap(
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
-      const updated = restoreEnvRefsFromMap(child, childPath, envRefMap, changedPaths);
+      const updated = restoreEnvRefsFromMap(
+        child,
+        childPath,
+        envRefMap,
+        changedPaths,
+        identityRestoredPaths,
+      );
       if (updated !== child) {
         changed = true;
       }

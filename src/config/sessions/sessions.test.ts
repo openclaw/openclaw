@@ -1,3 +1,4 @@
+// Session config tests cover session creation, updates, and persistence.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +10,7 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
+  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -69,6 +71,16 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("rejects explicit sessionFile paths without derived fallback", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(() =>
+      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
+        sessionsDir,
+      }),
+    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -297,6 +309,42 @@ describe("session lifecycle timestamps", () => {
       });
 
       expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores out-of-range lifecycle timestamps before header fallback", async () => {
+    const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, "legacy-session.jsonl");
+      const headerTimestamp = "2026-04-20T04:30:00.000Z";
+      await fsPromises.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "legacy-session",
+          timestamp: headerTimestamp,
+          cwd: dir,
+        })}\n`,
+        "utf8",
+      );
+
+      const timestamps = resolveSessionLifecycleTimestamps({
+        storePath,
+        entry: {
+          sessionId: "legacy-session",
+          sessionFile,
+          sessionStartedAt: Number.MAX_SAFE_INTEGER,
+          lastInteractionAt: Number.MAX_SAFE_INTEGER,
+          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+        },
+      });
+
+      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      expect(timestamps.lastInteractionAt).toBeUndefined();
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
@@ -861,6 +909,60 @@ describe("session store writer queue", () => {
     expect(merged.modelProvider).toBeUndefined();
   });
 
+  it("rewrites generated sessionFile paths when session id changes", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: `/tmp/openclaw/sessions/${previousSessionId}.jsonl`,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}.jsonl`);
+  });
+
+  it("rewrites stale generated sessionFile patches during session rollover", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const previousSessionFile = `/tmp/openclaw/sessions/${previousSessionId}-topic-456.jsonl`;
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: previousSessionFile,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+        sessionFile: previousSessionFile,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}-topic-456.jsonl`);
+  });
+
+  it("preserves custom sessionFile paths when session id changes", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "previous-session",
+        updatedAt: 100,
+        sessionFile: "/tmp/openclaw/sessions/custom-transcript.jsonl",
+      },
+      {
+        sessionId: "next-session",
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
+  });
+
   it("caps future updatedAt values at the session merge boundary", () => {
     const now = 1_000;
     const merged = mergeSessionEntryWithPolicy(
@@ -911,7 +1013,7 @@ describe("session store writer queue", () => {
     expect(store[key]?.model).toBeUndefined();
   });
 
-  it("preserves ACP metadata when replacing a session entry wholesale", async () => {
+  it("does not preserve legacy ACP metadata when replacing a session entry wholesale", async () => {
     const key = "agent:codex:acp:binding:discord:default:feedface";
     const acp = {
       backend: "acpx",
@@ -933,18 +1035,18 @@ describe("session store writer queue", () => {
       store[key] = {
         sessionId: "sess-acp",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
       };
     });
 
     const store = loadSessionStore(storePath);
-    expect(store[key]?.acp).toEqual(acp);
-    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.acp).toBeUndefined();
+    expect(store[key]?.modelProvider).toBe("openai");
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 
-  it("allows explicit ACP metadata removal through the ACP session helper", async () => {
+  it("removes legacy ACP metadata when the SQLite metadata row is cleared", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
     const { storePath } = await makeTmpStore({
       [key]: {

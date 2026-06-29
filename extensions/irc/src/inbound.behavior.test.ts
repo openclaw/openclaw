@@ -1,3 +1,4 @@
+// Irc tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
@@ -133,7 +134,6 @@ describe("irc inbound behavior", () => {
         "```",
         "",
         "Ask the bot owner to approve with:",
-        "openclaw pairing approve irc CODE",
         "```",
         "openclaw pairing approve irc CODE",
         "```",

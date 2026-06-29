@@ -1,3 +1,4 @@
+// Protocol Gen script supports OpenClaw repository automation.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,7 +46,7 @@ async function main() {
   await writeJsonSchema();
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });

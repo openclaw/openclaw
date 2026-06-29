@@ -1,3 +1,4 @@
+// Tests pending final delivery records and deferred message-tool send behavior.
 import { describe, expect, it } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -24,6 +25,7 @@ describe("sanitizePendingFinalDeliveryText", () => {
 
   it("drops silent reply sentinel payloads", () => {
     expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("");
+    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("");
     expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("");
   });
 

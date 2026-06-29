@@ -1,3 +1,4 @@
+/** Exercises runtime capability-provider loading from manifest-backed plugin contracts. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -554,7 +555,7 @@ describe("resolvePluginCapabilityProviders", () => {
     {
       key: "speechProviders" as const,
       contracts: { speechProviders: ["openai"] },
-      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+      seedLoadedProvider: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
         registry.speechProviders.push({
           pluginId: "openai",
           pluginName: "OpenAI",
@@ -576,7 +577,7 @@ describe("resolvePluginCapabilityProviders", () => {
     {
       key: "realtimeTranscriptionProviders" as const,
       contracts: { realtimeTranscriptionProviders: ["openai"] },
-      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+      seedLoadedProvider: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
         registry.realtimeTranscriptionProviders.push({
           pluginId: "openai",
           pluginName: "OpenAI",
@@ -598,7 +599,7 @@ describe("resolvePluginCapabilityProviders", () => {
     {
       key: "realtimeVoiceProviders" as const,
       contracts: { realtimeVoiceProviders: ["openai"] },
-      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+      seedLoadedProvider: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
         registry.realtimeVoiceProviders.push({
           pluginId: "openai",
           pluginName: "OpenAI",
@@ -714,7 +715,7 @@ describe("resolvePluginCapabilityProviders", () => {
   it.each([
     {
       key: "realtimeTranscriptionProviders" as const,
-      seedLoadedProviders(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+      seedLoadedProviders: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
         registry.realtimeTranscriptionProviders.push(
           {
             pluginId: "openai",
@@ -733,7 +734,7 @@ describe("resolvePluginCapabilityProviders", () => {
     },
     {
       key: "realtimeVoiceProviders" as const,
-      seedLoadedProviders(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+      seedLoadedProviders: (registry: ReturnType<typeof createEmptyPluginRegistry>) => {
         registry.realtimeVoiceProviders.push(
           {
             pluginId: "openai",

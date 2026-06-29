@@ -1,17 +1,12 @@
 package ai.openclaw.app
 
+/** Normalizes blank gateway session keys to the legacy main session alias. */
 internal fun normalizeMainKey(raw: String?): String {
   val trimmed = raw?.trim()
   return if (!trimmed.isNullOrEmpty()) trimmed else "main"
 }
 
-internal fun isCanonicalMainSessionKey(raw: String?): Boolean {
-  val trimmed = raw?.trim().orEmpty()
-  if (trimmed.isEmpty()) return false
-  if (trimmed == "global") return true
-  return trimmed.startsWith("agent:")
-}
-
+/** Extracts the agent id from canonical agent-scoped main session keys. */
 internal fun resolveAgentIdFromMainSessionKey(raw: String?): String? {
   val trimmed = raw?.trim().orEmpty()
   if (!trimmed.startsWith("agent:")) return null
@@ -22,6 +17,7 @@ internal fun resolveAgentIdFromMainSessionKey(raw: String?): String? {
     .ifEmpty { null }
 }
 
+/** Builds the node session key shape consumed by gateway chat and presence APIs. */
 internal fun buildNodeMainSessionKey(
   deviceId: String,
   agentId: String?,

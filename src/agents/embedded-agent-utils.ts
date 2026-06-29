@@ -1,3 +1,8 @@
+/**
+ * Embedded-agent message text utilities.
+ * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
+ * and compact tool metadata for channel delivery and transcript replay.
+ */
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
@@ -5,7 +10,10 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
+import {
+  sanitizeAssistantFinalAnswerText,
+  sanitizeAssistantVisibleText,
+} from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -17,6 +25,7 @@ export {
 } from "../shared/text/assistant-visible-text.js";
 export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
 
+/** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
@@ -30,8 +39,18 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
-function sanitizeAssistantText(text: string): string {
-  return sanitizeAssistantVisibleText(text);
+function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
+  return phase === "final_answer"
+    ? sanitizeAssistantFinalAnswerText(text)
+    : sanitizeAssistantVisibleText(text);
+}
+
+function isAssistantTextContentBlockType(value: unknown): boolean {
+  return value === "text" || value === "input_text" || value === "output_text";
+}
+
+export function sanitizeAssistantVisibleStreamText(text: string): string {
+  return sanitizeUserFacingText(sanitizeAssistantText(text), { errorContext: false });
 }
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
@@ -47,6 +66,7 @@ type AssistantTextExtractionResult = {
 function extractAssistantTextForPhase(
   msg: AssistantMessage,
   phase?: AssistantPhase,
+  options?: { unphasedSignedFinalAnswer?: boolean },
 ): AssistantTextExtractionResult {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
@@ -60,7 +80,7 @@ function extractAssistantTextForPhase(
     const hadRequestedPhase = phase ? messagePhase === phase : messagePhase === undefined;
     return {
       text: shouldIncludeContent(messagePhase)
-        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
+        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content, messagePhase))
         : "",
       hadRequestedPhase,
     };
@@ -75,37 +95,37 @@ function extractAssistantTextForPhase(
       return false;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
+    if (!isAssistantTextContentBlockType(record.type)) {
       return false;
     }
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
   });
 
   let hadRequestedPhase = false;
-  const extracted =
-    extractTextFromChatContent(
-      msg.content.filter((block) => {
-        if (!block || typeof block !== "object") {
-          return false;
-        }
-        const record = block as { type?: unknown; textSignature?: unknown };
-        if (record.type !== "text") {
-          return false;
-        }
-        const signature = parseAssistantTextSignature(record.textSignature);
-        const resolvedPhase =
-          signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
-        if (phase ? resolvedPhase === phase : resolvedPhase === undefined) {
-          hadRequestedPhase = true;
-        }
-        return shouldIncludeContent(resolvedPhase);
-      }),
-      {
-        sanitizeText: (text) => sanitizeAssistantText(text),
-        joinWith: "\n",
-        normalizeText: (text) => text.trim(),
-      },
-    ) ?? "";
+  const parts = msg.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return null;
+      }
+      const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+      if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
+        return null;
+      }
+      const signature = parseAssistantTextSignature(record.textSignature);
+      const resolvedPhase =
+        signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+      if (!shouldIncludeContent(resolvedPhase)) {
+        return null;
+      }
+      hadRequestedPhase = true;
+      const sanitizerPhase =
+        resolvedPhase ??
+        (options?.unphasedSignedFinalAnswer === true && signature?.id ? "final_answer" : undefined);
+      const text = sanitizeAssistantText(record.text, sanitizerPhase);
+      return text.trim() ? text : null;
+    })
+    .filter((value): value is string => typeof value === "string");
+  const extracted = parts.join("\n").trim();
 
   return {
     text: finalizeAssistantExtraction(msg, extracted),
@@ -113,15 +133,17 @@ function extractAssistantTextForPhase(
   };
 }
 
+/** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
   const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
   if (finalAnswerExtraction.hadRequestedPhase) {
     return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
   }
 
-  return extractAssistantTextForPhase(msg).text;
+  return extractAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true }).text;
 }
 
+/** Extract sanitized assistant text across all text content blocks. */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -136,6 +158,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return finalizeAssistantExtraction(msg, extracted);
 }
 
+/** Extract native thinking block text or a placeholder when only signed reasoning exists. */
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";
@@ -161,6 +184,7 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
+/** Format reasoning text for markdown-friendly channel surfaces. */
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -181,7 +205,7 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)`;
+const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
 const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
@@ -195,11 +219,13 @@ const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
+/** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
 
+/** Split text that starts with thinking tags into structured thinking/text blocks. */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
@@ -264,6 +290,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   return blocks;
 }
 
+/** Promote inline thinking-tag text blocks into native thinking blocks in place. */
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
@@ -311,6 +338,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   message.content = next;
 }
 
+/** Extract closed thinking-tag content from a complete text payload. */
 export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
@@ -330,6 +358,7 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
+/** Extract thinking-tag content from a possibly incomplete streaming payload. */
 export function extractThinkingFromTaggedStream(text: string): string {
   if (!text) {
     return "";
@@ -353,6 +382,7 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
+/** Infer compact display metadata for a tool call from its args. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,

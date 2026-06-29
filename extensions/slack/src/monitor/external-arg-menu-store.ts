@@ -1,3 +1,4 @@
+// Slack plugin module implements external arg menu store behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -39,7 +40,7 @@ function pruneSlackExternalArgMenuStore(
 }
 
 function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenuEntry>): string {
-  let token = "";
+  let token;
   do {
     token = generateSecureToken(SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES);
   } while (store.has(token));

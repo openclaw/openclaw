@@ -1,15 +1,21 @@
+// Coordinates gateway lock files, ports, and stale owner detection.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import {
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { resolveTimestampMsToIsoString } from "../shared/number-coercion.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -74,32 +80,8 @@ function readLinuxCmdline(pid: number): string[] | null {
 
 const CMDLINE_EXEC_TIMEOUT_MS = 1000;
 
-/**
- * Read the command line of a Windows process via `wmic`.
- * Returns an argv-style array, or null when the lookup fails (process gone,
- * `wmic` missing/deprecated, timeout, etc.).
- */
 function readWindowsCmdline(pid: number): string[] | null {
-  try {
-    // Omit `encoding` so execFileSync returns a Buffer — wmic emits UTF-16LE
-    // (with BOM) on most Windows 10/11 builds, which would be garbled as UTF-8.
-    const buf = execFileSync(
-      "wmic",
-      ["process", "where", `processid=${pid}`, "get", "CommandLine", "/value"],
-      { timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-    ) as Buffer;
-    const raw =
-      buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe
-        ? buf.toString("utf16le")
-        : buf.toString("utf8");
-    const match = raw.match(/CommandLine=(.+)/);
-    if (!match) {
-      return null;
-    }
-    return parseWindowsCmdline(match[1].trim());
-  } catch {
-    return null;
-  }
+  return readWindowsProcessArgsSync(pid, CMDLINE_EXEC_TIMEOUT_MS);
 }
 
 /**
@@ -256,14 +238,21 @@ export async function acquireGatewayLock(
     return null;
   }
 
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS, 0);
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(
+    opts.pollIntervalMs,
+    DEFAULT_POLL_INTERVAL_MS,
+  );
+  const staleMs = resolveTimerTimeoutMs(opts.staleMs, DEFAULT_STALE_MS, 0);
   const platform = opts.platform ?? process.platform;
   const port = opts.port;
   const now = opts.now ?? Date.now;
   const sleep =
-    opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+    opts.sleep ??
+    (async (ms: number) =>
+      await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const { lockPath, configPath } = resolveGatewayLockPath(env, opts.lockDir);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
@@ -336,7 +325,11 @@ export async function acquireGatewayLock(
         }
       }
 
-      await sleep(pollIntervalMs);
+      const remainingMs = timeoutMs - (now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(pollIntervalMs, remainingMs));
     }
   }
 

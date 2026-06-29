@@ -1,14 +1,26 @@
+// Managed proxy tests cover proxy server lifecycle with managed capture files.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DebugProxySettings } from "./env.js";
 import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
+import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestDirs(): Promise<void> {
+  closeDebugProxyCaptureStore();
+  closeOpenClawStateDatabaseForTest();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   if (!testRoot) {
     return;
   }
@@ -17,16 +29,17 @@ async function cleanupTestDirs(): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
-async function makeSettings() {
+async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   const certDir = join(testRoot, "certs");
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+  process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
-    dbPath: ":memory:",
+    dbPath: join(testRoot, "capture.sqlite"),
     blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",
@@ -40,14 +53,16 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
     socket.connect(Number(target.port), target.hostname, resolve);
   });
   socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -59,14 +74,16 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(`GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -77,14 +94,16 @@ async function requestRawThroughProxy(proxyUrl: string, request: string): Promis
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(request);
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }

@@ -1,3 +1,4 @@
+// Daemon status print tests cover user-facing service status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -11,6 +12,9 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+const isWSLEnvMock = vi.hoisted(() =>
+  vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
+);
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -54,7 +58,7 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
-  isWSLEnv: () => false,
+  isWSLEnv: isWSLEnvMock,
 }));
 
 vi.mock("./shared.js", () => ({
@@ -92,6 +96,7 @@ describe("printDaemonStatus", () => {
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
+    isWSLEnvMock.mockClear();
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -178,6 +183,50 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "protocol mismatch after rollback");
   });
 
+  it("uses service command env for WSL systemd unavailable hints", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["wsl hint"]);
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "unknown",
+              detail: "System has not been booted with systemd as init system",
+            },
+            command: {
+              programArguments: [],
+              environment: { WSL_DISTRO_NAME: "Ubuntu" },
+            },
+          },
+          rpc: {
+            ok: false,
+            error: "unavailable",
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expect(isWSLEnvMock).toHaveBeenCalledWith({ WSL_DISTRO_NAME: "Ubuntu" });
+    expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
+      wsl: true,
+      kind: "generic_unavailable",
+      container: false,
+    });
+    expectMockLineContains(runtime.error, "wsl hint");
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {
@@ -191,6 +240,10 @@ describe("printDaemonStatus", () => {
             {
               label: "ai.openclaw.update.2026.5.12",
               lastExitStatus: 127,
+            },
+            {
+              label: "ai.openclaw.manual-update.1717168800",
+              lastExitStatus: 0,
             },
           ],
         },
@@ -208,6 +261,7 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
     expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
+    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
     expectMockLineContains(runtime.error, "launchctl remove <label>");
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
@@ -250,6 +304,31 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
     expectMockLineContains(runtime.error, "Errors: suppressed");
+  });
+
+  it("prints GUI-session wording before generic missing-supervision wording", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: false,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: {
+            status: "unknown",
+            missingSupervision: true,
+            missingGuiSession: true,
+            detail: "Bootstrap failed: 125: Domain does not support specified action",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "macOS has no usable GUI session");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("launchd has no loaded job");
   });
 
   it("prints probe kind and capability separately", () => {
@@ -510,6 +589,104 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("prints a terse plugin drift warning outside deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.5.4",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.3",
+              gatewayVersion: "2026.5.4",
+              source: "npm",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: false },
+    );
+
+    expectMockLineContains(runtime.log, "Plugin version drift: 1 active official plugin");
+    expectMockLineContains(runtime.log, "openclaw gateway status --deep");
+    expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain("whatsapp:");
+  });
+
+  it("prints detailed plugin drift entries in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.5.4",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.3",
+              gatewayVersion: "2026.5.4",
+              source: "clawhub",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
+    expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
+  it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.10-beta.1",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.6.9",
+              gatewayVersion: "2026.6.10-beta.1",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.6.9",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- brave: 2026.6.9 (npm)");
+    expectMockLineContains(
+      runtime.log,
+      "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
+    );
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 
   it("does not print systemd user-service hints when a gateway responds", () => {

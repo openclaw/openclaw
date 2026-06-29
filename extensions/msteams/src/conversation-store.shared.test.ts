@@ -1,24 +1,68 @@
+// Msteams tests cover conversation store.shared plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
-import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import type {
+  MSTeamsConversationStore,
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference,
+} from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
-import { msteamsRuntimeStub } from "./test-runtime.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 type StoreFactory = {
   name: string;
   createStore: () => Promise<MSTeamsConversationStore>;
 };
 
+function createMemoryConversationStore(
+  initial: MSTeamsConversationStoreEntry[] = [],
+): MSTeamsConversationStore {
+  const map = new Map<string, StoredConversationReference>();
+  for (const { conversationId, reference } of initial) {
+    map.set(normalizeStoredConversationId(conversationId), reference);
+  }
+
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> =>
+    findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
+
+  return {
+    upsert: async (conversationId, reference) => {
+      const normalizedId = normalizeStoredConversationId(conversationId);
+      map.set(
+        normalizedId,
+        mergeStoredConversationReference(
+          map.get(normalizedId),
+          reference,
+          new Date().toISOString(),
+        ),
+      );
+    },
+    get: async (conversationId) => map.get(normalizeStoredConversationId(conversationId)) ?? null,
+    list: async () => toConversationStoreEntries(map.entries()),
+    remove: async (conversationId) => map.delete(normalizeStoredConversationId(conversationId)),
+    findPreferredDmByUserId,
+    findByUserId: findPreferredDmByUserId,
+  };
+}
+
 const storeFactories: StoreFactory[] = [
   {
-    name: "fs",
+    name: "state",
     createStore: async () => {
       const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
-      return createMSTeamsConversationStoreFs({
+      return createMSTeamsConversationStoreState({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         ttlMs: 60_000,
       });
@@ -26,12 +70,13 @@ const storeFactories: StoreFactory[] = [
   },
   {
     name: "memory",
-    createStore: async () => createMSTeamsConversationStoreMemory(),
+    createStore: async () => createMemoryConversationStore(),
   },
 ];
 
 describe.each(storeFactories)("msteams conversation store ($name)", ({ createStore }) => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 

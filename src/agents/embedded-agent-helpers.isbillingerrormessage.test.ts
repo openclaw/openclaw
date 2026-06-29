@@ -1,5 +1,7 @@
+// Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
 import {
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
@@ -56,12 +58,15 @@ function expectMessageMatches(
   samples: readonly string[],
   expected: boolean,
 ) {
+  // Keep table cases terse while still showing the sample that failed.
   for (const sample of samples) {
     expect(matcher(sample), sample).toBe(expected);
   }
 }
 
 function expectTimeoutFailoverSamples(samples: readonly string[]) {
+  // Timeout samples must agree across the raw matcher, failover classifier, and
+  // broader failover predicate.
   for (const sample of samples) {
     expect(isTimeoutErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -186,7 +191,7 @@ describe("isBillingErrorMessage", () => {
   });
 
   it("does not false-positive on long assistant responses mentioning billing keywords", () => {
-    // Simulate a multi-paragraph assistant response that mentions billing terms
+    // Simulate a multi-paragraph assistant response that mentions billing terms.
     const longResponse =
       "Sure! Here's how to set up billing for your SaaS application.\n\n" +
       "## Payment Integration\n\n" +
@@ -219,6 +224,8 @@ describe("isBillingErrorMessage", () => {
     expect(classifyFailoverReason(msg)).toBe("billing");
   });
   it("matches provider spending-limit exhaustion messages", () => {
+    // Provider wording often omits HTTP 402 while still describing a billing
+    // exhaustion state that should route to billing copy/failover.
     const msg =
       "Your team has either used all available credits or reached its monthly spending limit.";
     expect(isBillingErrorMessage(msg)).toBe(true);
@@ -301,6 +308,7 @@ describe("isCloudflareOrHtmlErrorPage", () => {
   });
 
   it("detects standalone Cloudflare challenge HTML pages", () => {
+    // HTML challenge pages are provider transport failures, not model text.
     const htmlError = `<!DOCTYPE html>
 <html lang="en-US">
   <head><title>Just a moment...</title></head>
@@ -428,7 +436,7 @@ describe("isContextOverflowError", () => {
   });
 
   it("ignores normal conversation text mentioning context overflow", () => {
-    // These are legitimate conversation snippets, not error messages
+    // These are legitimate conversation snippets, not error messages.
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
@@ -990,7 +998,7 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
-  it("matches shared model runtime openai-codex bare transport failures as timeout (#69368)", () => {
+  it("matches shared model runtime openai bare transport failures as timeout (#69368)", () => {
     expectTimeoutFailoverSamples([
       "Request failed",
       "request failed",
@@ -1027,6 +1035,66 @@ describe("image dimension errors", () => {
       raw,
     });
     expect(isImageDimensionErrorMessage(raw)).toBe(true);
+  });
+});
+
+describe("classifyAssistantFailoverReason", () => {
+  const opencodeGoStalledStreamError = {
+    role: "assistant" as const,
+    api: "openai-completions" as const,
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    content: [],
+    timestamp: 0,
+  };
+
+  it("classifies opencode-go provider-owned stalled streams as timeout", () => {
+    expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
+  });
+
+  it("does not classify caller-aborted assistant messages as provider failover", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        stopReason: "aborted",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses structured assistant error bodies for model-not-found 400s", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openai",
+        model: "some-model-id",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+        errorBody:
+          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+        content: [],
+        timestamp: 0,
+      }),
+    ).toBe("model_not_found");
   });
 });
 
@@ -1428,7 +1496,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
       }),
@@ -1438,27 +1506,27 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies raw missing scope payloads without an HTTP prefix", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"},"code":401}',
       }),
     ).toBe("auth_scope");
   });
 
-  it("does not classify non-Codex permission errors as missing scope failures", () => {
+  it("does not classify other provider permission errors as OpenAI scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai",
+        provider: "anthropic",
         message:
           '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
       }),
     ).not.toBe("auth_scope");
   });
 
-  it("does not treat generic Codex permission failures as missing scope failures", () => {
+  it("does not treat generic OpenAI permission failures as missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai-codex",
+        provider: "openai",
         message:
           '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
       }),
@@ -1467,21 +1535,21 @@ describe("classifyProviderRuntimeFailureKind", () => {
 
   it("classifies OAuth refresh failures", () => {
     const refreshFailures = [
-      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
       "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
       "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
     ];
     for (const message of refreshFailures) {
       expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
-      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+      expect(classifyFailoverReason(message, { provider: "openai" })).toBe("auth_permanent");
     }
   });
 
   it("does not make uncertain OAuth refresh wrappers terminal", () => {
     const message =
-      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+      "OAuth token refresh failed for openai: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
     expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
-    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+    expect(classifyFailoverReason(message, { provider: "openai" })).toBe("auth");
   });
 
   it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
@@ -1492,14 +1560,14 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ];
     for (const message of entitlementMessages) {
       expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
-      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+      expect(classifyFailoverReason(message, { provider: "openai" })).toBe("rate_limit");
     }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
     expect(
       classifyProviderRuntimeFailureKind(
-        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
       ),
     ).toBe("refresh_timeout");
     expect(
@@ -1509,12 +1577,12 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind({
         code: "refresh_contention",
         message:
-          "OAuth token refresh failed for openai-codex: OAuth refresh failed (refresh_contention): another process is already refreshing openai-codex for openai-codex:default. Please wait for the in-flight refresh to finish and retry.",
+          "OAuth token refresh failed for openai: OAuth refresh failed (refresh_contention): another process is already refreshing openai for openai:default. Please wait for the in-flight refresh to finish and retry.",
       }),
     ).toBe("refresh_contention");
     expect(
       classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
+        "OAuth token refresh failed for openai: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
       ),
     ).toBe("auth_refresh");
   });
@@ -1561,6 +1629,25 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("classifies expired Anthropic thinking signatures as replay invalid", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.440: Invalid `signature` in `thinking` block"}}',
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: invalid signature on thinking block",
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: signature present in thinking block",
+      ),
+    ).not.toBe("replay_invalid");
+    expect(classifyProviderRuntimeFailureKind("Invalid signature")).not.toBe("replay_invalid");
   });
 
   it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {

@@ -1,3 +1,4 @@
+// Sync Labels script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -132,8 +133,8 @@ function resolveRepo(): string {
   throw new Error(`Unsupported GitHub remote: ${remote}`);
 }
 
-function fetchExistingLabels(repo: string): Map<string, RepoLabel> {
-  const raw = execFileSync("gh", ["api", `repos/${repo}/labels?per_page=100`, "--paginate"], {
+function fetchExistingLabels(repoLocal: string): Map<string, RepoLabel> {
+  const raw = execFileSync("gh", ["api", `repos/${repoLocal}/labels?per_page=100`, "--paginate"], {
     encoding: "utf8",
   });
   const labels = JSON.parse(raw) as RepoLabel[];

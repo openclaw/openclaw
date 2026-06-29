@@ -1,3 +1,9 @@
+/**
+ * Session suspension and lane auto-resume helpers.
+ *
+ * Records quota/manual/circuit suspensions and temporarily lowers command-lane concurrency.
+ */
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
@@ -5,6 +11,10 @@ import { applySessionStoreEntryPatch } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "../shared/number-coercion.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
@@ -14,8 +24,26 @@ const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
 export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const deferredSessionSuspension = new AsyncLocalStorage<{
+  claimed: boolean;
+  onDeferred?: (params: SessionSuspensionParams) => void;
+}>();
 
 export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+export type SessionSuspensionTarget =
+  | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
+  | { mode: "suspend" };
+export type SessionSuspensionParams = {
+  cfg: OpenClawConfig | undefined;
+  agentDir?: string;
+  sessionId: string;
+  laneId?: string;
+  reason: SessionSuspensionReason;
+  failedProvider: string;
+  failedModel: string;
+  summary?: string;
+  ttlMs?: number;
+};
 
 function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
   switch (laneId) {
@@ -41,6 +69,24 @@ export function resolveSessionSuspensionReason(reason: FailoverReason): SessionS
   return "circuit_open";
 }
 
+export function runWithDeferredSessionSuspension<T>(
+  run: () => Promise<T>,
+  onDeferred?: (params: SessionSuspensionParams) => void,
+): Promise<T> {
+  return deferredSessionSuspension.run({ claimed: false, onDeferred }, run);
+}
+
+export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
+  const scope = deferredSessionSuspension.getStore();
+  if (!scope || scope.claimed) {
+    return { mode: "suspend" };
+  }
+  // One candidate callback may launch nested direct embedded runs. Only its
+  // first embedded run inherits the outer fallback's remaining-candidate fact.
+  scope.claimed = true;
+  return { mode: "defer", defer: (params) => scope.onDeferred?.(params) };
+}
+
 function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
   const existing = laneResumeTimers.get(laneId);
   if (existing) {
@@ -61,25 +107,7 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   laneResumeTimers.set(laneId, timer);
 }
 
-export function cancelLaneAutoResume(laneId: string) {
-  const existing = laneResumeTimers.get(laneId);
-  if (existing) {
-    clearTimeout(existing);
-    laneResumeTimers.delete(laneId);
-  }
-}
-
-export async function suspendSession(params: {
-  cfg: OpenClawConfig | undefined;
-  agentDir?: string;
-  sessionId: string;
-  laneId?: string;
-  reason: SessionSuspensionReason;
-  failedProvider: string;
-  failedModel: string;
-  summary?: string;
-  ttlMs?: number;
-}) {
+export async function suspendSession(params: SessionSuspensionParams) {
   if (!params.cfg) {
     return;
   }
@@ -94,8 +122,9 @@ export async function suspendSession(params: {
     return;
   }
 
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_RESUME_MS;
+  const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
+  const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
 
   try {
     await applySessionStoreEntryPatch({
@@ -112,7 +141,7 @@ export async function suspendSession(params: {
           failedModel: params.failedModel,
           summary: params.summary,
           laneId: params.laneId,
-          expectedResumeBy: now + ttlMs,
+          expectedResumeBy,
           state: "suspended",
         },
       },

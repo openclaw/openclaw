@@ -54,16 +54,16 @@ Legend:
 
 ### Media delivery with block streaming
 
-`MEDIA:` directives are normal delivery metadata. When block streaming sends a
-media block early, OpenClaw remembers that delivery for the turn. If the final
-assistant payload repeats the same media URL, the final delivery strips the
-duplicate media instead of sending the attachment again.
+Streaming media must use structured payload fields such as `mediaUrl` or
+`mediaUrls`; streamed text is not parsed as an attachment command. When block
+streaming sends media early, OpenClaw remembers that delivery for the turn. If
+the final assistant payload repeats the same media URL, the final delivery
+strips the duplicate media instead of sending the attachment again.
 
 Exact duplicate final payloads are suppressed. If the final payload adds
 distinct text around media that was already streamed, OpenClaw still sends the
 new text while keeping the media single-delivery. This prevents duplicate voice
-notes or files on channels such as Telegram when an agent emits `MEDIA:` during
-streaming and the provider also includes it in the completed reply.
+notes or files on channels such as Telegram.
 
 ## Chunking algorithm (low/high bounds)
 
@@ -160,8 +160,10 @@ Legacy key migration:
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
+- Short initial previews are still debounced for push-notification UX, but Telegram now materializes them after a bounded delay so active runs do not stay visually silent.
 - Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
-- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- `block` mode rotates the preview into a new message at `streaming.preview.chunk.maxChars` (default 800, capped at Telegram's 4096 edit limit); other modes grow one preview up to 4096 characters.
+- `progress` mode keeps tool progress in an editable status draft, materializes the status label when answer streaming is active but no tool line is available yet, clears that draft at completion, and sends the final answer through normal delivery.
 - If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.

@@ -1,5 +1,6 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -26,11 +27,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
 
+/**
+ * UI transcript role emitted by microphone capture and assistant streaming.
+ */
 enum class VoiceConversationRole {
   User,
   Assistant,
 }
 
+/** UI transcript entry retained for recent voice turns. */
 data class VoiceConversationEntry(
   val id: String,
   val role: VoiceConversationRole,
@@ -38,7 +43,8 @@ data class VoiceConversationEntry(
   val isStreaming: Boolean = false,
 )
 
-class MicCaptureManager(
+/** Coordinates live mic transcription, queued sends, and assistant audio replies. */
+internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val createTranscriptionSession: suspend () -> String,
@@ -49,11 +55,12 @@ class MicCaptureManager(
   ) -> Unit,
   private val closeTranscriptionSession: suspend (sessionId: String) -> Unit,
   /**
-   * Send [message] to the gateway and return the run ID.
+   * Send [message] to the gateway and return the full chat.send ACK.
    * [onRunIdKnown] is called with the idempotency key *before* the network
    * round-trip so [pendingRunId] is set before any chat events can arrive.
    */
-  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> String?,
+  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> ChatSendAck,
+  private val refreshAfterTerminalSuccess: suspend () -> Unit = {},
   private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
@@ -99,6 +106,8 @@ class MicCaptureManager(
   private val messageQueue = ArrayDeque<String>()
   private val messageQueueLock = Any()
   private var flushedPartialTranscript: String? = null
+
+  // Correlates chat events with the idempotency key generated before sendChat returns.
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
   private var gatewayConnected = false
@@ -146,6 +155,7 @@ class MicCaptureManager(
       messageQueue.size
     }
 
+  /** Toggles manual microphone capture, draining partial transcripts when capture turns off. */
   fun setMicEnabled(enabled: Boolean) {
     if (_micEnabled.value == enabled) return
     _micEnabled.value = enabled
@@ -186,6 +196,7 @@ class MicCaptureManager(
     }
   }
 
+  /** Immediately stops capture and drops any unsent partial transcript. */
   fun cancelMicCapture() {
     transcriptionDrainJob?.cancel()
     transcriptionDrainJob = null
@@ -195,6 +206,7 @@ class MicCaptureManager(
     stop()
   }
 
+  /** Pauses capture while local TTS plays so speaker output is not transcribed as user speech. */
   suspend fun pauseForTts() {
     val shouldPause =
       synchronized(ttsPauseLock) {
@@ -216,6 +228,7 @@ class MicCaptureManager(
     stopTranscription(preserveStatus = true)
   }
 
+  /** Resumes capture after all nested TTS playback pauses have completed. */
   suspend fun resumeAfterTts() {
     val shouldResume =
       synchronized(ttsPauseLock) {
@@ -241,6 +254,7 @@ class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
+  /** Starts or stops gateway-dependent capture/send work when the operator session changes state. */
   fun onGatewayConnectionChanged(connected: Boolean) {
     gatewayConnected = connected
     if (connected) {
@@ -267,6 +281,7 @@ class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
+  /** Handles transcription and chat events that update live voice transcript/reply state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -470,24 +485,30 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId =
+        val ack =
           sendToGateway(next) { earlyRunId ->
             // Called with the idempotency key before chat.send fires so that
             // pendingRunId is populated before any chat events can arrive.
             pendingRunId = earlyRunId
           }
+        val runId = ack.runId
         // Update to the real runId if the gateway returned a different one.
         if (runId != null && runId != pendingRunId) pendingRunId = runId
-        if (runId == null) {
-          pendingRunTimeoutJob?.cancel()
-          pendingRunTimeoutJob = null
-          removeFirstQueuedMessage()
-          publishQueue()
-          _isSending.value = false
-          pendingAssistantEntryId = null
-          sendQueuedIfIdle()
-        } else {
-          armPendingRunTimeout(runId)
+        when {
+          ack.isTerminalSuccess -> {
+            completePendingTurn()
+            refreshAfterTerminalSuccess()
+          }
+          ack.isTerminalFailure -> {
+            completePendingTurn()
+            _statusText.value = "Send failed: Chat failed before the run started; try again."
+          }
+          runId == null -> {
+            completePendingTurn()
+          }
+          else -> {
+            armPendingRunTimeout(runId)
+          }
         }
       } catch (err: Throwable) {
         pendingRunTimeoutJob?.cancel()
@@ -611,6 +632,8 @@ class MicCaptureManager(
         capacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
+    // Drop oldest frames under network backpressure so the live transcription
+    // session stays close to real time instead of replaying stale audio.
     transcriptionAppendJob =
       scope.launch(Dispatchers.IO) {
         for (frame in audioFrames) {

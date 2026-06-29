@@ -1,7 +1,9 @@
+// Skill index helpers map normalized skill names to loaded skill entries.
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import type { SkillEntry } from "../types.js";
 
+/** Indexed skill metadata used for runtime visibility and command lookup. */
 export type SkillIndexEntry = {
   entry: SkillEntry;
   name: string;
@@ -16,20 +18,12 @@ export type SkillIndexEntry = {
   userInvocable: boolean;
 };
 
-export type SkillIndex = {
-  entries: SkillIndexEntry[];
-  runtimeEntries: SkillEntry[];
-  promptVisibleEntries: SkillEntry[];
-  userInvocableEntries: SkillEntry[];
-  byName: ReadonlyMap<string, SkillIndexEntry>;
-  byNormalizedName: ReadonlyMap<string, readonly SkillIndexEntry[]>;
-};
-
-export type BuildSkillIndexOptions = {
+type BuildSkillIndexOptions = {
   bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
 };
 
+/** Normalizes a skill name to the comparable key used by filters and commands. */
 export function normalizeSkillIndexName(value: string): string {
   return value
     .trim()
@@ -81,42 +75,6 @@ export function buildSkillIndexEntries(
   return entries.map((entry) => createSkillIndexEntry(entry, opts, agentSkillSet));
 }
 
-export function buildSkillIndex(
-  entries: readonly SkillEntry[],
-  opts?: BuildSkillIndexOptions,
-): SkillIndex {
-  const byName = new Map<string, SkillIndexEntry>();
-  const normalized = new Map<string, SkillIndexEntry[]>();
-  const indexedEntries = buildSkillIndexEntries(entries, opts);
-  const runtimeEntries: SkillEntry[] = [];
-  const promptVisibleEntries: SkillEntry[] = [];
-  const userInvocableEntries: SkillEntry[] = [];
-
-  for (const indexed of indexedEntries) {
-    byName.set(indexed.name, indexed);
-    addNormalizedEntry(normalized, indexed.normalizedName, indexed);
-    addNormalizedEntry(normalized, indexed.normalizedSkillKey, indexed);
-    if (indexed.runtimeVisible) {
-      runtimeEntries.push(indexed.entry);
-    }
-    if (indexed.promptVisible) {
-      promptVisibleEntries.push(indexed.entry);
-    }
-    if (indexed.userInvocable) {
-      userInvocableEntries.push(indexed.entry);
-    }
-  }
-
-  return {
-    entries: indexedEntries,
-    runtimeEntries,
-    promptVisibleEntries,
-    userInvocableEntries,
-    byName,
-    byNormalizedName: normalized,
-  };
-}
-
 function createSkillIndexEntry(
   entry: SkillEntry,
   opts: BuildSkillIndexOptions | undefined,
@@ -140,22 +98,4 @@ function createSkillIndexEntry(
     promptVisible: isSkillPromptVisible(entry),
     userInvocable: isSkillUserInvocable(entry),
   };
-}
-
-function addNormalizedEntry(
-  normalized: Map<string, SkillIndexEntry[]>,
-  key: string,
-  entry: SkillIndexEntry,
-) {
-  if (!key) {
-    return;
-  }
-  const existing = normalized.get(key);
-  if (existing) {
-    if (!existing.includes(entry)) {
-      existing.push(entry);
-    }
-    return;
-  }
-  normalized.set(key, [entry]);
 }

@@ -1,3 +1,4 @@
+// Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -344,7 +345,7 @@ export function createMSTeamsReplyDispatcher(params: {
 
   const markDispatchIdle = (): Promise<void> => {
     return flushPendingMessages()
-      .catch((err) => {
+      .catch((err: unknown) => {
         const errMsg = formatUnknownError(err);
         const classification = classifyMSTeamsSendError(err);
         const hint = formatMSTeamsSendErrorHint(classification);
@@ -356,7 +357,7 @@ export function createMSTeamsReplyDispatcher(params: {
         });
       })
       .then(async () => {
-        const fallbackPayload = await streamController.finalize().catch((err) => {
+        const fallbackPayload = await streamController.finalize().catch((err: unknown) => {
           params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
           return undefined;
         });
@@ -420,6 +421,10 @@ export function createMSTeamsReplyDispatcher(params: {
               msteamsCfg,
               {
                 event: "tool",
+                ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+                ...(typeof payload?.toolCallId === "string"
+                  ? { toolCallId: payload.toolCallId }
+                  : {}),
                 ...(name ? { name } : {}),
                 ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
                 ...(payload?.args && typeof payload.args === "object"
@@ -435,6 +440,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLineForEntry(msteamsCfg, {
               event: "item",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               ...(typeof payload?.kind === "string" ? { itemKind: payload.kind } : {}),
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
@@ -489,6 +498,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
               event: "command-output",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               phase: payload.phase as string,
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
@@ -504,6 +517,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
               event: "patch",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               phase: payload.phase as string,
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),

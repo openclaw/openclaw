@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements creds persistence behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { assertWebCredsPathRegularFileOrMissing, resolveWebCredsPath } from "./creds-files.js";
@@ -50,7 +51,7 @@ export function enqueueCredsSave(
   const previous = credsSaveQueues.get(authDir) ?? Promise.resolve();
   const next = previous
     .then(() => saveCreds())
-    .catch((error) => {
+    .catch((error: unknown) => {
       onError(error);
     })
     .finally(() => {

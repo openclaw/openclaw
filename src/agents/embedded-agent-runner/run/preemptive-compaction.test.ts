@@ -1,3 +1,5 @@
+// Preemptive compaction tests cover token-pressure estimates before prompt
+// submission and the route chosen to compact, truncate, or proceed.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
@@ -6,18 +8,18 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
-let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
 beforeAll(async () => {
+  // Import after the session-token mock is installed so token estimates match
+  // the runtime environment these helpers protect.
   vi.resetModules();
   ({
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
-    estimatePrePromptTokens,
     estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
@@ -46,6 +48,8 @@ function makeToolResultMessage(...texts: string[]): AgentMessage {
 }
 
 function makeJsonToolResultMessage(payload: unknown): AgentMessage {
+  // JSON tool results reach providers through rendered boundary payloads; this
+  // fixture proves estimates count object payloads, not just text blocks.
   return {
     role: "toolResult",
     toolCallId: `call_${timestamp}`,
@@ -85,12 +89,12 @@ describe("preemptive-compaction", () => {
   });
 
   it("raises the estimate as prompt-side content grows", () => {
-    const smaller = estimatePrePromptTokens({
+    const smaller = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: "sys",
       prompt: "hello",
     });
-    const larger = estimatePrePromptTokens({
+    const larger = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
@@ -222,6 +226,8 @@ describe("preemptive-compaction", () => {
   });
 
   it("uses rendered LLM-boundary pressure when the runtime owns the final payload shape", () => {
+    // Runtime renderers can add large provider-facing payloads after transcript
+    // assembly, so the precheck must prefer that boundary estimate when present.
     const renderedPrompt = "x".repeat(60_000);
     const estimatedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
       systemPrompt: "sys",
@@ -285,7 +291,7 @@ describe("preemptive-compaction", () => {
         })),
       }),
     ];
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
@@ -355,6 +361,8 @@ describe("preemptive-compaction", () => {
   });
 
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
+    // If reducible recent tool output covers the overflow, truncation is enough
+    // and a full transcript compaction would waste time/context.
     const medium = "alpha beta gamma delta epsilon ".repeat(2200);
     const messages: AgentMessage[] = [
       makeAssistantHistory("short history"),
@@ -362,7 +370,7 @@ describe("preemptive-compaction", () => {
     ];
     const reserveTokens = 2_000;
     const contextTokenBudget = 26_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",
@@ -420,7 +428,7 @@ describe("preemptive-compaction", () => {
       makeToolResultMessage(medium),
     ];
     const reserveTokens = 2_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",

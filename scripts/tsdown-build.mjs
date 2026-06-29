@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
+// Runs the tsdown build with output cleanup, stale chunk pruning, and bounded
+// child-process diagnostics.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -19,7 +24,9 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
+const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -28,9 +35,15 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
-const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
+const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
+const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -62,15 +75,117 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
+/**
+ * Removes build output roots while preserving explicitly protected artifacts.
+ */
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  for (const root of TSDOWN_OUTPUT_ROOTS) {
+  const env = params.env ?? process.env;
+  const roots = listTsdownOutputRoots();
+  const protectedDeclarationPaths =
+    env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? listExistingDeclarationOutputPaths({
+          cwd,
+          fs: fsImpl,
+          roots,
+        })
+      : new Set();
+  const protectedPaths = new Set([
+    ...protectedDeclarationPaths,
+    ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
+  ]);
+  for (const root of roots) {
     const rootPath = path.join(cwd, root);
     try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      if (hasProtectedChild({ rootPath, protectedPaths })) {
+        cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
+      } else {
+        fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      }
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
+    }
+  }
+}
+
+function hasProtectedChild({ rootPath, protectedPaths }) {
+  const rootWithSeparator = `${path.resolve(rootPath)}${path.sep}`;
+  for (const protectedPath of protectedPaths) {
+    if (protectedPath.startsWith(rootWithSeparator)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    const resolvedEntryPath = path.resolve(entryPath);
+    if (protectedPaths.has(resolvedEntryPath)) {
+      continue;
+    }
+    try {
+      if (entry.isDirectory()) {
+        cleanOutputRootExcept(entryPath, protectedPaths, fsImpl);
+        fsImpl.rmdirSync(entryPath);
+      } else {
+        fsImpl.rmSync(entryPath, { force: true });
+      }
+    } catch {
+      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+    }
+  }
+}
+
+function listExistingDeclarationOutputPaths({ cwd, fs: fsImpl, roots }) {
+  const protectedPaths = new Set();
+  for (const root of roots) {
+    collectDeclarationOutputPaths(path.join(cwd, root), protectedPaths, fsImpl);
+  }
+  return protectedPaths;
+}
+
+function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
+  const protectedPaths = new Set();
+  if (env[PRESERVE_CLI_STARTUP_METADATA_ENV] !== "1") {
+    return protectedPaths;
+  }
+  for (const relativePath of PRESERVED_TSDOWN_OUTPUT_FILES) {
+    const absolutePath = path.resolve(cwd, relativePath);
+    try {
+      if (fsImpl.statSync(absolutePath).isFile()) {
+        protectedPaths.add(absolutePath);
+      }
+    } catch {
+      // Missing preserved outputs are normal on first build.
+    }
+  }
+  return protectedPaths;
+}
+
+function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      collectDeclarationOutputPaths(entryPath, protectedPaths, fsImpl);
+    } else if (DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
+      protectedPaths.add(path.resolve(entryPath));
     }
   }
 }
@@ -78,9 +193,9 @@ export function cleanTsdownOutputRoots(params = {}) {
 export function pruneStaleRootChunkFiles(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const roots = TSDOWN_OUTPUT_ROOTS.map((root) => path.join(cwd, root));
+  const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
-    let entries = [];
+    let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });
     } catch {
@@ -101,6 +216,10 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function listTsdownOutputRoots() {
+  return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
@@ -185,26 +304,26 @@ function findFatalUnresolvedImport(lines) {
   return null;
 }
 
-function parsePositiveInteger(value) {
+function parsePositiveIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return Math.trunc(parsed);
+  return parsePositiveInt(value, name);
 }
 
-function parseNonNegativeInteger(value) {
+function parseNonNegativeIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a non-negative safe integer`);
+  }
+  return parsed;
 }
 
 function parseCgroupMemoryLimitBytes(value) {
@@ -274,21 +393,33 @@ function readProcMemTotalBytes(params = {}) {
 }
 
 function resolveTsdownMaxOldSpaceMb(params = {}) {
+  const defaultMaxOldSpaceMb =
+    (params.platform ?? process.platform) === "win32"
+      ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
+      : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  const envOverride = parsePositiveIntegerEnv(
+    (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
+    TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  );
+  if (envOverride !== null) {
+    return envOverride;
+  }
+
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
   if (limitMb <= 0) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const cgroupCap = Math.max(
     MIN_TSDOWN_MAX_OLD_SPACE_MB,
     limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
   );
-  return Math.min(DEFAULT_TSDOWN_MAX_OLD_SPACE_MB, cgroupCap);
+  return Math.min(defaultMaxOldSpaceMb, cgroupCap);
 }
 
 function parseMaxOldSpaceSizeMb(value, fallbackMb) {
@@ -446,10 +577,11 @@ export function resolveTsdownBuildInvocation(params = {}) {
     };
   }
   const runner = resolvePnpmRunner({
+    env,
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform: params.platform ?? process.platform,
   });
   return {
@@ -464,23 +596,148 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
+function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalTsdownBuildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may already be gone; fall back to the direct child handle.
+    }
+  }
+  if (platform === "win32" && child.pid) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
 export async function runTsdownBuildInvocation(invocation, params = {}) {
   const stdout = params.stdout ?? process.stdout;
   const stderr = params.stderr ?? process.stderr;
   const env = params.env ?? process.env;
   const scanner = params.scanner ?? createTsdownOutputScanner();
-  const timeoutMs = parsePositiveInteger(env.OPENCLAW_TSDOWN_TIMEOUT_MS);
+  const timeoutMs = parsePositiveIntegerEnv(
+    env.OPENCLAW_TSDOWN_TIMEOUT_MS,
+    "OPENCLAW_TSDOWN_TIMEOUT_MS",
+  );
   const heartbeatMs =
-    parseNonNegativeInteger(env.OPENCLAW_TSDOWN_HEARTBEAT_MS) ?? DEFAULT_HEARTBEAT_MS;
+    parseNonNegativeIntegerEnv(env.OPENCLAW_TSDOWN_HEARTBEAT_MS, "OPENCLAW_TSDOWN_HEARTBEAT_MS") ??
+    DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();
+  let forceKillAt = null;
 
-  const child = spawn(invocation.command, invocation.args, invocation.options);
+  const platform = params.platform ?? process.platform;
+  const runTaskkill = params.runTaskkill ?? spawnSync;
+  const useProcessGroup = platform !== "win32";
+  const child = spawn(invocation.command, invocation.args, {
+    ...invocation.options,
+    detached: useProcessGroup,
+  });
   const pidText = child.pid ? ` pid=${child.pid}` : "";
 
   function markOutput() {
     lastOutputAt = Date.now();
+  }
+
+  function signalChild(signal) {
+    signalTsdownBuildProcessTree(child, signal, {
+      platform,
+      runTaskkill,
+      useProcessGroup,
+    });
+  }
+
+  const parentSignalHandlers = [];
+  function cleanupParentSignalHandlers() {
+    for (const { signal, handler } of parentSignalHandlers) {
+      process.off(signal, handler);
+    }
+    parentSignalHandlers.length = 0;
+  }
+
+  function relayParentSignal(signal) {
+    const handler = () => {
+      signalChild(signal);
+      signalChild("SIGKILL");
+      cleanupParentSignalHandlers();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+
+  if (useProcessGroup) {
+    relayParentSignal("SIGINT");
+    relayParentSignal("SIGTERM");
+    relayParentSignal("SIGHUP");
+  }
+
+  function processTreeAlive() {
+    if (!child.pid) {
+      return false;
+    }
+    if (!useProcessGroup) {
+      return child.exitCode === null && child.signalCode === null;
+    }
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "EPERM";
+    }
+  }
+
+  async function waitForProcessTreeExit(timeoutMsToWait) {
+    const deadlineAt = Date.now() + timeoutMsToWait;
+    while (Date.now() < deadlineAt) {
+      if (!processTreeAlive()) {
+        return true;
+      }
+      await new Promise((resolvePoll) => {
+        setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+      });
+    }
+    return !processTreeAlive();
+  }
+
+  async function finishTimedOutProcessTree() {
+    const graceRemainingMs =
+      forceKillAt === null ? TERMINATION_GRACE_MS : Math.max(0, forceKillAt - Date.now());
+    if (graceRemainingMs > 0) {
+      await waitForProcessTreeExit(graceRemainingMs);
+    }
+    if (processTreeAlive()) {
+      signalChild("SIGKILL");
+      await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    }
   }
 
   child.stdout?.on("data", (chunk) => {
@@ -518,11 +775,12 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
       ? setTimeout(() => {
           timedOut = true;
           stderr.write(`[tsdown-build] timeout after ${timeoutMs}ms${pidText}; sending SIGTERM\n`);
-          child.kill("SIGTERM");
+          signalChild("SIGTERM");
+          forceKillAt = Date.now() + TERMINATION_GRACE_MS;
           setTimeout(() => {
             if (!settled) {
               stderr.write(`[tsdown-build] forcing SIGKILL${pidText}\n`);
-              child.kill("SIGKILL");
+              signalChild("SIGKILL");
             }
           }, TERMINATION_GRACE_MS).unref();
         }, timeoutMs).unref()
@@ -531,6 +789,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   return new Promise((resolve) => {
     child.once("error", (error) => {
       settled = true;
+      cleanupParentSignalHandlers();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
@@ -543,16 +802,26 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
       });
     });
     child.once("close", (status, signal) => {
-      settled = true;
-      clearInterval(heartbeat);
-      clearTimeout(timeout);
-      resolve({
-        status,
-        signal,
-        timedOut,
-        error: null,
-        ...scanner.finish(),
-      });
+      function finish() {
+        settled = true;
+        cleanupParentSignalHandlers();
+        clearInterval(heartbeat);
+        clearTimeout(timeout);
+        resolve({
+          status,
+          signal,
+          timedOut,
+          error: null,
+          ...scanner.finish(),
+        });
+      }
+
+      if (timedOut) {
+        void finishTimedOutProcessTree().then(finish, finish);
+        return;
+      }
+
+      finish();
     });
   });
 }

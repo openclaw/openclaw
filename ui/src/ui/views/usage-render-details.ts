@@ -1,3 +1,4 @@
+// Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
@@ -395,14 +396,15 @@ function renderTimeSeriesCompact(
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
     const startTs = startDate ? new Date(startDate + "T00:00:00").getTime() : 0;
     const endTs = endDate ? new Date(endDate + "T23:59:59").getTime() : Infinity;
+    const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
     points = timeSeries.points.filter((p) => {
       if (p.timestamp < startTs || p.timestamp > endTs) {
         return false;
       }
-      if (selectedDays && selectedDays.length > 0) {
+      if (selectedDaySet) {
         const d = new Date(p.timestamp);
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        return selectedDays.includes(dateStr);
+        return selectedDaySet.has(dateStr);
       }
       return true;
     });
@@ -955,11 +957,13 @@ function renderContextPanel(
                   </div>
                   <div class="context-breakdown-list">
                     ${toolsTop.map(
-                      (t) => html`
+                      (tLocal) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono" title=${t.name}>${t.name}</span>
+                          <span class="mono" title=${tLocal.name}>${tLocal.name}</span>
                           <span class="muted"
-                            >~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span
+                            >~${formatTokens(
+                              charsToTokens(tLocal.summaryChars + tLocal.schemaChars),
+                            )}</span
                           >
                         </div>
                       `,

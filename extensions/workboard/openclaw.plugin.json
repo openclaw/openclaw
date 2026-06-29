@@ -2,7 +2,8 @@
   "id": "workboard",
   "enabledByDefault": false,
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["workboard"]
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
@@ -15,6 +16,9 @@
       "workboard_claim",
       "workboard_heartbeat",
       "workboard_complete",
+      "workboard_attachment_add",
+      "workboard_attachment_read",
+      "workboard_attachment_delete",
       "workboard_block",
       "workboard_boards",
       "workboard_board_create",
@@ -26,6 +30,8 @@
       "workboard_decompose",
       "workboard_notify_subscribe",
       "workboard_notify_list",
+      "workboard_notify_events",
+      "workboard_notify_advance",
       "workboard_notify_unsubscribe",
       "workboard_promote",
       "workboard_reassign",
@@ -34,9 +40,18 @@
       "workboard_release",
       "workboard_comment",
       "workboard_proof",
+      "workboard_worker_log",
+      "workboard_protocol_violation",
       "workboard_unblock"
     ]
   },
+  "commandAliases": [
+    {
+      "name": "workboard",
+      "kind": "runtime-slash",
+      "cliCommand": "workboard"
+    }
+  ],
   "toolMetadata": {
     "workboard_list": {
       "optional": true
@@ -57,6 +72,15 @@
       "optional": true
     },
     "workboard_complete": {
+      "optional": true
+    },
+    "workboard_attachment_add": {
+      "optional": true
+    },
+    "workboard_attachment_read": {
+      "optional": true
+    },
+    "workboard_attachment_delete": {
       "optional": true
     },
     "workboard_block": {
@@ -92,6 +116,12 @@
     "workboard_notify_list": {
       "optional": true
     },
+    "workboard_notify_events": {
+      "optional": true
+    },
+    "workboard_notify_advance": {
+      "optional": true
+    },
     "workboard_notify_unsubscribe": {
       "optional": true
     },
@@ -114,6 +144,12 @@
       "optional": true
     },
     "workboard_proof": {
+      "optional": true
+    },
+    "workboard_worker_log": {
+      "optional": true
+    },
+    "workboard_protocol_violation": {
       "optional": true
     },
     "workboard_unblock": {

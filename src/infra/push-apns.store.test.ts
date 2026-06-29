@@ -1,20 +1,32 @@
+// Tests APNS push token store persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
-  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
   registerApnsRegistration,
-  registerApnsToken,
 } from "./push-apns.js";
 
 const tempDirs = createTrackedTempDirs();
 
 async function makeTempDir(): Promise<string> {
   return await tempDirs.make("openclaw-push-apns-store-test-");
+}
+
+async function registerDirectApnsRegistration(params: {
+  nodeId: string;
+  token: string;
+  topic: string;
+  environment?: unknown;
+  baseDir?: string;
+}) {
+  return await registerApnsRegistration({
+    ...params,
+    transport: "direct",
+  });
 }
 
 afterEach(async () => {
@@ -24,7 +36,7 @@ afterEach(async () => {
 describe("push APNs registration store", () => {
   it("stores and reloads direct APNs registrations", async () => {
     const baseDir = await makeTempDir();
-    const saved = await registerApnsToken({
+    const saved = await registerDirectApnsRegistration({
       nodeId: "ios-node-1",
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
       topic: "ai.openclaw.ios",
@@ -55,6 +67,23 @@ describe("push APNs registration store", () => {
     expect(saved.transport).toBe("relay");
     expect(loaded).toEqual(saved);
     expect(loaded && "token" in loaded).toBe(false);
+  });
+
+  it("stores sandbox relay registrations", async () => {
+    const baseDir = await makeTempDir();
+    const saved = await registerApnsRegistration({
+      nodeId: "ios-node-relay-sandbox",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      distribution: "official",
+      baseDir,
+    });
+
+    await expect(loadApnsRegistration("ios-node-relay-sandbox", baseDir)).resolves.toEqual(saved);
   });
 
   it("normalizes legacy direct records from disk and ignores invalid entries", async () => {
@@ -119,7 +148,7 @@ describe("push APNs registration store", () => {
 
   it("loads multiple APNs registrations from one store snapshot", async () => {
     const baseDir = await makeTempDir();
-    const first = await registerApnsToken({
+    const first = await registerDirectApnsRegistration({
       nodeId: "ios-node-1",
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
       topic: "ai.openclaw.ios",
@@ -154,8 +183,6 @@ describe("push APNs registration store", () => {
 
     await expect(loadApnsRegistration("ios-node-missing", baseDir)).resolves.toBeNull();
     await expect(loadApnsRegistration("   ", baseDir)).resolves.toBeNull();
-    await expect(clearApnsRegistration("   ", baseDir)).resolves.toBe(false);
-    await expect(clearApnsRegistration("ios-node-missing", baseDir)).resolves.toBe(false);
   });
 
   it("rejects invalid direct and relay registration inputs", async () => {
@@ -163,7 +190,7 @@ describe("push APNs registration store", () => {
     const oversized = "x".repeat(257);
 
     await expect(
-      registerApnsToken({
+      registerDirectApnsRegistration({
         nodeId: "ios-node-1",
         token: "not-a-token",
         topic: "ai.openclaw.ios",
@@ -171,7 +198,7 @@ describe("push APNs registration store", () => {
       }),
     ).rejects.toThrow("invalid APNs token");
     await expect(
-      registerApnsToken({
+      registerDirectApnsRegistration({
         nodeId: "n".repeat(257),
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",
@@ -179,7 +206,7 @@ describe("push APNs registration store", () => {
       }),
     ).rejects.toThrow("nodeId required");
     await expect(
-      registerApnsToken({
+      registerDirectApnsRegistration({
         nodeId: "ios-node-1",
         token: "A".repeat(513),
         topic: "ai.openclaw.ios",
@@ -187,7 +214,7 @@ describe("push APNs registration store", () => {
       }),
     ).rejects.toThrow("invalid APNs token");
     await expect(
-      registerApnsToken({
+      registerDirectApnsRegistration({
         nodeId: "ios-node-1",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "a".repeat(256),
@@ -206,7 +233,7 @@ describe("push APNs registration store", () => {
         distribution: "official",
         baseDir,
       }),
-    ).rejects.toThrow("relay registrations must use production environment");
+    ).rejects.toThrow("relay registrations must use valid APNs environment");
     await expect(
       registerApnsRegistration({
         nodeId: "ios-node-relay",
@@ -261,9 +288,9 @@ describe("push APNs registration store", () => {
     ).rejects.toThrow("sendGrant too long");
   });
 
-  it("persists with a trailing newline and clears registrations", async () => {
+  it("persists with a trailing newline and clears current registrations", async () => {
     const baseDir = await makeTempDir();
-    await registerApnsToken({
+    const registration = await registerDirectApnsRegistration({
       nodeId: "ios-node-1",
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
       topic: "ai.openclaw.ios",
@@ -272,7 +299,13 @@ describe("push APNs registration store", () => {
 
     const statePath = path.join(baseDir, "push", "apns-registrations.json");
     await expect(fs.readFile(statePath, "utf8")).resolves.toMatch(/\n$/);
-    await expect(clearApnsRegistration("ios-node-1", baseDir)).resolves.toBe(true);
+    await expect(
+      clearApnsRegistrationIfCurrent({
+        nodeId: "ios-node-1",
+        registration,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toBeNull();
   });
 
@@ -281,7 +314,7 @@ describe("push APNs registration store", () => {
     try {
       const baseDir = await makeTempDir();
       vi.setSystemTime(new Date("2026-03-11T00:00:00Z"));
-      const stale = await registerApnsToken({
+      const stale = await registerDirectApnsRegistration({
         nodeId: "ios-node-1",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",
@@ -290,7 +323,7 @@ describe("push APNs registration store", () => {
       });
 
       vi.setSystemTime(new Date("2026-03-11T00:00:01Z"));
-      const fresh = await registerApnsToken({
+      const fresh = await registerDirectApnsRegistration({
         nodeId: "ios-node-1",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",

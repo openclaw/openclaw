@@ -31,6 +31,10 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 conversation bindings, or other harnesses because those paths do not create
 Codex app-server threads with native `apps` config.
 
+OpenAI-side Codex access, app availability, and workspace app/plugin controls
+come from the signed-in Codex account. For the OpenAI account and admin model,
+see [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
+
 ## Quickstart
 
 Preview migration from the source Codex home:
@@ -196,11 +200,12 @@ enabled.
 
 OpenClaw sets app-level `destructive_enabled` from the effective global or
 per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. The `_default`
-app config is disabled with `open_world_enabled: false`. Enabled plugin apps
-are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
-plugin open-world policy knob and does not maintain per-plugin destructive
-tool-name deny lists.
+destructive tool metadata from its native app tool annotations. `true`,
+`"auto"`, and `"always"` set `destructive_enabled: true`; `false` sets it
+false. The `_default` app config is disabled with `open_world_enabled: false`.
+Enabled plugin apps are emitted with `open_world_enabled: true`; OpenClaw does
+not expose a separate plugin open-world policy knob and does not maintain
+per-plugin destructive tool-name deny lists.
 
 Tool approval mode is automatic by default for plugin apps so non-destructive
 read tools can run without a same-thread approval UI. Destructive tools remain
@@ -217,6 +222,13 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
 - When policy is `false`, OpenClaw returns a deterministic decline.
 - When policy is `true`, OpenClaw auto-accepts only safe schemas it can map to
   an approval response, such as a boolean approve field.
+- When policy is `"auto"`, OpenClaw exposes destructive plugin actions to
+  Codex but turns ownership-proven MCP approval elicitations into OpenClaw
+  plugin approvals before returning the Codex approval response.
+- When policy is `"always"`, OpenClaw uses the same Codex write/destructive
+  gating as `"auto"`, clears durable Codex per-tool approval overrides for the
+  app before the thread starts, and only offers one-shot approval or denial so
+  durable approvals cannot suppress later write-action prompts.
 - Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
   id, or an unsafe elicitation schema declines instead of prompting.
 
@@ -264,8 +276,9 @@ Codex thread bindings keep the app config they started with until OpenClaw
 establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even when policy is true, unsafe elicitation
-schemas and ambiguous plugin identity still fail closed.
+`allow_destructive_actions` values. Even when policy is true, `"auto"`, or
+`"always"`, unsafe elicitation schemas and ambiguous plugin identity still fail
+closed.
 
 ## Related
 

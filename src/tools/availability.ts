@@ -1,3 +1,4 @@
+// Evaluates tool descriptors against runtime availability constraints.
 import type {
   JsonObject,
   JsonPrimitive,
@@ -9,8 +10,14 @@ import type {
   ToolDescriptor,
 } from "./types.js";
 
+/**
+ * Tool availability evaluator for descriptor-driven tool planning.
+ *
+ * Descriptors express why a tool can be shown as small signals; this module
+ * turns those signals into diagnostics without knowing any concrete tool owner.
+ */
 function isRecord(value: JsonValue | undefined): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveConfigPath(
@@ -37,6 +44,7 @@ function hasConfiguredValue(params: {
     return false;
   }
   if ((signal.check ?? "exists") === "available") {
+    // "available" delegates semantic checks, for example provider auth that is configured but stale.
     return (
       params.context.isConfigValueAvailable?.({
         value,
@@ -118,8 +126,8 @@ function evaluateExpression(
   context: ToolAvailabilityContext,
 ): readonly ToolAvailabilityDiagnostic[] {
   if ("kind" in expression) {
-    const diagnostic = evaluateSignal(expression, context);
-    return diagnostic ? [diagnostic] : [];
+    const diagnosticLocal = evaluateSignal(expression, context);
+    return diagnosticLocal ? [diagnosticLocal] : [];
   }
   if ("allOf" in expression) {
     if (expression.allOf.length === 0) {
@@ -142,7 +150,13 @@ function evaluateExpression(
       ];
     }
     const diagnostics = expression.anyOf.map((entry) => evaluateExpression(entry, context));
-    return diagnostics.some((entries) => entries.length === 0) ? [] : diagnostics.flat();
+    // "unsupported-signal" marks a malformed descriptor, not a runtime condition, so it must surface
+    // even when a sibling branch is available; otherwise an available branch masks an authoring error.
+    const unsupported = diagnostics.flat().filter((entry) => entry.reason === "unsupported-signal");
+    if (diagnostics.some((entries) => entries.length === 0)) {
+      return unsupported;
+    }
+    return diagnostics.flat();
   }
   return [
     {
@@ -152,6 +166,7 @@ function evaluateExpression(
   ];
 }
 
+/** Evaluate one descriptor against runtime context and return hidden-tool diagnostics. */
 export function evaluateToolAvailability(params: {
   descriptor: ToolDescriptor;
   context?: ToolAvailabilityContext;

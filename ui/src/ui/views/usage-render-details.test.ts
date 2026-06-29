@@ -1,3 +1,4 @@
+// Control UI tests cover usage render details behavior.
 import { render } from "lit";
 import { describe, it, expect } from "vitest";
 import {
@@ -25,7 +26,7 @@ function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
 
 const baseUsage = {
   totalTokens: 1000,
-  totalCost: 1.0,
+  totalCost: 1,
   input: 300,
   output: 400,
   cacheRead: 200,

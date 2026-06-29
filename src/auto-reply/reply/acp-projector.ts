@@ -1,12 +1,13 @@
-import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../acp/runtime/types.js";
+// Projects ACP runtime events into OpenClaw-visible session update records.
+import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
@@ -26,7 +27,7 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
-export type AcpProjectedDeliveryMeta = {
+type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
   toolCallId?: string;
   toolStatus?: string;
@@ -160,7 +161,7 @@ function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_cal
   return formatToolSummary(display);
 }
 
-export type AcpReplyProjector = {
+type AcpReplyProjector = {
   onEvent: (event: AcpRuntimeEvent) => Promise<void>;
   flush: (force?: boolean) => Promise<void>;
 };

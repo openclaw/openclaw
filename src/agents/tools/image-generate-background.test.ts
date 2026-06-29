@@ -1,3 +1,5 @@
+// Image generation background tests cover detached task creation, progress
+// updates, and completion wake delivery for generated image results.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_GENERATION_TASK_KIND } from "../image-generation-task-status.js";
 import {
@@ -17,28 +19,9 @@ vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 const {
   createImageGenerationTaskRun,
+  imageGenerationTaskLifecycle,
   recordImageGenerationTaskProgress,
-  wakeImageGenerationTaskCompletion,
 } = await import("./image-generate-background.js");
-
-function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
-    | { internalEvents?: unknown }
-    | undefined;
-  if (!Array.isArray(params?.internalEvents)) {
-    throw new Error("Expected delivered internal events");
-  }
-  return params.internalEvents as Array<Record<string, unknown>>;
-}
-
-function expectReplyInstructionContains(text: string) {
-  const event = getDeliveredInternalEvents().find(
-    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
-  );
-  if (!event) {
-    throw new Error(`Expected reply instruction containing ${text}`);
-  }
-}
 
 describe("image generate background helpers", () => {
   beforeEach(() => {
@@ -97,12 +80,14 @@ describe("image generate background helpers", () => {
   });
 
   it("queues a completion event through the shared generated-media wake path", async () => {
+    // Successful media completion is routed through the announce handoff so the
+    // requesting session receives model-mediated visible reply instructions.
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
     });
 
-    await wakeImageGenerationTaskCompletion({
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:image_generate:abc",
         taskLabel: "small watercolor robot",
@@ -137,7 +122,7 @@ describe("image generate background helpers", () => {
       result: "provider failed",
     });
 
-    await wakeImageGenerationTaskCompletion({
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
       ...completion,
       status: "error",
       statusLabel: "failed",

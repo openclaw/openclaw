@@ -2,6 +2,7 @@
  * Message normalization utilities for chat rendering.
  */
 
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -9,11 +10,22 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import { mediaKindFromMime } from "../../../../src/media/constants.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
+
+function isTextContentBlock(
+  item: Record<string, unknown>,
+  role: string,
+): item is Record<string, unknown> & { text: string } {
+  return (
+    typeof item.text === "string" &&
+    (item.type === "text" ||
+      (role === "user" && item.type === "input_text") ||
+      (role === "assistant" && (item.type === "input_text" || item.type === "output_text")))
+  );
+}
 
 function coerceCanvasPreview(
   value: unknown,
@@ -406,15 +418,25 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
-      if (item.type === "text" && typeof item.text === "string" && isAssistantMessage) {
-        const expanded = expandTextContent(item.text);
-        audioAsVoice = audioAsVoice || expanded.audioAsVoice;
-        if (expanded.replyTarget?.kind === "id") {
-          replyTarget = expanded.replyTarget;
-        } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
-          replyTarget = expanded.replyTarget;
+      if (isTextContentBlock(item, role)) {
+        if (isAssistantMessage) {
+          const expanded = expandTextContent(item.text);
+          audioAsVoice = audioAsVoice || expanded.audioAsVoice;
+          if (expanded.replyTarget?.kind === "id") {
+            replyTarget = expanded.replyTarget;
+          } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
+            replyTarget = expanded.replyTarget;
+          }
+          return expanded.content;
         }
-        return expanded.content;
+        return [
+          {
+            type: "text" as const,
+            text: item.text,
+            name: undefined,
+            args: undefined,
+          },
+        ];
       }
       return [
         {

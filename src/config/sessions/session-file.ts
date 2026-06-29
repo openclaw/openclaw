@@ -1,8 +1,10 @@
+// Session file persistence resolves transcript paths and syncs store metadata.
 import { resolveSessionFilePath } from "./paths.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
+/** Resolves a transcript file path and persists it into the session store when needed. */
 export async function resolveAndPersistSessionFile(params: {
   sessionId: string;
   sessionKey: string;
@@ -21,6 +23,8 @@ export async function resolveAndPersistSessionFile(params: {
     sessionStore[sessionKey] ?? { sessionId, updatedAt: now, sessionStartedAt: now };
   const shouldReusePersistedSessionFile = baseEntry.sessionId === sessionId;
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
+  // A reset/fork should not reuse the previous transcript path unless the fallback explicitly
+  // points at the intended file for the new session id.
   const entryForResolve = !shouldReusePersistedSessionFile
     ? fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }

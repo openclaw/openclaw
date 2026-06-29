@@ -1,4 +1,5 @@
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
+/** Resolves cron job wall-clock timeout policy. */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { CronJob } from "../types.js";
 
 /**
@@ -14,9 +15,11 @@ export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
  */
 export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
+/** Resolves the wall-clock timeout for a cron job, including explicit detached-run overrides. */
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
   const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+    (job.payload.kind === "agentTurn" || job.payload.kind === "command") &&
+    typeof job.payload.timeoutSeconds === "number"
       ? (finiteSecondsToTimerSafeMilliseconds(job.payload.timeoutSeconds) ?? 0)
       : undefined;
   if (configuredTimeoutMs === undefined) {

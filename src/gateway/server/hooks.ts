@@ -1,4 +1,10 @@
+// Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -13,14 +19,15 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  resolveDateTimestampMs,
-  resolveTimestampMsToIsoString,
-} from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
+/**
+ * Gateway hook HTTP handler factory.
+ *
+ * Hooks can either enqueue wake events or spawn isolated agent turns; both paths
+ * sanitize external input before it reaches logs or system-event text.
+ */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
@@ -84,6 +91,7 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+/** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -143,6 +151,8 @@ export function createGatewayHooksRequestHandler(params: {
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
+        // Agent hooks run after the HTTP response path has returned, so failure
+        // handling must record a system event instead of throwing to the caller.
         const cfg = getRuntimeConfig();
         hookEventSessionKey = resolveHookEventSessionKey({
           cfg,

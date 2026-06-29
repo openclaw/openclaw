@@ -197,20 +197,46 @@ only for behavior that really belongs to the backend.
 
 `CliBackendPlugin` can also define:
 
-| Hook                               | Use                                                    |
-| ---------------------------------- | ------------------------------------------------------ |
-| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                 |
-| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort       |
-| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch  |
-| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform     |
-| `textTransforms`                   | Bidirectional prompt/output replacements               |
-| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                |
-| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
-| `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
-| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
+| Hook                               | Use                                                                         |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
+| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
+| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch                       |
+| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
+| `textTransforms`                   | Bidirectional prompt/output replacements                                    |
+| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
+| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
+| `nativeToolMode`                   | Declare whether the CLI has always-on native tools                          |
+| `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
+| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
+| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+`ctx.executionMode` is `"agent"` for normal turns and `"side-question"` for
+ephemeral `/btw` calls. Use it when the CLI needs different one-shot flags, such
+as disabling native tools, session persistence, or resume behavior for BTW. If a
+backend normally has `nativeToolMode: "always-on"` but its side-question argv
+reliably disables those tools, also set `sideQuestionToolMode: "disabled"`;
+otherwise OpenClaw fails closed when BTW requires a no-tools CLI run.
+
+### `ownsNativeCompaction`: opting out of OpenClaw compaction
+
+If your backend runs an agent that compacts its **own** transcript, set
+`ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs against its
+sessions - the CLI compaction lifecycle returns a no-op and the turn proceeds. `claude-cli`
+declares it because Claude Code compacts internally with no harness endpoint. Native-harness
+sessions such as Codex keep routing to their harness compaction endpoint instead.
+
+**Only declare it when all of the following hold**, or a deferred over-budget session can
+stay over budget / go stale (OpenClaw no longer rescues it):
+
+- the backend reliably compacts or bounds its own transcript as it nears its window;
+- it persists a resumable session so the compacted state survives turns
+  (e.g. `--resume` / `--session-id`);
+- it is not a native-harness compaction session - matching `agentHarnessId` sessions
+  route to the harness endpoint instead.
 
 ## MCP tool bridge
 

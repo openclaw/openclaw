@@ -1,3 +1,5 @@
+// Guest Transports script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
@@ -12,11 +14,19 @@ export interface GuestExecOptions {
 export interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
+  completedLogDrainGraceMs?: number;
   label: string;
+  logChunkBytes?: number;
   onLaunchRetry?: (message: string) => void;
+  pollIntervalMs?: number;
+  runCommand?: typeof run;
   script: string;
   timeoutMs: number;
   vmName: string;
+}
+
+function guestScriptName(extension: string): string {
+  return `openclaw-parallels-${randomUUID()}.${extension}`;
 }
 
 function appendOutput(
@@ -36,7 +46,9 @@ function timeoutBefore(deadline: number, fallbackMs: number): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function throwIfFailed(label: string, result: CommandResult, check: boolean | undefined): void {
@@ -46,33 +58,83 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
+
+function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
+  phases.append(result.stdout);
+  phases.append(result.stderr);
+}
+
+function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+  try {
+    appendCommandResult(
+      phases,
+      run("prlctl", transportArgs, {
+        check: false,
+        quiet: true,
+        timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
+      }),
+    );
+  } catch {
+    // Cleanup must not hide the command failure that made the phase useful.
+  }
+}
+
 export async function runWindowsBackgroundPowerShell(
   options: WindowsBackgroundPowerShellOptions,
 ): Promise<void> {
   const append = options.append;
+  const completedLogDrainGraceMs = Math.max(
+    1,
+    Math.floor(options.completedLogDrainGraceMs ?? 30_000),
+  );
+  const logChunkBytes = Math.max(1, Math.floor(options.logChunkBytes ?? 1024 * 1024));
+  const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
+  const runCommand = options.runCommand ?? run;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
-  const nonce = `${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const nonce = `${safeLabel}-${randomUUID()}`;
   const fileBase = `openclaw-parallels-${nonce}`;
+  const logLengthPrefix = `__OPENCLAW_LOG_LENGTH__:${nonce}:`;
+  const logOffsetPrefix = `__OPENCLAW_LOG_OFFSET__:${nonce}:`;
+  const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
+  const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
   const pathsScript = `$base = Join-Path $env:TEMP ${psSingleQuote(fileBase)}
 $scriptPath = "$base.ps1"
 $logPath = "$base.log"
 $donePath = "$base.done"
-$exitPath = "$base.exit"`;
+$exitPath = "$base.exit"
+$pidPath = "$base.pid"
+function Write-OpenClawUtf8File([string]$Path, [string]$Value) {
+  [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
+}`;
   const payload = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 ${pathsScript}
+function Add-OpenClawBackgroundLog {
+  param([Parameter(ValueFromPipeline=$true)]$InputObject)
+  process {
+    $text = $InputObject | Out-String
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try {
+      $stream.Write($bytes, 0, $bytes.Length)
+    } finally {
+      $stream.Dispose()
+    }
+  }
+}
 try {
   & {
 ${options.script}
-  } *>&1 | ForEach-Object { $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8 }
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+  } *>&1 | Add-OpenClawBackgroundLog
+  Write-OpenClawUtf8File $exitPath '0'
 } catch {
-  $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+  $_ | Add-OpenClawBackgroundLog
+  Write-OpenClawUtf8File $exitPath '1'
 } finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+  Write-OpenClawUtf8File $donePath 'done'
 }`;
-  const writeScript = run(
+  const writeScript = runCommand(
     "prlctl",
     [
       "exec",
@@ -84,7 +146,7 @@ ${options.script}
       "Bypass",
       "-EncodedCommand",
       encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
 if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not written" }`),
     ],
@@ -97,121 +159,168 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
     );
   }
 
-  const deadline = Date.now() + options.timeoutMs;
-  let launched = false;
-  let lastLaunchStatus = 0;
-  for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
-    options.beforeLaunchAttempt?.();
-    const launch = run(
-      "prlctl",
-      [
-        "exec",
-        options.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
-Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+  let doneSeen = false;
+  try {
+    const deadline = Date.now() + options.timeoutMs;
+    let launched = false;
+    let lastLaunchStatus = 0;
+    for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
+      options.beforeLaunchAttempt?.();
+      const launch = runCommand(
+        "prlctl",
+        [
+          "exec",
+          options.vmName,
+          "--current-user",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+$process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -PassThru
+Write-OpenClawUtf8File $pidPath ([string]$process.Id)
 'started'`),
-      ],
-      { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
-    );
-    appendOutput(append, launch);
-    if (launch.status === 0 && launch.stdout.includes("started")) {
-      launched = true;
-      break;
-    }
-    lastLaunchStatus = launch.status;
-    if (launch.status === 0 || launch.status === 124) {
-      const materialized = waitForWindowsBackgroundMaterialized({
-        append,
-        deadline,
-        pathsScript,
-        vmName: options.vmName,
-      });
-      if (materialized) {
+        ],
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+      );
+      appendOutput(append, launch);
+      if (launch.status === 0 && launch.stdout.includes("started")) {
         launched = true;
         break;
       }
-      options.onLaunchRetry?.(
-        `${options.label} launch retry ${attempt}: background log/done file did not materialize`,
+      lastLaunchStatus = launch.status;
+      if (launch.status === 0 || launch.status === 124) {
+        const materialized = await waitForWindowsBackgroundMaterialized({
+          append,
+          deadline,
+          pathsScript,
+          pollIntervalMs,
+          runCommand,
+          vmName: options.vmName,
+        });
+        if (materialized) {
+          launched = true;
+          break;
+        }
+        options.onLaunchRetry?.(
+          `${options.label} launch retry ${attempt}: background log/done file did not materialize`,
+        );
+        continue;
+      }
+      if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
+        options.onLaunchRetry?.(`${options.label} launch retry ${attempt}: VM is still restoring`);
+        await sleep(5_000);
+        continue;
+      }
+      throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
+    }
+    if (!launched) {
+      throw new Error(
+        `${options.label} background launch failed with exit code ${lastLaunchStatus}`,
       );
-      continue;
     }
-    if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
-      options.onLaunchRetry?.(`${options.label} launch retry ${attempt}: VM is still restoring`);
-      await sleep(5_000);
-      continue;
-    }
-    throw new Error(`${options.label} background launch failed with exit code ${launch.status}`);
-  }
-  if (!launched) {
-    throw new Error(`${options.label} background launch failed with exit code ${lastLaunchStatus}`);
-  }
 
-  let lastLogOffset = 0;
-  while (Date.now() < deadline) {
-    const poll = run(
-      "prlctl",
-      [
-        "exec",
-        options.vmName,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
+    let lastLogOffset = 0;
+    let completedLogDrainDeadline = 0;
+    const activeDeadline = () => (doneSeen ? completedLogDrainDeadline : deadline);
+    while (Date.now() < activeDeadline()) {
+      const poll = runCommand(
+        "prlctl",
+        [
+          "exec",
+          options.vmName,
+          "--current-user",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
 $offset = ${lastLogOffset}
 if (Test-Path $logPath) {
-  $bytes = [System.IO.File]::ReadAllBytes($logPath)
-  if ($bytes.Length -gt $offset) {
-    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
-    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+  $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+  try {
+    $length = $stream.Length
+    ${psSingleQuote(logLengthPrefix)} + $length
+    if ($length -gt $offset) {
+      [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
+      $count = [int][Math]::Min($length - $offset, ${logChunkBytes})
+      $buffer = New-Object byte[] $count
+      $read = $stream.Read($buffer, 0, $count)
+      if ($read -gt 0) {
+        $nextOffset = $offset + $read
+        ${psSingleQuote(logOffsetPrefix)} + $nextOffset
+        [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+      }
+    }
+  } finally {
+    $stream.Dispose()
   }
 }
 if (Test-Path $donePath) {
   $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
-  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
-  '__OPENCLAW_BACKGROUND_DONE__'
+  ${psSingleQuote(backgroundExitPrefix)} + $backgroundExit
+  ${psSingleQuote(backgroundDoneMarker)}
   if ($backgroundExit -ne '0') { exit 23 }
   exit 0
 }`),
-      ],
-      { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
-    );
-    appendOutput(append, poll);
-    const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
-    if (offsetMatch) {
-      lastLogOffset = Number(offsetMatch[1]);
-    }
-    if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-      const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
-      const backgroundExit = exitMatch?.[1] ?? "0";
-      if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
-        throw new Error(`${options.label} failed`);
+        ],
+        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 30_000) },
+      );
+      appendOutput(append, poll);
+      const offsetRaw = findControlValue(poll.stdout, logOffsetPrefix);
+      if (offsetRaw) {
+        lastLogOffset = Number(offsetRaw);
       }
-      cleanupWindowsBackground(options.vmName, pathsScript);
-      return;
+      const lengthRaw = findControlValue(poll.stdout, logLengthPrefix);
+      const logLength = lengthRaw ? Number(lengthRaw) : lastLogOffset;
+      if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
+        doneSeen = true;
+        completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
+        if (lastLogOffset < logLength) {
+          await sleep(Math.min(pollIntervalMs, 100));
+          continue;
+        }
+        const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
+        if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
+          throw new Error(`${options.label} failed`);
+        }
+        return;
+      }
+      await sleep(pollIntervalMs);
     }
-    await sleep(5_000);
+    if (doneSeen) {
+      throw new Error(`${options.label} completed but log drain timed out`);
+    }
+    throw new Error(`${options.label} timed out`);
+  } finally {
+    cleanupWindowsBackground(options.vmName, pathsScript, runCommand, {
+      stopProcessTree: !doneSeen,
+    });
   }
-  throw new Error(`${options.label} timed out`);
 }
 
-function waitForWindowsBackgroundMaterialized(params: {
+function findControlValue(output: string, prefix: string): string | undefined {
+  const line = output.split(/\r?\n/u).find((entry) => entry.startsWith(prefix));
+  return line?.slice(prefix.length).trim();
+}
+
+function hasControlLine(output: string, marker: string): boolean {
+  return output.split(/\r?\n/u).some((entry) => entry.trimEnd() === marker);
+}
+
+async function waitForWindowsBackgroundMaterialized(params: {
   append?: (chunk: string | Uint8Array) => void;
   deadline: number;
   pathsScript: string;
+  pollIntervalMs: number;
+  runCommand: typeof run;
   vmName: string;
-}): boolean {
+}): Promise<boolean> {
   const materializeDeadline = Math.min(Date.now() + 45_000, params.deadline);
   while (Date.now() < materializeDeadline) {
-    const result = run(
+    const result = params.runCommand(
       "prlctl",
       [
         "exec",
@@ -233,12 +342,33 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
     if (result.stdout.includes("materialized")) {
       return true;
     }
+    await sleep(Math.min(params.pollIntervalMs, Math.max(1, materializeDeadline - Date.now())));
   }
   return false;
 }
 
-function cleanupWindowsBackground(vmName: string, pathsScript: string): void {
-  run(
+function cleanupWindowsBackground(
+  vmName: string,
+  pathsScript: string,
+  runCommand: typeof run,
+  options: { stopProcessTree: boolean },
+): void {
+  const stopProcessTree = options.stopProcessTree
+    ? `function Stop-OpenClawBackgroundProcessTree([int]$ProcessId) {
+  Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-OpenClawBackgroundProcessTree ([int]$_.ProcessId)
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $pidPath) {
+  $backgroundPid = (Get-Content -Path $pidPath -Raw).Trim()
+  if ($backgroundPid) {
+    Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)
+  }
+}
+`
+    : "";
+  runCommand(
     "prlctl",
     [
       "exec",
@@ -250,7 +380,8 @@ function cleanupWindowsBackground(vmName: string, pathsScript: string): void {
       "Bypass",
       "-EncodedCommand",
       encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`),
+${stopProcessTree}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue`),
     ],
     { check: false, quiet: true, timeoutMs: 30_000 },
   );
@@ -263,48 +394,36 @@ export class LinuxGuest {
   ) {}
 
   exec(args: string[], options: GuestExecOptions = {}): string {
-    const result = run(
-      "prlctl",
-      ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args],
-      {
-        check: false,
-        input: options.input,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
-      },
-    );
+    const result = run("prlctl", this.transportArgs(args), {
+      check: false,
+      input: options.input,
+      quiet: true,
+      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
+    });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
     throwIfFailed("Linux guest command", result, options.check);
     return result.stdout.trim();
   }
 
+  private transportArgs(args: string[]): string[] {
+    return ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args];
+  }
+
   bash(script: string): string {
-    const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
-    const write = run(
-      "prlctl",
-      [
-        "exec",
-        this.vmName,
-        "/usr/bin/env",
-        "HOME=/root",
-        "OPENCLAW_ALLOW_ROOT=1",
-        "dd",
-        `of=${scriptPath}`,
-        "bs=1048576",
-      ],
-      {
+    const scriptPath = `/tmp/${guestScriptName("sh")}`;
+    try {
+      const write = run("prlctl", this.transportArgs(["dd", `of=${scriptPath}`, "bs=1048576"]), {
+        check: false,
         input: `umask 022\n${script}`,
         quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(),
-      },
-    );
-    this.phases.append(write.stdout);
-    this.phases.append(write.stderr);
-    try {
+      });
+      appendCommandResult(this.phases, write);
+      throwIfFailed("Linux guest script write", write, undefined);
       return this.exec(["bash", scriptPath]);
     } finally {
-      this.exec(["rm", "-f", scriptPath], { check: false });
+      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
     }
   }
 }
@@ -329,29 +448,31 @@ export class MacosGuest {
     return this.run(args, options).stdout.trim();
   }
 
-  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
-    const envArgs = Object.entries({ PATH: this.input.path, ...options.env }).map(
+  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+    const envArgs = Object.entries({ PATH: this.input.path, ...env }).map(
       ([key, value]) => `${key}=${value}`,
     );
     const user = this.input.getUser();
-    const transportArgs =
-      this.input.getTransport() === "sudo"
-        ? [
-            "exec",
-            this.input.vmName,
-            "/usr/bin/sudo",
-            "-H",
-            "-u",
-            user,
-            "/usr/bin/env",
-            `HOME=${this.input.resolveDesktopHome(user)}`,
-            `USER=${user}`,
-            `LOGNAME=${user}`,
-            ...envArgs,
-            ...args,
-          ]
-        : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
-    const result = run("prlctl", transportArgs, {
+    return this.input.getTransport() === "sudo"
+      ? [
+          "exec",
+          this.input.vmName,
+          "/usr/bin/sudo",
+          "-H",
+          "-u",
+          user,
+          "/usr/bin/env",
+          `HOME=${this.input.resolveDesktopHome(user)}`,
+          `USER=${user}`,
+          `LOGNAME=${user}`,
+          ...envArgs,
+          ...args,
+        ]
+      : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
+  }
+
+  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
+    const result = run("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -364,14 +485,14 @@ export class MacosGuest {
   }
 
   sh(script: string, env: Record<string, string> = {}): string {
-    const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
-    this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
-      input: `umask 022\n${script}`,
-    });
+    const scriptPath = `/tmp/${guestScriptName("sh")}`;
     try {
+      this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
+        input: `umask 022\n${script}`,
+      });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      this.exec(["/bin/rm", "-f", scriptPath], { check: false });
+      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
     }
   }
 }
@@ -400,7 +521,7 @@ export class WindowsGuest {
   }
 
   powershell(script: string, options: GuestExecOptions = {}): string {
-    const scriptName = `openclaw-parallels-${process.pid}-${Date.now()}.ps1`;
+    const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
     const write = run(
