@@ -12,6 +12,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -113,17 +114,20 @@ async function getToken(creds: Credentials): Promise<string> {
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
   });
-  if (!response.ok) {
-    await release();
-    throw new Error(`Token request failed with HTTP ${response.status}`);
-  }
-  const data = (await response.json()) as {
+  let data: {
     code: number;
     msg: string;
     tenant_access_token?: string;
     expire?: number;
   };
-  await release();
+  try {
+    if (!response.ok) {
+      throw new Error(`Token request failed with HTTP ${response.status}`);
+    }
+    data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
+  } finally {
+    await release();
+  }
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
   }
@@ -276,16 +280,19 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
-    if (!createRes.ok) {
-      await releaseCreate();
-      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
-    }
-    const createData = (await createRes.json()) as {
+    let createData: {
       code: number;
       msg: string;
       data?: { card_id: string };
     };
-    await releaseCreate();
+    try {
+      if (!createRes.ok) {
+        throw new Error(`Create card request failed with HTTP ${createRes.status}`);
+      }
+      createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");
+    } finally {
+      await releaseCreate();
+    }
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }

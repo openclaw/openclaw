@@ -7,6 +7,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
 import {
   FeishuStreamingSession,
   mergeStreamingText,
@@ -21,6 +22,53 @@ type StreamingSessionState = {
   sentText: string;
   hasNote: boolean;
 };
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function oversizedJsonStream(totalBytes: number): {
+  response: Response;
+  state: { bytesPulled: number; canceled: boolean };
+} {
+  const state = { bytesPulled: 0, canceled: false };
+  const chunk = Buffer.alloc(1024 * 1024, 0x20);
+  let remaining = totalBytes;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const prefix = new TextEncoder().encode(
+        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+      );
+      remaining -= prefix.byteLength;
+      state.bytesPulled += prefix.byteLength;
+      controller.enqueue(prefix);
+    },
+    pull(controller) {
+      if (remaining <= 0) {
+        controller.enqueue(new TextEncoder().encode('"}'));
+        controller.close();
+        return;
+      }
+      const size = Math.min(chunk.byteLength, remaining);
+      remaining -= size;
+      state.bytesPulled += size;
+      controller.enqueue(chunk.subarray(0, size));
+    },
+    cancel() {
+      state.canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    state,
+  };
+}
 
 function setStreamingSessionInternals(
   session: FeishuStreamingSession,
@@ -65,19 +113,15 @@ describe("FeishuStreamingSession", () => {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         const release = vi.fn(async () => {});
-        let ok = true;
         let status = 200;
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
-                code: 0,
-                msg: "ok",
-                tenant_access_token: "token",
-                expire: 7200,
-              }),
-            },
+            response: jsonResponse({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: "token",
+              expire: 7200,
+            }),
             release,
           };
         }
@@ -89,7 +133,6 @@ describe("FeishuStreamingSession", () => {
           }
           const failedStatus = failedContentUpdateStatuses.get(updateIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         } else if (url.includes("/elements/content")) {
@@ -97,16 +140,11 @@ describe("FeishuStreamingSession", () => {
           replaceBodies.push(init?.body ?? "");
           const failedStatus = failedReplaceStatuses.get(replaceIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         }
         return {
-          response: {
-            ok,
-            status,
-            json: async () => ({ code: 0, msg: "ok" }),
-          },
+          response: jsonResponse({ code: 0, msg: "ok" }, status),
           release,
         };
       },
@@ -125,19 +163,16 @@ describe("FeishuStreamingSession", () => {
           const token = `token-${authTokens.length + 1}`;
           authTokens.push(token);
           return {
-            response: { ok: true, json: async () => resolveAuthJson(token) },
+            response: jsonResponse(resolveAuthJson(token)),
             release,
           };
         }
         return {
-          response: {
-            ok: true,
-            json: async () => ({
-              code: 0,
-              msg: "ok",
-              data: { card_id: `card-${authTokens.length}` },
-            }),
-          },
+          response: jsonResponse({
+            code: 0,
+            msg: "ok",
+            data: { card_id: `card-${authTokens.length}` },
+          }),
           release,
         };
       },
@@ -151,6 +186,69 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client };
   }
+
+  it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
+    const { response, state } = oversizedJsonStream(FEISHU_JSON_MAX_BYTES * 2);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_oversized_token",
+      appSecret: "secret",
+    });
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+      /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
+    );
+    expect(state.canceled).toBe(true);
+    expect(state.bytesPulled).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
+    expect(release).toHaveBeenCalledOnce();
+    console.log(
+      `[feishu streaming-card bound proof] token over-cap: bytes_pulled=${state.bytesPulled} cap=${FEISHU_JSON_MAX_BYTES} canceled=${state.canceled}`,
+    );
+  });
+
+  it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
+    const tokenRelease = vi.fn(async () => {});
+    const cardRelease = vi.fn(async () => {});
+    const { response: cardResponse, state } = oversizedJsonStream(FEISHU_JSON_MAX_BYTES * 2);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        }),
+        release: tokenRelease,
+      })
+      .mockResolvedValueOnce({ response: cardResponse, release: cardRelease });
+
+    const session = new FeishuStreamingSession(
+      {
+        im: {
+          message: {
+            create: vi.fn(),
+          },
+        },
+      } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0],
+      {
+        appId: "app_oversized_card_create",
+        appSecret: "secret",
+      },
+    );
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+      /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
+    );
+    expect(tokenRelease).toHaveBeenCalledOnce();
+    expect(cardRelease).toHaveBeenCalledOnce();
+    expect(state.canceled).toBe(true);
+    expect(state.bytesPulled).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
+    console.log(
+      `[feishu streaming-card bound proof] card-create over-cap: bytes_pulled=${state.bytesPulled} cap=${FEISHU_JSON_MAX_BYTES} canceled=${state.canceled}`,
+    );
+  });
 
   it("flushes throttled pending text after the throttle window", async () => {
     vi.useFakeTimers();
@@ -354,15 +452,12 @@ describe("FeishuStreamingSession", () => {
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
-                code: 0,
-                msg: "ok",
-                tenant_access_token: "token",
-                expire: 7200,
-              }),
-            },
+            response: jsonResponse({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: "token",
+              expire: 7200,
+            }),
             release,
           };
         }
@@ -370,7 +465,7 @@ describe("FeishuStreamingSession", () => {
           settingsBodies.push(init?.body ?? "");
         }
         return {
-          response: { ok: true, status: 200, json: async () => ({ code: 0, msg: "ok" }) },
+          response: jsonResponse({ code: 0, msg: "ok" }),
           release,
         };
       },

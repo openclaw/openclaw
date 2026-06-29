@@ -8,6 +8,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number
  * the openclaw WizardPrompter surface.
  */
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readFeishuJsonResponse } from "./json-response.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -109,7 +110,7 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return (await response.json()) as T;
+    return await readFeishuJsonResponse<T>(response);
   } finally {
     await release();
   }
