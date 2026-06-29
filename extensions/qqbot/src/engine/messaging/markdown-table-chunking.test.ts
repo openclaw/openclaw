@@ -304,6 +304,76 @@ describe("chunkQQBotMarkdownText", () => {
       expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(80);
     }
   });
+
+  it("merges prose-table-prose into one chunk when under limit", () => {
+    const text = [
+      "前置段落第一句，描述上下文。",
+      "前置段落第二句，继续说明。",
+      "| 类型 | 用途 |",
+      "|---|---|",
+      "| 截图 | 页面快照 |",
+      "| 文本 | 留底 |",
+      "后置段落，表格结束后的总结。",
+    ].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain("前置段落第一句");
+    expect(chunks[0]).toContain("| 截图 | 页面快照 |");
+    expect(chunks[0]).toContain("后置段落");
+    expect(chunks[0]).toMatch(/继续说明。\n\n\| 类型/);
+    expect(chunks[0]).toMatch(/\| 文本 \| 留底 \|\n\n后置段落/);
+  });
+
+  it("merges adjacent small tables into one chunk when under limit", () => {
+    const text = [
+      "| A | B |",
+      "|---|---|",
+      "| 1 | 2 |",
+      "",
+      "| C | D |",
+      "|---|---|",
+      "| 3 | 4 |",
+    ].join("\n");
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toHaveLength(1);
+  });
+
+  it("merges prose-fence-prose into one chunk when under limit", () => {
+    const text = ["前一段落。", "```ts", "const x = 1;", "```", "后一段落。"].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toContain("```ts\nconst x = 1;\n```");
+  });
+
+  it("still splits correctly when content exceeds limit", () => {
+    const longPara = "前置长段落。".repeat(500);
+    const text = [longPara, "| A | B |", "|---|---|", "| 1 | 2 |"].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
+  });
+
+  it("regression: 400-byte reply with two small tables is one chunk", () => {
+    const text = [
+      '明白 —— 你要的不是"任务完成"那行短消息，是 OpenCode 任务产出的全部对话/输出文本，要完整留底。',
+      "",
+      '修改现有的 cron job，把"完成后动作"扩成三件套：截图 + 完整文本落盘 + 一起发 QQ。',
+      "",
+      "| 类型 | 路径 | 用途 |",
+      "|---|---|---|",
+      "| 截图 | tmp/one.jpg | 页面快照 |",
+      "| 文本 | tmp/two.md | 留底 |",
+      "| 推送 | 截图+md | 一起发 |",
+      "",
+      "抓取策略：主用 evaluate innerText 抓主对话区，长内容兜底用 scrollTo 顶部+底部各抓一次合并去重，5MB 截断保 QQ 附件安全。",
+      "",
+      "任务一完成，截图和 md 一起弹到你 QQ。",
+    ].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+    expect(chunks).toHaveLength(1);
+    expect(Buffer.byteLength(chunks[0], "utf8")).toBeLessThan(3600);
+  });
 });
 
 describe("table-cell splitting", () => {
