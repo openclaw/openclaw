@@ -281,7 +281,7 @@ class QQBotMarkdownChunkingState {
     }
 
     pushFenceLineChunks({
-      chunks,
+      enqueue: (content, kind, chunkLimit) => this.enqueuePending(content, kind, chunkLimit),
       openLine: fence.openLine,
       closeLine: fence.closeLine,
       bodyLines,
@@ -640,21 +640,21 @@ function renderTableRowAsFields(headers: string[], cells: string[]): string {
 }
 
 function pushFenceLineChunks(params: {
-  chunks: string[];
+  enqueue: (content: string, kind: EmitUnitKind, chunkLimit: number) => void;
   openLine: string;
   closeLine: string;
   bodyLines: string[];
   limit: number;
   baseChunker: QQBotBaseMarkdownChunker;
 }): void {
-  const { chunks, openLine, closeLine, bodyLines, limit, baseChunker } = params;
+  const { enqueue, openLine, closeLine, bodyLines, limit, baseChunker } = params;
   let currentLines: string[] = [];
   const render = (lines: string[]) => [openLine, ...lines, closeLine].join("\n");
   const flushCurrent = (): void => {
     if (currentLines.length === 0) {
       return;
     }
-    chunks.push(render(currentLines));
+    enqueue(render(currentLines), "fence", limit);
     currentLines = [];
   };
 
@@ -670,11 +670,13 @@ function pushFenceLineChunks(params: {
       currentLines = [line];
       continue;
     }
-    pushBaseChunks(chunks, singleLineChunk, limit, baseChunker);
+    for (const piece of baseChunker(singleLineChunk, limit)) {
+      if (piece) enqueue(piece, "fence", limit);
+    }
   }
 
   if (currentLines.length > 0 || bodyLines.length === 0) {
-    chunks.push(render(currentLines));
+    enqueue(render(currentLines), "fence", limit);
   }
 }
 
