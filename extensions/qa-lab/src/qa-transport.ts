@@ -176,6 +176,7 @@ export type QaTransportAdapter = {
     replyChannel: string;
     replyTo: string;
   };
+  createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
   handleAction: (params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
