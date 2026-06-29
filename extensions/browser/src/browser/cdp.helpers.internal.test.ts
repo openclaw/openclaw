@@ -15,12 +15,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   return {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+    registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
   };
 });
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
-  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
-}));
 
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
