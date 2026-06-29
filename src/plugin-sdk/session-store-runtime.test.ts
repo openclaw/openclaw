@@ -10,6 +10,7 @@ import {
   listSessionEntries,
   patchSessionEntry,
   readSessionUpdatedAt,
+  resolveSessionStoreBackupPaths,
   updateSessionStoreEntry,
   upsertSessionEntry,
   type SessionEntry,
@@ -218,6 +219,17 @@ describe("session-store-runtime compatibility surface", () => {
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
     expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("resolves agent-scoped custom SQLite stores for backups", () => {
+    const customStorePath = path.join(tempDir, "custom", "sessions.json");
+
+    expect(
+      resolveSessionStoreBackupPaths({
+        agentId: "support",
+        storePath: customStorePath,
+      }),
+    ).toContain(path.join(tempDir, "custom", "openclaw-agent.support.sqlite"));
   });
 
   it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {

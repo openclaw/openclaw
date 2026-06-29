@@ -249,9 +249,11 @@ function collectFeishuSessionTargets(params: {
 }): FeishuSessionTarget[] {
   const byStorePath = new Map<string, FeishuSessionTarget>();
   const addTarget = (target: FeishuSessionTarget) => {
-    byStorePath.set(path.resolve(target.storePath), {
+    const resolvedStorePath = path.resolve(target.storePath);
+    byStorePath.set(`${normalizeAgentId(target.agentId)}\0${resolvedStorePath}`, {
       ...target,
-      storePath: path.resolve(target.storePath),
+      agentId: normalizeAgentId(target.agentId),
+      storePath: resolvedStorePath,
     });
   };
 
@@ -577,7 +579,10 @@ export function inspectFeishuDoctorState(params: {
   const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
-    for (const { sessionKey: key, entry } of listSessionEntries({ storePath: target.storePath })
+    for (const { sessionKey: key, entry } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })
       .filter(({ sessionKey, entry: sessionEntry }) =>
         isFeishuSessionEntry(sessionKey, sessionEntry),
       )
@@ -643,7 +648,10 @@ function movePathToBackup(params: {
 
 function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
   const targetDir = path.join(params.backupDir, "session-stores", params.agentId);
-  for (const sourcePath of resolveSessionStoreBackupPaths({ storePath: params.storePath })) {
+  for (const sourcePath of resolveSessionStoreBackupPaths({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  })) {
     if (!existsFile(sourcePath)) {
       continue;
     }

@@ -462,7 +462,7 @@ export async function forkSqliteSessionTranscriptFromParent(
 export async function forkSqliteSessionEntryFromParentTarget(
   params: ForkSessionEntryFromParentTargetParams,
 ): Promise<ForkSessionEntryFromParentTargetResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath);
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   const parentTarget = normalizeSqliteLifecycleTarget(params.parentTarget);
   const sessionTarget = normalizeSqliteLifecycleTarget(params.sessionTarget);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -680,7 +680,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
 export async function resetSqliteSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath);
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const current = resolveSqliteLifecyclePrimaryEntry(database, params.target);
@@ -722,7 +722,7 @@ export async function resetSqliteSessionEntryLifecycle(
 export async function deleteSqliteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath);
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts: [],
@@ -894,7 +894,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
 export async function purgeSqliteDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<SessionEntryLifecycleMutationResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath);
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.storeAgentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const removedSessionKeys: string[] = [];
     let afterCount = 0;
@@ -1681,8 +1681,15 @@ function resolveExplicitSqliteAgentId(params: {
     : parseAgentSessionKey(params.sessionKey)?.agentId;
 }
 
-function resolveSqliteStoreScope(storePath: string): ResolvedSqliteScope {
-  return resolveSqliteScope({ sessionKey: "", storePath });
+function resolveSqliteStoreScope(
+  storePath: string,
+  options: { agentId?: string } = {},
+): ResolvedSqliteScope {
+  return resolveSqliteScope({
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    sessionKey: "",
+    storePath,
+  });
 }
 
 function resolveSqliteAgentId(params: {
