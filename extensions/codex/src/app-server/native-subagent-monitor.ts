@@ -59,6 +59,7 @@ type ChildState = {
   pendingCompletion?: CodexNativeSubagentCompletion;
   pendingCompletionEventAt?: number;
   completionDeliveryAttempt: number;
+  completionDeliveryStartedAt?: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletionKey?: string;
   noFinalCompletionFallbackTimer?: ReturnType<typeof setTimeout>;
@@ -89,6 +90,13 @@ const DEFAULT_TRANSCRIPT_POLL_DELAYS_MS = [
 const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
   5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ];
+// Maximum retry attempts for completion delivery before giving up.
+// With the default 6-delay schedule this gives ~5+15+30+60+120+300*7 ≈ 38 min.
+const MAX_COMPLETION_DELIVERY_RETRY_ATTEMPTS = 12;
+
+// Hard deadline from first delivery attempt, after which retries stop.
+// 30 minutes covers the retry window with margin.
+const COMPLETION_DELIVERY_DEADLINE_MS = 30 * 60 * 1000;
 const DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS = 10_000;
 const RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS = 60_000;
 // Codex's recorder uses this filename contract; non-canonical names keep the
@@ -565,6 +573,7 @@ export class CodexNativeSubagentMonitor {
         childState.pendingCompletion = undefined;
         childState.pendingCompletionEventAt = undefined;
         childState.completionDeliveryAttempt = 0;
+        childState.completionDeliveryStartedAt = undefined;
         if (childState.completionDeliveryTimer) {
           clearTimeout(childState.completionDeliveryTimer);
           childState.completionDeliveryTimer = undefined;
@@ -618,7 +627,24 @@ export class CodexNativeSubagentMonitor {
     if (!childState.pendingCompletion || childState.completionDeliveryTimer) {
       return;
     }
+
     const attempt = childState.completionDeliveryAttempt;
+
+    // Track first delivery attempt time for deadline enforcement.
+    if (childState.completionDeliveryStartedAt === undefined) {
+      childState.completionDeliveryStartedAt = Date.now();
+    }
+
+    // Give up if we've hit the retry cap or the overall deadline.
+    // This prevents an unbounded retry loop on permanently non-durable delivery.
+    if (
+      attempt >= MAX_COMPLETION_DELIVERY_RETRY_ATTEMPTS ||
+      Date.now() - childState.completionDeliveryStartedAt >= COMPLETION_DELIVERY_DEADLINE_MS
+    ) {
+      this.giveUpCompletionDelivery(childState);
+      return;
+    }
+
     const delayMs =
       this.completionDeliveryRetryDelaysMs[
         Math.min(attempt, this.completionDeliveryRetryDelaysMs.length - 1)
@@ -633,6 +659,40 @@ export class CodexNativeSubagentMonitor {
       void this.deliverPendingCompletion(state, childState);
     }, delayMs);
     unrefTimer(childState.completionDeliveryTimer);
+  }
+
+  /**
+   * Give up on delivering a completion after exhausting retry attempts or the
+   * overall deadline. Marks the delivery as failed so it won't be rescheduled.
+   */
+  private giveUpCompletionDelivery(childState: ChildState): void {
+    const completion = childState.pendingCompletion;
+    if (!completion) {
+      return;
+    }
+    const taskRuntime = this.getTaskRuntimeForChild(completion.childThreadId);
+    if (taskRuntime) {
+      taskRuntime.setDetachedTaskDeliveryStatusByRunId({
+        runId: codexNativeSubagentRunId(completion.childThreadId),
+        deliveryStatus: "failed",
+        error:
+          "Completion delivery retries exhausted; giving up after " +
+          `${childState.completionDeliveryAttempt} attempts`,
+      });
+    }
+    childState.pendingCompletion = undefined;
+    childState.pendingCompletionEventAt = undefined;
+    childState.completionDeliveryAttempt = 0;
+    childState.completionDeliveryStartedAt = undefined;
+    if (childState.completionDeliveryTimer) {
+      clearTimeout(childState.completionDeliveryTimer);
+      childState.completionDeliveryTimer = undefined;
+    }
+    embeddedAgentLog.warn("Gave up delivering Codex native subagent completion", {
+      parentThreadId: childState.parentThreadId,
+      childThreadId: childState.childThreadId,
+      attempts: childState.completionDeliveryAttempt,
+    });
   }
 
   private finalizeCompletionTask(completion: CodexNativeSubagentCompletion, eventAt: number): void {

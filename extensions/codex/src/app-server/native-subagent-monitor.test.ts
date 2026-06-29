@@ -1286,6 +1286,120 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  // FIX #97593: Delivery retries must stop after a bounded attempt cap.
+  it("stops retrying after max attempts on permanently non-durable delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      // Delivery always fails — permanently non-durable.
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "permanently non-durable",
+      });
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child result",
+        }),
+      );
+
+      // Initial delivery attempt.
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // Exhaust the retry cap (MAX = 12 means 12 retries after the initial call).
+      for (let tick = 0; tick < 20; tick++) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      // The monitor should have given up — deliveryAttempt stops incrementing.
+      const finalCalls = runtime.deliverAgentHarnessTaskCompletion.mock.calls.length;
+      // Initial call + up to MAX retries = 13 max, but the 13th (attempt 12) triggers give-up.
+      expect(finalCalls).toBeLessThanOrEqual(13);
+
+      // Delivery should be marked as failed instead of pending/rescheduled.
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "failed",
+        }),
+      );
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // FIX #97593: After give-up, no further retries fire even with more time passing.
+  it("does not resume retrying after give-up on permanently non-durable delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "permanently non-durable",
+      });
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child result",
+        }),
+      );
+
+      // Exhaust retries.
+      for (let tick = 0; tick < 20; tick++) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      // Give-up fired: status = failed
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryStatus: "failed" }),
+      );
+
+      const callsBefore = runtime.deliverAgentHarnessTaskCompletion.mock.calls.length;
+
+      // Advance more time — no additional delivery calls should fire.
+      for (let tick = 0; tick < 10; tick++) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      const callsAfter = runtime.deliverAgentHarnessTaskCompletion.mock.calls.length;
+      expect(callsAfter).toBe(callsBefore);
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reconciles completed native subagents from child rollout transcripts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");
