@@ -4,7 +4,15 @@ import {
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 // Covers embedded runner extension factories and tool-result middleware bridge.
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  AuthStorage,
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  loadExtensionFromFactory,
+  ModelRegistry,
+  SessionManager,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -509,13 +517,26 @@ describe("buildEmbeddedExtensionFactories", () => {
       model: undefined,
     });
 
-    const handlers = new Map<string, Function>();
-    await factories[0]?.({
-      on(event: string, handler: Function) {
-        handlers.set(event, handler);
-      },
-    } as never);
-    const handler = handlers.get("tool_result");
+    const factory = factories[0];
+    expect(factory).toBeDefined();
+    if (!factory) {
+      throw new Error("Expected embedded tool-result extension factory");
+    }
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      factory,
+      "/tmp",
+      createEventBus(),
+      runtime,
+      "<embedded-test>",
+    );
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/tmp",
+      SessionManager.inMemory(),
+      ModelRegistry.inMemory(AuthStorage.inMemory()),
+    );
     const acceptedResult = jsonResult({
       status: "accepted",
       childSessionKey: "agent:watcher:subagent:abc",
@@ -523,18 +544,17 @@ describe("buildEmbeddedExtensionFactories", () => {
       mode: "run",
     });
 
-    const result = await handler?.(
-      {
-        toolName: "sessions_spawn",
-        toolCallId: "call-spawn",
-        content: acceptedResult.content,
-        details: acceptedResult.details,
-        isError: true,
-      },
-      { cwd: "/tmp" },
-    );
+    const result = await runner.emitToolResult({
+      type: "tool_result",
+      toolName: "sessions_spawn",
+      toolCallId: "call-spawn",
+      input: {},
+      content: acceptedResult.content,
+      details: acceptedResult.details,
+      isError: true,
+    });
 
-    expect(result).toEqual(acceptedResult);
+    expect(result).toEqual({ ...acceptedResult, isError: false });
   });
 
   it("still marks a forbidden sessions_spawn as a model-visible failure", async () => {

@@ -95,6 +95,9 @@ function buildAgentToolResultMiddlewareFactory(
       const isError =
         !isAcceptedSessionSpawn &&
         (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const clearsAcceptedSessionSpawnError =
+        isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -107,6 +110,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(isError ? { isError: true } : {}),
+        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
     });
   };
