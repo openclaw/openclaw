@@ -133,6 +133,23 @@ function resolveWaWebSocketUrl(value: string | URL | undefined): string | URL | 
   return value.trim() || undefined;
 }
 
+function resolveEnvWaWebSocketUrl(): string | undefined {
+  const value = resolveWaWebSocketUrl(process.env[OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV]);
+  if (!value) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV} must be a valid URL.`);
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error(`${OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV} must use ws:// or wss://.`);
+  }
+  return url.toString();
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -172,6 +189,7 @@ export async function createWaSocket(
     await writeCredsJsonAtomically(authDir, state.creds);
   };
   const { version } = await fetchLatestBaileysVersion();
+  const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
   const socketTiming = {
@@ -181,9 +199,6 @@ export async function createWaSocket(
     defaultQueryTimeoutMs:
       opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
   };
-  const waWebSocketUrl =
-    resolveWaWebSocketUrl(opts.waWebSocketUrl) ??
-    resolveWaWebSocketUrl(process.env[OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV]);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,

@@ -449,6 +449,25 @@ describe("web session", () => {
     expect(readLastSocketOptions().waWebSocketUrl).toBeUndefined();
   });
 
+  it("rejects invalid OPENCLAW_WHATSAPP_WEB_SOCKET_URL values", async () => {
+    vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, "http://127.0.0.1:14567/ws");
+
+    await expect(createWaSocket(false, false)).rejects.toThrow(
+      "OPENCLAW_WHATSAPP_WEB_SOCKET_URL must use ws:// or wss://.",
+    );
+    expect(baileys.makeWASocket).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit Baileys WebSocket URL options over invalid environment", async () => {
+    vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, "http://127.0.0.1:49153/ws/chat");
+
+    await createWaSocket(false, false, {
+      waWebSocketUrl: "ws://127.0.0.1:49154/ws/chat",
+    });
+
+    expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
+  });
+
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
 
