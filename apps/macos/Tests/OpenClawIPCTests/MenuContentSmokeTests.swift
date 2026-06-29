@@ -65,4 +65,19 @@ struct MenuContentSmokeTests {
         #expect(shouldUseDefaultHandling == false)
         #expect(didOpenDashboard)
     }
+
+    @Test func `dock reopen keeps default handling when windows are visible`() {
+        let delegate = AppDelegate()
+        var didOpenDashboard = false
+        delegate.openDashboardAction = {
+            didOpenDashboard = true
+        }
+
+        let shouldUseDefaultHandling = delegate.applicationShouldHandleReopen(
+            NSApplication.shared,
+            hasVisibleWindows: true)
+
+        #expect(shouldUseDefaultHandling)
+        #expect(!didOpenDashboard)
+    }
 }
