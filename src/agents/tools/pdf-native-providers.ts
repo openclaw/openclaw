@@ -8,6 +8,7 @@ import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-run
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 type PdfInput = {
   base64: string;
@@ -92,7 +93,7 @@ export async function anthropicAnalyzePdf(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  const json = await readProviderJsonResponse<unknown>(res, "Anthropic PDF");
   if (!isRecord(json)) {
     throw new Error("Anthropic PDF response was not JSON.");
   }
@@ -180,7 +181,7 @@ export async function geminiAnalyzePdf(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  const json = await readProviderJsonResponse<unknown>(res, "Gemini PDF");
   if (!isRecord(json)) {
     throw new Error("Gemini PDF response was not JSON.");
   }

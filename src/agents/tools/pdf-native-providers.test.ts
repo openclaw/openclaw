@@ -1,5 +1,8 @@
 // Native PDF provider tests cover direct Anthropic and Gemini request shapes,
-// base URL handling, and bounded API error reporting.
+// base URL handling, bounded API error reporting, and the 16 MiB response-size
+// guard added to prevent OOM on oversized AI provider responses.
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
@@ -70,12 +73,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "Analysis of PDF" }],
+    const fetchMock = mockFetchResponse(
+      new Response(JSON.stringify({ content: [{ type: "text", text: "Analysis of PDF" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    });
+    );
 
     const result = await pdfNativeProviders.anthropicAnalyzePdf(
       makeAnthropicAnalyzeParams({
@@ -104,12 +107,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "Analysis of PDF" }],
+    const fetchMock = mockFetchResponse(
+      new Response(JSON.stringify({ content: [{ type: "text", text: "Analysis of PDF" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    });
+    );
 
     await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
 
@@ -196,12 +199,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("anthropicAnalyzePdf throws when response has no text", async () => {
-    mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "   " }],
+    mockFetchResponse(
+      new Response(JSON.stringify({ content: [{ type: "text", text: "   " }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    });
+    );
 
     await expect(
       pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams()),
@@ -211,12 +214,12 @@ describe("native PDF provider API calls", () => {
   it("geminiAnalyzePdf sends correct request shape", async () => {
     // Gemini API keys belong in headers here, not query strings that are more
     // likely to leak through logs and URL diagnostics.
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }],
-      }),
-    });
+    const fetchMock = mockFetchResponse(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
 
     const result = await pdfNativeProviders.geminiAnalyzePdf(
       makeGeminiAnalyzeParams({
@@ -257,10 +260,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf throws when no candidates returned", async () => {
-    mockFetchResponse({
-      ok: true,
-      json: async () => ({ candidates: [] }),
-    });
+    mockFetchResponse(
+      new Response(JSON.stringify({ candidates: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
 
     await expect(pdfNativeProviders.geminiAnalyzePdf(makeGeminiAnalyzeParams())).rejects.toThrow(
       "Gemini PDF returned no candidates",
@@ -268,12 +273,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("anthropicAnalyzePdf supports multiple PDFs", async () => {
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "Multi-doc analysis" }],
+    const fetchMock = mockFetchResponse(
+      new Response(JSON.stringify({ content: [{ type: "text", text: "Multi-doc analysis" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    });
+    );
 
     await pdfNativeProviders.anthropicAnalyzePdf(
       makeAnthropicAnalyzeParams({
@@ -295,12 +300,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("anthropicAnalyzePdf uses custom base URL", async () => {
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "ok" }],
+    const fetchMock = mockFetchResponse(
+      new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    });
+    );
 
     await pdfNativeProviders.anthropicAnalyzePdf(
       makeAnthropicAnalyzeParams({ baseUrl: "https://custom.example.com" }),
@@ -322,12 +327,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf does not duplicate /v1beta when baseUrl already includes it", async () => {
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        candidates: [{ content: { parts: [{ text: "ok" }] } }],
-      }),
-    });
+    const fetchMock = mockFetchResponse(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
 
     await pdfNativeProviders.geminiAnalyzePdf(
       makeGeminiAnalyzeParams({
@@ -341,12 +346,12 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf normalizes bare Google API hosts to a single /v1beta root", async () => {
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        candidates: [{ content: { parts: [{ text: "ok" }] } }],
-      }),
-    });
+    const fetchMock = mockFetchResponse(
+      new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
 
     await pdfNativeProviders.geminiAnalyzePdf(
       makeGeminiAnalyzeParams({
@@ -357,5 +362,183 @@ describe("native PDF provider API calls", () => {
     const [url] = firstFetchCall(fetchMock);
     expect(url).toContain("https://generativelanguage.googleapis.com/v1beta/models/");
     expect(url).not.toContain("/v1beta/v1beta");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16 MiB response-size guard — real node:http server (no fetch mock)
+// Drives the exported functions end-to-end to prove readProviderJsonResponse
+// caps oversized bodies before OOM can occur.
+// ---------------------------------------------------------------------------
+
+type ServerHandle = { port: number; stop: () => Promise<void> };
+
+function startTestServer(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+): Promise<ServerHandle> {
+  return new Promise((resolve, reject) => {
+    const server = createServer(handler);
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as { port: number };
+      resolve({
+        port: addr.port,
+        stop: () =>
+          new Promise<void>((res, rej) =>
+            server.close((err) => (err ? rej(err) : res())),
+          ),
+      });
+    });
+  });
+}
+
+/**
+ * Returns an HTTP handler that streams 20 MiB of content in 1 MiB chunks.
+ * The caller-supplied callback fires once per chunk so tests can confirm the
+ * cap fires before all chunks are consumed.
+ */
+function makeOversizedStreamHandler(
+  onChunkWritten: () => void,
+): (req: IncomingMessage, res: ServerResponse) => void {
+  const CHUNK_SIZE = 1024 * 1024; // 1 MiB
+  const TOTAL_CHUNKS = 20; // 20 MiB total — well above the 16 MiB default cap
+  const CHUNK = Buffer.alloc(CHUNK_SIZE, 0x61); // fill with 'a'
+
+  return (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    let written = 0;
+
+    function writeNext() {
+      if (written >= TOTAL_CHUNKS) {
+        res.end();
+        return;
+      }
+      written++;
+      onChunkWritten();
+      const ok = res.write(CHUNK);
+      if (ok) {
+        writeNext();
+      } else {
+        res.once("drain", writeNext);
+      }
+    }
+
+    writeNext();
+  };
+}
+
+describe("anthropicAnalyzePdf — 16 MiB response-size guard (real HTTP server)", () => {
+  it("returns extracted text for a well-formed response under the cap", async () => {
+    const responseBody = JSON.stringify({
+      content: [{ type: "text", text: "Summary of the PDF document." }],
+    });
+
+    const srv = await startTestServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(responseBody);
+    });
+
+    try {
+      const result = await pdfNativeProviders.anthropicAnalyzePdf({
+        apiKey: "sk-test-placeholder",
+        modelId: "claude-3-5-sonnet-20241022",
+        prompt: "Summarize",
+        pdfs: [{ base64: "dGVzdA==" }],
+        baseUrl: `http://127.0.0.1:${srv.port}`,
+      });
+      expect(result).toBe("Summary of the PDF document.");
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it("rejects oversized AI responses before buffering all 20 MiB (OOM guard)", async () => {
+    let chunksWritten = 0;
+    const TOTAL_CHUNKS = 20;
+
+    const srv = await startTestServer(
+      makeOversizedStreamHandler(() => {
+        chunksWritten++;
+      }),
+    );
+
+    try {
+      // Mutation-control: bare `res.json()` would buffer all 20 MiB and then
+      // throw a JSON parse error. readProviderJsonResponse throws with this
+      // specific message once the 16 MiB cap is crossed.
+      await expect(
+        pdfNativeProviders.anthropicAnalyzePdf({
+          apiKey: "sk-test-placeholder",
+          modelId: "claude-3-5-sonnet-20241022",
+          prompt: "Summarize",
+          pdfs: [{ base64: "dGVzdA==" }],
+          baseUrl: `http://127.0.0.1:${srv.port}`,
+        }),
+      ).rejects.toThrow(/JSON response exceeds/);
+
+      // Negative-control: the cap fires well before the server finishes
+      // streaming, proving the body was NOT fully buffered.
+      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+    } finally {
+      await srv.stop();
+    }
+  });
+});
+
+describe("geminiAnalyzePdf — 16 MiB response-size guard (real HTTP server)", () => {
+  it("returns extracted text for a well-formed response under the cap", async () => {
+    const responseBody = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "Extracted Gemini PDF text." }] } }],
+    });
+
+    const srv = await startTestServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(responseBody);
+    });
+
+    try {
+      const result = await pdfNativeProviders.geminiAnalyzePdf({
+        apiKey: "gai-test-placeholder",
+        modelId: "gemini-2.0-flash",
+        prompt: "Summarize",
+        pdfs: [{ base64: "dGVzdA==" }],
+        baseUrl: `http://127.0.0.1:${srv.port}`,
+      });
+      expect(result).toBe("Extracted Gemini PDF text.");
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it("rejects oversized AI responses before buffering all 20 MiB (OOM guard)", async () => {
+    let chunksWritten = 0;
+    const TOTAL_CHUNKS = 20;
+
+    const srv = await startTestServer(
+      makeOversizedStreamHandler(() => {
+        chunksWritten++;
+      }),
+    );
+
+    try {
+      // Mutation-control: bare `res.json()` would buffer all 20 MiB and then
+      // throw a JSON parse error. readProviderJsonResponse throws with this
+      // specific message once the 16 MiB cap is crossed.
+      await expect(
+        pdfNativeProviders.geminiAnalyzePdf({
+          apiKey: "gai-test-placeholder",
+          modelId: "gemini-2.0-flash",
+          prompt: "Summarize",
+          pdfs: [{ base64: "dGVzdA==" }],
+          baseUrl: `http://127.0.0.1:${srv.port}`,
+        }),
+      ).rejects.toThrow(/JSON response exceeds/);
+
+      // Negative-control: the cap fires well before the server finishes
+      // streaming, proving the body was NOT fully buffered.
+      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+    } finally {
+      await srv.stop();
+    }
   });
 });
