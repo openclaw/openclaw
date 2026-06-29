@@ -101,9 +101,11 @@ mcporter's supported config locations:
 
 1. `MCPORTER_CONFIG`, if set. It may point to `.json` or `.jsonc`; relative
    paths resolve from `<workspaceDir>`.
-2. `$XDG_CONFIG_HOME/mcporter/mcporter.json` or `.jsonc`.
-3. `<workspaceDir>/config/mcporter.json` for project-scoped config.
-4. The legacy `~/.mcporter/mcporter.json` or `.jsonc` fallback.
+2. The user config layer: `$XDG_CONFIG_HOME/mcporter/mcporter.json` or `.jsonc`
+   when `XDG_CONFIG_HOME` is set, otherwise the legacy
+   `~/.mcporter/mcporter.json` or `.jsonc`.
+3. `<workspaceDir>/config/mcporter.json` or `.jsonc` for project-scoped config.
+   Project entries with the same server name override the user layer.
 
 For a bare QMD stdio entry (`command` or `executable` ending in `qmd`,
 `qmd.exe`, or `qmd.cmd` with `args: ["mcp"]`), OpenClaw generates a per-agent
