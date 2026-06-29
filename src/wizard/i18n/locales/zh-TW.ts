@@ -235,6 +235,9 @@ export const zh_TW = {
       authChoiceRequired: "必須選擇認證方式",
       channelsTitle: "頻道",
       configHandling: "設定處理",
+      durationNote:
+        "接下來會依序設定模型/認證、工作區、Gateway、頻道、網頁搜尋、技能和選用插件。QuickStart 通常只需幾分鐘，但提供者登入、頻道配對、daemon 安裝、網路下載和選用依賴可能需要更久。你可以略過選用步驟，之後用 {command} 返回設定。",
+      durationTitle: "設定流程",
       existingConfigTitle: "偵測到既有設定",
       flowAdvanced: "手動設定",
       flowAdvancedHint: "選擇 Gateway 連接埠、網路暴露、Tailscale 和認證方式。",

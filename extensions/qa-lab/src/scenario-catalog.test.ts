@@ -235,6 +235,7 @@ describe("qa scenario catalog", () => {
   it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
     expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
       "gateway.openai-compatible-apis",
+      "runtime.hosted-tool-use",
     ]);
     expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
       "runtime.reasoning-and-cache-controls",
@@ -244,6 +245,7 @@ describe("qa scenario catalog", () => {
     ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
     expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
       "gateway.openai-compatible-apis",
+      "runtime.hosted-provider-turns",
     ]);
   });
 

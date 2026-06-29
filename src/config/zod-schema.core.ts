@@ -207,7 +207,16 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-const ModelApiSchema = z.enum(MODEL_APIS);
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CHATGPT_RESPONSES_API =
+  "openai-chatgpt-responses" satisfies (typeof MODEL_APIS)[number];
+
+const ModelApiSchema = z.enum(MODEL_APIS, {
+  error: (issue) =>
+    issue.input === LEGACY_OPENAI_CODEX_RESPONSES_API
+      ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
+      : undefined,
+});
 
 const ModelCompatSchema = z
   .object({

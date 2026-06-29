@@ -875,7 +875,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
     if (candidate?.finishReason) {
       params.output.stopReason = mapStopReason(candidate.finishReason);
-      if (params.output.content.some((block) => block.type === "toolCall")) {
+      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Google stop may promote parsed calls into an executable tool-use turn.
+      if (
+        params.output.stopReason === "stop" &&
+        params.output.content.some((block) => block.type === "toolCall")
+      ) {
         params.output.stopReason = "toolUse";
       }
     }

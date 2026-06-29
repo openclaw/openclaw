@@ -1,6 +1,6 @@
 {
   "id": "vercel-ai-gateway",
-  "icon": "https://cdn.simpleicons.org/vercel/111111",
+  "icon": "https://cdn.simpleicons.org/vercel",
   "activation": {
     "onStartup": false
   },

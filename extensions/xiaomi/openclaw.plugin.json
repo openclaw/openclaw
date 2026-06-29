@@ -1,6 +1,6 @@
 {
   "id": "xiaomi",
-  "icon": "https://cdn.simpleicons.org/xiaomi/111111",
+  "icon": "https://cdn.simpleicons.org/xiaomi",
   "activation": {
     "onStartup": false
   },

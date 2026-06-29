@@ -1174,6 +1174,7 @@ describe("GatewayClient connect auth payload", () => {
         deviceToken?: string;
         password?: string;
         approvalRuntimeToken?: string;
+        agentRuntimeIdentityToken?: string;
       };
     };
   };
@@ -1468,6 +1469,44 @@ describe("GatewayClient connect auth payload", () => {
     );
     expect(retriedAuth.approvalRuntimeToken).toBeUndefined();
     client.stop();
+  });
+
+  it("fails closed when a gateway rejects the required agent runtime identity auth field", async () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      agentRuntimeIdentityToken: "identity-token",
+      deviceIdentity: null,
+      onConnectError,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expectRecordFields(
+      connect.params?.auth ?? {},
+      {
+        token: "shared-token",
+        agentRuntimeIdentityToken: "identity-token",
+      },
+      "initial connect auth",
+    );
+
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws,
+      connectId: connect.id,
+      failureDetails: {},
+      failureMessage:
+        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    });
+    const error = firstMockArg(onConnectError, "connect error") as Error;
+    expect(error.message).toBe(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+    expect(ws.lastClose).toEqual({ code: 1008, reason: "connect failed" });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway connect failed: gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
   });
 
   it("waits for socket open before sending connect after an early challenge", () => {
