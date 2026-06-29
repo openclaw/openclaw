@@ -18,7 +18,10 @@ export function shortenPath(path: unknown): string {
     return "";
   }
   const home = os.homedir();
-  if (path.startsWith(home)) {
+  if (path === home) {
+    return "~";
+  }
+  if (path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) {
     return `~${path.slice(home.length)}`;
   }
   return path;
