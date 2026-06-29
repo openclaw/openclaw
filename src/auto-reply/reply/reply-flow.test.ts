@@ -154,6 +154,26 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("tracks delivered counts from explicit delivery evidence", async () => {
+    const deliver = vi.fn(async (payload: DeliverPayload) => {
+      if (payload.text === "final") {
+        return true;
+      }
+      if (payload.text === "block") {
+        return { delivered: true };
+      }
+      return false;
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    expect(dispatcher.sendToolResult({ text: "tool" })).toBe(true);
+    expect(dispatcher.sendBlockReply({ text: "block" })).toBe(true);
+    expect(dispatcher.sendFinalReply({ text: "final" })).toBe(true);
+
+    await dispatcher.waitForIdle();
+    expect(dispatcher.getDeliveredCounts?.()).toEqual({ tool: 0, block: 1, final: 1 });
+  });
+
   it("fires onIdle when the queue drains", async () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
       await Promise.resolve();

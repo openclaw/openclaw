@@ -182,6 +182,7 @@ async function expectSlackNoDelivery(
     ...overrides,
   });
   expect(res.ok).toBe(true);
+  expect(res.attemptedDelivery).toBeUndefined();
   expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   return res;
 }
@@ -304,6 +305,7 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
+    expect(res.attemptedDelivery).toBe(true);
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
@@ -576,6 +578,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "final",
@@ -615,6 +618,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
@@ -646,6 +650,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
