@@ -1792,6 +1792,7 @@ describe("loadChatHistory filtering", () => {
       messages: [],
       sessionId: "legacy-session",
       thinkingLevel: "low",
+      verboseLevel: "full",
       sessionInfo: {
         key: "main",
         sessionId: "session-main",
@@ -1811,6 +1812,7 @@ describe("loadChatHistory filtering", () => {
     expect(result?.sessionInfo?.sessionId).toBe("session-main");
     expect(state.currentSessionId).toBe("session-main");
     expect(state.chatThinkingLevel).toBe("medium");
+    expect(state.chatVerboseLevel).toBe("full");
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {
