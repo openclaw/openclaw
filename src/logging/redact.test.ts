@@ -973,7 +973,10 @@ describe("redactSensitiveText", () => {
     expect(output.text).toContain("help-desk-team-page");
     expect(output.text).toContain("kube-node-pool-spec");
     expect(output.content).toContain("logs-from-unit-test");
-    expect(output.message).toContain("abcd-efgh-ijkl-wxyz");
+    // "abcd-efgh-ijkl-wxyz" is sequential alphabet chars (not dictionary words)
+    // so it gets masked by the wordlist-precision sweep. This is intentional:
+    // only dictionary-word tokens like "help-desk-team-page" are preserved.
+    expect(output.message).not.toContain("abcd-efgh-ijkl-wxyz");
   });
 
   it("still masks app-specific password shapes in Apple-related fields", () => {
@@ -986,6 +989,66 @@ describe("redactSensitiveText", () => {
     expect(output.apple).not.toContain("abcd-efgh-ijkl-mnop");
     expect(output.appSpecificPassword).not.toContain("qrst-uvwx-yzab-cdef");
     expect(output.icloud).not.toContain("lmno-pqrs-tuvw-xyza");
+  });
+
+  it("masks non-dictionary 4×4 tokens in generic fields (app-password sweep always active)", () => {
+    // The app-password sweep is always active but uses wordlist precision:
+    // random-looking tokens (non-dictionary segments) are masked;
+    // dictionary-word tokens like "help-desk-team-page" survive.
+    expect(redactSensitiveFieldValue("error", "iCloud rejected abcd-efgh-ijkl-mnop")).not.toContain(
+      "abcd-efgh-ijkl-mnop",
+    );
+    expect(
+      redactSensitiveFieldValue("message", "app password qrst-uvwx-yzab-cdef is invalid"),
+    ).not.toContain("qrst-uvwx-yzab-cdef");
+    expect(
+      redactSensitiveFieldValue("text", "sign in with apple id lmno-pqrs-tuvw-xyza"),
+    ).not.toContain("lmno-pqrs-tuvw-xyza");
+  });
+
+  it("preserves all-word kebab identifiers in generic fields (wordlist precision)", () => {
+    // Tokens composed entirely of dictionary words (from BENIGN_APP_PASSWORD_WORDS)
+    // survive in all fields thanks to the wordlist gate in
+    // looksLikeAppSpecificPassword().
+    expect(redactSensitiveFieldValue("text", "identifier help-desk-team-page found")).toContain(
+      "help-desk-team-page",
+    );
+    expect(redactSensitiveFieldValue("error", "kube-node-pool-spec crashed")).toContain(
+      "kube-node-pool-spec",
+    );
+    expect(redactSensitiveFieldValue("message", "load-some-bare-init completed")).toContain(
+      "load-some-bare-init",
+    );
+  });
+
+  it("masks random kebab tokens in generic fields even without Apple context", () => {
+    // Random-character tokens (not dictionary words) are still masked
+    // regardless of field type.
+    expect(redactSensitiveFieldValue("error", "auth failed: kxbv-qwfn-zptl-mrqd")).not.toContain(
+      "kxbv-qwfn-zptl-mrqd",
+    );
+    expect(
+      redactSensitiveFieldValue("message", "token abcd-efgh-ijkl-mnop detected"),
+    ).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
+  it("masks app passwords in generic fields when another secret is present (context sweep)", () => {
+    // If the value already contains a known secret (like an OpenAI key),
+    // the secret-context sweep fires and masks ALL 4x4 kebab tokens
+    // regardless of wordlist or Apple context.
+    const value = "sk-ant-api03-aaaa and help-desk-team-page too";
+    expect(redactSensitiveFieldValue("text", value)).not.toContain("help-desk-team-page");
+  });
+
+  it("masks all-word app passwords in explicit Apple fields (fail-closed)", () => {
+    // Even an all-dictionary-word token like "main-test-case-name" IS masked
+    // when the field key is apple/icloud/appSpecificPassword.
+    expect(redactSensitiveFieldValue("appSpecificPassword", "main-test-case-name")).not.toBe(
+      "main-test-case-name",
+    );
+    expect(redactSensitiveFieldValue("apple", "main-test-case-name")).not.toBe(
+      "main-test-case-name",
+    );
   });
 
   it("skips redaction when mode is off", () => {
@@ -1118,11 +1181,14 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("1//0fake-refresh-token");
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     // The password field value (line 1075) is still masked because "password"
-    // matches STRUCTURED_SECRET_FIELD_RE. App passwords in non-Apple generic
-    // fields ("text", "errorMessage") are no longer masked to protect
-    // ordinary kebab-case text identifiers from corruption.
-    expect(serialized).toContain("standalone app password abcd-efgh-ijkl-mnop");
-    expect(serialized).toContain("qrst-uvwx-yzab-cdef");
+    // matches STRUCTURED_SECRET_FIELD_RE.
+    //
+    // The text/errorMessage fields contain non-dictionary 4×4 tokens,
+    // so they are masked by the always-active app-password sweep.
+    expect(serialized).not.toContain("standalone app password abcd-efgh-ijkl-mnop");
+    expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
+    // `main-test-case-name` is all dictionary words so it survives the
+    // wordlist-precision gate in looksLikeAppSpecificPassword().
     expect(serialized).toContain("main-test-case-name");
   });
 
