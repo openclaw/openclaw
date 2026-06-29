@@ -77,6 +77,22 @@ function clearTimer(handle: TimerHandle): void {
   (runtime.clearTimer ?? clearTimeout)(handle);
 }
 
+// Single-slot debounce: schedule one drain unless one is already pending. Shared
+// by enqueue (new work), the overflow branch, and the drain's non-terminal
+// failure path (so a batch restored after a timer-fired failure still gets
+// retried even when no later enqueue arrives).
+function scheduleDrainSoon(debounceMs: number): void {
+  if (timer) {
+    return;
+  }
+  timer = setTimer(() => {
+    timer = null;
+    void drainCommitmentExtractionQueue().catch((err: unknown) => {
+      log.warn("commitment extraction failed", { error: String(err) });
+    });
+  }, debounceMs);
+}
+
 /** Installs runtime hooks for extraction tests or alternate batch extraction. */
 export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
@@ -131,6 +147,10 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
       });
       queueOverflowWarned = true;
     }
+    // The queue can be full because a non-terminal failure restored its batch
+    // (see drainCommitmentExtractionQueue). Dropping this request must not also
+    // drop the retry: make sure a drain is scheduled before returning.
+    scheduleDrainSoon(resolved.extraction.debounceMs);
     return false;
   }
   queue.push({
@@ -150,14 +170,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
     ...(input.sourceRunId?.trim() ? { sourceRunId: input.sourceRunId.trim() } : {}),
     cfg: input.cfg,
   });
-  if (!timer) {
-    timer = setTimer(() => {
-      timer = null;
-      void drainCommitmentExtractionQueue().catch((err: unknown) => {
-        log.warn("commitment extraction failed", { error: String(err) });
-      });
-    }, resolved.extraction.debounceMs);
-  }
+  scheduleDrainSoon(resolved.extraction.debounceMs);
   return true;
 }
 
@@ -306,6 +319,15 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
             Date.now(),
             items[0]?.nowMs ?? Date.now(),
           );
+        } else {
+          // Non-terminal failure (e.g. transient model/network error): the batch
+          // was already spliced out, so restore it to the front in original order.
+          // A timer-fired drain has already cleared `timer`, so also re-arm the
+          // debounce; otherwise the restored batch sits only in memory and is lost
+          // on process exit if no later enqueue happens to reschedule a drain.
+          // Rethrow so the caller still logs; the next drain reprocesses it in order.
+          queue.unshift(...batch);
+          scheduleDrainSoon(resolved.extraction.debounceMs);
         }
         throw error;
       }

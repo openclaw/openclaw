@@ -448,6 +448,7 @@ function createMockReplyOperation(): {
       sessionId: "session",
       abortSignal: new AbortController().signal,
       resetTriggered: false,
+      terminalRecovery: false,
       phase: "running",
       result: null,
       setPhase: vi.fn(),
@@ -461,6 +462,7 @@ function createMockReplyOperation(): {
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
+      markTerminalRecovery: vi.fn(),
     },
   };
 }
@@ -7124,6 +7126,28 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toContain("openclaw configure");
       expect(result.payload.text).toContain("(invalid_grant)");
       expect(result.payload.text).not.toContain("Auth profile failover exhausted");
+    }
+  });
+
+  it("does not suggest re-authentication for typed format failures", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("Format failover exhausted for provider openai", {
+        reason: "format",
+        provider: "openai",
+        authProfileFailure: { allInCooldown: true },
+        cause: new Error("messages must alternate roles"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Couldn't reach openai");
+      expect(result.payload.text).toContain("messages must alternate roles");
+      expect(result.payload.text).not.toContain("models auth login");
+      expect(result.payload.text).not.toContain("openclaw configure");
     }
   });
 

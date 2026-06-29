@@ -427,6 +427,10 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
     return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
+  if (thread.scope === "none") {
+    return undefined;
+  }
+
   // Telegram rejects message_thread_id=1 for General forum topic
   if (normalized === TELEGRAM_GENERAL_TOPIC_ID) {
     return undefined;

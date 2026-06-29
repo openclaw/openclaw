@@ -156,7 +156,7 @@ describe("exec foreground failures", () => {
       wait: vi.fn(async () => ({
         reason: "overall-timeout" as const,
         exitCode: null,
-        exitSignal: null,
+        exitSignal: "SIGKILL" as NodeJS.Signals,
         durationMs: input.timeoutMs ?? 50,
         stdout: "",
         stderr: "",
@@ -178,7 +178,11 @@ describe("exec foreground failures", () => {
     expect(text).toMatch(/re-run with a higher timeout/i);
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
+    expect(details.exitSignal).toBe("SIGKILL");
+    expect(details.failureKind).toBe("overall-timeout");
+    expect(details.exitReason).toBe("overall-timeout");
     expect(details.timedOut).toBe(true);
+    expect(details.noOutputTimedOut).toBe(false);
     expect(details.aggregated).toBe("");
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
@@ -362,6 +366,62 @@ describe("exec foreground failures", () => {
       expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/generated");
       expect(supervisorMock.spawn).toHaveBeenCalledOnce();
       expect(supervisorMock.spawn.mock.calls[0]?.[0]?.cwd).toBe(workspaceDir);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    const finalizeToken = { session: "remote-session" };
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async (params) => ({
+        argv: ["remote-shell", params.command],
+        env: {},
+        stdinMode: "pipe-open" as const,
+        finalizeToken,
+      }),
+    );
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
+    const validateWorkdir = vi.fn<NonNullable<BashSandboxConfig["validateWorkdir"]>>(
+      async (workdir) => workdir,
+    );
+    supervisorMock.spawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+        buildExecSpec,
+        finalizeExec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-remote-sandbox-spawn-failure", {
+          command: "echo ok",
+          workdir: "/remote/workspace/generated",
+        }),
+      ).rejects.toThrow("spawn failed");
+
+      expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
+      expect(buildExecSpec).toHaveBeenCalledOnce();
+      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+      expect(finalizeExec).toHaveBeenCalledOnce();
+      expect(finalizeExec).toHaveBeenCalledWith({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+        token: finalizeToken,
+      });
     } finally {
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }

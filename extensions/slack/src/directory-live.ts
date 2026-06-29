@@ -50,9 +50,10 @@ type SlackAuthTestResponse = {
   team?: string;
 };
 
-function resolveReadToken(params: DirectoryConfigParams): string | undefined {
+function createSlackDirectoryClient(params: DirectoryConfigParams) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  return account.userToken ?? account.botToken?.trim();
+  const token = account.userToken ?? account.botToken?.trim();
+  return token ? createSlackWebClient(token) : null;
 }
 
 function normalizeQuery(value?: string | null): string {
@@ -101,11 +102,10 @@ function slackUserToDirectoryEntry(
 export async function getSlackDirectorySelfLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry | null> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return null;
   }
-  const client = createSlackWebClient(token);
   const auth = (await client.auth.test()) as SlackAuthTestResponse;
   const userId = normalizeOptionalString(auth.user_id);
   if (!userId) {
@@ -125,11 +125,10 @@ export async function getSlackDirectorySelfLive(
 export async function listSlackDirectoryPeersLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return [];
   }
-  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
   let cursor: string | undefined;
@@ -172,11 +171,10 @@ export async function listSlackDirectoryPeersLive(
 export async function listSlackDirectoryGroupsLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
-  if (!token) {
+  const client = createSlackDirectoryClient(params);
+  if (!client) {
     return [];
   }
-  const client = createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;

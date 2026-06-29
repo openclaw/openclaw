@@ -155,10 +155,19 @@ collection root.
 
 ## Indexing session transcripts
 
-Enable session indexing to recall earlier conversations:
+Enable session indexing to recall earlier conversations. QMD needs both the general
+`memorySearch` session source and the QMD transcript exporter:
 
 ```json5
 {
+  agents: {
+    defaults: {
+      memorySearch: {
+        experimental: { sessionMemory: true },
+        sources: ["memory", "sessions"],
+      },
+    },
+  },
   memory: {
     backend: "qmd",
     qmd: {
@@ -169,7 +178,14 @@ Enable session indexing to recall earlier conversations:
 ```
 
 Transcripts are exported as sanitized User/Assistant turns into a dedicated QMD
-collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
+collection under `~/.openclaw/agents/<id>/qmd/sessions/`. Setting only
+`memorySearch.experimental.sessionMemory` does not export transcripts into QMD.
+
+Session hits are still filtered by
+[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+`tree` visibility does not expose unrelated same-agent sessions. If a
+gateway-dispatched session should be recallable from a separate DM session, set
+`tools.sessions.visibility: "agent"` intentionally.
 
 ## Search scope
 

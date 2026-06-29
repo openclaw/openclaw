@@ -143,6 +143,13 @@ type ResolvedExecEnvPreparedState = {
   pluginEnv?: Record<string, string>;
 };
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
+type DeferredResolveExecEnvPreparedState = {
+  hookContext?: HookContext;
+};
+const deferredResolveExecEnvPreparedStates = new WeakMap<
+  ExecToolArgs,
+  DeferredResolveExecEnvPreparedState
+>();
 type ResolvedExecWorkdirPreparedState = {
   host: ExecHost;
   inputWorkdir?: string;
@@ -161,6 +168,10 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "ask",
   "node",
 ] as const;
+
+function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
   const env: Record<string, string> = {};
@@ -201,6 +212,20 @@ function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
 }
 
+function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
+  params: T,
+  state: DeferredResolveExecEnvPreparedState,
+): T {
+  deferredResolveExecEnvPreparedStates.set(params, state);
+  return params;
+}
+
+function getDeferredResolveExecEnvPreparedState(
+  params: ExecToolArgs,
+): DeferredResolveExecEnvPreparedState | undefined {
+  return deferredResolveExecEnvPreparedStates.get(params);
+}
+
 function markResolvedExecWorkdirPrepared<T extends ExecToolArgs>(
   params: T,
   state: ResolvedExecWorkdirPreparedState,
@@ -225,17 +250,24 @@ function buildExecForegroundResult(params: {
     return failedTextResult(`${warningText}${params.outcome.reason}`, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
+      exitSignal: params.outcome.exitSignal,
+      failureKind: params.outcome.failureKind,
+      exitReason: params.outcome.exitReason,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
       timedOut: params.outcome.timedOut,
+      noOutputTimedOut: params.outcome.noOutputTimedOut,
       cwd: params.cwd,
     });
   }
   return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
     status: "completed",
     exitCode: params.outcome.exitCode,
+    exitSignal: params.outcome.exitSignal,
+    exitReason: params.outcome.exitReason,
     durationMs: params.outcome.durationMs,
     aggregated: params.outcome.aggregated,
+    noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
   });
 }
@@ -1475,20 +1507,31 @@ export function createExecTool(
       if (workdirState?.resolution.kind === "unavailable") {
         return params;
       }
-      if (shouldDeferResolveExecEnvUntilWorkdirValidated(params)) {
+      if (!isExecToolArgsObject(params)) {
         return params;
+      }
+      if (shouldDeferResolveExecEnvUntilWorkdirValidated(params)) {
+        return markDeferredResolveExecEnvPrepared(params, {
+          hookContext: context.hookContext as HookContext | undefined,
+        });
       }
       return prepareParamsWithResolvedExecEnv(params, {
         hookContext: context.hookContext as HookContext | undefined,
       });
     },
     finalizeBeforeToolCallParams: (params, preparedParams) => {
-      const execParams = params as ExecToolArgs;
       const envState = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
+      const deferredEnvState = getDeferredResolveExecEnvPreparedState(
+        preparedParams as ExecToolArgs,
+      );
       const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
-      if (!envState && !workdirState) {
+      if (!envState && !deferredEnvState && !workdirState) {
         return params;
       }
+      if (!isExecToolArgsObject(params)) {
+        return params;
+      }
+      const execParams = params;
       let host: ExecHost | undefined;
       const resolveFinalHost = () => {
         host ??= resolveHostForParams(execParams);
@@ -1511,6 +1554,9 @@ export function createExecTool(
       if (envState) {
         markResolveExecEnvPrepared(execParams, envState);
       }
+      if (deferredEnvState) {
+        markDeferredResolveExecEnvPrepared(execParams, deferredEnvState);
+      }
       if (workdirState) {
         markResolvedExecWorkdirPrepared(execParams, workdirState);
       }
@@ -1522,6 +1568,7 @@ export function createExecTool(
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
       );
       const resolveExecEnvPrepared = isResolveExecEnvPrepared(args as ExecToolArgs);
+      const deferredResolveExecEnvState = getDeferredResolveExecEnvPreparedState(params);
       const preparedWorkdirState = getResolvedExecWorkdirPreparedState(params);
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
@@ -1724,7 +1771,9 @@ export function createExecTool(
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
         }
         if (!resolveExecEnvPrepared) {
-          params = await prepareParamsWithResolvedExecEnv(params);
+          params = await prepareParamsWithResolvedExecEnv(params, {
+            hookContext: deferredResolveExecEnvState?.hookContext,
+          });
         }
 
         const inheritedBaseEnv = coerceEnv(process.env);

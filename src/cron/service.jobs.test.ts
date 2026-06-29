@@ -1286,6 +1286,45 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(expected);
   });
 
+  it("preserves exact-second cron slots that fall multiple intervals into the future (#81691)", () => {
+    // Regression for the stale-future repair path. `isStaggeredCronRunAtMs`
+    // used to probe the cron library at `runAtMs + 1` to classify whether the
+    // persisted timestamp was a real scheduled slot. Croner-style second-
+    // granular schedules normalize that 1ms probe back to the candidate's
+    // second, so `previousRuns(1, probe)` returns the slot before the
+    // candidate rather than the slot itself. The slot then looks "stale" and
+    // future-slot repair rebases it, even though it is a perfectly valid
+    // schedule slot two-or-more intervals out.
+    //
+    // The bug only surfaces when nextRun lands two-plus intervals past
+    // `naturalNext`, because the closer cases are already saved by the
+    // `nextRun === naturalNext` / `followingNaturalNext` guards in
+    // shouldRepairFutureCronNextRunAtMs.
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    // "0 9 * * *" Pacific/Honolulu (UTC-10) → 19:00 UTC daily.
+    // Honolulu has no DST, so the UTC offset is stable across the window.
+    const exactFutureSlot = Date.parse("2026-05-08T19:00:00.000Z");
+    const job: CronJob = {
+      id: "honolulu-9am-future-slot",
+      name: "honolulu 9am future slot",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "Pacific/Honolulu", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: exactFutureSlot },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(exactFutureSlot);
+  });
+
   it("keeps future nextRunAtMs while probing malformed cron schedules", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const future = Date.parse("2026-05-12T16:00:00.000Z");
