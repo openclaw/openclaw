@@ -7,6 +7,9 @@ import type { Tool, ToolCall } from "./types.js";
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
 
+/** Maximum string length accepted for schema-gated JSON coercion. */
+const MAX_JSON_COERCE_LENGTH = 64 * 1024;
+
 interface JsonSchemaObject {
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;
@@ -151,6 +154,40 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       }
       if (typeof value === "number" || typeof value === "boolean") {
         return String(value);
+      }
+      return value;
+    }
+    case "array": {
+      if (
+        typeof value === "string" &&
+        value.trim() !== "" &&
+        value.length <= MAX_JSON_COERCE_LENGTH
+      ) {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Not valid JSON; leave as-is for the validator to reject.
+        }
+      }
+      return value;
+    }
+    case "object": {
+      if (
+        typeof value === "string" &&
+        value.trim() !== "" &&
+        value.length <= MAX_JSON_COERCE_LENGTH
+      ) {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Not valid JSON; leave as-is for the validator to reject.
+        }
       }
       return value;
     }
