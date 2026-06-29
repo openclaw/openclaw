@@ -1,5 +1,11 @@
 // Google provider adapts Gemini streams and tools to the agent runtime.
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "../../agents/api-key-rotation.js";
+import { isApiKeyRateLimitError } from "../../agents/live-auth-keys.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -26,17 +32,41 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
   const stream = new AssistantMessageEventStream();
   const output = createGoogleAssistantOutput(model, "google-generative-ai");
 
-  void runGoogleGenerateContentLifecycle({
-    stream,
-    model,
-    output,
-    options,
-    createClient: () => {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(model, apiKey, options?.headers);
+  const primaryApiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+  const apiKeys = collectProviderApiKeysForExecution({
+    provider: model.provider,
+    primaryApiKey,
+  });
+
+  void executeWithApiKeyRotation({
+    provider: model.provider,
+    apiKeys,
+    execute: async (apiKey) => {
+      await runGoogleGenerateContentLifecycle({
+        stream,
+        model,
+        output,
+        options,
+        createClient: () => createClient(model, apiKey, options?.headers),
+        buildParams: () => buildParams(model, context, options),
+        nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
+      });
     },
-    buildParams: () => buildParams(model, context, options),
-    nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
+    shouldRetry: ({ message }) => isApiKeyRateLimitError(message),
+  }).catch((err) => {
+    // All API keys exhausted — push final error to stream.
+    const errorMessage = formatErrorMessage(err);
+    for (const block of output.content) {
+      if ("index" in block) {
+        delete (block as { index?: number }).index;
+      }
+    }
+    if (!output.stopReason) {
+      output.stopReason = "error";
+      output.errorMessage = errorMessage;
+      stream.push({ type: "error", reason: "error", error: output });
+      stream.end();
+    }
   });
 
   return stream;

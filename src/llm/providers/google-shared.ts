@@ -465,6 +465,10 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       nextToolCallId: params.nextToolCallId,
     });
   } catch (error) {
+    // Re-throw rate-limit errors so callers can rotate API keys (e.g. GEMINI_API_KEY_1/2/3).
+    if ((error as { status?: number }).status === 429) {
+      throw error;
+    }
     for (const block of output.content) {
       if ("index" in block) {
         delete (block as { index?: number }).index;
