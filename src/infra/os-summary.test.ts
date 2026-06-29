@@ -11,7 +11,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary } from "./os-summary.js";
+import { resolveOsSummary, resolveRuntimeOsLabel } from "./os-summary.js";
 
 type OsSummaryCase = {
   name: string;
@@ -93,5 +93,37 @@ describe("resolveOsSummary", () => {
       });
     }
     expect(resolveOsSummary()).toEqual(expected);
+  });
+});
+
+describe("resolveRuntimeOsLabel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports the macOS product version without an architecture suffix on tahoe", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(os, "type").mockReturnValue("Darwin");
+    vi.spyOn(os, "release").mockReturnValue("25.6.0");
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    spawnSyncMock.mockReturnValue({
+      stdout: "26.6.0\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+    // Architecture is appended separately by the prompt renderer, so the runtime
+    // label must not include it, and must use the product version, not Darwin 25.x.
+    expect(resolveRuntimeOsLabel()).toBe("macOS 26.6.0");
+  });
+
+  it("preserves the os.type/os.release shape off darwin", () => {
+    vi.spyOn(os, "platform").mockReturnValue("linux");
+    vi.spyOn(os, "type").mockReturnValue("Linux");
+    vi.spyOn(os, "release").mockReturnValue("6.8.0-generic");
+    vi.spyOn(os, "arch").mockReturnValue("x64");
+    expect(resolveRuntimeOsLabel()).toBe("Linux 6.8.0-generic");
   });
 });
