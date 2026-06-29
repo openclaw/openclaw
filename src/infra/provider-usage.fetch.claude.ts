@@ -7,6 +7,7 @@ import {
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 
 type ClaudeUsageResponse = {
   five_hour?: { utilization?: number; resets_at?: string };
@@ -151,9 +152,9 @@ export async function fetchClaudeUsage(
   if (!res.ok) {
     let message: string | undefined;
     try {
-      const data = (await res.json()) as {
+      const data = await readProviderJsonResponse<{
         error?: { message?: unknown } | null;
-      };
+      }>(res, "Anthropic usage error");
       const raw = data?.error?.message;
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();
