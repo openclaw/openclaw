@@ -3043,11 +3043,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     return /(?:^|\n|:\s)(?:MCP error [^:\n]+:\s*)?Tool ['"]?query['"]? not found\b/i.test(detail);
   }
 
-  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
+  private async ensureMcporterDaemonStarted(
+    mcporter: ResolvedQmdMcporterConfig,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!mcporter.enabled) {
       return;
     }
-    const configMode = await this.ensureMcporterConfig();
+    const configMode = await this.ensureMcporterConfig(signal);
+    if (signal?.aborted) {
+      throw asAbortError(signal);
+    }
     const state = getMcporterState();
     if (!mcporter.startDaemon) {
       if (!state.coldStartWarned) {
@@ -3067,6 +3073,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             envMode: configMode,
             includeGeneratedConfig: configMode === "generated",
             timeoutMs: 10_000,
+            signal,
           });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
@@ -3079,9 +3086,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     await daemonStart;
   }
 
-  private async ensureMcporterConfig(): Promise<McporterConfigMode> {
+  private async ensureMcporterConfig(signal?: AbortSignal): Promise<McporterConfigMode> {
+    if (signal?.aborted) {
+      throw asAbortError(signal);
+    }
     if (!this.mcporterConfigMode) {
-      this.mcporterConfigMode = this.resolveMcporterConfigMode().catch((err: unknown) => {
+      this.mcporterConfigMode = this.resolveMcporterConfigMode(signal).catch((err: unknown) => {
         this.mcporterConfigMode = null;
         throw err;
       });
@@ -3089,9 +3099,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     return await this.mcporterConfigMode;
   }
 
-  private async resolveMcporterConfigMode(): Promise<McporterConfigMode> {
+  private async resolveMcporterConfigMode(signal?: AbortSignal): Promise<McporterConfigMode> {
     await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
-    const configured = await this.resolveConfiguredMcporterServer();
+    const configured = await this.resolveConfiguredMcporterServer(signal);
     if (configured?.mode === "external") {
       return "external";
     }
@@ -3132,7 +3142,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     return server;
   }
 
-  private async resolveConfiguredMcporterServer(): Promise<ConfiguredMcporterServer | null> {
+  private async resolveConfiguredMcporterServer(
+    signal?: AbortSignal,
+  ): Promise<ConfiguredMcporterServer | null> {
     const serverName = this.qmd.mcporter.serverName;
     const explicitMcporterConfig = this.mcporterEnv.MCPORTER_CONFIG;
     const canUseGeneratedFallback =
@@ -3144,8 +3156,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         envMode: "discovery",
         includeGeneratedConfig: false,
         timeoutMs: 5_000,
+        signal,
       });
     } catch (err) {
+      if (signal?.aborted) {
+        throw asAbortError(signal);
+      }
       if (canUseGeneratedFallback) {
         return null;
       }
@@ -3354,7 +3370,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     args: string[],
     opts?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string }> {
-    const configMode = await this.ensureMcporterConfig();
+    const configMode = await this.ensureMcporterConfig(opts?.signal);
     return await this.runMcporterCommand(args, {
       ...opts,
       envMode: configMode,
@@ -3368,7 +3384,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (params.signal?.aborted) {
       throw asAbortError(params.signal);
     }
-    await this.ensureMcporterDaemonStarted(params.mcporter);
+    await this.ensureMcporterDaemonStarted(params.mcporter, params.signal);
+    if (params.signal?.aborted) {
+      throw asAbortError(params.signal);
+    }
 
     // If the version is already known as v1 but we received a stale "query" tool name
     // (e.g. from runMcporterAcrossCollections iterating after the first collection

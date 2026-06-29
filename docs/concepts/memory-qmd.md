@@ -105,12 +105,14 @@ mcporter's supported config locations:
 3. `<workspaceDir>/config/mcporter.json` or `.jsonc` for project-scoped config.
 4. The legacy `~/.mcporter/mcporter.json` or `.jsonc` fallback.
 
-If your existing `qmd` server entry has any custom material -- environment
-variables, auth headers, relative paths, or `logging.daemon.enabled` -- OpenClaw
-treats it as **external** and routes the daemon through your original mcporter
-config. Otherwise OpenClaw generates a per-agent config under
-`~/.openclaw/agents/<id>/qmd/mcporter/mcporter.json` with the default QMD
-stdio shape (`command: "qmd", args: ["mcp"]`).
+For a bare QMD stdio entry (`command` or `executable` ending in `qmd`,
+`qmd.exe`, or `qmd.cmd` with `args: ["mcp"]`), OpenClaw generates a per-agent
+config under `~/.openclaw/agents/<id>/qmd/mcporter/mcporter.json` and preserves
+QMD lifecycle or daemon logging metadata such as `logging.daemon.enabled`. If
+your existing server entry has user-owned material -- environment variables,
+auth headers, command arrays, `cwd`/`path`, a non-QMD command, or authenticated
+remote config -- OpenClaw treats it as **external** and routes through your
+original mcporter config.
 
 The per-agent generated config is rewritten only when its contents actually
 change, so repeated searches do not thrash the filesystem.
