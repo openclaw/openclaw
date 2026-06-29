@@ -113,7 +113,7 @@ const clientCache = new Map<
   }
 >();
 
-type FeishuSdkCacheKey = string | Symbol;
+type FeishuSdkCacheKey = Parameters<Lark.Cache["get"]>[0];
 type FeishuSdkCacheOptions = { namespace?: string };
 
 class FeishuSdkCache implements Lark.Cache {

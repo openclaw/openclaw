@@ -91,7 +91,7 @@ async function fetchCardKitJsonWithTokenRefresh<T extends { code?: number; msg?:
       init: {
         ...params.init,
         headers: {
-          ...(params.init.headers ?? {}),
+          ...params.init.headers,
           Authorization: `Bearer ${await getToken(params.creds)}`,
           "User-Agent": getFeishuUserAgent(),
         },
