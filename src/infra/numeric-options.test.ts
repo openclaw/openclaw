@@ -16,7 +16,7 @@ describe("resolveNonNegativeIntegerOption", () => {
   });
 
   it("returns fallback when value is NaN", () => {
-    expect(resolveNonNegativeIntegerOption(NaN, 10)).toBe(10);
+    expect(resolveNonNegativeIntegerOption(Number.NaN, 10)).toBe(10);
   });
 
   it("returns fallback when value is Infinity", () => {
@@ -42,7 +42,7 @@ describe("resolveIntegerOption", () => {
   });
 
   it("returns fallback when value is NaN", () => {
-    expect(resolveIntegerOption(NaN, 10, { min: 1 })).toBe(10);
+    expect(resolveIntegerOption(Number.NaN, 10, { min: 1 })).toBe(10);
   });
 
   it("returns fallback when value is Infinity", () => {
