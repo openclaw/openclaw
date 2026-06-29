@@ -23,6 +23,10 @@ function firstBeforeAgentReplyCall() {
 }
 
 function firstAttemptParams(): {
+  agentHarnessTaskRuntimeScope?: {
+    requesterSessionKey?: string;
+    requesterOrigin?: Record<string, unknown>;
+  };
   cleanupBundleMcpOnRunEnd?: boolean;
   modelRun?: boolean;
   promptMode?: string;
@@ -44,6 +48,13 @@ function firstAttemptParams(): {
     throw new Error("expected embedded attempt call");
   }
   return call[0];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("runEmbeddedAgent cron before_agent_reply seam", () => {
@@ -188,6 +199,61 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it("derives task runtime requester origins from explicit cron delivery routes", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      messageChannel: " Discord ",
+      agentAccountId: " acct-1 ",
+      messageTo: "channel:12345",
+      messageThreadId: "thread-9",
+    });
+
+    const scope = requireRecord(
+      firstAttemptParams().agentHarnessTaskRuntimeScope,
+      "agentHarnessTaskRuntimeScope",
+    );
+    expect(scope.requesterSessionKey).toBe("test-key");
+    expect(scope.requesterOrigin).toEqual({
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:12345",
+      threadId: "thread-9",
+    });
+  });
+
+  it("keeps explicit requester origins ahead of derived cron delivery routes", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      messageChannel: "discord",
+      agentAccountId: "acct-route",
+      messageTo: "channel:route",
+      messageThreadId: "thread-route",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "acct-explicit",
+        to: "telegram:123",
+        threadId: "thread-explicit",
+      },
+    });
+
+    const scope = requireRecord(
+      firstAttemptParams().agentHarnessTaskRuntimeScope,
+      "agentHarnessTaskRuntimeScope",
+    );
+    expect(scope.requesterOrigin).toEqual({
+      channel: "telegram",
+      accountId: "acct-explicit",
+      to: "telegram:123",
+      threadId: "thread-explicit",
+    });
   });
 
   it("forwards suppressed live stream output into the embedded attempt", async () => {

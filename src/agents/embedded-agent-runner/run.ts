@@ -38,6 +38,7 @@ import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/comm
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   retireSessionMcpRuntime,
@@ -597,6 +598,23 @@ function resolveInitialEmbeddedRunModel(params: {
     provider: explicitProvider ?? defaultProvider,
     modelId: configuredDefault.model || DEFAULT_MODEL,
   };
+}
+
+function resolveEmbeddedTaskRuntimeRequesterOrigin(
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "requesterOrigin" | "messageChannel" | "agentAccountId" | "messageTo" | "messageThreadId"
+  >,
+) {
+  return (
+    normalizeDeliveryContext(params.requesterOrigin) ??
+    normalizeDeliveryContext({
+      channel: params.messageChannel,
+      accountId: params.agentAccountId,
+      to: params.messageTo,
+      threadId: params.messageThreadId,
+    })
+  );
 }
 
 export function runEmbeddedAgent(
@@ -2041,6 +2059,7 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          const taskRuntimeRequesterOrigin = resolveEmbeddedTaskRuntimeRequesterOrigin(params);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2106,7 +2125,9 @@ async function runEmbeddedAgentInternal(
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
                     requesterSessionKey: params.sessionKey,
-                    ...(params.requesterOrigin ? { requesterOrigin: params.requesterOrigin } : {}),
+                    ...(taskRuntimeRequesterOrigin
+                      ? { requesterOrigin: taskRuntimeRequesterOrigin }
+                      : {}),
                   }),
                 }
               : {}),
