@@ -445,6 +445,76 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("maps sandbox /workspace qqmedia block replies to the agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-virtual-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "sandbox-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver(
+            { text: `<qqmedia>/workspace/sandbox-report.docx</qqmedia>` },
+            { kind: "block" },
+          );
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks sandbox /workspace qqmedia paths that escape the agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-virtual-root-"));
+    try {
+      const workspaceDir = path.join(tmpRoot, "workspace");
+      await fs.mkdir(workspaceDir);
+      await fs.writeFile(path.join(tmpRoot, "outside-report.docx"), Buffer.from("outside"));
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver(
+            { text: `<qqmedia>/workspace/../outside-report.docx</qqmedia>` },
+            { kind: "block" },
+          );
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("threads agent scoped media roots through gateway tool media forwarding", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-tool-root-"));
     try {
@@ -496,6 +566,51 @@ describe("dispatchOutbound", () => {
                 mediaType: "file",
                 source: "file",
                 path: filePath,
+              })}`,
+            },
+            { kind: "block" },
+          );
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("maps sandbox /workspace QQBOT_PAYLOAD media paths to the agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-payload-virtual-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "payload-workspace-report.pdf");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver(
+            {
+              text: `QQBOT_PAYLOAD:${JSON.stringify({
+                type: "media",
+                mediaType: "file",
+                source: "file",
+                path: "/workspace/payload-workspace-report.pdf",
               })}`,
             },
             { kind: "block" },

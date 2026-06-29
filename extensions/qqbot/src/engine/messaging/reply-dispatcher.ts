@@ -216,10 +216,29 @@ function resolveStructuredPayloadLocalRoots(ctx: ReplyContext): string[] | undef
 
 function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string {
   const normalizedPath = normalizePath(payloadPath);
-  if (!ctx.mediaAccess?.workspaceDir || path.isAbsolute(normalizedPath)) {
+  const workspaceDir = ctx.mediaAccess?.workspaceDir;
+  if (!workspaceDir) {
     return normalizedPath;
   }
-  return path.resolve(ctx.mediaAccess.workspaceDir, normalizedPath);
+  if (normalizedPath === "/workspace") {
+    return workspaceDir;
+  }
+  if (normalizedPath.startsWith("/workspace/")) {
+    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
+  }
+  if (path.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+  return path.resolve(workspaceDir, normalizedPath);
+}
+
+function resolveStructuredPayloadCandidates(ctx: ReplyContext, payloadPath: string): string[] {
+  const normalizedPath = normalizePath(payloadPath);
+  const mappedPath = resolveStructuredPayloadCandidate(ctx, payloadPath);
+  if (mappedPath === normalizedPath) {
+    return [normalizedPath];
+  }
+  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
 }
 
 function validateStructuredPayloadLocalPath(
@@ -227,21 +246,23 @@ function validateStructuredPayloadLocalPath(
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const candidatePath = resolveStructuredPayloadCandidate(ctx, payloadPath);
-  const allowedPath = resolveTrustedOutboundMediaPath(candidatePath);
-  if (allowedPath) {
-    return allowedPath;
-  }
+  const candidatePaths = resolveStructuredPayloadCandidates(ctx, payloadPath);
+  for (const candidatePath of candidatePaths) {
+    const allowedPath = resolveTrustedOutboundMediaPath(candidatePath);
+    if (allowedPath) {
+      return allowedPath;
+    }
 
-  const localRoots = resolveStructuredPayloadLocalRoots(ctx);
-  if (localRoots) {
-    const scopedPath = resolveLocalPathFromRootsSync({
-      filePath: candidatePath,
-      roots: localRoots,
-      label: "QQ Bot local roots",
-    })?.path;
-    if (scopedPath) {
-      return scopedPath;
+    const localRoots = resolveStructuredPayloadLocalRoots(ctx);
+    if (localRoots) {
+      const scopedPath = resolveLocalPathFromRootsSync({
+        filePath: candidatePath,
+        roots: localRoots,
+        label: "QQ Bot local roots",
+      })?.path;
+      if (scopedPath) {
+        return scopedPath;
+      }
     }
   }
 

@@ -150,10 +150,47 @@ function resolveMissingPathWithinRoots(
 }
 
 function resolveWorkspacePathCandidate(normalizedPath: string, workspaceDir?: string): string {
-  if (!workspaceDir || path.isAbsolute(normalizedPath)) {
+  if (!workspaceDir) {
+    return normalizedPath;
+  }
+  if (normalizedPath === "/workspace") {
+    return workspaceDir;
+  }
+  if (normalizedPath.startsWith("/workspace/")) {
+    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
+  }
+  if (path.isAbsolute(normalizedPath)) {
     return normalizedPath;
   }
   return path.resolve(workspaceDir, normalizedPath);
+}
+
+function resolveWorkspacePathCandidates(normalizedPath: string, workspaceDir?: string): string[] {
+  const mappedPath = resolveWorkspacePathCandidate(normalizedPath, workspaceDir);
+  if (mappedPath === normalizedPath) {
+    return [normalizedPath];
+  }
+  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
+}
+
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const resolvedRoot = path.resolve(rootPath);
+  if (resolvedRoot === path.parse(resolvedRoot).root) {
+    return false;
+  }
+  const relative = path.relative(resolvedRoot, path.resolve(candidatePath));
+  return (
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function isPathWithinAnyRoot(
+  candidatePath: string,
+  allowedRoots: readonly string[] | undefined,
+): boolean {
+  return (
+    allowedRoots?.some((root) => root.trim() && isPathWithinRoot(candidatePath, root)) ?? false
+  );
 }
 
 function resolveExistingPathWithinRoots(
@@ -208,8 +245,15 @@ function senderKindForLoadedMedia(
   return "file";
 }
 
-function resolveHostReadQuotaFilePath(ctx: MediaTargetContext, mediaPath: string): string {
-  return resolveWorkspacePathCandidate(normalizePath(mediaPath), ctx.mediaAccess?.workspaceDir);
+function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string {
+  const normalizedPath = normalizePath(mediaPath);
+  if (
+    path.isAbsolute(normalizedPath) &&
+    isPathWithinAnyRoot(normalizedPath, resolveOutboundMediaLocalRoots(ctx))
+  ) {
+    return normalizedPath;
+  }
+  return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess?.workspaceDir);
 }
 
 async function stageHostReadVoice(
@@ -220,7 +264,8 @@ async function stageHostReadVoice(
   if (!mediaReadFile || isHttpOrDataSource(mediaPath)) {
     return null;
   }
-  const loaded = await loadOutboundMediaFromUrl(mediaPath, {
+  const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
     maxBytes: getMaxUploadSize(MediaFileType.VOICE),
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
@@ -246,8 +291,9 @@ async function trySendViaHostRead(
   if (!mediaReadFile || isHttpOrDataSource(mediaPath)) {
     return null;
   }
+  const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
   try {
-    const loaded = await loadOutboundMediaFromUrl(mediaPath, {
+    const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
       maxBytes: getMaxUploadSize(mediaFileTypeForKind(mediaKind)),
       mediaAccess: ctx.mediaAccess,
       mediaLocalRoots: ctx.mediaLocalRoots,
@@ -282,11 +328,7 @@ async function trySendViaHostRead(
     if (err instanceof UploadDailyLimitExceededError) {
       return buildDailyLimitExceededResult(
         err.filePath === "<buffer>"
-          ? new UploadDailyLimitExceededError(
-              resolveHostReadQuotaFilePath(ctx, mediaPath),
-              err.fileSize,
-              err.message,
-            )
+          ? new UploadDailyLimitExceededError(hostReadMediaPath, err.fileSize, err.message)
           : err,
       );
     }
@@ -306,28 +348,35 @@ export function resolveOutboundMediaPath(
   if (isHttpOrDataSource(normalizedPath)) {
     return { ok: true, mediaPath: normalizedPath };
   }
-  const candidatePath = resolveWorkspacePathCandidate(normalizedPath, options.workspaceDir);
+  const candidatePaths = resolveWorkspacePathCandidates(normalizedPath, options.workspaceDir);
 
-  const allowedPath = resolveTrustedOutboundMediaPath(candidatePath, {
-    allowMissing: options.allowMissingLocalPath,
-  });
-  if (allowedPath) {
-    return { ok: true, mediaPath: allowedPath };
-  }
+  for (const candidatePath of candidatePaths) {
+    const allowedPath = resolveTrustedOutboundMediaPath(candidatePath, {
+      allowMissing: options.allowMissingLocalPath,
+    });
+    if (allowedPath) {
+      return { ok: true, mediaPath: allowedPath };
+    }
 
-  if (options.extraLocalRoots && options.extraLocalRoots.length > 0) {
-    const extraAllowedPath = resolveExistingPathWithinRoots(candidatePath, options.extraLocalRoots);
-    if (extraAllowedPath) {
-      return { ok: true, mediaPath: extraAllowedPath };
+    if (options.extraLocalRoots && options.extraLocalRoots.length > 0) {
+      const extraAllowedPath = resolveExistingPathWithinRoots(
+        candidatePath,
+        options.extraLocalRoots,
+      );
+      if (extraAllowedPath) {
+        return { ok: true, mediaPath: extraAllowedPath };
+      }
     }
   }
 
   if (options.allowMissingLocalPath) {
     const missingRoots = mergeLocalRoots([getQQBotMediaDir()], options.extraLocalRoots);
     if (missingRoots) {
-      const allowedMissingPath = resolveMissingPathWithinRoots(candidatePath, missingRoots);
-      if (allowedMissingPath) {
-        return { ok: true, mediaPath: allowedMissingPath };
+      for (const candidatePath of candidatePaths) {
+        const allowedMissingPath = resolveMissingPathWithinRoots(candidatePath, missingRoots);
+        if (allowedMissingPath) {
+          return { ok: true, mediaPath: allowedMissingPath };
+        }
       }
     }
   }
