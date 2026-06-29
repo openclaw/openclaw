@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import {
+<<import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";`r`nimport {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
   executeSqliteQuerySync,
@@ -12,9 +11,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
-import type { TelegramRuntime } from "./runtime.types.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";`r`nimport { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";`r`nimport type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
 const runMock = vi.hoisted(() => vi.fn());
@@ -717,6 +714,11 @@ describe("TelegramPollingSession", () => {
     pollingSessionTesting.resetActiveSpooledUpdateHandlersForTests();
     clearTelegramRuntime();
     closeOpenClawStateDatabaseForTest();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -4001,7 +4003,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
-          spooledUpdateHandlerTimeoutMs: 100,
+<<spooledUpdateHandlerTimeoutMs: 5_000,
           spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
@@ -4016,7 +4018,7 @@ describe("TelegramPollingSession", () => {
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(250);
+<<await vi.advanceTimersByTimeAsync(5_200);
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(
