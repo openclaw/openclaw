@@ -1,6 +1,7 @@
 import type {
   DoctorSessionSqliteIssue,
   DoctorSessionSqliteReport,
+  DoctorSessionSqliteRestoreReport,
 } from "../commands/doctor-session-sqlite.js";
 import {
   runSessionStartupMigration,
@@ -15,8 +16,19 @@ type SessionSqliteStartupImportRunner = (params: {
   mode: "import";
 }) => Promise<DoctorSessionSqliteReport>;
 
+type SessionSqliteStartupRestoreRunner = (params: {
+  manifestPath: string;
+}) => DoctorSessionSqliteRestoreReport;
+
+type SessionSqliteStartupFailureReportWriter = (
+  manifestPath: string,
+  params: { reason: string },
+) => { jsonPath: string; markdownPath: string };
+
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+  restoreSessionSqliteMigrationRun?: SessionSqliteStartupRestoreRunner;
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
+  writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
 
 const STARTUP_WARNING_ISSUE_CODES = new Set([
@@ -59,11 +71,13 @@ async function runStartupSessionSqliteImport(params: {
   const warningIssues = collectStartupWarningIssues(report);
   const blockingIssues = collectStartupBlockingIssues(report);
   if (blockingIssues.length > 0) {
+    const recovery = await restoreFailedStartupSessionSqliteRun(params, report, blockingIssues);
     throw new Error(
       [
         `session SQLite migration failed during startup with ${blockingIssues.length} blocking issue(s).`,
         ...formatStartupIssueLines(blockingIssues).map((line) => `- ${line}`),
         'Run "openclaw doctor --session-sqlite inspect --session-sqlite-all-agents" for details.',
+        ...(recovery.length > 0 ? recovery : []),
       ].join("\n"),
     );
   }
@@ -79,6 +93,48 @@ async function runStartupSessionSqliteImport(params: {
       ].join("\n"),
     );
   }
+}
+
+async function restoreFailedStartupSessionSqliteRun(
+  params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    log: SessionStartupMigrationLogger;
+    deps?: SessionMigrationDeps;
+  },
+  report: DoctorSessionSqliteReport,
+  blockingIssues: readonly DoctorSessionSqliteIssue[],
+): Promise<string[]> {
+  const manifestPath = report.migrationRun?.manifestPath;
+  if (!manifestPath) {
+    return report.migrationRun?.failureReportMarkdownPath
+      ? [`Failure report: ${report.migrationRun.failureReportMarkdownPath}`]
+      : [];
+  }
+  let restoreSessionSqliteMigrationRun = params.deps?.restoreSessionSqliteMigrationRun;
+  let writeSessionSqliteMigrationFailureReports =
+    params.deps?.writeSessionSqliteMigrationFailureReports;
+  if (!restoreSessionSqliteMigrationRun || !writeSessionSqliteMigrationFailureReports) {
+    const doctorModule = await import("../commands/doctor-session-sqlite.js");
+    restoreSessionSqliteMigrationRun ??= doctorModule.restoreSessionSqliteMigrationRun;
+    writeSessionSqliteMigrationFailureReports ??=
+      doctorModule.writeSessionSqliteMigrationFailureReports;
+  }
+  const restore = restoreSessionSqliteMigrationRun({ manifestPath });
+  const failureReports = writeSessionSqliteMigrationFailureReports(manifestPath, {
+    reason: `startup blocked on ${blockingIssues.length} session SQLite issue(s)`,
+  });
+  params.log.warn(
+    [
+      "session: restored archived legacy transcript artifacts after startup SQLite migration failure:",
+      `- restored=${restore.restoredFiles.length} skipped=${restore.skippedFiles.length} conflicts=${restore.conflicts.length}`,
+      `- failureReport=${failureReports.markdownPath}`,
+    ].join("\n"),
+  );
+  return [
+    `Restore attempted for current migration run: restored=${restore.restoredFiles.length}, skipped=${restore.skippedFiles.length}, conflicts=${restore.conflicts.length}.`,
+    `Failure report: ${failureReports.markdownPath}`,
+  ];
 }
 
 function collectStartupBlockingIssues(

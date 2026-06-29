@@ -36,7 +36,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--session-sqlite <mode>",
-      "Run session SQLite migration mode (dry-run|import|validate|inspect)",
+      "Run session SQLite migration mode (dry-run|import|validate|inspect|restore)",
     )
     .option("--session-sqlite-store <path>", "With --session-sqlite: inspect one session store")
     .option("--session-sqlite-agent <id>", "With --session-sqlite: inspect one agent")
@@ -243,14 +243,22 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
 
 function parseDoctorSessionSqliteMode(
   value: unknown,
-): "dry-run" | "import" | "validate" | "inspect" | undefined {
+): "dry-run" | "import" | "validate" | "inspect" | "restore" | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (value === "dry-run" || value === "import" || value === "validate" || value === "inspect") {
+  if (
+    value === "dry-run" ||
+    value === "import" ||
+    value === "validate" ||
+    value === "inspect" ||
+    value === "restore"
+  ) {
     return value;
   }
-  defaultRuntime.error("Invalid --session-sqlite mode. Use dry-run, import, validate, or inspect.");
+  defaultRuntime.error(
+    "Invalid --session-sqlite mode. Use dry-run, import, validate, inspect, or restore.",
+  );
   defaultRuntime.exit(2);
   throw new Error("unreachable");
 }

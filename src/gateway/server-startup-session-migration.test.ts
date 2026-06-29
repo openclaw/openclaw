@@ -216,6 +216,84 @@ describe("runStartupSessionMigration", () => {
     ).rejects.toThrow("session SQLite migration failed during startup");
   });
 
+  it("auto-restores the current failed session SQLite migration run after files moved", async () => {
+    const log = makeLog();
+    const restoreSessionSqliteMigrationRun = vi.fn(() => ({
+      conflicts: [],
+      manifestPaths: ["/tmp/run.json"],
+      restoredFiles: ["/tmp/session.jsonl"],
+      skippedFiles: [],
+    }));
+    const writeSessionSqliteMigrationFailureReports = vi.fn(() => ({
+      jsonPath: "/tmp/run.failure.json",
+      markdownPath: "/tmp/run.failure.md",
+    }));
+    const runDoctorSessionSqlite = makeSessionSqliteImport({
+      migrationRun: {
+        manifestPath: "/tmp/run.json",
+        runId: "run",
+      },
+      targets: [
+        {
+          agentId: "main",
+          archivedTranscriptFiles: ["/tmp/archive/session.jsonl"],
+          archivedUnreferencedJsonlFiles: [],
+          importedEntries: 1,
+          importedTranscriptEvents: 1,
+          issues: [
+            {
+              code: "active_sqlite_transcript_jsonl",
+              message: "active file remained",
+              sessionKey: "agent:main:main",
+            },
+          ],
+          legacyEntries: 1,
+          referencedTranscriptFiles: 1,
+          sqliteEntries: 1,
+          sqlitePath: "/tmp/openclaw-agent.sqlite",
+          storePath: "/tmp/sessions.json",
+          unreferencedJsonlFiles: [],
+          validatedEntries: 1,
+          validatedTranscriptEvents: 1,
+        },
+      ],
+      totals: {
+        archivedTranscriptFiles: 1,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 1,
+        importedTranscriptEvents: 1,
+        issues: 1,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        targets: 1,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 1,
+        validatedTranscriptEvents: 1,
+      },
+    });
+
+    await expect(
+      runStartupSessionMigration({
+        cfg: makeCfg(),
+        log,
+        deps: {
+          migrateOrphanedSessionKeys: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+          restoreSessionSqliteMigrationRun,
+          runDoctorSessionSqlite,
+          writeSessionSqliteMigrationFailureReports,
+        },
+      }),
+    ).rejects.toThrow("Failure report: /tmp/run.failure.md");
+
+    expect(restoreSessionSqliteMigrationRun).toHaveBeenCalledWith({
+      manifestPath: "/tmp/run.json",
+    });
+    expect(writeSessionSqliteMigrationFailureReports).toHaveBeenCalledWith("/tmp/run.json", {
+      reason: "startup blocked on 1 session SQLite issue(s)",
+    });
+    expect(firstLogMessage(log.warn, "startup restore warning")).toContain("restored=1");
+  });
+
   it("warns without blocking when a legacy transcript sidecar is missing", async () => {
     const log = makeLog();
     const runDoctorSessionSqlite = makeSessionSqliteImport({
