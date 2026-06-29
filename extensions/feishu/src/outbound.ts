@@ -30,6 +30,7 @@ import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
   resolveFeishuCardTemplate,
@@ -40,6 +41,7 @@ import {
 } from "./send.js";
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
+const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -459,11 +461,67 @@ async function sendOutboundText(params: {
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
 }
 
+function resolvePostTextChunkLimit(account: ReturnType<typeof resolveFeishuAccount>): number {
+  const limit = account.config?.textChunkLimit;
+  return typeof limit === "number" && Number.isFinite(limit) && limit > 0
+    ? limit
+    : FEISHU_TEXT_CHUNK_LIMIT;
+}
+
+async function sendPostTextWithMaterializedLimit(params: {
+  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
+  to: string;
+  text: string;
+  accountId?: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  account: ReturnType<typeof resolveFeishuAccount>;
+}) {
+  const renderedText = materializeFeishuPostMarkdownLineBreaks(params.text);
+  const limit = resolvePostTextChunkLimit(params.account);
+  if (renderedText.length <= limit) {
+    return await sendMessageFeishu({
+      cfg: params.cfg,
+      to: params.to,
+      text: params.text,
+      accountId: params.accountId,
+      replyToMessageId: params.replyToMessageId,
+      replyInThread: params.replyInThread,
+    });
+  }
+
+  const chunks = chunkTextForOutbound(renderedText, limit).filter((chunk) => chunk.length > 0);
+  let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
+  let replyToMessageId = params.replyToMessageId;
+  for (const chunk of chunks) {
+    lastResult = await sendMessageFeishu({
+      cfg: params.cfg,
+      to: params.to,
+      text: chunk,
+      accountId: params.accountId,
+      replyToMessageId,
+      replyInThread: params.replyInThread,
+    });
+    replyToMessageId = undefined;
+  }
+  return (
+    lastResult ??
+    sendMessageFeishu({
+      cfg: params.cfg,
+      to: params.to,
+      text: params.text,
+      accountId: params.accountId,
+      replyToMessageId: params.replyToMessageId,
+      replyInThread: params.replyInThread,
+    })
+  );
+}
+
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
-  textChunkLimit: 4000,
+  textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {
     supported: true,
     buttons: true,
@@ -627,13 +685,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           header: header?.title ? header : undefined,
         });
       }
-      return await sendOutboundText({
+      return await sendPostTextWithMaterializedLimit({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
         replyInThread,
+        account,
       });
     },
     sendMedia: async ({
