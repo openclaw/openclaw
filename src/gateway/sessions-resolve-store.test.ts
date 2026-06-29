@@ -47,7 +47,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     closeSessionSqliteDatabasesForTest();
   });
 
-  it("resolves legacy main-alias matches by sessionId and label for the configured default agent", async () => {
+  it("resolves configured default-agent main sessions by sessionId and label", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-alias-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "sessions.json");
       const cfg = {
@@ -55,7 +55,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
       await seedSessionStore(storePath, {
-        "agent:main:main": {
+        "agent:ops:main": {
           sessionId: "sess-default-alias",
           label: "default-alias",
           updatedAt: freshUpdatedAt(),
@@ -174,13 +174,12 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   });
 
   it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
-    await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "sessions.json");
+    await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
       const cfg = {
-        session: { store: storePath, mainKey: "main" },
+        session: { mainKey: "main" },
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
-      await seedSessionStore(storePath, {
+      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "main" }), {
         "agent:main:guildchat:direct:u1": {
           sessionId: "sess-stale-main",
           label: "stale-main",
