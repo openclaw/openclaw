@@ -128,25 +128,11 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
 
 const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-function getClawHubTrustWarningFromError(err: unknown): string | undefined {
+function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
   }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details)?.warning;
-}
-
-function getClawHubTrustCodeFromError(err: unknown) {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details)?.clawhubTrustCode;
-}
-
-function getClawHubTrustVersionFromError(err: unknown): string | undefined {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details)?.version;
+  return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
 }
 
 function formatClawHubInstallMessage(message: string, warning?: string): string {
@@ -638,16 +624,18 @@ export async function installFromClawHub(
     };
   } catch (err) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
+      const trustDetails = getClawHubTrustDetailsFromError(err);
       const needsAcknowledgement =
-        getClawHubTrustCodeFromError(err) === ClawHubTrustErrorCodes.RISK_ACKNOWLEDGEMENT_REQUIRED;
-      const acknowledgeVersion = getClawHubTrustVersionFromError(err);
+        trustDetails?.clawhubTrustCode === ClawHubTrustErrorCodes.RISK_ACKNOWLEDGEMENT_REQUIRED;
       state.clawhubInstallMessage = {
         kind: "error",
         text: needsAcknowledgement
-          ? formatClawHubAcknowledgementMessage(getClawHubTrustWarningFromError(err))
-          : formatClawHubInstallMessage(getErrorMessage(err), getClawHubTrustWarningFromError(err)),
+          ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
+          : formatClawHubInstallMessage(getErrorMessage(err), trustDetails?.warning),
         ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
-        ...(needsAcknowledgement && acknowledgeVersion ? { acknowledgeVersion } : {}),
+        ...(needsAcknowledgement && trustDetails?.version
+          ? { acknowledgeVersion: trustDetails.version }
+          : {}),
         ...(needsAcknowledgement ? { acknowledgeLabel: "Acknowledge risk and install" } : {}),
       };
     }
