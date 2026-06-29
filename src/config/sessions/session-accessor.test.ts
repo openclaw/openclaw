@@ -30,7 +30,11 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import {
+  importSqliteSessionRows,
+  loadExactSqliteSessionEntry,
+  replaceSqliteTranscriptEvents,
+} from "./session-accessor.sqlite.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -1489,6 +1493,28 @@ describe("session accessor seam", () => {
 
     expect(readTarget.sessionFile).toBe(marker);
     expect(writeTarget.sessionFile).toBe(marker);
+  });
+
+  it("normalizes imported legacy session transcript paths to SQLite markers", async () => {
+    const sessionKey = "agent:main:main";
+    await importSqliteSessionRows({
+      agentId: "main",
+      entry: {
+        sessionFile: path.join(tempDir, "legacy-transcript.jsonl"),
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey,
+        storePath,
+      })?.entry.sessionFile,
+    ).toBe(`sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {
