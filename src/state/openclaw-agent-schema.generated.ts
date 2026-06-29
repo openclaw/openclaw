@@ -136,4 +136,59 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
   ON memory_index_chunks(path);
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
-  ON memory_index_chunks(source);\n`;
+  ON memory_index_chunks(source);
+
+-- Conversational-memory durable store (Phase 2). Immutable append-only turns
+-- plus thin span/box metadata. The accordion flips boxes.state only; turns is
+-- never mutated. seq is assigned monotonically per session_key at append time.
+CREATE TABLE IF NOT EXISTS turns (
+  session_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  run_id TEXT,
+  channel TEXT,
+  ts INTEGER NOT NULL,
+  noise_class TEXT,
+  PRIMARY KEY (session_key, seq)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_idempotency
+  ON turns(idempotency_key);
+
+-- Contiguous range of turns sharing a topic; belongs to at most one box.
+CREATE TABLE IF NOT EXISTS spans (
+  span_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  start_seq INTEGER NOT NULL,
+  end_seq INTEGER NOT NULL,
+  topic TEXT,
+  box_id TEXT,
+  noise_class TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_spans_session_start
+  ON spans(session_key, start_seq);
+
+CREATE INDEX IF NOT EXISTS idx_spans_box
+  ON spans(box_id)
+  WHERE box_id IS NOT NULL;
+
+-- A topic that owns one or more (possibly non-contiguous) spans. Collapse/expand
+-- flips state; summary/importance/suppression_rollup are dreaming-maintained (Phase 3).
+CREATE TABLE IF NOT EXISTS boxes (
+  box_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  label TEXT,
+  state TEXT NOT NULL DEFAULT 'live',
+  summary TEXT,
+  summary_embedding_ref TEXT,
+  importance REAL,
+  suppression_rollup TEXT,
+  last_active_seq INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_boxes_session
+  ON boxes(session_key);\n`;

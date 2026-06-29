@@ -53,6 +53,17 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+/**
+ * Durable conversational-memory + topic-accordion config (Phase 2). When
+ * `enabled`, completed turns are captured to the per-agent durable `turns` store
+ * and the accordion context extension may collapse inactive topics to summaries.
+ * Default off — flag-off captures nothing and registers no context extension.
+ */
+export type AgentConversationalMemoryConfig = {
+  /** Master switch for durable turn capture + the topic accordion. Default false. */
+  enabled?: boolean;
+};
+
 export type AgentContextPruningConfig = {
   /** Pruning mode for old tool results in model context. */
   mode?: "off" | "cache-ttl";
@@ -327,6 +338,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Opt-in: durable turn capture + topic-accordion context management (Phase 2). Default off. */
+  conversationalMemory?: AgentConversationalMemoryConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Outer run loop retry iteration boundaries. */

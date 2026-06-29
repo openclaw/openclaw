@@ -19,6 +19,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
+import { conversationalMemoryCaptureExtension } from "../memory/turns-capture.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -171,6 +172,24 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
+function buildConversationalMemoryCaptureFactory(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string;
+  sessionKey?: string;
+}): ExtensionFactory | undefined {
+  // Off by default; capture needs a durable agent + session scope to write into.
+  if (params.cfg?.agents?.defaults?.conversationalMemory?.enabled !== true) {
+    return undefined;
+  }
+  if (!params.agentId || !params.sessionKey) {
+    return undefined;
+  }
+  return conversationalMemoryCaptureExtension({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+}
+
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -179,8 +198,14 @@ export function buildEmbeddedExtensionFactories(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
   runId?: string;
+  agentId?: string;
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
+  const captureFactory = buildConversationalMemoryCaptureFactory(params);
+  if (captureFactory) {
+    factories.push(captureFactory);
+  }
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;

@@ -22,6 +22,18 @@ export interface AuthProfileStore {
   updated_at: number;
 }
 
+export interface Boxes {
+  box_id: string;
+  importance: number | null;
+  label: string | null;
+  last_active_seq: number | null;
+  session_key: string;
+  state: Generated<string>;
+  summary: string | null;
+  summary_embedding_ref: string | null;
+  suppression_rollup: string | null;
+}
+
 export interface CacheEntries {
   blob: Uint8Array | null;
   expires_at: number | null;
@@ -82,9 +94,33 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface Spans {
+  box_id: string | null;
+  end_seq: number;
+  noise_class: string | null;
+  session_key: string;
+  span_id: string;
+  start_seq: number;
+  topic: string | null;
+}
+
+export interface Turns {
+  channel: string | null;
+  content: string;
+  content_hash: string;
+  idempotency_key: string;
+  noise_class: string | null;
+  role: string;
+  run_id: string | null;
+  seq: number;
+  session_key: string;
+  ts: number;
+}
+
 export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
+  boxes: Boxes;
   cache_entries: CacheEntries;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
@@ -92,4 +128,6 @@ export interface DB {
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
+  spans: Spans;
+  turns: Turns;
 }
