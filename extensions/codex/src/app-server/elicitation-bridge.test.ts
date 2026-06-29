@@ -181,6 +181,7 @@ function createPluginAppPolicyContext(
           ...(params.destructiveApprovalMode
             ? { destructiveApprovalMode: params.destructiveApprovalMode }
             : {}),
+          destructiveToolNames: [],
           mcpServerNames: app.mcpServerNames,
         },
       ]),
