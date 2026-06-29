@@ -144,12 +144,20 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   providers: Record<string, T>;
 }): Record<string, T> {
+  if (!params.catalogPluginId) {
+    return {};
+  }
   if (
-    !params.catalogPluginId ||
-    !params.pluginMetadataSnapshot ||
-    (params.parsedCatalog !== undefined && !isGeneratedPluginModelCatalog(params.parsedCatalog))
+    params.parsedCatalog !== undefined &&
+    !isGeneratedPluginModelCatalog(params.parsedCatalog)
   ) {
     return {};
+  }
+  if (!params.pluginMetadataSnapshot) {
+    // Runtime model resolution can outlive the process snapshot that originally
+    // wrote a generated sidecar. When metadata is temporarily unavailable, fall
+    // back to the generated catalog path as the remaining ownership signal.
+    return params.parsedCatalog === undefined ? {} : params.providers;
   }
   return Object.fromEntries(
     Object.entries(params.providers).filter(([providerId]) => {
