@@ -199,6 +199,28 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("validates missing SQLite rows without creating the agent database", async () => {
+    const store = createLegacyStore();
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "validate",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      issues: 1,
+      sqliteEntries: 0,
+      validatedEntries: 0,
+      validatedTranscriptEvents: 0,
+    });
+    expect(report.targets[0]?.issues[0]).toMatchObject({
+      code: "sqlite_entry_missing",
+      sessionKey: "agent:main:main",
+    });
+    expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
+  });
+
   it("imports aliases that share one legacy transcript before archiving it", async () => {
     const store = createLegacyStore();
     const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
