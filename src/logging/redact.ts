@@ -95,6 +95,27 @@ const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
 
+/** Apple/iCloud context keywords — when one of these appears in a generic field
+ * value, the app-password sweep fires. Derived from Apple docs and common error
+ * messages. */
+const APP_PASSWORD_CONTEXT_KEYWORDS = [
+  "app-specific password",
+  "application password",
+  "app-specific",
+  "app specific",
+  "appSpecific",
+  "app password",
+  "apppassword",
+  "apple id",
+  "appleid",
+  "apple ID",
+  "sign in",
+  "signin",
+  "iCloud",
+  "icloud",
+  "apple",
+];
+
 /** Common 4-letter words that appear in kebab-case identifiers (URL slugs,
  * package names, resource names, etc.). Tokens composed entirely of these
  * words are presumed benign. Sorted alphabetically. */
@@ -1160,6 +1181,13 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
   return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
 }
 
+/** Returns true when the value text contains Apple/iCloud-related keywords
+ * that suggest a 4x4-kebab token may be a real app-specific password. */
+function hasApplePasswordContext(value: string): boolean {
+  const lower = value.toLowerCase();
+  return APP_PASSWORD_CONTEXT_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 function redactAppSpecificPasswords(text: string): string {
   return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
     looksLikeAppSpecificPassword(token)
@@ -1265,9 +1293,8 @@ function redactSensitiveFieldValueWithOptions(
   // Tier 2 — Secret-context (another pattern already redacted in this value):
   // also mask all 4x4 tokens, because a value known to contain secrets is
   // high-risk and should not leak any password-shaped token.
-  // Tier 3 — Generic fields without other secrets: use wordlist precision
-  // (looksLikeAppSpecificPassword) so dictionary-word kebab identifiers
-  // like "help-desk-team-page" survive while random-looking tokens mask.
+  // Tier 1 — Apple-specific fields (apple, icloud, appSpecificPassword):
+  // mask ALL 4x4 tokens unconditionally (fail-closed).
   if (STRUCTURED_APP_PASSWORD_FIELD_RE.test(key)) {
     const appRedacted = replacePatternBounded(redacted, APP_SPECIFIC_PASSWORD_RE, (match) =>
       redactMatch(match, [match], APP_SPECIFIC_PASSWORD_RE),
@@ -1277,19 +1304,27 @@ function redactSensitiveFieldValueWithOptions(
     }
   }
   if (redacted !== value) {
-    // Secret-context sweep: also check for Apple passwords. Uses wordlist
-    // precision so dictionary-word identifiers still survive even when a
-    // value contains another secret (e.g., JWT + kebab identifier).
+    // Tier 2 — Secret-context (another pattern already redacted in this value):
+    // also check for Apple passwords. Uses wordlist precision so
+    // dictionary-word identifiers survive even in a value with other secrets.
     const appRedacted = redactAppSpecificPasswords(redacted);
     if (appRedacted !== value) {
       return appRedacted;
     }
     return redacted;
   }
-  // Generic fields without other secrets: wordlist-precision check.
-  const appRedacted = redactAppSpecificPasswords(redacted);
-  if (appRedacted !== value) {
-    return appRedacted;
+  // Tier 3 — Generic fields without other secrets: only scan for Apple
+  // passwords when the value contains Apple/iCloud credential context
+  // (e.g., "iCloud rejected...", "app password..."). Without such context,
+  // skip entirely to avoid corrupting legitimate kebab-case identifiers.
+  // When context IS present, mask ALL 4x4 tokens fail-closed.
+  if (hasApplePasswordContext(value)) {
+    const appRedacted = replacePatternBounded(redacted, APP_SPECIFIC_PASSWORD_RE, (match) =>
+      redactMatch(match, [match], APP_SPECIFIC_PASSWORD_RE),
+    );
+    if (appRedacted !== value) {
+      return appRedacted;
+    }
   }
   if (isSensitiveFieldKey(key)) {
     if (isShellReferenceToKey(key, value)) {

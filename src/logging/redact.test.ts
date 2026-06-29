@@ -974,9 +974,10 @@ describe("redactSensitiveText", () => {
     expect(output.text).toContain("kube-node-pool-spec");
     expect(output.content).toContain("logs-from-unit-test");
     // "abcd-efgh-ijkl-wxyz" is sequential alphabet chars (not dictionary words)
-    // so it gets masked by the wordlist-precision sweep. This is intentional:
-    // only dictionary-word tokens like "help-desk-team-page" are preserved.
-    expect(output.message).not.toContain("abcd-efgh-ijkl-wxyz");
+    // but without Apple/iCloud context in the value, Tier 3 skips scanning
+    // entirely. This avoids corrupting legitimate identifiers that happen
+    // to use non-dictionary segments.
+    expect(output.message).toContain("abcd-efgh-ijkl-wxyz");
   });
 
   it("still masks app-specific password shapes in Apple-related fields", () => {
@@ -991,10 +992,10 @@ describe("redactSensitiveText", () => {
     expect(output.icloud).not.toContain("lmno-pqrs-tuvw-xyza");
   });
 
-  it("masks non-dictionary 4×4 tokens in generic fields (app-password sweep always active)", () => {
-    // The app-password sweep is always active but uses wordlist precision:
-    // random-looking tokens (non-dictionary segments) are masked;
-    // dictionary-word tokens like "help-desk-team-page" survive.
+  it("masks 4×4 tokens in generic fields when Apple credential context is present", () => {
+    // Tier 3: generic fields only scan for Apple passwords when the value
+    // contains Apple/iCloud credential context (e.g., "iCloud", "app password").
+    // When context is present, ALL 4×4 tokens are masked (fail-closed).
     expect(redactSensitiveFieldValue("error", "iCloud rejected abcd-efgh-ijkl-mnop")).not.toContain(
       "abcd-efgh-ijkl-mnop",
     );
@@ -1021,14 +1022,14 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("masks random kebab tokens in generic fields even without Apple context", () => {
-    // Random-character tokens (not dictionary words) are still masked
-    // regardless of field type.
-    expect(redactSensitiveFieldValue("error", "auth failed: kxbv-qwfn-zptl-mrqd")).not.toContain(
-      "kxbv-qwfn-zptl-mrqd",
-    );
+  it("masks random kebab tokens in generic fields when Apple context is present", () => {
+    // Without Apple context, Tier 3 skips scanning entirely. With Apple
+    // context, all 4x4 tokens are masked regardless of dictionary status.
     expect(
-      redactSensitiveFieldValue("message", "found abcd-efgh-ijkl-mnop sequence"),
+      redactSensitiveFieldValue("error", "iCloud auth failed: kxbv-qwfn-zptl-mrqd"),
+    ).not.toContain("kxbv-qwfn-zptl-mrqd");
+    expect(
+      redactSensitiveFieldValue("message", "apple password abcd-efgh-ijkl-mnop found"),
     ).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
