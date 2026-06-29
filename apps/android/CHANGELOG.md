@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Maintenance update for the current OpenClaw Android release.
+Adds the required in-app disclosure and consent gate before Installed Apps can share app names, package IDs, and app status with your user-managed OpenClaw Gateway.
+
+Existing Installed Apps opt-ins are reset until you accept the new disclosure.
 
 ## 2026.6.2 - 2026-06-02
 
