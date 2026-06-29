@@ -71,6 +71,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -795,6 +796,9 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
+const CLAUDE_CLI_LOCAL_AUTH_COMMAND = "claude auth login";
+const CLAUDE_CLI_OPENCLAW_AUTH_COMMAND =
+  "openclaw models auth login --provider anthropic --method cli";
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
@@ -942,6 +946,52 @@ function buildAuthProfileFailoverFailureText(error: unknown): string | null {
   });
 }
 
+function buildOAuthFailureReplyForError(
+  error: unknown,
+  normalizedMessage: string,
+  options?: {
+    includeAuthProfileId?: boolean;
+  },
+): ExternalRunFailureReply | null {
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  if (!oauthRefreshFailure) {
+    return null;
+  }
+  if (oauthRefreshFailure.provider === "claude-cli") {
+    const openClawAuthCommand = formatCliCommand(CLAUDE_CLI_OPENCLAW_AUTH_COMMAND);
+    const text = oauthRefreshFailure.reason
+      ? "⚠️ Model login expired on the gateway for claude-cli."
+      : "⚠️ Model login failed on the gateway for claude-cli.";
+    return {
+      text: `${text} Re-auth with \`${CLAUDE_CLI_LOCAL_AUTH_COMMAND}\`, then refresh OpenClaw's CLI auth profile with \`${openClawAuthCommand}\`, then try again.`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
+    profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
+  });
+  const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+  const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+  const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
+  const channelLoginHint = supportsCodexLogin
+    ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+    : "Re-auth";
+  const retryLoginHint = supportsCodexLogin
+    ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+    : "re-auth";
+  if (oauthRefreshFailure.reason) {
+    return {
+      text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with ${loginCommandMarkdown} in a terminal, then try again.`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  return {
+    text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
+    isGenericRunnerFailure: false,
+  };
+}
+
 function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = sanitizeUserFacingText(message, { errorContext: true })
     .trim()
@@ -981,31 +1031,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
-  if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
-      profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
-    });
-    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
-    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
-    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
-    const channelLoginHint = supportsCodexLogin
-      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "Re-auth";
-    const retryLoginHint = supportsCodexLogin
-      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "re-auth";
-    if (oauthRefreshFailure.reason) {
-      return {
-        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with ${loginCommandMarkdown} in a terminal, then try again.`,
-        isGenericRunnerFailure: false,
-      };
-    }
-    return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
-      isGenericRunnerFailure: false,
-    };
+  const oauthFailureReply = buildOAuthFailureReplyForError(error, normalizedMessage, {
+    includeAuthProfileId: options?.includeAuthProfileId,
+  });
+  if (oauthFailureReply) {
+    return oauthFailureReply;
   }
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
@@ -3305,14 +3335,19 @@ async function runAgentTurnWithFallbackInternal(
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-      const oauthRefreshFailure =
-        classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
-      const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
+      const oauthFailureReply =
+        !isBilling && !shouldSurfaceToControlUi
+          ? buildOAuthFailureReplyForError(err, collapseRepeatedFailureDetail(message), {
+              includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
+            })
+          : null;
+      const hasAuthProfileFailoverFailure =
+        !isBilling && !oauthFailureReply && buildAuthProfileFailoverFailureText(err) !== null;
       const providerRequestError =
         !isBilling &&
-        !oauthRefreshFailure &&
-        !hasAuthProfileFailoverFailure &&
-        !shouldSurfaceToControlUi
+        !shouldSurfaceToControlUi &&
+        !oauthFailureReply &&
+        !hasAuthProfileFailoverFailure
           ? classifyProviderRequestError(err)
           : undefined;
       const isTransientHttp = isTransientHttpError(message);
@@ -3394,6 +3429,16 @@ async function runAgentTurnWithFallbackInternal(
               runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
+          }),
+        };
+      }
+      if (oauthFailureReply) {
+        takePendingLifecycleTerminal()?.emit("error", err);
+        params.replyOperation?.fail("run_failed", err);
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: oauthFailureReply.text,
           }),
         };
       }

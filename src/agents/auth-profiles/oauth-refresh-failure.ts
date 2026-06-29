@@ -39,6 +39,9 @@ export class OAuthRefreshFailureError extends Error {
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const CLAUDE_CLI_AUTH_FAILURE_RE =
+  /\bfailed to authenticate\b[\s\S]*\b401\b[\s\S]*\binvalid (?:authentication credentials|bearer token)\b/i;
+const CLAUDE_CLI_AUTH_401_DETAIL_RE = /\binvalid (?:authentication credentials|bearer token)\b/i;
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -114,6 +117,55 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
   };
 }
 
+/**
+ * Claude CLI 401s come from its local OAuth login state, not inherited API keys,
+ * so route that typed provider failure through the existing re-auth hint path.
+ */
+function classifyProviderOAuthAuthenticationFailure(params: {
+  provider: string | null | undefined;
+  reason?: string | null;
+  status?: number | null;
+  message: string;
+}): OAuthRefreshFailure | null {
+  const provider = sanitizeOAuthRefreshFailureProvider(params.provider);
+  const structuredClaudeCliAuth401 =
+    params.reason?.trim().toLowerCase() === "auth" &&
+    params.status === 401 &&
+    CLAUDE_CLI_AUTH_401_DETAIL_RE.test(params.message);
+  if (
+    provider !== "claude-cli" ||
+    !(CLAUDE_CLI_AUTH_FAILURE_RE.test(params.message) || structuredClaudeCliAuth401)
+  ) {
+    return null;
+  }
+  return {
+    provider,
+    reason: "sign_in_again",
+  };
+}
+
+function classifyProviderOAuthAuthenticationFailureObject(
+  candidate: object,
+): OAuthRefreshFailure | null {
+  const error = candidate as {
+    message?: unknown;
+    provider?: unknown;
+    rawError?: unknown;
+    reason?: unknown;
+    status?: unknown;
+  };
+  const provider = typeof error.provider === "string" ? error.provider : null;
+  const reason = typeof error.reason === "string" ? error.reason : null;
+  const status = typeof error.status === "number" ? error.status : null;
+  const message =
+    typeof error.rawError === "string"
+      ? error.rawError
+      : typeof error.message === "string"
+        ? error.message
+        : "";
+  return classifyProviderOAuthAuthenticationFailure({ provider, reason, status, message });
+}
+
 /** Classify provider/reason from the structured OAuth refresh failure error. */
 export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
   const seen = new Set<object>();
@@ -126,6 +178,10 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
         ...(profileId ? { profileId } : {}),
         reason: candidate.reason,
       };
+    }
+    const providerAuthFailure = classifyProviderOAuthAuthenticationFailureObject(candidate);
+    if (providerAuthFailure) {
+      return providerAuthFailure;
     }
     if (seen.has(candidate)) {
       return null;

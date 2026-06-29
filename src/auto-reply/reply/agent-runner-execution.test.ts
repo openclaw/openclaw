@@ -26,6 +26,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
+  buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
@@ -7625,6 +7626,70 @@ describe("runAgentTurnWithFallback", () => {
         "openclaw models auth login --provider openai` in a terminal",
       );
       expect(result.payload.text).not.toContain("user@example.com");
+    }
+  });
+
+  it("surfaces Claude CLI OAuth reauth guidance for typed 401 auth failures", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("Invalid bearer token", {
+        reason: "auth",
+        provider: "claude-cli",
+        status: 401,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login`, then refresh OpenClaw's CLI auth profile with `openclaw models auth login --provider anthropic --method cli`, then try again.",
+      );
+    }
+  });
+
+  it("surfaces Claude CLI OAuth reauth guidance through known failure payloads", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError("Invalid bearer token", {
+        reason: "auth",
+        provider: "claude-cli",
+        status: 401,
+      }),
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login`, then refresh OpenClaw's CLI auth profile with `openclaw models auth login --provider anthropic --method cli`, then try again.",
+    );
+  });
+
+  it("preserves active profile flags in Claude CLI OAuth reauth guidance", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    try {
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError(
+          "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+          {
+            reason: "auth",
+            provider: "claude-cli",
+            status: 401,
+          },
+        ),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain(
+          "`openclaw --profile work models auth login --provider anthropic --method cli`",
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

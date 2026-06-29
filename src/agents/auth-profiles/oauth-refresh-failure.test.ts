@@ -75,6 +75,63 @@ describe("oauth refresh failure hints", () => {
     );
   });
 
+  it("classifies Claude CLI OAuth 401 provider errors for re-auth guidance", () => {
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "claude-cli",
+        rawError: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "claude-cli",
+        rawError: "Failed to authenticate. API Error: 401 Invalid bearer token",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "claude-cli",
+        reason: "auth",
+        status: 401,
+        message: "Invalid authentication credentials",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "claude-cli",
+        reason: "auth",
+        status: 401,
+        message: "Invalid bearer token",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "anthropic",
+        reason: "auth",
+        status: 401,
+        message: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      }),
+    ).toBeNull();
+    expect(
+      classifyOAuthRefreshFailureError({
+        provider: "claude-cli",
+        message: "Invalid authentication credentials",
+      }),
+    ).toBeNull();
+  });
+
   it("classifies token invalidation refresh failures", () => {
     expect(
       classifyOAuthRefreshFailure(
