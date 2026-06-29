@@ -6,7 +6,7 @@ import {
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
@@ -125,7 +125,7 @@ export function registerSecurityCli(program: Command) {
         ? await fixSecurityFootguns().catch((_err: unknown) => null)
         : null;
 
-      const sourceConfig = getRuntimeConfig();
+      const sourceConfig = getRuntimeConfigSourceSnapshot() ?? getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,

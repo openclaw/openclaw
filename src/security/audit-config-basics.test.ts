@@ -152,6 +152,64 @@ describe("security audit config basics", () => {
     );
   });
 
+  it("does not flag gateway password or hooks token when source config uses env references", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        gateway: {
+          auth: { password: "actual-resolved-password" },
+        },
+        hooks: { enabled: true, token: "actual-resolved-token" },
+      },
+      sourceConfig: {
+        gateway: {
+          auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+        },
+        hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+      },
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      report.findings.some((f) => f.checkId === "config.secrets.gateway_password_in_config"),
+    ).toBe(false);
+    expect(report.findings.some((f) => f.checkId === "config.secrets.hooks_token_in_config")).toBe(
+      false,
+    );
+  });
+
+  it("still flags gateway password and hooks token stored as plaintext literals", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        gateway: {
+          auth: { password: "literal-password" },
+        },
+        hooks: { enabled: true, token: "literal-token" },
+      },
+      sourceConfig: {
+        gateway: {
+          auth: { password: "literal-password" },
+        },
+        hooks: { enabled: true, token: "literal-token" },
+      },
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.gateway_password_in_config" && f.severity === "warn",
+      ),
+    ).toBe(true);
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.hooks_token_in_config" && f.severity === "info",
+      ),
+    ).toBe(true);
+  });
+
   it("emits a redacted security audit summary event", async () => {
     resetDiagnosticEventsForTest();
     const captured = captureSecurityEvents();

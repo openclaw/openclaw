@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -24,7 +25,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -576,10 +576,14 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
-export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSecretsInConfigFindings(
+  cfg: OpenClawConfig,
+  sourceConfig?: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  const sourcePassword = normalizeOptionalString(sourceConfig?.gateway?.auth?.password) ?? password;
+  if (password && !looksLikeEnvRef(sourcePassword)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -592,7 +596,8 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const sourceHooksToken = normalizeOptionalString(sourceConfig?.hooks?.token) ?? hooksToken;
+  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(sourceHooksToken)) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
