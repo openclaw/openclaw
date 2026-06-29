@@ -267,8 +267,7 @@ export function loadSettings(): UiSettings {
     let raw: string | null | undefined = scopedRaw;
     if (!raw) {
       const fallbackRaw =
-        storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-        storage?.getItem(LEGACY_SETTINGS_KEY);
+        storage?.getItem(SETTINGS_KEY_PREFIX + "default") ?? storage?.getItem(LEGACY_SETTINGS_KEY);
       if (fallbackRaw) {
         try {
           const fallback = JSON.parse(fallbackRaw) as PersistedUiSettings;
@@ -528,6 +527,15 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
+    // Also index under the page-derived key so these settings survive a page
+    // reload when the user has overridden the gateway URL to a remote host.
+    // The page-derived key is basePath-scoped, so sibling gateways on the
+    // same origin each get their own entry — no cross-contamination (#97636).
+    const { pageUrl: pageDerivedUrl } = deriveDefaultGatewayUrl();
+    const pageScopedKey = settingsKeyForGateway(pageDerivedUrl);
+    if (pageScopedKey !== scopedKey) {
+      storage?.setItem(pageScopedKey, serialized);
+    }
     // The legacy unscoped key is intentionally not written here.  Persisting it
     // would let the last gateway to save overwrite the shared key and contaminate
     // settings for every sibling gateway on the same origin (#97636).

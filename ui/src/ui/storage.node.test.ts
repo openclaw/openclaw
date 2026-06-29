@@ -236,8 +236,12 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const settings = loadSettings();
-    expect(settings.gatewayUrl).toBe(gwUrl);
-    expect(settings.token).toBe("gateway-a-token");
+    // The last-saved gateway URL is persisted through a page reload; the page
+    // now points at otherUrl, not the earlier gwUrl.
+    expect(settings.gatewayUrl).toBe(otherUrl);
+    // The session token from gwUrl must not be transferred to otherUrl —
+    // each gateway manages its own independent token.
+    expect(settings.token).toBe("");
   });
 
   it("does not persist gateway tokens when saving settings", () => {
@@ -739,5 +743,133 @@ describe("loadSettings default gateway URL derivation", () => {
       avatar: null,
     });
     expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
+  });
+
+  it("persists a custom remote gatewayUrl so it survives a page reload", () => {
+    // Regression for #97636: when the user overrides the gateway URL to a
+    // remote host, the scoped key is derived from that remote URL rather than
+    // from the page's basePath.  Without also writing a page-derived index key,
+    // a reload would fail to find the entry and silently fall back to the
+    // page-derived default, losing the user's endpoint configuration.
+    setTestLocation({
+      protocol: "https:",
+      host: "control.example:8443",
+      pathname: "/",
+    });
+
+    const customUrl = "wss://remote-gateway.example.com";
+    saveSettings({
+      gatewayUrl: customUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "dash",
+      themeMode: "dark",
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+      chatAutoScroll: "off",
+      splitRatio: 0.5,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 25,
+      textScale: 110,
+    });
+
+    // Simulate a page reload: loadSettings reads from the page-derived key first.
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(customUrl);
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.chatShowThinking).toBe(false);
+    expect(settings.chatAutoScroll).toBe("off");
+    expect(settings.splitRatio).toBe(0.5);
+  });
+
+  it("keeps per-basePath settings isolated when sibling gateways have distinct configurations", () => {
+    // Regression scenario for #97636: two gateways sharing an origin but
+    // serving different basePaths must maintain fully independent settings.
+    // Gateway-a represents a deployment with managed-provider warnings
+    // dismissed (theme=dash, chatShowThinking=false) while gateway-b represents
+    // a native-search-active deployment with default UI settings (theme=claw,
+    // chatShowThinking=true).  Neither gateway must bleed its state into the
+    // other on reload.
+
+    // --- Save gateway-a settings ---
+    setTestLocation({
+      protocol: "https:",
+      host: "multi.example:8443",
+      pathname: "/gateway-a/chat",
+    });
+    saveSettings({
+      gatewayUrl: "wss://multi.example:8443/gateway-a",
+      token: "",
+      sessionKey: "managed-session",
+      lastActiveSessionKey: "managed-session",
+      theme: "dash",
+      themeMode: "light",
+      chatShowThinking: false,
+      chatShowToolCalls: false,
+      chatAutoScroll: "off",
+      splitRatio: 0.65,
+      navCollapsed: true,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 0,
+      textScale: 100,
+    });
+
+    // --- Save gateway-b settings ---
+    setTestLocation({
+      protocol: "https:",
+      host: "multi.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+    saveSettings({
+      gatewayUrl: "wss://multi.example:8443/gateway-b",
+      token: "",
+      sessionKey: "native-session",
+      lastActiveSessionKey: "native-session",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 300,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    // --- Reload as gateway-a: must see its own isolated settings ---
+    setTestLocation({
+      protocol: "https:",
+      host: "multi.example:8443",
+      pathname: "/gateway-a/chat",
+    });
+    const settingsA = loadSettings();
+    expect(settingsA.gatewayUrl).toBe("wss://multi.example:8443/gateway-a");
+    expect(settingsA.theme).toBe("dash");
+    expect(settingsA.chatShowThinking).toBe(false);
+    expect(settingsA.chatShowToolCalls).toBe(false);
+    expect(settingsA.chatAutoScroll).toBe("off");
+    expect(settingsA.navCollapsed).toBe(true);
+
+    // --- Reload as gateway-b: must see its own settings, not gateway-a's ---
+    setTestLocation({
+      protocol: "https:",
+      host: "multi.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+    const settingsB = loadSettings();
+    expect(settingsB.gatewayUrl).toBe("wss://multi.example:8443/gateway-b");
+    expect(settingsB.theme).toBe("claw");
+    expect(settingsB.chatShowThinking).toBe(true);
+    expect(settingsB.chatShowToolCalls).toBe(true);
+    expect(settingsB.chatAutoScroll).toBe("near-bottom");
+    expect(settingsB.navCollapsed).toBe(false);
+    expect(settingsB.navWidth).toBe(300);
   });
 });
