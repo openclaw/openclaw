@@ -22,6 +22,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -514,6 +515,7 @@ export async function compactEmbeddedAgentSessionDirect(
       agentId: fallbackAgentId,
       sessionId: params.sessionId,
       sessionKey: fallbackSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.config,
@@ -1052,7 +1054,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     const runtimeInfo = {
       host: machineName,
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: `${provider}/${modelId}`,

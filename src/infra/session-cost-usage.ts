@@ -518,6 +518,8 @@ function buildCostUsageSummaryFromCache(params: {
     }
   }
 
+  fillMissingDays(dailyMap, params.startMs, params.endMs);
+
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
     .toSorted((a, b) => a.date.localeCompare(b.date));
@@ -927,6 +929,111 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 const formatDayKey = (date: Date): string =>
   date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
 
+/**
+ * Maximum window (in days) for which we will zero-fill missing calendar
+ * days. Bounded ranges from the UI's range filter top out at 90 days for
+ * the explicit picker and "All" is the wildcard escape hatch — anything
+ * wider than this threshold is treated as an all-time / open-ended range
+ * and falls back to sparse behavior (only days with activity), since a
+ * dense series at that scale would produce tens of thousands of zero
+ * buckets (e.g. a 1970-based startMs → ~20k entries) without any user
+ * value. 366 days covers a full year + leap-day cushion.
+ */
+const MAX_ZERO_FILL_DAYS = 366;
+
+/**
+ * Parse a `YYYY-MM-DD` day key (as produced by `formatDayKey`) into a Date
+ * constructed at local noon on that calendar date. Local-noon anchoring
+ * gives a ±12h cushion so the resulting Date always formats back to the
+ * same key via `formatDayKey`, even across DST transitions where the
+ * local clock shifts by ±1h. Returns `null` for malformed keys so the
+ * caller can fall back safely.
+ */
+const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const monthIdx = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  // Constructs the Date in the runtime's local timezone, which is the same
+  // timezone `formatDayKey` uses (`Intl.DateTimeFormat().resolvedOptions().timeZone`).
+  const date = new Date(year, monthIdx, day, 12, 0, 0, 0);
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+/**
+ * Ensure the daily map has an entry for every calendar day in [startMs, endMs].
+ * Days without activity are inserted with a zero-valued totals bucket so the
+ * resulting `daily` series matches the requested range length (one bar per
+ * calendar day) instead of only covering days with recorded usage.
+ *
+ * Iteration steps by calendar day in the local timezone — we derive the
+ * start and end day keys via `formatDayKey`, anchor a cursor at local noon
+ * of the start day, and advance via `setDate(getDate() + 1)`. This is
+ * robust against local-clock DST transitions where a fixed 24h ms step
+ * would land in the previous or next calendar day (and risk skipping an
+ * interior day from the zero-fill output).
+ */
+const fillMissingDays = (
+  dailyMap: Map<string, CostUsageTotals>,
+  startMs: number,
+  endMs: number,
+): void => {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return;
+  }
+  const dayMs = 24 * 60 * 60 * 1000;
+  // Bound the fill so unbounded / all-time ranges don't generate tens of
+  // thousands of zero buckets. Wider ranges keep their existing sparse
+  // (activity-only) shape.
+  const spanDays = Math.floor((endMs - startMs) / dayMs) + 1;
+  if (spanDays > MAX_ZERO_FILL_DAYS) {
+    return;
+  }
+  const startKey = formatDayKey(new Date(startMs));
+  const endKey = formatDayKey(new Date(endMs));
+  const cursorDate = parseDayKeyToLocalNoon(startKey);
+  if (cursorDate === null) {
+    // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
+    // key, but if locale data ever shifts under us, at least make sure the
+    // endpoint days are present so the chart isn't completely empty.
+    if (!dailyMap.has(startKey)) {
+      dailyMap.set(startKey, emptyTotals());
+    }
+    if (!dailyMap.has(endKey)) {
+      dailyMap.set(endKey, emptyTotals());
+    }
+    return;
+  }
+  // Hard upper bound to avoid runaway loops on bogus inputs (e.g. malformed
+  // formatDayKey output that never reaches endKey). Pads the expected span
+  // by a few iterations to cover any DST-driven boundary fuzz.
+  const maxIterations = MAX_ZERO_FILL_DAYS + 5;
+  let lastKey: string | undefined;
+  for (let i = 0; i <= maxIterations; i += 1) {
+    const key = formatDayKey(cursorDate);
+    if (!dailyMap.has(key)) {
+      dailyMap.set(key, emptyTotals());
+    }
+    lastKey = key;
+    if (key === endKey) {
+      break;
+    }
+    // Advance one calendar day in the local timezone. `setDate` handles
+    // month/year rollover, and the local-noon anchor (set in
+    // parseDayKeyToLocalNoon) gives us a ±12h cushion against ±1h DST
+    // shifts, so the cursor never lands in the prior or next calendar day.
+    cursorDate.setDate(cursorDate.getDate() + 1);
+  }
+  // Defensive: make sure the end-day key is present even if the loop
+  // terminated early (e.g. iteration cap hit before reaching endKey).
+  if (lastKey !== endKey && !dailyMap.has(endKey)) {
+    dailyMap.set(endKey, emptyTotals());
+  }
+};
+
 const formatUtcDayKey = (date: Date): string =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
@@ -1329,6 +1436,8 @@ export async function loadCostUsageSummary(params?: {
       },
     });
   }
+
+  fillMissingDays(dailyMap, sinceTime, untilTime);
 
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))

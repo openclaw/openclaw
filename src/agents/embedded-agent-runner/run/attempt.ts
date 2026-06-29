@@ -45,6 +45,7 @@ import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
@@ -1925,7 +1926,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         host: machineName,
-        os: `${os.type()} ${os.release()}`,
+        os: resolveRuntimeOsLabel(),
         arch: os.arch(),
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
@@ -5109,6 +5110,12 @@ export async function runEmbeddedAttempt(
             } catch (entryErr) {
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
             }
+          }
+
+          if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
+            // Context-engine afterTurn hooks may reconcile against the jsonl, so
+            // materialize the active turn before finalization reads from disk.
+            flushSessionManagerFile(activeSessionManager);
           }
         });
 

@@ -13,7 +13,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../types.ts";
-import { saveConfig } from "./config.ts";
+import { saveConfig, stageDefaultAgentConfigEntry } from "./config.ts";
 import type { ConfigState } from "./config.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -244,5 +244,20 @@ export async function saveAgentsConfig(state: AgentsConfigSaveState) {
   await loadAgents(state);
   if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
     state.agentsSelectedId = selectedBefore;
+  }
+}
+
+export async function setDefaultAgent(
+  state: AgentsConfigSaveState,
+  agentId: string,
+): Promise<void> {
+  const hadPendingConfigDraft = state.configFormDirty;
+  // Set Default is a one-click action on a clean draft, but saveConfig serializes the
+  // whole form. If other edits were already dirty, keep them staged for the explicit
+  // Save button instead of committing unrelated pending config changes.
+  if (stageDefaultAgentConfigEntry(state, agentId)) {
+    if (!hadPendingConfigDraft && state.configFormDirty) {
+      await saveAgentsConfig(state);
+    }
   }
 }

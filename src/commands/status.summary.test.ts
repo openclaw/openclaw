@@ -80,7 +80,21 @@ vi.mock("./status.summary.runtime.js", () => ({
       model: "gpt-5.5",
     })),
     resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
+    resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
+      typeof model === "string" && model.length > 0
+        ? {
+            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+            model,
+          }
+        : null,
+    ),
+    resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
+      typeof model === "string" && model.length > 0
+        ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
+        : null,
+    ),
     resolveContextTokensForModel: vi.fn(() => 200_000),
+    waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
   },
 }));
 
@@ -359,6 +373,7 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
+    expect(statusSummaryRuntime.waitForContextWindowCacheLoad).toHaveBeenCalledTimes(1);
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
     expect(contextCall?.allowAsyncLoad).toBe(false);
@@ -508,6 +523,40 @@ describe("getStatusSummary", () => {
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
+  it("preserves store order for tied recent session timestamps", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 11 }, (_, index) => {
+        const number = index + 1;
+        return [
+          `agent:main:session-${number}`,
+          {
+            sessionId: `session-${number}`,
+            updatedAt: 1,
+          },
+        ];
+      }),
+    );
+    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:session-1",
+      "agent:main:session-2",
+      "agent:main:session-3",
+      "agent:main:session-4",
+      "agent:main:session-5",
+      "agent:main:session-6",
+      "agent:main:session-7",
+      "agent:main:session-8",
+      "agent:main:session-9",
+      "agent:main:session-10",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
+      summary.sessions.recent.map((session) => session.key),
+    );
   });
 
   it("passes agent scope when listing configured agent session stores", async () => {
@@ -684,5 +733,61 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+  });
+
+  it("does not mark provider-local model aliases as pinned mismatches", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "anthropic",
+      model: "opus",
+    });
+    vi.mocked(statusSummaryRuntime.resolveStatusModelComparisonLabel).mockImplementation(
+      ({ provider, model }) => {
+        if (provider === "anthropic" && model === "opus") {
+          return "anthropic/claude-opus-4-8";
+        }
+        return typeof model === "string" && model.length > 0
+          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
+          : null;
+      },
+    );
+    vi.mocked(statusSummaryRuntime.resolveStatusModelLookupRef).mockImplementation(
+      ({ provider, model }) => {
+        if (provider === "anthropic" && model === "opus") {
+          return { provider: "anthropic", model: "claude-opus-4-8" };
+        }
+        return typeof model === "string" && model.length > 0
+          ? {
+              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+              model,
+            }
+          : null;
+      },
+    );
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          modelOverride: "opus",
+          modelOverrideSource: "user",
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("anthropic/claude-opus-4-8");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("anthropic/opus");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+    expect(statusSummaryRuntime.resolveSessionRuntimeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+      }),
+    );
   });
 });

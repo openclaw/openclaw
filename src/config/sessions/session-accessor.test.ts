@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applyRestartRecoveryLifecycle,
@@ -95,6 +96,27 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
+    const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+
+    await upsertSessionEntry(
+      { sessionKey: mixedKey, storePath },
+      { sessionId: "mixed-session", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: lowerKey, storePath },
+      { sessionId: "lower-session", updatedAt: 20 },
+    );
+
+    expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
+    expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
+    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
+      mixedKey,
+      lowerKey,
+    ]);
   });
 
   it("marks abort targets while canonicalizing legacy session keys", async () => {
@@ -510,6 +532,60 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionId: "second-session",
     });
+  });
+
+  it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "first-session",
+        skillsSnapshot: {
+          prompt: `<available_skills>${"x".repeat(600)}</available_skills>`,
+          skills: [{ name: "skill-0" }],
+          version: 1,
+        },
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const cachedStore = loadSessionStore(storePath, { clone: false });
+    const cachedEntry = cachedStore[sessionKey];
+    if (!cachedEntry?.skillsSnapshot) {
+      throw new Error("expected cached skills snapshot");
+    }
+    cachedEntry.skillsSnapshot = {
+      ...cachedEntry.skillsSnapshot,
+      resolvedSkills: [
+        createCanonicalFixtureSkill({
+          baseDir: "/skills/skill-0",
+          description: "skill-0 description",
+          filePath: "/skills/skill-0/SKILL.md",
+          name: "skill-0",
+          source: `# skill-0\n\n${"x".repeat(3000)}`,
+        }),
+      ],
+    };
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        sessionId: "next-session",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("next-session");
   });
 
   it("can borrow cached entry objects for read-only hot paths", async () => {
@@ -1036,6 +1112,92 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("branches from the newest matching compaction checkpoint without sorting all checkpoints", async () => {
+    const sourceSessionId = "11111111-1111-4111-8111-111111111111";
+    const branchSessionId = "22222222-2222-4222-8222-222222222222";
+    const branchPath = path.join(tempDir, "branch-newest.jsonl");
+    fs.writeFileSync(branchPath, `{"type":"session","id":"${branchSessionId}"}\n`, "utf8");
+    const oldMatchingCheckpoint = {
+      checkpointId: "checkpoint-1",
+      sessionKey: "agent:main:main",
+      sessionId: sourceSessionId,
+      createdAt: 10,
+      reason: "manual",
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "old-leaf",
+      },
+      postCompaction: { sessionId: "33333333-3333-4333-8333-333333333333" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestMatchingCheckpoint = {
+      ...oldMatchingCheckpoint,
+      createdAt: 20,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "new-leaf",
+      },
+      postCompaction: { sessionId: "44444444-4444-4444-8444-444444444444" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestDifferentCheckpoint = {
+      ...oldMatchingCheckpoint,
+      checkpointId: "checkpoint-2",
+      createdAt: 30,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "different-leaf",
+      },
+      postCompaction: { sessionId: "55555555-5555-4555-8555-555555555555" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: sourceSessionId,
+            updatedAt: 30,
+            compactionCheckpoints: [
+              oldMatchingCheckpoint,
+              newestDifferentCheckpoint,
+              newestMatchingCheckpoint,
+            ],
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch-newest",
+      checkpointId: "checkpoint-1",
+      forkTranscriptFromCheckpoint: async (selectedCheckpoint) => {
+        expect(selectedCheckpoint).toEqual(newestMatchingCheckpoint);
+        return {
+          status: "created",
+          transcript: {
+            sessionFile: branchPath,
+            sessionId: branchSessionId,
+          },
+        };
+      },
+      buildEntry: ({ currentEntry, forkedTranscript }) => ({
+        ...currentEntry,
+        sessionFile: forkedTranscript.sessionFile,
+        sessionId: forkedTranscript.sessionId,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "created",
+      key: "agent:main:branch-newest",
+      checkpoint: newestMatchingCheckpoint,
+    });
+  });
+
   it("does not persist checkpoint restores when the transcript boundary is missing", async () => {
     fs.writeFileSync(
       storePath,
@@ -1251,7 +1413,7 @@ describe("session accessor file-backed seam", () => {
     ).toHaveLength(1);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
@@ -1303,6 +1465,16 @@ describe("session accessor file-backed seam", () => {
     expect(result.replayedMessages).toBe(2);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
     expect(fs.existsSync(previousTranscript)).toBe(false);
+    const archivedPreviousTranscripts = fs
+      .readdirSync(tempDir)
+      .filter((file) => file.startsWith("previous-session.jsonl.reset."));
+    expect(archivedPreviousTranscripts).toHaveLength(1);
+    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
+    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
+      '"id":"previous-session"',
+    );
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
     expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
   });
 

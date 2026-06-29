@@ -761,7 +761,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+    "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
     [
       "src/agents/agent-bundle-mcp-runtime.test.ts",
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
@@ -796,7 +796,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/crestodian-first-run-docker-client.ts",
+    "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
       "src/cli/run-main.test.ts",
@@ -895,8 +895,19 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/mcp-channels-docker-client.ts",
+    "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+    [
+      "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+    ],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
+    ["test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts"],
   ],
   ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
@@ -925,7 +936,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
     ["test/scripts/docker-e2e-seeds.test.ts", "test/scripts/mcp-code-mode-gateway-client.test.ts"],
   ],
-  ["scripts/e2e/mcp-client-temp-state.ts", ["test/scripts/mcp-channels-harness.test.ts"]],
+  [
+    "scripts/e2e/cron-cli-docker.sh",
+    ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-observability.test.ts"],
+  ],
   [
     "scripts/e2e/cron-mcp-cleanup-docker.sh",
     [
@@ -977,9 +991,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
   ],
+  ["scripts/mobile-release-ref.ts", ["test/scripts/mobile-release-ref.test.ts"]],
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
+  ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-signing.mjs", ["test/scripts/ios-release-signing.test.ts"]],
@@ -1813,7 +1829,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/openai-image-auth-docker-client.ts",
+    "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     [
       "test/scripts/openai-image-auth-docker-client.test.ts",
       "extensions/openai/image-generation-provider.test.ts",
@@ -2154,6 +2170,22 @@ export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000)
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
+
+export function formatNoChangedTestTargetLines(skippedBroadFallbackPaths) {
+  if (skippedBroadFallbackPaths.length === 0) {
+    return ["[test] no changed test targets; skipping Vitest."];
+  }
+
+  return [
+    "[test] no precise changed test targets; skipping Vitest.",
+    `[test] ${skippedBroadFallbackPaths.length} changed path${
+      skippedBroadFallbackPaths.length === 1 ? "" : "s"
+    } require broad Vitest fallback:`,
+    ...skippedBroadFallbackPaths.map((changedPath) => `[test]   ${changedPath}`),
+    "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+  ];
+}
+
 const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
