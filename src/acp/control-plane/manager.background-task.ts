@@ -1,6 +1,7 @@
 /** Mirrors child ACP turns into detached-task status for requester-facing progress. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
@@ -32,7 +33,7 @@ function summarizeBackgroundTaskText(text: string): string {
   if (normalized.length <= ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH) {
     return normalized;
   }
-  return `${normalized.slice(0, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
+  return `${truncateUtf16Safe(normalized, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
 }
 
 /** Appends bounded progress text while preserving a single-line task summary. */
@@ -49,7 +50,7 @@ export function appendBackgroundTaskProgressSummary(current: string, chunk: stri
   if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
     return combined;
   }
-  return `${combined.slice(0, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
+  return `${truncateUtf16Safe(combined, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
 }
 
 /** Maps ACP runtime failures to detached-task terminal states. */

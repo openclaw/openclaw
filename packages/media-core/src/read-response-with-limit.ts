@@ -53,6 +53,16 @@ type ReadResponsePrefixResult = {
   truncated: boolean;
 };
 
+function sliceHeadUtf16Safe(value: string, end: number): string {
+  let safeEnd = Math.max(0, Math.min(value.length, end));
+  const last = value.charCodeAt(safeEnd - 1);
+  const next = value.charCodeAt(safeEnd);
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    safeEnd -= 1;
+  }
+  return value.slice(0, safeEnd);
+}
+
 async function readResponsePrefix(
   res: Response,
   maxBytes: number,
@@ -64,15 +74,7 @@ async function readResponsePrefix(
   const chunkTimeoutMs = opts?.chunkTimeoutMs;
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
-    }
-    return { buffer: fallback, size: fallback.length, truncated: false };
+    return { buffer: Buffer.alloc(0), size: 0, truncated: false };
   }
 
   const reader = body.getReader();
@@ -180,7 +182,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${sliceHeadUtf16Safe(collapsed, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }
