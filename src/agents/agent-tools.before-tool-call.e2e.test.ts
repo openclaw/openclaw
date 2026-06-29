@@ -1513,6 +1513,35 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Approval timed out");
   });
 
+  it("fails closed when waitDecision reports a stale approval id", async () => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Stale approval",
+        description: "Approval disappeared",
+        timeoutBehavior: "allow",
+        onResolution,
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-stale", status: "accepted" });
+    mockCallGateway.mockRejectedValueOnce(new Error("approval expired or not found"));
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "cat /tmp/private-key" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Plugin approval unavailable (stale approval)");
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       params: { command: "safe-command" },
