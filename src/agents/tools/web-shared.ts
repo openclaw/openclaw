@@ -287,7 +287,10 @@ export async function readResponseText(
       }
       try {
         reader.releaseLock();
-      } catch {}
+      } catch {
+        // Best-effort: releaseLock may throw if the stream was already closed
+        // by cancel() above or by a concurrent stream consumer.
+      }
     }
 
     const bytes = concatBytes(parts, bytesRead);

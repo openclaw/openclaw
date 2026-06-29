@@ -54,7 +54,9 @@ function coerceApiHost(params: {
   try {
     const url = new URL(raw);
     return url.origin;
-  } catch {}
+  } catch {
+    // Fall through to the https:// prefix attempt below.
+  }
 
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;

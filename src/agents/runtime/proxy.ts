@@ -409,7 +409,10 @@ export function streamProxy(
     } finally {
       try {
         reader?.releaseLock();
-      } catch {}
+      } catch {
+        // Best-effort: releaseLock may throw if the stream was already closed
+        // by cancel() during abort handling or a concurrent stream consumer.
+      }
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }
