@@ -48,8 +48,6 @@ import {
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
-export type { WhatsAppCreateSocket } from "./connection-controller.js";
-
 export type WhatsAppMonitorRuntimeOptions = {
   createSocket?: WhatsAppCreateSocket;
 };

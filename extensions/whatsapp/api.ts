@@ -2,9 +2,9 @@
 export {
   setWhatsAppMonitorRuntimeOptions,
   whatsappPlugin,
-  type WhatsAppCreateSocket,
   type WhatsAppMonitorRuntimeOptions,
 } from "./src/channel.js";
+export type { WhatsAppCreateSocket } from "./src/connection-controller.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {
   DEFAULT_WHATSAPP_MEDIA_MAX_MB,
