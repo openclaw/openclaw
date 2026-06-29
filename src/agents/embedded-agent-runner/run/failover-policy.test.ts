@@ -20,6 +20,37 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates retry-limit exhaustion for model_not_found when fallback is configured", () => {
+    // model_not_found should cascade to configured fallbacks instead of
+    // returning a terminal error, so a decommissioned model is handled
+    // transparently via the fallback chain.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
+  it("surfaces model_not_found as terminal when no fallback is configured", () => {
+    // Without fallbacks, model_not_found stays terminal so a typo'd model id
+    // surfaces loudly — the fallbackConfigured guard handles this, not the
+    // shouldEscalateRetryLimit exclusion.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
   it("keeps retry-limit as a local error for non-escalating reasons", () => {
     expect(
       resolveRunFailoverDecision({
