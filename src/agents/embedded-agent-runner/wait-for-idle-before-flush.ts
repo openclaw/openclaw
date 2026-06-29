@@ -1,6 +1,7 @@
 /**
  * Waits for tool-result streams to become idle before flushing output.
  */
+import { setImmediate } from "node:timers";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 type IdleAwareAgent = {
@@ -58,5 +59,10 @@ export async function flushPendingToolResultsAfterIdle(opts: {
       opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
     );
   }
+  // Drain one event-loop iteration before flushing so that pending
+  // I/O callbacks (e.g. Feishu message-tool HTTP responses) can write
+  // real tool results and clear the pending map before synthetics are
+  // injected (#84134).
+  await new Promise<void>((resolve) => setImmediate(resolve));
   opts.sessionManager?.flushPendingToolResults?.();
 }
