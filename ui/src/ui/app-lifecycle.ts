@@ -1,5 +1,5 @@
 // Control UI module implements app lifecycle behavior.
-import { connectGateway } from "./app-gateway.ts";
+import { connectGateway, resolveUnifiedSessionTargetKey } from "./app-gateway.ts";
 import {
   startLogsPolling,
   startNodesPolling,
@@ -8,6 +8,7 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
+import { switchChatSessionAndWait } from "./app-render.helpers.ts";
 import {
   observeTopbar,
   scheduleActivityScroll,
@@ -26,6 +27,7 @@ import { startControlUiResponsivenessObserver } from "./control-ui-performance.t
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./controllers/workboard.ts";
 import type { Tab } from "./navigation.ts";
+import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
@@ -99,10 +101,28 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
+  const bootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
     { applyIdentity: false },
   );
+  host.controlUiBootstrapReady = bootstrapReady;
+  // The bootstrap config carries gateway.controlUi.unifiedSession but may resolve
+  // after the gateway hello already subscribed to a per-conversation session. If
+  // unified mode is on, switch onto the agent main session now so send + live
+  // mirror unify. Run as a detached side effect so controlUiBootstrapReady stays
+  // the bootstrap-config promise. (When bootstrap wins the race, the onHello clamp
+  // in app-gateway already handled this and the keys match here.)
+  void Promise.resolve(bootstrapReady).then(() => {
+    const target = resolveUnifiedSessionTargetKey(
+      host as unknown as Parameters<typeof resolveUnifiedSessionTargetKey>[0],
+    );
+    if (target && host.connected && !areUiSessionKeysEquivalent(host.sessionKey, target)) {
+      void switchChatSessionAndWait(
+        host as unknown as Parameters<typeof switchChatSessionAndWait>[0],
+        target,
+      );
+    }
+  });
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   const hasPendingGatewaySwitch =
     typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();

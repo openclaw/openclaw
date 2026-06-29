@@ -34,10 +34,12 @@ import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
 } from "./session-key.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
@@ -225,6 +227,12 @@ const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
+  // Unified-session mode has no per-conversation sessions, so the Sessions
+  // management tab (a session switcher surface) is hidden along with the chat
+  // sidebar switcher; switchChatSessionInternal still re-clamps as a backstop.
+  if (tab === "sessions" && state.unifiedSession) {
+    return nothing;
+  }
   const href = pathForTab(tab, state.basePath);
   const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
@@ -592,7 +600,9 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
+          ${state.unifiedSession
+            ? nothing
+            : renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -648,11 +658,27 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
+// Unified-session mode: every chat switch lands on the target agent's main
+// session (agent:{agentId}:main), so per-conversation keys from the Sessions
+// tab, deep links, or programmatic switches cannot move chat off the unified
+// session. Multi-agent stays intact — switching agents still resolves to that
+// agent's own main session. Returns the requested key unchanged when off.
+function resolveUnifiedSwitchTarget(state: AppViewState, requestedSessionKey: string): string {
+  if (!state.unifiedSession) {
+    return requestedSessionKey;
+  }
+  return buildAgentMainSessionKey({
+    agentId: resolveAgentIdFromSessionKey(requestedSessionKey),
+    mainKey: resolveUiConfiguredMainKey(state),
+  });
+}
+
 function switchChatSessionInternal(
   state: AppViewState,
-  nextSessionKey: string,
+  requestedSessionKey: string,
   opts?: { awaitInitialLoad?: boolean },
 ): Promise<void> | undefined {
+  const nextSessionKey = resolveUnifiedSwitchTarget(state, requestedSessionKey);
   const previousSessionKey = state.sessionKey;
   const previousSessionsResult = state.sessionsResult;
   const nextSessionRow =
@@ -739,6 +765,11 @@ export async function createChatSession(
   intent?: CreateChatSessionIntent,
 ): Promise<boolean> {
   if (intent?.source !== "user") {
+    return false;
+  }
+  // Unified-session mode has one session per agent; no new per-conversation
+  // sessions. Use /reset to clear the main session in place instead.
+  if (state.unifiedSession) {
     return false;
   }
   if (!state.client || !state.connected) {

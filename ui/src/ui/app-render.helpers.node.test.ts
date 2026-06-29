@@ -1601,3 +1601,39 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkTranscript).toBeNull();
   });
 });
+
+describe("unified session enforcement (SESS-03)", () => {
+  beforeEach(() => {
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+    syncSelectedSessionMessageSubscriptionMock.mockResolvedValue(undefined);
+  });
+
+  it("re-clamps a per-conversation switch onto the target agent's main session", async () => {
+    const state = createChatSessionState({ unifiedSession: true });
+    switchChatSession(state, "agent:ops:conversation-xyz");
+    await Promise.resolve();
+    expect(state.sessionKey).toBe("agent:ops:main");
+  });
+
+  it("keeps each agent's own main session when switching agents in unified mode", async () => {
+    const state = createChatSessionState({ unifiedSession: true });
+    switchChatSession(state, "agent:research:conversation-abc");
+    await Promise.resolve();
+    expect(state.sessionKey).toBe("agent:research:main");
+  });
+
+  it("leaves the requested key untouched when unified mode is off", async () => {
+    const state = createChatSessionState();
+    switchChatSession(state, "agent:ops:conversation-xyz");
+    await Promise.resolve();
+    expect(state.sessionKey).toBe("agent:ops:conversation-xyz");
+  });
+
+  it("blocks creating a new session in unified mode", async () => {
+    const state = createChatSessionState({ unifiedSession: true });
+    await expect(createChatSession(state, { source: "user" })).resolves.toBe(false);
+  });
+});

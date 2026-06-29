@@ -1088,6 +1088,7 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+            unifiedSession: z.boolean().optional(),
           })
           .strict()
           .optional(),

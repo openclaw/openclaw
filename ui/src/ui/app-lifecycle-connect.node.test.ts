@@ -12,6 +12,9 @@ const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock, restore
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
+  // handleConnected re-clamps to the unified main session once bootstrap resolves;
+  // null keeps the detached side effect inert for these lifecycle tests.
+  resolveUnifiedSessionTargetKey: vi.fn(() => null),
 }));
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({

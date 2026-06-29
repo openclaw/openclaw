@@ -549,6 +549,11 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
 }
 
 function renderSidebarSessions(state: AppViewState) {
+  // Unified-session mode joins one main session per agent; per-conversation
+  // switching, new-session, and the recent-sessions list are hidden.
+  if (state.unifiedSession) {
+    return nothing;
+  }
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);

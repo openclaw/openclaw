@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ActivityEntry } from "./activity-model.ts";
-import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
+import {
+  clampToUnifiedSession,
+  connectGateway,
+  resolveControlUiClientVersion,
+  resolveUnifiedSessionTargetKey,
+} from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -2093,5 +2098,49 @@ describe("resolveControlUiClientVersion", () => {
         pageUrl: "https://control.example.com/openclaw/",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("unified session clamp (SESS-01/02)", () => {
+  it("resolveUnifiedSessionTargetKey returns null when the mode is off", () => {
+    const host = createHost();
+    host.agentsList = { defaultId: "dev" } as TestGatewayHost["agentsList"];
+    expect(resolveUnifiedSessionTargetKey(host)).toBeNull();
+  });
+
+  it("resolveUnifiedSessionTargetKey returns the agent main key when the mode is on", () => {
+    const host = createHost();
+    host.unifiedSession = true;
+    host.agentsList = { defaultId: "dev" } as TestGatewayHost["agentsList"];
+    expect(resolveUnifiedSessionTargetKey(host)).toBe("agent:dev:main");
+  });
+
+  it("clampToUnifiedSession moves a per-conversation session onto the agent main session", () => {
+    const host = createHost();
+    host.unifiedSession = true;
+    host.agentsList = { defaultId: "dev" } as TestGatewayHost["agentsList"];
+    host.sessionKey = "agent:dev:conversation-123";
+
+    expect(clampToUnifiedSession(host)).toBe(true);
+    expect(host.sessionKey).toBe("agent:dev:main");
+  });
+
+  it("clampToUnifiedSession is a no-op when already on the agent main session", () => {
+    const host = createHost();
+    host.unifiedSession = true;
+    host.agentsList = { defaultId: "dev" } as TestGatewayHost["agentsList"];
+    host.sessionKey = "agent:dev:main";
+
+    expect(clampToUnifiedSession(host)).toBe(false);
+    expect(host.sessionKey).toBe("agent:dev:main");
+  });
+
+  it("clampToUnifiedSession leaves the session untouched when the mode is off (SESS-02)", () => {
+    const host = createHost();
+    host.agentsList = { defaultId: "dev" } as TestGatewayHost["agentsList"];
+    host.sessionKey = "agent:dev:conversation-123";
+
+    expect(clampToUnifiedSession(host)).toBe(false);
+    expect(host.sessionKey).toBe("agent:dev:conversation-123");
   });
 });

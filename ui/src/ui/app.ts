@@ -256,6 +256,9 @@ export class OpenClawApp extends LitElement {
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "strict";
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
+  // Populated from the control-ui bootstrap config (gateway.controlUi.unifiedSession).
+  // When true, the UI clamps onto the agent's main session and hides session switching.
+  @state() unifiedSession = false;
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;

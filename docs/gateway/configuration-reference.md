@@ -537,6 +537,7 @@ See [Inferred commitments](/concepts/commitments).
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
       // allowInsecureAuth: false,
       // dangerouslyDisableDeviceAuth: false,
+      // unifiedSession: false, // join the agent's single main session; hide session switching in Control UI
     },
     remote: {
       url: "ws://127.0.0.1:18789",

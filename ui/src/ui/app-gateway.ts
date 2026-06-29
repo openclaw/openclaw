@@ -158,6 +158,7 @@ type GatewayHost = {
   fetchRealtimeTalkCatalog?: () => Promise<void>;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
+  unifiedSession?: boolean;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -551,6 +552,39 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
+// Unified-session mode: force the active chat onto the agent's single main
+// session (agent:{agentId}:main). Returns true when the session key changed so
+// callers can re-run subscribe/refresh. The sidebar switcher is hidden in this
+// mode (renderSidebarSessions), so this clamp is the only session selector.
+// Agent main session key the unified UI clamps onto, or null when the mode is
+// off. Exposed so the lifecycle can re-clamp if the bootstrap config (which
+// carries the flag) resolves after the gateway hello.
+export function resolveUnifiedSessionTargetKey(host: GatewayHost): string | null {
+  return host.unifiedSession ? resolveMainSessionFallback(host) : null;
+}
+
+export function clampToUnifiedSession(host: GatewayHost): boolean {
+  if (!host.unifiedSession) {
+    return false;
+  }
+  const target = resolveMainSessionFallback(host);
+  if (areUiSessionKeysEquivalent(host.sessionKey, target)) {
+    return false;
+  }
+  host.sessionKey = target;
+  applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+    ...host.settings,
+    sessionKey: target,
+    lastActiveSessionKey: target,
+  });
+  syncUrlWithSessionKey(
+    host as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    target,
+    true,
+  );
+  return true;
+}
+
 function resolveDefaultAgentId(host: GatewayHost): string {
   return resolveUiDefaultAgentId(host);
 }
@@ -818,6 +852,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         void host.fetchRealtimeTalkCatalog?.();
       }
       applySnapshot(host, hello);
+      // Unified mode: clamp onto the agent main session before the initial
+      // subscribe/refresh so send + live mirror target agent:{agentId}:main.
+      // (If the bootstrap config resolves after hello, app-lifecycle re-clamps.)
+      clampToUnifiedSession(host);
       prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
         preserveCurrent: true,

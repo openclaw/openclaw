@@ -94,6 +94,9 @@ export type AppViewState = {
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
+  // Unified-session mode (gateway.controlUi.unifiedSession): the Control UI joins
+  // the agent's single main session and hides per-conversation session switching.
+  unifiedSession?: boolean;
   sessionKey: string;
   chatSessionMessageSubscriptionKey?: string | null;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
