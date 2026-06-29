@@ -2526,29 +2526,31 @@ describe("archiveSessionTranscripts", () => {
   });
 
   test("does not archive symlink under legacy root that resolves outside", () => {
-    const oldSessionId = "22222222-2222-4222-8222-222222222222";
-    const currentSessionId = "11111111-1111-4111-8111-111111111111";
-    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
-    fs.mkdirSync(legacyDir, { recursive: true });
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-symlink-target-"));
-    try {
-      const targetPath = path.join(outsideDir, "target.jsonl");
-      fs.writeFileSync(targetPath, '{"type":"session"}\n', "utf-8");
-      const symlinkPath = path.join(legacyDir, `${oldSessionId}.jsonl`);
-      fs.symlinkSync(targetPath, symlinkPath);
+    withArchiveHome(() => {
+      const oldSessionId = "22222222-2222-4222-8222-222222222222";
+      const currentSessionId = "11111111-1111-4111-8111-111111111111";
+      const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-symlink-target-"));
+      try {
+        const targetPath = path.join(outsideDir, "target.jsonl");
+        fs.writeFileSync(targetPath, '{"type":"session"}\n', "utf-8");
+        const symlinkPath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+        fs.symlinkSync(targetPath, symlinkPath);
 
-      const archived = archiveSessionTranscripts({
-        sessionId: currentSessionId,
-        storePath,
-        sessionFile: symlinkPath,
-        reason: "reset",
-      });
+        const archived = archiveSessionTranscripts({
+          sessionId: currentSessionId,
+          storePath,
+          sessionFile: symlinkPath,
+          reason: "reset",
+        });
 
-      expect(archived).toStrictEqual([]);
-      expect(fs.existsSync(targetPath)).toBe(true);
-    } finally {
-      fs.rmSync(outsideDir, { recursive: true, force: true });
-    }
+        expect(archived).toStrictEqual([]);
+        expect(fs.existsSync(targetPath)).toBe(true);
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
   });
 });
 
