@@ -339,7 +339,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
-function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
+export function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
   if (!snapshot || snapshot.resolvedSkills === undefined) {
     return entry;
