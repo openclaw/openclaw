@@ -1082,4 +1082,88 @@ describe("loginGeminiCliOAuth", () => {
     expect(Number.isSafeInteger(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
+
+  it("rejects an oversized token exchange response body", async () => {
+    // fetchWithTimeout materialises the body via arrayBuffer() before returning
+    // new Response(buf, ...). readProviderJsonResponse must still reject if the
+    // materialized body exceeds 16 MiB so JSON.parse cannot run on it.
+    const oversizedBody = JSON.stringify({
+      access_token: "a".repeat(17 * 1024 * 1024),
+      refresh_token: "r",
+      expires_in: 3600,
+    });
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        new Response(oversizedBody, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /google\.token.*exceeds|Content too large/,
+    );
+  });
+
+  it("rejects an oversized loadCodeAssist success response body", async () => {
+    // discoverProject loops over all 3 LOAD endpoints; each must return the
+    // oversized body so that bound errors propagate for the whole loop.
+    const oversizedBody = JSON.stringify({
+      currentTier: { id: "standard-tier" },
+      cloudaicompanionProject: { id: "b".repeat(17 * 1024 * 1024) },
+    });
+    const oversizedResponse = () =>
+      new Response(oversizedBody, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD || url === LOAD_DAILY || url === LOAD_AUTOPUSH) {
+        return oversizedResponse();
+      }
+      return undefined;
+    });
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token")).rejects.toThrow(
+      /google\.load-code-assist.*exceeds|Content too large/,
+    );
+  });
+
+  it("swallows bound error on oversized userinfo body and returns undefined email", async () => {
+    // getUserEmail catches all errors; an oversized userinfo body should not
+    // propagate but email must be undefined, proving the bound fired instead
+    // of completing a successful parse.
+    const oversizedUserinfoBody = JSON.stringify({ email: "c".repeat(17 * 1024 * 1024) });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === USERINFO_URL) {
+          return new Response(oversizedUserinfoBody, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url === LOAD_PROD) {
+          return new Response(
+            JSON.stringify({
+              currentTier: { id: "standard-tier" },
+              cloudaicompanionProject: { id: "proj-bound-test" },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ error: "not found" }), { status: 503 });
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    const result = await resolveGoogleOAuthIdentity("access-token");
+    expect(result.projectId).toBe("proj-bound-test");
+    // email is undefined: the bound error was thrown and swallowed by getUserEmail
+    expect(result.email).toBeUndefined();
+  });
 });

@@ -3,6 +3,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
@@ -31,11 +32,11 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
     throw new Error(`Token exchange failed: ${errorText}`);
   }
 
-  return (await response.json()) as {
+  return readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: unknown;
-  };
+  }>(response, "google.token");
 }
 
 function resolveExpiredTokenTimestampMs(nowMs: number): number {
