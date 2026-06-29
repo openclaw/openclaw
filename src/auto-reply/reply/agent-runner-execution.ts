@@ -957,20 +957,11 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
-  if (providerRequestError) {
-    return {
-      text: providerRequestError.userMessage,
-      isGenericRunnerFailure: false,
-    };
-  }
-  const missingApiKeyFailure = buildMissingApiKeyFailureText({
-    message: normalizedMessage,
-    error,
-  });
-  if (missingApiKeyFailure) {
-    return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
-  }
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -985,6 +976,20 @@ function buildExternalRunFailureReply(
       text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
       isGenericRunnerFailure: false,
     };
+  }
+  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
+  if (providerRequestError) {
+    return {
+      text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
+  const missingApiKeyFailure = buildMissingApiKeyFailureText({
+    message: normalizedMessage,
+    error,
+  });
+  if (missingApiKeyFailure) {
+    return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -3131,8 +3136,17 @@ export async function runAgentTurnWithFallback(params: {
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      // OAuth refresh failures (e.g. claude-cli expired token) must reach
+      // buildExternalRunFailureReply so the provider-specific re-auth hint is
+      // surfaced.  Skip classifyProviderRequestError for them: its typed-401
+      // branch would otherwise intercept the FailoverError first and return
+      // the generic "re-authenticate this provider" copy.
       const providerRequestError =
-        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
+        !isBilling && !shouldSurfaceToControlUi
+          ? (classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message))
+            ? undefined
+            : classifyProviderRequestError(err)
+          : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart

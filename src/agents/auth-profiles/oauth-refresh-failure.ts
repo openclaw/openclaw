@@ -34,17 +34,35 @@ export class OAuthRefreshFailureError extends Error {
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+// Matches the error surfaced via FailoverError when the `claude` subprocess
+// has an expired/invalid OAuth token.  The message always includes the
+// "claude-cli" provider prefix (injected by the failover layer) and the
+// literal 401 status plus Anthropic's "Invalid authentication credentials"
+// phrase, so the pattern is narrow enough to avoid false-positives from
+// unrelated provider 401 failures.
+const CLAUDE_CLI_AUTH_FAILURE_RE =
+  /\bclaude-cli\b.+?\b(failed to authenticate|401\s+invalid authentication credentials)\b/is;
+
+function isClaudeCliExpiredOAuthMessage(message: string): boolean {
+  return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
+}
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
-    lower.includes("authentication session could not be refreshed automatically")
+    lower.includes("authentication session could not be refreshed automatically") ||
+    isClaudeCliExpiredOAuthMessage(message)
   );
 }
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
+  if (isClaudeCliExpiredOAuthMessage(message)) {
+    // The message was produced by the claude-cli subprocess; the provider is
+    // statically known — no need to parse it from the error text.
+    return "claude-cli";
+  }
   const provider = message.match(OAUTH_REFRESH_FAILURE_PROVIDER_RE)?.[1]?.trim();
   return provider && provider.length > 0 ? provider : null;
 }
@@ -74,6 +92,13 @@ export function classifyOAuthRefreshFailureReason(
     return "invalid_refresh_token";
   }
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
+    return "revoked";
+  }
+  if (isClaudeCliExpiredOAuthMessage(message)) {
+    // The claude subprocess emits "401 Invalid authentication credentials"
+    // when its stored OAuth token has expired.  Map this to "revoked" so the
+    // caller surfaces the targeted re-auth hint rather than the generic login
+    // failure copy.
     return "revoked";
   }
   return null;

@@ -7049,6 +7049,36 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces claude-cli re-auth hint over generic provider auth copy for 401 OAuth expiry", async () => {
+    // When the claude subprocess emits a 401 "Failed to authenticate" because
+    // its OAuth token has expired, the error is wrapped as a FailoverError with
+    // reason:"auth" and status:401.  Without the ordering fix, this would be
+    // caught by classifyProviderRequestError before reaching classifyOAuthRefreshFailure,
+    // producing the generic "re-authenticate this provider" copy instead of the
+    // targeted claude-cli re-auth command.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-20250514",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `openclaw models auth login --provider claude-cli`, then try again.",
+      );
+    }
+  });
+
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
