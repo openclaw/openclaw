@@ -363,6 +363,46 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(legacyTranscript)).toBe(false);
   });
 
+  it("resolves default-store SQLite transcript turn markers before appending", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const expectedStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = {
+      agentId: "main",
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      sessionId: "default-store-turn-session",
+      sessionKey: "agent:main:default-store-turn",
+    };
+    await upsertSessionEntry(
+      { ...scope, storePath: expectedStorePath },
+      {
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "default store sqlite turn" } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.sessionFile).toBe(`sqlite:main:${scope.sessionId}:${expectedStorePath}`);
+    const persistedScope = { ...scope, storePath: expectedStorePath };
+    expect(loadSessionEntry(persistedScope)?.sessionFile).toBe(result.sessionFile);
+    await expect(loadTranscriptEvents(persistedScope)).resolves.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "default store sqlite turn",
+        }),
+      }),
+    );
+  });
+
   it("guards store-backed turns in SQLite when an old sessionFile path is present", async () => {
     const legacyTranscript = path.join(tempDir, "guarded-legacy-topic.jsonl");
     const scope = {
