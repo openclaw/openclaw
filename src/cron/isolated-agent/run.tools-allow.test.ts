@@ -5,6 +5,7 @@ import {
   listWebSearchProvidersMock,
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCodexNativeSearchActivationMock,
   resolveDeliveryTargetMock,
   resolveWebSearchProviderIdMock,
   runEmbeddedAgentMock,
@@ -201,6 +202,21 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     async () => {
       listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
       resolveWebSearchProviderIdMock.mockReturnValue("duckduckgo");
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics).toBeUndefined();
+    },
+  );
+
+  it(
+    "does not warn when native OpenAI/Codex hosted web_search is active for the resolved model",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([]);
+      resolveWebSearchProviderIdMock.mockReturnValue("");
+      resolveCodexNativeSearchActivationMock.mockReturnValue({ state: "native_active" });
 
       const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
 

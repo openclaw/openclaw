@@ -82,6 +82,7 @@ export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
 export const listWebSearchProvidersMock = createMock();
 export const resolveWebSearchProviderIdMock = createMock();
+export const resolveCodexNativeSearchActivationMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -166,6 +167,10 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
 vi.mock("../../web-search/runtime.js", () => ({
   listWebSearchProviders: listWebSearchProvidersMock,
   resolveWebSearchProviderId: resolveWebSearchProviderIdMock,
+}));
+
+vi.mock("../../agents/codex-native-web-search-core.js", () => ({
+  resolveCodexNativeSearchActivation: resolveCodexNativeSearchActivationMock,
 }));
 
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
@@ -503,6 +508,7 @@ function resetRunConfigMocks(): void {
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
   listWebSearchProvidersMock.mockReturnValue([]);
   resolveWebSearchProviderIdMock.mockReturnValue("");
+  resolveCodexNativeSearchActivationMock.mockReturnValue({ state: "managed_only" });
 }
 
 function resetRunExecutionMocks(): void {

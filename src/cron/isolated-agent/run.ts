@@ -130,6 +130,9 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
 const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
+const nativeWebSearchRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/codex-native-web-search-core.js"),
+);
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
@@ -170,6 +173,10 @@ async function loadCronModelPreflightRuntime() {
 
 async function loadWebSearchRuntime() {
   return await webSearchRuntimeLoader.load();
+}
+
+async function loadNativeWebSearchRuntime() {
+  return await nativeWebSearchRuntimeLoader.load();
 }
 
 async function loadRuntimePlugins() {
@@ -336,15 +343,20 @@ function canPromptForMessageTool(params: {
 async function createCronToolsAllowWebSearchDiagnostics(params: {
   cfg: OpenClawConfig;
   agentDir: string;
+  agentId?: string;
+  agentSessionKey?: string;
+  modelProvider?: string;
+  modelApi?: string;
+  modelId?: string;
   toolsAllow?: string[];
 }) {
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return undefined;
   }
-  const normalizedAllow = expandToolGroups(params.toolsAllow).map((toolName) =>
-    normalizeToolName(toolName),
+  const normalizedAllow = new Set(
+    expandToolGroups(params.toolsAllow).map((toolName) => normalizeToolName(toolName)),
   );
-  if (!normalizedAllow.includes("web_search") || normalizedAllow.includes("*")) {
+  if (!normalizedAllow.has("web_search") || normalizedAllow.has("*")) {
     return undefined;
   }
   try {
@@ -357,6 +369,28 @@ async function createCronToolsAllowWebSearchDiagnostics(params: {
         providers,
       })
     ) {
+      return undefined;
+    }
+    // Native OpenAI/Codex hosted web_search bypasses managed provider selection;
+    // skip the warning when it would handle the resolved model so operators on
+    // direct OpenAI Responses/Codex traffic do not see a misleading diagnostic.
+    const configuredProvider = params.modelProvider
+      ? params.cfg.models?.providers?.[params.modelProvider]
+      : undefined;
+    const configuredModelApi = params.modelId
+      ? configuredProvider?.models?.find((candidate) => candidate.id === params.modelId)?.api
+      : undefined;
+    const { resolveCodexNativeSearchActivation } = await loadNativeWebSearchRuntime();
+    const nativeActivation = resolveCodexNativeSearchActivation({
+      config: params.cfg,
+      modelProvider: params.modelProvider,
+      modelApi: params.modelApi ?? configuredModelApi ?? configuredProvider?.api,
+      modelId: params.modelId,
+      agentId: params.agentId,
+      sessionKey: params.agentSessionKey,
+      agentDir: params.agentDir,
+    });
+    if (nativeActivation.state === "native_active") {
       return undefined;
     }
   } catch (error) {
@@ -1454,14 +1488,16 @@ export async function runCronIsolatedAgentTurn(params: {
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
   let cronRunSessionCleanupAttempted = false;
-  let preflightDiagnostics: Awaited<
-    ReturnType<typeof createCronToolsAllowWebSearchDiagnostics>
-  >;
+  let preflightDiagnostics: Awaited<ReturnType<typeof createCronToolsAllowWebSearchDiagnostics>>;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     preflightDiagnostics = await createCronToolsAllowWebSearchDiagnostics({
       cfg: prepared.context.cfgWithAgentDefaults,
       agentDir: prepared.context.agentDir,
+      agentId: prepared.context.agentId,
+      agentSessionKey: prepared.context.agentSessionKey,
+      modelProvider: prepared.context.liveSelection?.provider,
+      modelId: prepared.context.liveSelection?.model,
       toolsAllow: prepared.context.agentPayload?.toolsAllow,
     });
     const existingRunContext = getAgentRunContext(initialSessionId);
