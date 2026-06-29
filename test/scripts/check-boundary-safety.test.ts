@@ -4,6 +4,7 @@ import {
   diffBoundaryInventory,
   findBoundarySafetyViolations,
   isBoundarySafetyCandidateFile,
+  main,
 } from "../../scripts/check-boundary-safety.mjs";
 
 describe("check-boundary-safety", () => {
@@ -169,5 +170,26 @@ describe("check-boundary-safety", () => {
       missing: [],
       unexpected: [],
     });
+  });
+
+  it("keeps JSON mode stdout parseable", async () => {
+    const output = { stdout: "", stderr: "" };
+    const io = {
+      stdout: {
+        write(chunk: string) {
+          output.stdout += chunk;
+        },
+      },
+      stderr: {
+        write(chunk: string) {
+          output.stderr += chunk;
+        },
+      },
+    };
+
+    await expect(main(["--json"], io)).resolves.toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual(expect.any(Array));
+    expect(output.stdout).not.toContain("Boundary safety changed-file check passed");
+    expect(output.stderr).toContain("Boundary safety changed-file check passed");
   });
 });
