@@ -31,6 +31,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
+  normalizeOptionalString,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -158,6 +159,14 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 /** Read all visible transcript messages for a session from the first existing candidate file. */
 export function readSessionMessages(
   sessionId: string,
@@ -177,6 +186,12 @@ export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
   maxLines?: number;
+  allowResetArchiveFallback?: boolean;
+};
+
+export type ReadSessionMessagesPageOptions = {
+  offset: number;
+  maxMessages: number;
   allowResetArchiveFallback?: boolean;
 };
 
@@ -295,10 +310,58 @@ async function readRecentTranscriptTailLinesAsync(
 
 const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
+const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
 function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+}
+
+function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
+  for (let index = tokenIndex - 1; index >= 0; index--) {
+    const char = source[index];
+    if (/\s/.test(char)) {
+      continue;
+    }
+    return char === "{" || char === ",";
+  }
+  return true;
+}
+
+function extractJsonStringFieldWindow(
+  source: string,
+  field: string,
+  startIndex = 0,
+  endIndex = source.length,
+): string | undefined {
+  const fieldToken = JSON.stringify(field);
+  let searchIndex = startIndex;
+  while (searchIndex < endIndex) {
+    const tokenIndex = source.indexOf(fieldToken, searchIndex);
+    if (tokenIndex < 0 || tokenIndex >= endIndex) {
+      return undefined;
+    }
+    searchIndex = tokenIndex + fieldToken.length;
+    if (!isJsonObjectFieldToken(source, tokenIndex)) {
+      continue;
+    }
+    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex, endIndex));
+    if (!match) {
+      continue;
+    }
+    try {
+      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+      return normalizeOptionalString(decoded);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
+  const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
+  return extractJsonStringFieldWindow(source, field, startIndex);
 }
 
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
@@ -312,6 +375,9 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
     extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const idempotencyKey =
+    extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??
+    extractJsonStringFieldSuffix(line, "idempotencyKey");
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
@@ -319,6 +385,7 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     ...(timestamp !== undefined ? { timestamp } : {}),
     message: {
       role,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
       __openclaw: { truncated: true, reason: "oversized" },
     },
@@ -752,6 +819,38 @@ export async function readRecentSessionMessagesWithStatsAsync(
   return { messages: messagesWithSeq, totalMessages, transcriptPath: filePath };
 }
 
+export async function readSessionMessagesPageWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesPageOptions,
+  agentId?: string,
+): Promise<ReadRecentSessionMessagesResult> {
+  const filePath =
+    opts.allowResetArchiveFallback === true
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { messages: [], totalMessages: 0, transcriptPath: filePath };
+  }
+  const totalMessages = index.entries.length;
+  const offset = Math.min(resolveNonNegativeIntegerOption(opts.offset, 0), totalMessages);
+  const maxMessages = resolveNonNegativeIntegerOption(opts.maxMessages, 0);
+  const endExclusive = Math.max(0, totalMessages - offset);
+  const start = Math.max(0, endExclusive - maxMessages);
+  return {
+    messages: index.entries
+      .slice(start, endExclusive)
+      .flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    totalMessages,
+    transcriptPath: filePath,
+  };
+}
+
 export function readRecentSessionTranscriptLines(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -800,8 +899,10 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
         : typeof entry.timestamp === "number"
           ? entry.timestamp
           : Number.NaN;
+    const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
       seq,
     });
