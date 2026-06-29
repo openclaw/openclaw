@@ -511,7 +511,10 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  const entryForcesRollover =
+    typeof entry?.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
+  const skipImplicitExpiry =
+    !entryForcesRollover && hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -529,8 +532,6 @@ async function initSessionStateAttemptLocked(
           policy: resetPolicy,
         })
     : undefined;
-  const entryForcesRollover =
-    typeof entry?.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
   const softResetAllowed =
     softReset.matched &&
     resetAuthorized &&

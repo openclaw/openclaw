@@ -102,6 +102,39 @@ describe("resolveSessionEntryResetFreshness", () => {
     expect(result.freshness).toMatchObject({ fresh: true });
   });
 
+  it("treats closed provider-owned sessions as stale when reset policy is implicit", async () => {
+    const sessionKey = "agent:main:main:thread:provider-owned-closed";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "session-provider-owned-closed",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * DAY_MS,
+        lastInteractionAt: now,
+        sessionClosedAt: now - 1_000,
+        providerOverride: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "cli-session-provider-owned-closed" },
+        },
+      },
+    );
+
+    const result = resolveSessionEntryResetFreshness({
+      sessionKey,
+      storePath,
+      sessionCfg: {},
+      resetType: "thread",
+      now,
+    });
+
+    expect(result.state).toBe("stale");
+    expect(result.freshness).toMatchObject({
+      fresh: false,
+      closedAt: now - 1_000,
+    });
+  });
+
   it("applies configured reset policies to provider-owned sessions", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned-configured";
     const now = new Date("2026-01-02T12:00:00Z").getTime();

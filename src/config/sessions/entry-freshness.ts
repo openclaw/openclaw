@@ -91,11 +91,14 @@ export function resolveSessionEntryResetFreshness(
       ...base,
     };
   }
+  const entryHasClosedMarker =
+    typeof entry.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
   const freshness =
-    resetPolicy.configured !== true && hasProviderOwnedSession(entry)
+    !entryHasClosedMarker && resetPolicy.configured !== true && hasProviderOwnedSession(entry)
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
           updatedAt: entry.updatedAt,
+          sessionClosedAt: entry.sessionClosedAt,
           sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
           lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
           now: params.now ?? Date.now(),

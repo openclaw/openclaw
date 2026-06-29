@@ -3861,7 +3861,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("defers closed thread rollover while the same session has an active run", async () => {
+  it("defers provider-owned closed thread rollover while the same session has an active run", async () => {
     vi.useFakeTimers();
     const existingSessionId = "active-closed-thread-session";
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
@@ -3879,6 +3879,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           sessionStartedAt: now,
           lastInteractionAt: now,
           sessionClosedAt: now,
+          providerOverride: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "provider-owned-active-closed-thread" },
+          },
         },
       });
       await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
