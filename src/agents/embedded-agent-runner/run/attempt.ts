@@ -869,41 +869,65 @@ async function resolveAttemptTrajectorySessionFile(params: {
   ).sessionFile;
 }
 
-async function hasExistingAttemptTranscriptState(params: {
+type ExistingAttemptTranscriptState = {
+  hasBootstrapTranscriptState: boolean;
+  hasFileTranscriptState: boolean;
+};
+
+function isTranscriptMessageEvent(event: unknown): boolean {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    "type" in event &&
+    (event as { type?: unknown }).type === "message"
+  );
+}
+
+async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): Promise<boolean> {
+}): Promise<ExistingAttemptTranscriptState> {
   const storePath =
     params.sessionTarget?.storePath ??
     resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  let hasBootstrapTranscriptState = false;
   if (storePath && params.sessionKey) {
     try {
-      const hasSqliteEvents = await loadTranscriptEvents({
+      const sqliteEvents = await loadTranscriptEvents({
         agentId: params.agentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         storePath,
       });
-      if (hasSqliteEvents.length > 0) {
-        return true;
-      }
-      if (parseSqliteSessionFileMarker(params.sessionFile)) {
-        return false;
+      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState,
+          hasFileTranscriptState: false,
+        };
       }
     } catch {
-      if (parseSqliteSessionFileMarker(params.sessionFile)) {
-        return false;
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState: false,
+          hasFileTranscriptState: false,
+        };
       }
     }
   }
-  return await fs
+  const hasFileTranscriptState = await fs
     .stat(params.sessionFile)
     .then(() => true)
     .catch(() => false);
+  return {
+    hasBootstrapTranscriptState: hasBootstrapTranscriptState || hasFileTranscriptState,
+    hasFileTranscriptState,
+  };
 }
 
 export async function runEmbeddedAttempt(
@@ -2232,7 +2256,7 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await hasExistingAttemptTranscriptState({
+      const transcriptState = await resolveExistingAttemptTranscriptState({
         agentId: sessionAgentId,
         config: params.config,
         sessionFile: params.sessionFile,
@@ -2291,7 +2315,7 @@ export async function runEmbeddedAttempt(
 
       await withOwnedSessionWriteLock(async () => {
         await runAttemptContextEngineBootstrap({
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasBootstrapTranscriptState,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -2331,7 +2355,7 @@ export async function runEmbeddedAttempt(
         await prepareSessionManagerForRun({
           sessionManager,
           sessionFile: params.sessionFile,
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasFileTranscriptState,
           sessionId: params.sessionId,
           cwd: effectiveCwd,
         });

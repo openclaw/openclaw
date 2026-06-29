@@ -402,6 +402,10 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {
+  return isRecord(value) && readNonEmptyString(value.role) !== undefined;
+}
+
 function projectVisibleMessageEntry(entry: {
   event: SessionTranscriptEvent;
   parentId: string | null;
@@ -413,7 +417,7 @@ function projectVisibleMessageEntry(entry: {
   }
   const entryId = readNonEmptyString(event.id);
   const message = event.message;
-  if (!entryId || !isRecord(message) || !readNonEmptyString(message.role)) {
+  if (!entryId || !isAgentMessageRecord(message)) {
     return [];
   }
   const createdAt = readNonEmptyString(event.timestamp);
@@ -423,8 +427,8 @@ function projectVisibleMessageEntry(entry: {
       entryId,
       parentId: entry.parentId,
       seq: entry.seq,
-      message: message as AgentMessage,
-      role: message.role as AgentMessage["role"],
+      message,
+      role: message.role,
       ...(createdAt ? { createdAt } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
     },
