@@ -18,6 +18,9 @@ import type {
 import { EventStream } from "../../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../../llm/utils/json-parse.js";
 import { createSseByteGuard, type SseByteGuard } from "../streaming-byte-guard.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("agent-proxy-stream");
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
@@ -409,7 +412,9 @@ export function streamProxy(
     } finally {
       try {
         reader?.releaseLock();
-      } catch {}
+      } catch {
+        log.warn("reader.releaseLock failed (proxy stream may already be closed)");
+      }
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }

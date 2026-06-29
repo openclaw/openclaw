@@ -10,6 +10,9 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("agent-web-tools");
 
 export type CacheEntry<T> = {
   value: T;
@@ -287,7 +290,9 @@ export async function readResponseText(
       }
       try {
         reader.releaseLock();
-      } catch {}
+      } catch {
+        log.warn("reader.releaseLock failed (stream may already be closed)");
+      }
     }
 
     const bytes = concatBytes(parts, bytesRead);

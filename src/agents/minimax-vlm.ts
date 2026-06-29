@@ -1,4 +1,7 @@
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("agent-minimax-vlm");
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
@@ -54,7 +57,9 @@ function coerceApiHost(params: {
   try {
     const url = new URL(raw);
     return url.origin;
-  } catch {}
+  } catch {
+    log.warn("Invalid Minimax VLM endpoint URL, falling back to default", { url: raw });
+  }
 
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;
