@@ -5235,7 +5235,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("keeps configured stdio qmd with keep-alive lifecycle external", async () => {
+  it("preserves configured stdio qmd keep-alive lifecycle in generated config", async () => {
     const userMcporterConfig = path.join(tmpRoot, "stdio-lifecycle-user-mcporter.json");
     process.env.MCPORTER_CONFIG = userMcporterConfig;
     await fs.writeFile(
@@ -5295,26 +5295,34 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.XDG_CONFIG_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-config",
-    );
-    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          env?: Record<string, string>;
+          lifecycle?: { mode?: string; idleTimeoutMs?: number };
+        }
+      >;
+    };
+    expect(config.mcpServers?.["custom-qmd"]?.lifecycle).toEqual({
+      mode: "keep-alive",
+      idleTimeoutMs: 60_000,
+    });
+    expect(config.mcpServers?.["custom-qmd"]?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
       "/agents/main/qmd/xdg-config/qmd",
     );
-    expect(callOpts?.env?.XDG_CACHE_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-cache",
-    );
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
 
-  it("keeps configured stdio qmd with daemon logging external", async () => {
+  it("preserves configured stdio qmd daemon logging in generated config", async () => {
     const userMcporterConfig = path.join(tmpRoot, "stdio-logging-user-mcporter.json");
     process.env.MCPORTER_CONFIG = userMcporterConfig;
     await fs.writeFile(
@@ -5374,26 +5382,34 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.XDG_CONFIG_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-config",
-    );
-    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          env?: Record<string, string>;
+          logging?: { enabled?: boolean; level?: string };
+        }
+      >;
+    };
+    expect(config.mcpServers?.["custom-qmd"]?.logging).toEqual({
+      enabled: true,
+      level: "info",
+    });
+    expect(config.mcpServers?.["custom-qmd"]?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
       "/agents/main/qmd/xdg-config/qmd",
     );
-    expect(callOpts?.env?.XDG_CACHE_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-cache",
-    );
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
 
-  it("keeps commented mcporter.json stdio daemon logging external", async () => {
+  it("preserves commented mcporter.json stdio daemon logging in generated config", async () => {
     const userMcporterConfig = path.join(tmpRoot, "commented-stdio-logging-mcporter.json");
     process.env.MCPORTER_CONFIG = userMcporterConfig;
     await fs.writeFile(
@@ -5457,12 +5473,28 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          env?: Record<string, string>;
+          logging?: { daemon?: { enabled?: boolean } };
+        }
+      >;
+    };
+    expect(config.mcpServers?.["custom-qmd"]?.logging).toEqual({
+      daemon: { enabled: true },
+    });
+    expect(config.mcpServers?.["custom-qmd"]?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
@@ -5855,6 +5887,8 @@ describe("QmdMemoryManager", () => {
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
     expect(args).not.toContain("--config");
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -5862,7 +5896,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("resolves relative MCPORTER_CONFIG from the workspace", async () => {
+  it("resolves relative MCPORTER_CONFIG from the workspace into generated config", async () => {
     const projectConfigDir = path.join(workspaceDir, "config");
     await fs.mkdir(projectConfigDir, { recursive: true });
     const userMcporterConfig = path.join(projectConfigDir, "mcporter.json");
@@ -5925,17 +5959,25 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          logging?: { daemon?: { enabled?: boolean } };
+        }
+      >;
+    };
+    expect(config.mcpServers?.qmd?.logging).toEqual({ daemon: { enabled: true } });
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(callOpts?.env?.MCPORTER_CONFIG).toBe("./config/mcporter.json");
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
 
-  it("preserves project lifecycle/logging when home has the same server name", async () => {
+  it("preserves project lifecycle/logging in generated config when home has the same server name", async () => {
     delete process.env.MCPORTER_CONFIG;
     delete process.env.XDG_CONFIG_HOME;
 
@@ -6021,10 +6063,22 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          lifecycle?: { mode?: string };
+          logging?: { daemon?: { enabled?: boolean; logFile?: string } };
+        }
+      >;
+    };
+    expect(config.mcpServers?.qmd?.lifecycle).toEqual({ mode: "keep-alive" });
+    expect(config.mcpServers?.qmd?.logging).toEqual({
+      daemon: { enabled: true, logFile: "/var/log/qmd.log" },
+    });
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
@@ -6161,10 +6215,20 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          baseUrl?: string;
+          logging?: { daemon?: { enabled?: boolean } };
+        }
+      >;
+    };
+    expect(config.mcpServers?.qmd?.baseUrl).toBe("https://qmd.example/mcp");
+    expect(config.mcpServers?.qmd?.logging).toEqual({ daemon: { enabled: true } });
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
@@ -6236,15 +6300,8 @@ describe("QmdMemoryManager", () => {
     expect(args).not.toContain("--config");
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.XDG_CONFIG_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-config",
-    );
-    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-config/qmd",
-    );
-    expect(callOpts?.env?.XDG_CACHE_HOME?.replace(/\\/g, "/")).toContain(
-      "/agents/main/qmd/xdg-cache",
-    );
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -6320,7 +6377,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("routes stdio servers with logging.daemon.enabled to external mode", async () => {
+  it("routes stdio servers with logging.daemon.enabled to generated mode", async () => {
     const userMcporterConfig = path.join(tmpRoot, "user-mcporter.json");
     await fs.writeFile(
       userMcporterConfig,
@@ -6383,11 +6440,27 @@ describe("QmdMemoryManager", () => {
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(args).not.toContain("--config");
-    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          env?: Record<string, string>;
+          logging?: { daemon?: { enabled?: boolean; logFile?: string } };
+        }
+      >;
+    };
+    expect(config.mcpServers?.qmd?.logging).toEqual({
+      daemon: { enabled: true, logFile: "/var/log/qmd.log" },
+    });
+    expect(config.mcpServers?.qmd?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
@@ -6503,6 +6576,70 @@ describe("QmdMemoryManager", () => {
     };
     const generatedServer = config.mcpServers?.["custom-qmd"];
     expect(generatedServer?.command).toBe(absoluteQmdCommand);
+    expect(generatedServer?.args).toEqual(["mcp"]);
+    expect(generatedServer?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
+
+    await manager.close();
+  });
+
+  it("generates agent-scoped config for Windows qmd command shims", async () => {
+    const windowsQmdCommand = "C:\\tools\\qmd.cmd";
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "custom-qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "custom-qmd",
+            source: "user",
+            command: windowsQmdCommand,
+            args: ["mcp"],
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        { command?: string; args?: string[]; env?: Record<string, string> }
+      >;
+    };
+    const generatedServer = config.mcpServers?.["custom-qmd"];
+    expect(generatedServer?.command).toBe(windowsQmdCommand);
     expect(generatedServer?.args).toEqual(["mcp"]);
     expect(generatedServer?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
       "/agents/main/qmd/xdg-config/qmd",
@@ -7408,7 +7545,7 @@ describe("QmdMemoryManager", () => {
     await trump.close();
   });
 
-  it("uses distinct daemon starts for external qmd servers with agent QMD env", async () => {
+  it("uses distinct daemon starts for generated qmd servers with lifecycle config", async () => {
     const sharedWorkspace = path.join(tmpRoot, "shared-workspace");
     const userMcporterConfig = path.join(tmpRoot, "shared-lifecycle-mcporter.json");
     process.env.MCPORTER_CONFIG = userMcporterConfig;
@@ -7499,17 +7636,33 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "daemon",
     );
     expect(daemonStarts).toHaveLength(2);
+    const daemonConfigPaths = daemonStarts.map((call) => {
+      const args = (call[1] as string[] | undefined) ?? [];
+      return args[args.indexOf("--config") + 1];
+    });
+    const hexConfigPath = daemonConfigPaths.find((configPath) =>
+      configPath?.replace(/\\/g, "/").includes("/agents/hex/qmd/mcporter/mcporter.json"),
+    );
+    const trumpConfigPath = daemonConfigPaths.find((configPath) =>
+      configPath?.replace(/\\/g, "/").includes("/agents/trump/qmd/mcporter/mcporter.json"),
+    );
+    expect(hexConfigPath).toBeTruthy();
+    expect(trumpConfigPath).toBeTruthy();
     const daemonEnvs = daemonStarts.map((call) => (call[2] as { env?: NodeJS.ProcessEnv }).env);
+    expect(daemonEnvs.every((env) => env?.QMD_CONFIG_DIR === undefined)).toBe(true);
+
+    const hexConfig = JSON.parse(await fs.readFile(hexConfigPath ?? "", "utf8")) as {
+      mcpServers?: { "custom-qmd"?: { env?: Record<string, string> } };
+    };
+    const trumpConfig = JSON.parse(await fs.readFile(trumpConfigPath ?? "", "utf8")) as {
+      mcpServers?: { "custom-qmd"?: { env?: Record<string, string> } };
+    };
     expect(
-      daemonEnvs.some((env) =>
-        env?.QMD_CONFIG_DIR?.replace(/\\/g, "/").includes("/agents/hex/qmd/xdg-config/qmd"),
-      ),
-    ).toBe(true);
+      hexConfig.mcpServers?.["custom-qmd"]?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/"),
+    ).toContain("/agents/hex/qmd/xdg-config/qmd");
     expect(
-      daemonEnvs.some((env) =>
-        env?.QMD_CONFIG_DIR?.replace(/\\/g, "/").includes("/agents/trump/qmd/xdg-config/qmd"),
-      ),
-    ).toBe(true);
+      trumpConfig.mcpServers?.["custom-qmd"]?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/"),
+    ).toContain("/agents/trump/qmd/xdg-config/qmd");
 
     await hex.close();
     await trump.close();

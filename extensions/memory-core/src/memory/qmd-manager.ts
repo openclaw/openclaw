@@ -183,7 +183,7 @@ type McporterEnvMode = "discovery" | McporterConfigMode;
 
 type ConfiguredMcporterServer =
   | { mode: "generated"; server: Record<string, unknown> }
-  | { mode: "external"; useAgentQmdEnv?: boolean };
+  | { mode: "external" };
 
 type RawMcporterEntry = {
   lifecycle?: unknown;
@@ -338,7 +338,8 @@ function isQmdExecutableCommand(command: unknown): boolean {
   }
   const normalized = command.replace(/\\/g, "/");
   const commandName = normalized.split("/").findLast(Boolean) ?? normalized;
-  return normalizeMcporterConfigKey(commandName) === "qmd";
+  const commandBaseName = commandName.replace(/\.(?:cmd|exe)$/i, "");
+  return normalizeMcporterConfigKey(commandBaseName) === "qmd";
 }
 
 function hasMcporterAuthLikeArgs(value: unknown): boolean {
@@ -631,21 +632,17 @@ async function readRawMcporterEntry(
 }
 
 function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
-  if (hasMcporterStdioLifecycleOrDaemonLogging(server)) {
-    return true;
-  }
+  return hasMcporterStdioLifecycleOrDaemonLogging(server) || hasMcporterStdioContextPath(server);
+}
+
+function hasMcporterStdioContextPath(server: RawMcporterEntry): boolean {
   // A user-set cwd or path is context-dependent and must not be copied into
   // the per-agent generated config under OpenClaw state, where it would
-  // resolve against a different working directory. Check the raw entry so
-  // mcporter's normalized default cwd (added to "config get --json" output)
-  // does not force every bare qmd server into external mode.
-  if (typeof server.cwd === "string" && server.cwd.length > 0) {
-    return true;
-  }
-  if (typeof server.path === "string" && server.path.length > 0) {
-    return true;
-  }
-  return false;
+  // resolve against a different working directory.
+  return (
+    (typeof server.cwd === "string" && server.cwd.length > 0) ||
+    (typeof server.path === "string" && server.path.length > 0)
+  );
 }
 
 function hasMcporterStdioLifecycleOrDaemonLogging(server: RawMcporterEntry): boolean {
@@ -952,7 +949,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private mcporterConfigMode: Promise<McporterConfigMode> | null = null;
-  private externalMcporterUsesAgentQmdEnv = false;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
@@ -3097,10 +3093,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
     const configured = await this.resolveConfiguredMcporterServer();
     if (configured?.mode === "external") {
-      this.externalMcporterUsesAgentQmdEnv = configured.useAgentQmdEnv === true;
       return "external";
     }
-    this.externalMcporterUsesAgentQmdEnv = false;
     const server = configured?.server ?? this.buildDefaultMcporterQmdServer();
     const config = {
       imports: [],
@@ -3222,20 +3216,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const isGeneratedQmdServer = isGeneratedMcporterQmdStdioServer(stdioServer);
       const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(stdioServer);
-      const hasExternalOnlyRawFields =
-        rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry);
-      if (
-        !isGeneratedQmdServer ||
-        hasUserOwnedMaterial ||
-        hasExternalOnlyRawFields
-      ) {
-        return {
-          mode: "external",
-          useAgentQmdEnv:
-            isGeneratedQmdServer && !hasUserOwnedMaterial && hasExternalOnlyRawFields,
-        };
+      const hasContextPathFields = rawEntry !== null && hasMcporterStdioContextPath(rawEntry);
+      if (!isGeneratedQmdServer || hasUserOwnedMaterial || hasContextPathFields) {
+        return { mode: "external" };
       }
-      return { mode: "generated", server: this.toGeneratedMcporterStdioServer(stdioServer) };
+      return {
+        mode: "generated",
+        server: this.toGeneratedMcporterStdioServer(stdioServer, rawEntry),
+      };
     }
 
     const hasRemoteEndpoint =
@@ -3260,11 +3248,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     return null;
   }
 
-  private toGeneratedMcporterStdioServer(server: Record<string, unknown>): Record<string, unknown> {
-    return {
+  private toGeneratedMcporterStdioServer(
+    server: Record<string, unknown>,
+    rawEntry?: RawMcporterEntry | null,
+  ): Record<string, unknown> {
+    const generated: Record<string, unknown> = {
       ...server,
       env: this.buildMcporterQmdEnv(),
     };
+    if (rawEntry?.lifecycle !== undefined) {
+      generated.lifecycle = rawEntry.lifecycle;
+    }
+    if (rawEntry?.logging !== undefined) {
+      generated.logging = rawEntry.logging;
+    }
+    return generated;
   }
 
   private buildMcporterQmdEnv(): Record<string, string> {
@@ -3299,17 +3297,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       delete env.XDG_CONFIG_HOME;
       delete env.MCPORTER_CONFIG;
     }
-    if (mode === "external" && this.externalMcporterUsesAgentQmdEnv) {
-      const hasMcporterConfigOverride =
-        Boolean(this.externalMcporterConfigPath) ||
-        (typeof env.MCPORTER_CONFIG === "string" && env.MCPORTER_CONFIG.trim().length > 0);
-      for (const [key, value] of Object.entries(this.buildMcporterQmdEnv())) {
-        if (key === "XDG_CONFIG_HOME" && !hasMcporterConfigOverride) {
-          continue;
-        }
-        env[key] = value;
-      }
-    }
     if (mode === "external" && this.externalMcporterConfigPath) {
       // Point mcporter at the exact user/project config that defined the
       // external server, so calls do not fall back to agent-scoped dirs.
@@ -3329,14 +3316,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.mcporterEnv.XDG_CONFIG_HOME ?? "",
       this.workspaceDir,
     ];
-    if (this.externalMcporterUsesAgentQmdEnv) {
-      keyParts.push(
-        "agent-qmd-env",
-        this.externalMcporterConfigPath ?? "",
-        this.env.QMD_CONFIG_DIR ?? "",
-        this.env.XDG_CACHE_HOME ?? "",
-      );
-    }
     return keyParts.join(":");
   }
 
