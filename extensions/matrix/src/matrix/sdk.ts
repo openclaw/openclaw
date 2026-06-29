@@ -529,7 +529,7 @@ export class MatrixClient {
         recoveryKeyStore: this.recoveryKeyStore,
         getRoomStateEvent: (roomId, eventType, stateKey = "") =>
           this.getRoomStateEvent(roomId, eventType, stateKey),
-        downloadContent: (mxcUrl) => this.downloadContent(mxcUrl),
+        downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
     if (!this.verificationSummaryListenerBound) {
