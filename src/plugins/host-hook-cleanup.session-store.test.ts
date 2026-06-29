@@ -169,4 +169,54 @@ describe("plugin host cleanup session stores", () => {
     expect(secondOther?.pluginExtensions).toBeUndefined();
     expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
   });
+
+  it("clears shared custom SQLite stores for each resolved agent", async () => {
+    stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-shared-custom-"),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const sharedStorePath = path.join(stateDir, "custom", "sessions.json");
+    const beforeUpdatedAt = 100;
+    const entry: SessionEntry = {
+      sessionId: "shared-session",
+      updatedAt: beforeUpdatedAt,
+      pluginExtensions: {
+        cleanup: { state: { active: true } },
+      },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath: sharedStorePath },
+      entry,
+    );
+    await replaceSessionEntry(
+      { agentId: "work", sessionKey: "agent:work:main", storePath: sharedStorePath },
+      entry,
+    );
+
+    const result = await runPluginHostCleanup({
+      cfg: {
+        session: { store: sharedStorePath },
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      },
+      registry: createEmptyPluginRegistry(),
+      pluginId: "cleanup",
+      reason: "disable",
+    });
+
+    expect(result).toEqual({ cleanupCount: 2, failures: [] });
+    const main = loadSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath: sharedStorePath,
+    });
+    const work = loadSessionEntry({
+      agentId: "work",
+      sessionKey: "agent:work:main",
+      storePath: sharedStorePath,
+    });
+    expect(main?.pluginExtensions).toBeUndefined();
+    expect(main?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    expect(work?.pluginExtensions).toBeUndefined();
+    expect(work?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+  });
 });
