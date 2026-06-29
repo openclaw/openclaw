@@ -252,9 +252,15 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
 /** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
-/** Builds a stable cache key from runtime identity fields. */
-export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyInput): string {
+/** Builds a stable cache key from build versions and runtime identity fields. */
+export function buildCodexAppInventoryCacheKey(
+  input: CodexAppInventoryCacheKeyInput,
+  openClawVersion: string,
+  codexPluginVersion: string,
+): string {
   return JSON.stringify({
+    openClawVersion,
+    codexPluginVersion,
     codexHome: input.codexHome ?? null,
     endpoint: input.endpoint ?? null,
     runtimeIdentity: normalizeRuntimeIdentityForCacheKey(input.runtimeIdentity),
