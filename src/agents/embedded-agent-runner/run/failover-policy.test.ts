@@ -49,6 +49,20 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("returns error payload for model_not_found when no fallback is configured", () => {
+    // Without configured fallbacks a typo'd model should still surface
+    // loudly as a terminal error rather than silently swallowing it.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
   it("prefers prompt-side profile rotation before fallback", () => {
     // Prompt construction can fail before any model output exists, so rotate
     // the current provider profile before spending the configured fallback.
