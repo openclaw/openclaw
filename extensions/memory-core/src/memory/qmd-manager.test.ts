@@ -6567,8 +6567,15 @@ describe("QmdMemoryManager", () => {
     expect(args).not.toContain("--config");
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
-    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config",
+    );
+    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
+    expect(callOpts?.env?.XDG_CACHE_HOME?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-cache",
+    );
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -6627,7 +6634,9 @@ describe("QmdMemoryManager", () => {
     expect(args).not.toContain("--config");
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
-    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
