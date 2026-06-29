@@ -1,5 +1,5 @@
-// Undici runtime tests cover managed proxy TLS, IP-SNI stripping, and proxy
-// client factory installation.
+// Undici runtime tests cover managed proxy TLS, IP-SNI stripping, proxy
+// client factory installation, and keep-alive socket lifetime caps.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetActiveManagedProxyStateForTests,
@@ -7,11 +7,13 @@ import {
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
 import {
+  createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   TEST_UNDICI_RUNTIME_DEPS_KEY,
 } from "./undici-runtime.js";
 
+const agentCtor = vi.fn();
 const envHttpProxyAgentCtor = vi.fn();
 const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
@@ -19,6 +21,10 @@ const proxyConnect = vi.fn();
 
 class MockAgent {
   readonly __testStub = true;
+
+  constructor(public readonly options: unknown) {
+    agentCtor(options);
+  }
 }
 
 class MockPool {
@@ -73,6 +79,14 @@ function requireProxyAgentOptions(): Record<string, unknown> {
   return expectOptionsRecord(call[0], "expected ProxyAgent options object");
 }
 
+function requireAgentOptions(): Record<string, unknown> {
+  const call = agentCtor.mock.calls[0];
+  if (!call) {
+    throw new Error("expected Agent constructor call");
+  }
+  return expectOptionsRecord(call[0], "expected Agent options object");
+}
+
 function requireEnvHttpProxyAgentOptions(): Record<string, unknown> {
   const call = envHttpProxyAgentCtor.mock.calls[0];
   if (!call) {
@@ -107,6 +121,7 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+  agentCtor.mockReset();
   envHttpProxyAgentCtor.mockReset();
   poolCtor.mockReset();
   proxyAgentCtor.mockReset();
@@ -185,5 +200,60 @@ describe("createHttp1EnvHttpProxyAgent", () => {
       expect.not.objectContaining({ servername: "127.0.0.1" }),
       expect.any(Function),
     );
+  });
+});
+
+describe("keepAliveMaxTimeout", () => {
+  const KEEP_ALIVE_MAX_TIMEOUT_MS = 25_000;
+
+  it("caps keep-alive socket lifetime on direct undici Agent to prevent UND_ERR_SOCKET", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1Agent();
+
+    const options = requireAgentOptions();
+    expect(options.keepAliveMaxTimeout).toBe(KEEP_ALIVE_MAX_TIMEOUT_MS);
+    expect(options.allowH2).toBe(false);
+  });
+
+  it("caps keep-alive socket lifetime on ProxyAgent to prevent UND_ERR_SOCKET", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1ProxyAgent({ uri: "https://proxy.example:8443" });
+
+    const options = requireProxyAgentOptions();
+    expect(options.keepAliveMaxTimeout).toBe(KEEP_ALIVE_MAX_TIMEOUT_MS);
+    expect(options.allowH2).toBe(false);
+  });
+
+  it("caps keep-alive socket lifetime on EnvHttpProxyAgent to prevent UND_ERR_SOCKET", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1EnvHttpProxyAgent({ httpsProxy: "https://proxy.example:8443" });
+
+    const options = requireEnvHttpProxyAgentOptions();
+    expect(options.keepAliveMaxTimeout).toBe(KEEP_ALIVE_MAX_TIMEOUT_MS);
+    expect(options.allowH2).toBe(false);
+  });
+
+  it("preserves keepAliveMaxTimeout alongside caller-provided timeout options", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1Agent(undefined, 30_000);
+
+    const options = requireAgentOptions();
+    expect(options.keepAliveMaxTimeout).toBe(KEEP_ALIVE_MAX_TIMEOUT_MS);
+    expect(options.bodyTimeout).toBe(30_000);
+    expect(options.headersTimeout).toBe(30_000);
+  });
+
+  it("respects explicit keepAliveMaxTimeout override from caller options", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1Agent({ keepAliveMaxTimeout: 60_000 });
+
+    const options = requireAgentOptions();
+    // Caller-supplied value should take precedence over the default cap
+    expect(options.keepAliveMaxTimeout).toBe(60_000);
   });
 });

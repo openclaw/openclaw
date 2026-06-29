@@ -121,6 +121,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
     });
     const firstCallArg = requireFirstAgentOptions();
     expect(requireRecord(firstCallArg.connect, "Agent connect options").autoSelectFamily).toBe(
@@ -146,6 +147,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
     });
   });
 
@@ -174,6 +176,7 @@ describe("createPinnedDispatcher", () => {
         lookup,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
     });
   });
 
@@ -200,6 +203,7 @@ describe("createPinnedDispatcher", () => {
         lookup,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
     });
   });
 
@@ -223,6 +227,7 @@ describe("createPinnedDispatcher", () => {
       allowH2: false,
       bodyTimeout: 123_456,
       headersTimeout: 123_456,
+      keepAliveMaxTimeout: 25000,
     });
   });
 
@@ -302,6 +307,7 @@ describe("createPinnedDispatcher", () => {
       },
       clientFactory: expect.any(Function),
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -333,6 +339,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
       requestTls: {
         autoSelectFamily: false,
         lookup,
@@ -376,6 +383,7 @@ describe("createPinnedDispatcher", () => {
       allowH2: false,
       bodyTimeout: 654_321,
       headersTimeout: 654_321,
+      keepAliveMaxTimeout: 25000,
     });
   });
 });

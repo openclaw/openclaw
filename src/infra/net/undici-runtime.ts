@@ -39,6 +39,16 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
+// Cap the maximum keep-alive socket lifetime below typical server-side idle
+// connection timeouts (30-120s for most cloud providers, e.g. Cloudflare,
+// Anthropic, OpenAI). Undici's default keepAliveMaxTimeout is 600s (10 min),
+// which lets connections outlive the server's close window. When undici then
+// tries to reuse a server-closed socket it surfaces UND_ERR_SOCKET with no
+// transparent retry, causing silent mid-turn provider fallback.
+// 25s stays under the shortest known provider keep-alive window while still
+// allowing connection reuse across rapid sequential requests.
+const KEEP_ALIVE_MAX_TIMEOUT_MS = 25_000;
+
 function applyMissingConnectOptions(
   connect: Record<string, unknown>,
   defaults: Record<string, unknown>,
@@ -211,6 +221,13 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
         timeout: normalizedTimeoutMs,
       };
     }
+  }
+  // Bound the keep-alive socket lifetime to prevent undici from reusing
+  // connections that the server has already closed. This avoids UND_ERR_SOCKET
+  // errors and the silent provider fallback they trigger.
+  // Respect an explicit caller override when set.
+  if (baseRecord.keepAliveMaxTimeout === undefined) {
+    baseRecord.keepAliveMaxTimeout = KEEP_ALIVE_MAX_TIMEOUT_MS;
   }
   return base;
 }
