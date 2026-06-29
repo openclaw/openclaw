@@ -53,6 +53,27 @@ type ReadResponsePrefixResult = {
   truncated: boolean;
 };
 
+type NonStreamedResponseBodyReader = {
+  arrayBuffer?: () => Promise<ArrayBuffer>;
+  text?: () => Promise<string>;
+  json?: () => Promise<unknown>;
+};
+
+async function readNonStreamedResponseBuffer(res: Response): Promise<Buffer> {
+  const reader = res as NonStreamedResponseBodyReader;
+  if (typeof reader.arrayBuffer === "function") {
+    return Buffer.from(await reader.arrayBuffer());
+  }
+  if (typeof reader.text === "function") {
+    return Buffer.from(await reader.text());
+  }
+  if (typeof reader.json === "function") {
+    const serializedBody = JSON.stringify(await reader.json()) ?? "";
+    return Buffer.from(serializedBody);
+  }
+  return Buffer.alloc(0);
+}
+
 async function readResponsePrefix(
   res: Response,
   maxBytes: number,
@@ -64,7 +85,7 @@ async function readResponsePrefix(
   const chunkTimeoutMs = opts?.chunkTimeoutMs;
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
+    const fallback = await readNonStreamedResponseBuffer(res);
     if (fallback.length > maxBytes) {
       return {
         buffer: fallback.subarray(0, maxBytes),
