@@ -395,6 +395,18 @@ function isRelativeMcporterCommandPath(command: string): boolean {
   return !/^[A-Za-z]:\//.test(normalized);
 }
 
+function appendMcporterServerEnvList(value: string | undefined, serverName: string): string {
+  const existing = value?.trim();
+  if (!existing) {
+    return serverName;
+  }
+  const names = existing.split(/[,\s]+/).filter(Boolean);
+  if (names.includes(serverName) || names.includes("*")) {
+    return existing;
+  }
+  return `${existing},${serverName}`;
+}
+
 function normalizeMcporterSerializedStdioServer(
   server: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -3516,6 +3528,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         env[key] = value;
       }
+      env.MCPORTER_DISABLE_KEEPALIVE = appendMcporterServerEnvList(
+        env.MCPORTER_DISABLE_KEEPALIVE,
+        this.qmd.mcporter.serverName,
+      );
     }
     if (mode === "external" && this.externalMcporterConfigPath) {
       // Point mcporter at the exact user/project config that defined the

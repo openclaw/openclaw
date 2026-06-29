@@ -7297,6 +7297,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
       "/agents/main/qmd/xdg-config/qmd",
     );
+    expect(callOpts?.env?.MCPORTER_DISABLE_KEEPALIVE).toBe("qmd");
 
     await manager.close();
   });

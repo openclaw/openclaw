@@ -114,9 +114,11 @@ QMD lifecycle or daemon logging metadata such as `logging.daemon.enabled`. If
 your existing server entry has user-owned material -- path-changing or
 auth-like environment variables, auth headers, command arrays, `cwd`/`path`, a
 non-QMD command, or authenticated remote config -- OpenClaw treats it as
-**external** and routes through your original mcporter config. Safe QMD tuning
-environment variables, such as model and context-size overrides, are copied into
-the generated per-agent config.
+**external** and routes through your original mcporter config. If OpenClaw must
+inject agent-scoped QMD environment into an external server, it disables
+MCPorter keep-alive for that server so warmed QMD state is not shared across
+agents. Safe QMD tuning environment variables, such as model and context-size
+overrides, are copied into the generated per-agent config.
 
 The per-agent generated config is rewritten only when its contents actually
 change, so repeated searches do not thrash the filesystem.
