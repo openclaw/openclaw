@@ -59,6 +59,10 @@ final class DeepLinkHandler {
             deepLinkLogger.debug("ignored url \(url.absoluteString, privacy: .public)")
             return
         }
+        if case .dashboard = route {
+            await self.openDashboard()
+            return
+        }
         guard !AppStateStore.shared.isPaused else {
             self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
             return
@@ -70,7 +74,7 @@ final class DeepLinkHandler {
         case .gateway:
             break
         case .dashboard:
-            await self.openDashboard()
+            break
         }
     }
 
