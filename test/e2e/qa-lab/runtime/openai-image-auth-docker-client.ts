@@ -3,7 +3,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRequestBodyTooLargeError, readBody } from "./lib/mock-openai-http.mjs";
+import {
+  isRequestBodyTooLargeError,
+  readBody,
+} from "../../../../scripts/e2e/lib/mock-openai-http.mjs";
 
 const DIRECT_IMAGE_BYTES = Buffer.from("docker-direct-image");
 const CODEX_IMAGE_BYTES = Buffer.from("docker-codex-image");
@@ -174,7 +177,7 @@ export async function main() {
   const mock = await startMockServer(records);
   try {
     const { buildOpenAIImageGenerationProvider } =
-      await import("../../dist/extensions/openai/image-generation-provider.js");
+      await import("../../../../dist/extensions/openai/image-generation-provider.js");
     const provider = buildOpenAIImageGenerationProvider();
 
     const directResult = await provider.generateImage({
