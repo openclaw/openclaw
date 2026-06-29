@@ -3637,6 +3637,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(updates.join("\n")).not.toContain("CheckingReading");
   });
 
+  it("clears the prior reasoning preview before splitting into a new reasoning message", async () => {
+    // Regression for issue #80862: when /reasoning stream splits into a second
+    // reasoning segment, forceNewMessage() must not run before the old preview
+    // id is cleared, otherwise the prior Telegram preview is orphaned in chat.
+    const answerDraftStream = createDraftStream(2001);
+    const reasoningDraftStream = createTestDraftStream({
+      messageId: 3001,
+      clearMessageIdOnForceNew: true,
+    });
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReasoningStream?.({ text: "<think>First thought</think>" });
+      await replyOptions?.onReasoningEnd?.();
+      await replyOptions?.onReasoningStream?.({ text: "<think>Second thought</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_First thought_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Second thought_");
+    expect(reasoningDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(reasoningDraftStream.clear).toHaveBeenCalledTimes(2);
+    expect(reasoningDraftStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      reasoningDraftStream.forceNewMessage.mock.invocationCallOrder[0],
+    );
+    expect(reasoningDraftStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      reasoningDraftStream.update.mock.invocationCallOrder[1],
+    );
+  });
+
   it("streams reasoning from configured defaults", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
