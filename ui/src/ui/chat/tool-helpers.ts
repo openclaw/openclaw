@@ -2,13 +2,18 @@
  * Helper functions for tool card rendering.
  */
 
+import { isMarkdownBlockArtText } from "../markdown.ts";
 import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants.ts";
 
 /**
  * Format tool output content for display in the sidebar.
- * Detects JSON and wraps it in a code block with formatting.
+ * Detects block art and JSON, wrapping content in code blocks when needed.
  */
 export function formatToolOutputForSidebar(text: string): string {
+  if (isMarkdownBlockArtText(text)) {
+    return "```\n" + text + "\n```";
+  }
+
   const trimmed = text.trim();
   // Try to detect and format JSON
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {

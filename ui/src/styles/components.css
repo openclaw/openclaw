@@ -2210,13 +2210,35 @@
 .code-block-wrapper {
   position: relative;
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow: visible;
   margin-top: 0.75em;
 }
 
 .code-block-wrapper pre {
   margin: 0;
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  overflow-x: auto;
+}
+
+.code-block-wrapper pre:has(> code.markdown-block-art),
+.chat-text :where(pre:has(> code.markdown-block-art)),
+.sidebar-markdown :where(pre:has(> code.markdown-block-art)) {
+  background: var(--bg);
+}
+
+:is(.code-block-wrapper, .chat-text, .sidebar-markdown) :where(pre code.markdown-block-art) {
+  display: block;
+  min-width: 100%;
+  width: max-content;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: 0.86;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
 }
 
 .code-block-header {
