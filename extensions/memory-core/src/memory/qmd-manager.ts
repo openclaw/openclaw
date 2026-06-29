@@ -400,8 +400,8 @@ function appendMcporterServerEnvList(value: string | undefined, serverName: stri
   if (!existing) {
     return serverName;
   }
-  const names = existing.split(/[,\s]+/).filter(Boolean);
-  if (names.includes(serverName) || names.includes("*")) {
+  const names = new Set(existing.split(/[,\s]+/).filter(Boolean));
+  if (names.has(serverName) || names.has("*")) {
     return existing;
   }
   return `${existing},${serverName}`;
@@ -3487,7 +3487,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       ...server,
       env: {
         ...this.buildMcporterQmdEnv(),
-        ...(envOverrides ?? {}),
+        ...envOverrides,
       },
     };
     if (rawEntry?.lifecycle !== undefined) {
