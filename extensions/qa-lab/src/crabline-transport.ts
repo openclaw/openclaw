@@ -6,6 +6,7 @@ import {
   OPENCLAW_CRABLINE_MANIFEST_PATH,
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
+  type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -96,16 +97,13 @@ async function waitForCrablineReady(params: {
 
 async function postCrablineInbound(params: {
   adapter: StartedOpenClawCrablineAdapter;
-  providerBody: Record<string, unknown>;
+  providerInbound: OpenClawCrablineInbound;
 }) {
   const { response, release } = await fetchWithSsrFGuard({
-    url: params.adapter.manifest.endpoints.adminInboundUrl,
+    url: params.providerInbound.providerUrl,
     init: {
-      body: JSON.stringify(params.providerBody),
-      headers: {
-        authorization: `Bearer ${params.adapter.manifest.adminToken}`,
-        "content-type": "application/json",
-      },
+      body: JSON.stringify(params.providerInbound.providerBody),
+      headers: params.providerInbound.providerHeaders,
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },
@@ -190,7 +188,7 @@ function createCrablineState(params: {
       });
       await postCrablineInbound({
         adapter: params.adapter,
-        providerBody: providerInbound.providerBody,
+        providerInbound,
       });
       return message;
     },
@@ -256,6 +254,8 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     this.#state.rememberProviderTarget(delivery.to ?? delivery.replyTo, target);
     return delivery;
   };
+
+  createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
 
   handleAction = async (_params: {
     action: QaTransportActionName;
