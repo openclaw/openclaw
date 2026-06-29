@@ -537,6 +537,23 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
+  it("carries configured-origin trust eligibility for custom and local endpoints", () => {
+    const custom = resolveProviderHttpRequestConfig({
+      baseUrl: "https://models.internal/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+    });
+    const deniedLocal = resolveProviderHttpRequestConfig({
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+      request: { allowPrivateNetwork: false },
+    });
+
+    expect(custom.trustConfiguredBaseUrlOrigin).toBe(true);
+    expect(deniedLocal.trustConfiguredBaseUrlOrigin).toBe(false);
+  });
+
   it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.deepgram.com/v1",

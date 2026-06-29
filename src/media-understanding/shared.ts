@@ -341,6 +341,7 @@ export function resolveProviderHttpRequestConfig(params: {
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   requestConfig: ResolvedProviderRequestConfig;
+  trustConfiguredBaseUrlOrigin: boolean;
 } {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
@@ -368,6 +369,10 @@ export function resolveProviderHttpRequestConfig(params: {
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
+    trustConfiguredBaseUrlOrigin:
+      !requestConfig.privateNetworkExplicitlyDenied &&
+      (requestConfig.policy.endpointClass === "custom" ||
+        requestConfig.policy.endpointClass === "local"),
   };
 }
 

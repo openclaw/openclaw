@@ -14,6 +14,7 @@ import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 type PdfInput = {
   base64: string;
@@ -34,6 +35,7 @@ type NativePdfJsonRequest = {
   headers: Headers;
   body: unknown;
   allowPrivateNetwork: boolean;
+  ssrfPolicy: Parameters<typeof postJsonRequest>[0]["ssrfPolicy"];
   dispatcherPolicy: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   failureLabel: string;
   responseLabel: string;
@@ -48,6 +50,7 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
     fetchFn: fetch,
     allowPrivateNetwork: params.allowPrivateNetwork,
+    ssrfPolicy: params.ssrfPolicy,
     dispatcherPolicy: params.dispatcherPolicy,
   });
 
@@ -121,7 +124,7 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
@@ -138,9 +141,10 @@ export async function anthropicAnalyzePdf(params: {
       transport: "http",
     });
   headers.set("Content-Type", "application/json");
+  const url = resolveAnthropicMessagesUrl(baseUrl);
 
   const json = await postNativePdfJson({
-    url: resolveAnthropicMessagesUrl(baseUrl),
+    url,
     headers,
     body: {
       model: params.modelId,
@@ -148,6 +152,12 @@ export async function anthropicAnalyzePdf(params: {
       messages: [{ role: "user", content }],
     },
     allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
+    }),
     dispatcherPolicy,
     failureLabel: "Anthropic PDF request failed",
     responseLabel: "Anthropic PDF response",
@@ -213,7 +223,7 @@ export async function geminiAnalyzePdf(params: {
       baseUrl: params.baseUrl,
     },
   }) ?? { baseUrl: params.baseUrl };
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfig({
       baseUrl: transport.baseUrl,
       defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
@@ -238,6 +248,12 @@ export async function geminiAnalyzePdf(params: {
       contents: [{ role: "user", parts }],
     },
     allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
+    }),
     dispatcherPolicy,
     failureLabel: "Gemini PDF request failed",
     responseLabel: "Gemini PDF response",

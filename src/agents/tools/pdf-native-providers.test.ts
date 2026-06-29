@@ -211,7 +211,7 @@ describe("native PDF provider API calls", () => {
     ).rejects.toThrow("Anthropic PDF returned no text");
   });
 
-  it("anthropicAnalyzePdf blocks private-network provider URLs unless explicitly allowed", async () => {
+  it("anthropicAnalyzePdf trusts the exact configured local provider origin", async () => {
     const fetchMock = mockFetchResponse(
       jsonResponse({
         content: [{ type: "text", text: "ok" }],
@@ -222,11 +222,11 @@ describe("native PDF provider API calls", () => {
       pdfNativeProviders.anthropicAnalyzePdf(
         makeAnthropicAnalyzeParams({ baseUrl: "http://127.0.0.1:11434" }),
       ),
-    ).rejects.toThrow(/private|SSRF|blocked/i);
-    expect(fetchMock).not.toHaveBeenCalled();
+    ).resolves.toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("anthropicAnalyzePdf allows private-network provider URLs with request opt-in", async () => {
+  it("anthropicAnalyzePdf honors explicit private-network denial for a configured local origin", async () => {
     const fetchMock = mockFetchResponse(
       jsonResponse({
         content: [{ type: "text", text: "ok" }],
@@ -238,12 +238,57 @@ describe("native PDF provider API calls", () => {
         makeAnthropicAnalyzeParams({
           baseUrl: "http://127.0.0.1:11434",
           requestConfig: {
+            request: { allowPrivateNetwork: false },
+          },
+        }),
+      ),
+    ).rejects.toThrow(/private|SSRF|blocked/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("anthropicAnalyzePdf does not carry exact-origin trust across redirects", async () => {
+    const fetchMock = mockFetchResponse(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://127.0.0.1:4321/v1/messages" },
+      }),
+    );
+
+    await expect(
+      pdfNativeProviders.anthropicAnalyzePdf(
+        makeAnthropicAnalyzeParams({ baseUrl: "http://127.0.0.1:11434" }),
+      ),
+    ).rejects.toThrow(/private|SSRF|blocked/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("anthropicAnalyzePdf allows off-origin private redirects with explicit opt-in", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://127.0.0.1:4321/v1/messages" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      );
+    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+    await expect(
+      pdfNativeProviders.anthropicAnalyzePdf(
+        makeAnthropicAnalyzeParams({
+          baseUrl: "http://127.0.0.1:11434",
+          requestConfig: {
             request: { allowPrivateNetwork: true },
           },
         }),
       ),
     ).resolves.toBe("ok");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("anthropicAnalyzePdf rejects oversized successful JSON responses", async () => {
