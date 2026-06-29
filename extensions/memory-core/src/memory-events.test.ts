@@ -6,7 +6,7 @@ import {
   readMemoryHostEvents,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { describe, expect, it } from "vitest";
-import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
+import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -187,5 +187,73 @@ describe("memory host event journal integration", () => {
     expect(dreamEvent.phase).toBe("light");
     expect(dreamEvent.lineCount).toBe(2);
     expect(dreamEvent.storageMode).toBe("both");
+  });
+
+  it("omits outcome on successful dreaming events when no outcome is provided", async () => {
+    const workspaceDir = await createTempWorkspace("memory-core-dream-outcome-implicit-");
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "rem",
+      bodyLines: ["- REM insight"],
+      nowMs: Date.UTC(2026, 3, 5, 14, 0, 0),
+      storage: { mode: "inline", separateReports: false },
+    });
+
+    const events = await readMemoryHostEvents({ workspaceDir });
+    expect(events).toHaveLength(1);
+    const dreamEvent = events[0];
+    if (dreamEvent?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    // Backward-compatible: successful events without explicit outcome omit the field.
+    expect(dreamEvent.outcome).toBeUndefined();
+    expect(dreamEvent.error).toBeUndefined();
+  });
+
+  it("records outcome and error on failed dreaming events", async () => {
+    const workspaceDir = await createTempWorkspace("memory-core-dream-outcome-failed-");
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: [],
+      nowMs: Date.UTC(2026, 3, 5, 13, 0, 0),
+      storage: { mode: "inline", separateReports: false },
+      outcome: "failed",
+      error: "promoted file write rejected: EACCES",
+    });
+
+    const events = await readMemoryHostEvents({ workspaceDir });
+    expect(events).toHaveLength(1);
+    const dreamEvent = events[0];
+    if (dreamEvent?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    expect(dreamEvent.outcome).toBe("failed");
+    expect(dreamEvent.error).toBe("promoted file write rejected: EACCES");
+    expect(dreamEvent.phase).toBe("light");
+  });
+
+  it("records partial outcome on dreaming events", async () => {
+    const workspaceDir = await createTempWorkspace("memory-core-dream-outcome-partial-");
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Partial result"],
+      nowMs: Date.UTC(2026, 3, 5, 13, 0, 0),
+      storage: { mode: "inline", separateReports: false },
+      outcome: "partial",
+    });
+
+    const events = await readMemoryHostEvents({ workspaceDir });
+    expect(events).toHaveLength(1);
+    const dreamEvent = events[0];
+    if (dreamEvent?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    expect(dreamEvent.outcome).toBe("partial");
+    expect(dreamEvent.error).toBeUndefined();
+    expect(dreamEvent.phase).toBe("deep");
   });
 });
