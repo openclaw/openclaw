@@ -366,6 +366,23 @@ export type DurableWorkflowStoreStats = {
   openRuns: number;
 };
 
+export type DurableWorkflowTimelineOptions = {
+  limit?: number;
+  afterEventSeq?: number;
+};
+
+export type CompactDurableWorkflowRunInput = {
+  workflowRunId: string;
+  keepLastEvents?: number;
+  now?: number;
+};
+
+export type CompactDurableWorkflowRunResult = {
+  workflowRunId: string;
+  compacted: boolean;
+  removedEvents: number;
+};
+
 export type DurableWorkflowStore = {
   createRun(input: CreateDurableWorkflowRunInput): DurableWorkflowRun;
   getRun(workflowRunId: string): DurableWorkflowRun | undefined;
@@ -404,7 +421,11 @@ export type DurableWorkflowStore = {
   consumeSignal(input: { signalId: string; now?: number }): DurableWorkflowSignal | undefined;
   listPendingSignals(options?: { limit?: number }): DurableWorkflowSignal[];
   listSignals(workflowRunId: string): DurableWorkflowSignal[];
-  getTimeline(workflowRunId: string): DurableWorkflowEvent[];
+  getTimeline(
+    workflowRunId: string,
+    options?: DurableWorkflowTimelineOptions,
+  ): DurableWorkflowEvent[];
+  compactTerminalRun(input: CompactDurableWorkflowRunInput): CompactDurableWorkflowRunResult;
   getStats(): DurableWorkflowStoreStats;
   close(): void;
 };

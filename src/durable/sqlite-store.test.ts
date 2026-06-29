@@ -500,6 +500,67 @@ describe("durable workflow sqlite store", () => {
     }
   });
 
+  it("paginates timelines and compacts only terminal run history", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableWorkflowSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const active = store.createRun({
+        workflowId: "test.workflow",
+        status: "running",
+        recoveryState: "running",
+      });
+      store.appendEvent({ workflowRunId: active.workflowRunId, eventType: "active.one" });
+      expect(store.compactTerminalRun({ workflowRunId: active.workflowRunId })).toEqual({
+        workflowRunId: active.workflowRunId,
+        compacted: false,
+        removedEvents: 0,
+      });
+
+      const terminal = store.createRun({
+        workflowId: "test.workflow",
+        status: "succeeded",
+        recoveryState: "terminal",
+        completedAt: 200,
+      });
+      for (let index = 1; index <= 5; index += 1) {
+        store.appendEvent({
+          workflowRunId: terminal.workflowRunId,
+          eventType: `terminal.${index}`,
+        });
+      }
+      expect(
+        store
+          .getTimeline(terminal.workflowRunId, { afterEventSeq: 2, limit: 2 })
+          .map((event) => [event.eventSeq, event.eventType]),
+      ).toEqual([
+        [3, "terminal.3"],
+        [4, "terminal.4"],
+      ]);
+
+      expect(
+        store.compactTerminalRun({
+          workflowRunId: terminal.workflowRunId,
+          keepLastEvents: 2,
+          now: 500,
+        }),
+      ).toEqual({
+        workflowRunId: terminal.workflowRunId,
+        compacted: true,
+        removedEvents: 3,
+      });
+      expect(store.getTimeline(terminal.workflowRunId).map((event) => event.eventType)).toEqual([
+        "terminal.4",
+        "terminal.5",
+        "workflow.history.compacted",
+      ]);
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("adds durable tables to an existing shared state database without rewriting existing rows", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const dbPath = path.join(dir, "openclaw.sqlite");

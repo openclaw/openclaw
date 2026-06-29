@@ -11,6 +11,8 @@ import type {
   AppendDurableWorkflowEventInput,
   ClaimDurableWorkflowRunInput,
   ClaimDurableWorkflowStepInput,
+  CompactDurableWorkflowRunInput,
+  CompactDurableWorkflowRunResult,
   CreateDurableWorkflowLinkInput,
   CreateDurableWorkflowRefInput,
   CreateDurableWorkflowRunInput,
@@ -32,6 +34,7 @@ import type {
   DurableWorkflowStepType,
   DurableWorkflowStore,
   DurableWorkflowStoreStats,
+  DurableWorkflowTimelineOptions,
   DurableWorkflowTimer,
   DurableWorkflowTimerStatus,
   UpdateDurableWorkflowRunInput,
@@ -576,6 +579,16 @@ function getDurableWorkflowSchemaVersion(db: DatabaseSync): number {
 function count(db: DatabaseSync, sql: string, values: SQLInputValue[] = []): number {
   const row = db.prepare(sql).get(...values) as CountRow | undefined;
   return Number(row?.count ?? 0);
+}
+
+function normalizeQueryLimit(limit: number | undefined, fallback: number): number {
+  return Math.max(1, Math.min(5000, Math.trunc(limit ?? fallback)));
+}
+
+function isTerminalRunStatus(status: DurableWorkflowRunStatus): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
 }
 
 export function openDurableWorkflowSqliteStore(options?: {
@@ -1453,16 +1466,137 @@ export function openDurableWorkflowSqliteStore(options?: {
       return rows.map(rowToSignal);
     },
 
-    getTimeline(workflowRunId: string): DurableWorkflowEvent[] {
-      const rows = db
-        .prepare(
-          `SELECT *
-             FROM durable_workflow_events
-            WHERE workflow_run_id = ?
-            ORDER BY event_seq ASC`,
-        )
-        .all(workflowRunId) as DurableWorkflowEventRow[];
+    getTimeline(
+      workflowRunId: string,
+      timelineOptions?: DurableWorkflowTimelineOptions,
+    ): DurableWorkflowEvent[] {
+      const afterEventSeq = Math.max(0, Math.trunc(timelineOptions?.afterEventSeq ?? 0));
+      const rows =
+        timelineOptions?.limit === undefined && afterEventSeq === 0
+          ? (db
+              .prepare(
+                `SELECT *
+                   FROM durable_workflow_events
+                  WHERE workflow_run_id = ?
+                  ORDER BY event_seq ASC`,
+              )
+              .all(workflowRunId) as DurableWorkflowEventRow[])
+          : (db
+              .prepare(
+                `SELECT *
+                   FROM durable_workflow_events
+                  WHERE workflow_run_id = ?
+                    AND event_seq > ?
+                  ORDER BY event_seq ASC
+                  LIMIT ?`,
+              )
+              .all(
+                workflowRunId,
+                afterEventSeq,
+                normalizeQueryLimit(timelineOptions?.limit, 500),
+              ) as DurableWorkflowEventRow[]);
       return rows.map(rowToEvent);
+    },
+
+    compactTerminalRun(input: CompactDurableWorkflowRunInput): CompactDurableWorkflowRunResult {
+      const keepLastEvents = normalizeQueryLimit(input.keepLastEvents, 200);
+      const now = input.now ?? Date.now();
+      return runSqliteImmediateTransactionSync(db, () => {
+        const run = db
+          .prepare("SELECT * FROM durable_workflow_runs WHERE workflow_run_id = ?")
+          .get(input.workflowRunId) as DurableWorkflowRunRow | undefined;
+        if (!run || !isTerminalRunStatus(run.status)) {
+          return {
+            workflowRunId: input.workflowRunId,
+            compacted: false,
+            removedEvents: 0,
+          };
+        }
+        const totalEvents = count(
+          db,
+          "SELECT COUNT(*) AS count FROM durable_workflow_events WHERE workflow_run_id = ?",
+          [input.workflowRunId],
+        );
+        if (totalEvents <= keepLastEvents) {
+          return {
+            workflowRunId: input.workflowRunId,
+            compacted: false,
+            removedEvents: 0,
+          };
+        }
+        const cutoff = db
+          .prepare(
+            `SELECT event_seq
+               FROM durable_workflow_events
+              WHERE workflow_run_id = ?
+              ORDER BY event_seq DESC
+              LIMIT 1 OFFSET ?`,
+          )
+          .get(input.workflowRunId, keepLastEvents - 1) as
+          | { event_seq: number | bigint }
+          | undefined;
+        const cutoffSeq = Number(cutoff?.event_seq ?? 0);
+        if (cutoffSeq <= 1) {
+          return {
+            workflowRunId: input.workflowRunId,
+            compacted: false,
+            removedEvents: 0,
+          };
+        }
+        const deleteResult = db
+          .prepare(
+            `DELETE FROM durable_workflow_events
+              WHERE workflow_run_id = ?
+                AND event_seq < ?`,
+          )
+          .run(input.workflowRunId, cutoffSeq);
+        const removedEvents = Number(deleteResult.changes ?? 0);
+        if (removedEvents <= 0) {
+          return {
+            workflowRunId: input.workflowRunId,
+            compacted: false,
+            removedEvents: 0,
+          };
+        }
+        const nextSeq =
+          count(
+            db,
+            "SELECT COALESCE(MAX(event_seq), 0) AS count FROM durable_workflow_events WHERE workflow_run_id = ?",
+            [input.workflowRunId],
+          ) + 1;
+        db.prepare(
+          `INSERT INTO durable_workflow_events (
+             event_id, workflow_run_id, event_seq, event_type, event_time, step_id,
+             agent_invocation_id, tool_invocation_id, idempotency_key, payload_json,
+             payload_hash, checkpoint_ref, causation_event_id, correlation_id, recorded_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          `evt_${randomUUID()}`,
+          input.workflowRunId,
+          nextSeq,
+          "workflow.history.compacted",
+          now,
+          null,
+          null,
+          null,
+          null,
+          serializeJson({
+            removedEvents,
+            keptLastEvents: keepLastEvents,
+            compactedBeforeEventSeq: cutoffSeq,
+          }),
+          null,
+          null,
+          null,
+          null,
+          now,
+        );
+        return {
+          workflowRunId: input.workflowRunId,
+          compacted: true,
+          removedEvents,
+        };
+      });
     },
 
     getStats(): DurableWorkflowStoreStats {
