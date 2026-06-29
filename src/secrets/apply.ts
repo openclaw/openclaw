@@ -89,7 +89,7 @@ type ResolvedPlanTargetEntry = {
 
 type ConfigTargetMutationResult = {
   resolvedTargets: ResolvedPlanTargetEntry[];
-  scrubbedValuesByProvider: Map<string, Set<string>>;
+  scrubbedProviderAuthValues: Map<string, Set<string>>;
   scrubbedValuesByTarget: Map<SecretsPlanTarget, Set<string>>;
   providerTargets: Set<string>;
   authProfileProviderByTarget: Map<SecretsPlanTarget, string>;
@@ -141,6 +141,10 @@ function appendKeyedValue<K>(map: Map<K, Set<string>>, key: K, value: string): v
     return;
   }
   map.set(key, new Set([value]));
+}
+
+function migratesProviderAuthCredential(resolved: ResolvedPlanTargetEntry["resolved"]): boolean {
+  return resolved.entry.trackProviderShadowing === true || resolved.entry.authProfileType != null;
 }
 
 function scrubEnvRaw(
@@ -272,7 +276,7 @@ async function projectPlanState(params: {
     nextConfig,
     stateDir,
     providerTargets: targetMutations.providerTargets,
-    scrubbedValuesByProvider: targetMutations.scrubbedValuesByProvider,
+    scrubbedProviderAuthValues: targetMutations.scrubbedProviderAuthValues,
     authStoreByPath: targetMutations.authStoreByPath,
     authStoreAgentDirByPath: targetMutations.authStoreAgentDirByPath,
     changedFiles,
@@ -289,8 +293,7 @@ async function projectPlanState(params: {
   const knownSecretEnvKeys = new Set(listKnownSecretEnvVarNames());
   const scrubByEnvKey = new Map<string, Set<string>>();
   for (const { resolved, target } of targetMutations.resolvedTargets) {
-    const migratesProviderAuth =
-      resolved.entry.trackProviderShadowing === true || resolved.entry.authProfileType != null;
+    const migratesProviderAuth = migratesProviderAuthCredential(resolved);
     if (migratesProviderAuth) {
       const providerId = (
         resolved.providerId ??
@@ -301,7 +304,7 @@ async function projectPlanState(params: {
       ).trim();
       if (providerId) {
         const normalizedProvider = normalizeProviderId(providerId);
-        const providerValues = targetMutations.scrubbedValuesByProvider.get(normalizedProvider);
+        const providerValues = targetMutations.scrubbedProviderAuthValues.get(normalizedProvider);
         if (providerValues) {
           for (const envKey of getProviderEnvVars(normalizedProvider)) {
             for (const value of providerValues) {
@@ -370,7 +373,7 @@ function applyConfigTargetMutations(params: {
     target,
     resolved: resolveTarget(target),
   }));
-  const scrubbedValuesByProvider = new Map<string, Set<string>>();
+  const scrubbedProviderAuthValues = new Map<string, Set<string>>();
   const scrubbedValuesByTarget = new Map<SecretsPlanTarget, Set<string>>();
   const providerTargets = new Set<string>();
   const authProfileProviderByTarget = new Map<SecretsPlanTarget, string>();
@@ -380,11 +383,12 @@ function applyConfigTargetMutations(params: {
     target: SecretsPlanTarget,
     provider: string,
     value: string,
+    options?: { providerAuth: boolean },
   ): void => {
     const trimmed = value.trim();
     appendKeyedValue(scrubbedValuesByTarget, target, trimmed);
-    if (provider) {
-      appendKeyedValue(scrubbedValuesByProvider, normalizeProviderId(provider), trimmed);
+    if (provider && options?.providerAuth === true) {
+      appendKeyedValue(scrubbedProviderAuthValues, normalizeProviderId(provider), trimmed);
     }
   };
 
@@ -399,7 +403,9 @@ function applyConfigTargetMutations(params: {
         authStoreAgentDirByPath: params.authStoreAgentDirByPath,
       });
       for (const migratedValue of authProfileMutation.migratedValues) {
-        recordMigratedValue(target, authProfileMutation.provider, migratedValue);
+        recordMigratedValue(target, authProfileMutation.provider, migratedValue, {
+          providerAuth: true,
+        });
       }
       if (authProfileMutation.provider) {
         authProfileProviderByTarget.set(target, authProfileMutation.provider);
@@ -422,10 +428,13 @@ function applyConfigTargetMutations(params: {
 
     const targetPathSegments = resolved.pathSegments;
     const usesSiblingRef = resolved.entry.secretShape === "sibling_ref"; // pragma: allowlist secret
+    const migratesProviderAuth = migratesProviderAuthCredential(resolved);
     if (usesSiblingRef) {
       const previous = getPath(params.nextConfig, targetPathSegments);
       if (isNonEmptyString(previous)) {
-        recordMigratedValue(target, resolved.providerId ?? "", previous);
+        recordMigratedValue(target, resolved.providerId ?? "", previous, {
+          providerAuth: migratesProviderAuth,
+        });
       }
       const refPathSegments = resolved.refPathSegments;
       if (!refPathSegments) {
@@ -441,7 +450,9 @@ function applyConfigTargetMutations(params: {
 
     const previous = getPath(params.nextConfig, targetPathSegments);
     if (isNonEmptyString(previous)) {
-      recordMigratedValue(target, resolved.providerId ?? "", previous);
+      recordMigratedValue(target, resolved.providerId ?? "", previous, {
+        providerAuth: migratesProviderAuth,
+      });
     }
     const wroteRef = setPathCreateStrict(params.nextConfig, targetPathSegments, target.ref);
     if (wroteRef) {
@@ -454,7 +465,7 @@ function applyConfigTargetMutations(params: {
 
   return {
     resolvedTargets,
-    scrubbedValuesByProvider,
+    scrubbedProviderAuthValues,
     scrubbedValuesByTarget,
     providerTargets,
     authProfileProviderByTarget,
@@ -468,7 +479,7 @@ function scrubAuthStoresForProviderTargets(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   providerTargets: Set<string>;
-  scrubbedValuesByProvider: Map<string, Set<string>>;
+  scrubbedProviderAuthValues: Map<string, Set<string>>;
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreAgentDirByPath: Map<string, string>;
   changedFiles: Set<string>;
@@ -502,7 +513,7 @@ function scrubAuthStoresForProviderTargets(params: {
       }
       if (profile.kind === "api_key" || profile.kind === "token") {
         if (isNonEmptyString(profile.value)) {
-          appendKeyedValue(params.scrubbedValuesByProvider, provider, profile.value.trim());
+          appendKeyedValue(params.scrubbedProviderAuthValues, provider, profile.value.trim());
         }
         if (profile.valueField in profile.profile) {
           delete profile.profile[profile.valueField];

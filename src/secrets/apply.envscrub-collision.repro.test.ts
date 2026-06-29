@@ -21,6 +21,7 @@ vi.mock("./runtime.js", () => ({
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 
 const SHARED_KEY = "sk-shared-proxy-key"; // pragma: allowlist secret
+const PROVIDER_AUTH_KEY = "sk-provider-auth-key"; // pragma: allowlist secret
 
 describe("secrets apply env scrub value collision", () => {
   let rootDir: string;
@@ -478,5 +479,67 @@ describe("secrets apply env scrub value collision", () => {
     expect(nextEnv).toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
     expect(nextEnv).toContain("UNRELATED=value");
     expect(nextEnv).not.toContain(`FIRECRAWL_API_KEY=${SHARED_KEY}`);
+  });
+
+  it("does NOT delete OPENAI_API_KEY when provider auth and a same-provider header are migrated together", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              openai: {
+                apiKey: PROVIDER_AUTH_KEY,
+                headers: { "x-shared-header": SHARED_KEY },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      envPath,
+      `OPENAI_API_KEY=${SHARED_KEY}\nOPENAI_AUTH_KEY=${PROVIDER_AUTH_KEY}\nUNRELATED=value\n`,
+      "utf8",
+    );
+    env.OPENAI_AUTH_KEY = PROVIDER_AUTH_KEY;
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_AUTH_KEY" },
+        },
+        {
+          type: "models.providers.headers",
+          path: "models.providers.openai.headers.x-shared-header",
+          pathSegments: ["models", "providers", "openai", "headers", "x-shared-header"],
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    await runSecretsApply({ plan, env, write: true });
+
+    const nextEnv = await fs.readFile(envPath, "utf8");
+
+    expect(nextEnv).toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
+    expect(nextEnv).toContain(`OPENAI_AUTH_KEY=${PROVIDER_AUTH_KEY}`);
+    expect(nextEnv).toContain("UNRELATED=value");
   });
 });
