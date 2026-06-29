@@ -16,6 +16,24 @@ import {
   updateChatRunProvider,
 } from "./chat-abort.js";
 
+// Capture the subsystem logger's error spy so the terminal-persistence failure
+// path can be asserted to emit a log line instead of swallowing it.
+const chatAbortLogError = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    warn: vi.fn(),
+    info: vi.fn(),
+    error: chatAbortLogError,
+    debug: vi.fn(),
+    trace: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+    isEnabled: vi.fn(() => false),
+    subsystem: "test",
+  })),
+}));
+
 type ChatAbortPayload = {
   runId: string;
   sessionKey: string;
@@ -263,6 +281,46 @@ describe("registerChatAbortController", () => {
     await persistence;
     await Promise.resolve();
     expect(chatAbortControllers.has("run-persisting")).toBe(false);
+  });
+
+  it("logs an error and still clears the entry when terminal persistence fails", async () => {
+    chatAbortLogError.mockClear();
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-persist-failed",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+    });
+    let rejectPersistence: (err: Error) => void = () => undefined;
+    const persistence = new Promise<void>((_resolve, reject) => {
+      rejectPersistence = reject;
+    });
+    if (!registration.entry) {
+      throw new Error("expected registered entry");
+    }
+    registration.entry.projectSessionActive = false;
+    registration.entry.projectSessionTerminalPersistence = persistence;
+
+    registration.cleanup();
+
+    // Entry is retained while persistence is still in flight.
+    expect(chatAbortControllers.has("run-persist-failed")).toBe(true);
+    expect(chatAbortLogError).not.toHaveBeenCalled();
+
+    const failure = new Error("disk full");
+    rejectPersistence(failure);
+    // Allow the rejection to propagate to the .catch() handler.
+    await expect(persistence).rejects.toBe(failure);
+    await Promise.resolve();
+
+    // Entry must still be cleaned up (no leak) AND the failure must be logged
+    // rather than silently swallowed — the regression this guards against.
+    expect(chatAbortControllers.has("run-persist-failed")).toBe(false);
+    expect(chatAbortLogError).toHaveBeenCalledTimes(1);
+    expect(chatAbortLogError.mock.calls[0][0]).toContain("run-persist-failed");
+    expect(chatAbortLogError.mock.calls[0][0]).toContain("disk full");
   });
 
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
