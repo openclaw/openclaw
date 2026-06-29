@@ -1223,6 +1223,7 @@ export async function runPreparedReply(
   const originatingThreadId = resolveRoutedDeliveryThreadId({
     ctx,
     sessionKey,
+    deliveryThreadId: preparedSessionState.sessionEntry?.deliveryContext?.threadId,
   });
   const currentTurnImages = await traceRunPhase("reply.resolve_current_turn_images", () =>
     resolveCurrentTurnImages({
