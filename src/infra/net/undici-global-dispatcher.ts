@@ -209,13 +209,15 @@ function createNoProxyAwareEnvDispatcher(
             return Reflect.apply(value, target, proxyArgs);
           }
 
-          // Promise-style: invoke both, return a single promise that settles
-          // when both the bypass agent and the proxy dispatcher are done.
+          // Promise-style: invoke both, return a promise that settles when
+          // both are done. Pass through any non-callback arguments (e.g. the
+          // optional error argument for destroy(err)).
+          const lifecycleArgs = originalCallback ? [] : args;
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
-            settled.push(Promise.resolve(Reflect.apply(bypassValue, bypassAgent, [])));
+            settled.push(Promise.resolve(Reflect.apply(bypassValue, bypassAgent, lifecycleArgs)));
           }
-          settled.push(Promise.resolve(Reflect.apply(value, target, [])));
+          settled.push(Promise.resolve(Reflect.apply(value, target, lifecycleArgs)));
           return settled.length === 2
             ? Promise.all(settled).then(() => undefined)
             : settled[0];
