@@ -9,6 +9,7 @@ import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chun
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
@@ -101,10 +102,15 @@ function resolveDiscordSuppressEmbeds(params: {
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
 /** Derive a thread title from the first non-empty line of the message text. */
-function deriveForumThreadName(text: string): string {
+export function deriveForumThreadName(text: string): string {
   const firstLine =
     normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
-  return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
+  // Surrogate-safe cap so an emoji straddling the 100-char Discord limit is not
+  // split into a dangling half (broken glyph / rejected name). Matches the
+  // sibling thread-name path in monitor/threading.starter.ts.
+  return (
+    truncateUtf16Safe(firstLine, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16)
+  );
 }
 
 /** Forum/Media channels cannot receive regular messages; detect them here. */
