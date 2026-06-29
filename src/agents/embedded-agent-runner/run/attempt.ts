@@ -170,7 +170,6 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -231,6 +230,7 @@ import {
 import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import { resolveAgentToolSearchRuntimeConfig } from "../../tool-search-runtime-config.js";
 import {
   addClientToolsToToolSearchCatalog,
   applyToolSchemaDirectoryCatalog,
@@ -1202,13 +1202,12 @@ export async function runEmbeddedAttempt(
     });
     const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
-    const toolSearchRuntimeConfig = forceDirectMessageTool
-      ? params.config
-      : applyLocalModelLeanToolSearchDefaults({
-          config: params.config,
-          agentId: sessionAgentId,
-          sessionKey: sandboxSessionKey,
-        });
+    const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      forceDirectMessageTool,
+    });
     const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
