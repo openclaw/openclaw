@@ -34,6 +34,7 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
@@ -73,6 +74,10 @@ function clearHedgeTimer(sessionKey: string): void {
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function formatDelegateTaskForSystemEvent(task: string): string {
+  return sanitizeInboundSystemTags(task);
 }
 
 function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): void {
@@ -275,10 +280,13 @@ export async function dispatchToolDelegates(params: {
       `[continuation:delegate-rejected] maxDelegatesPerTurn=${maxDelegatesPerTurn} task=${dropped.task.slice(0, 80)} session=${sessionKey}`,
     );
     markDelegateFailed(dropped, summary);
-    enqueueSystemEvent(`[continuation] ${summary} Task: ${dropped.task}`, {
-      sessionKey,
-      trusted: true,
-    });
+    enqueueSystemEvent(
+      `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
+      {
+        sessionKey,
+        trusted: true,
+      },
+    );
   }
 
   let dispatched = 0;
@@ -300,10 +308,13 @@ export async function dispatchToolDelegates(params: {
         `[continuation:delegate-rejected] policy.cross_session_targeting task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
       markDelegateFailed(delegate, summary);
-      enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
-        sessionKey,
-        trusted: true,
-      });
+      enqueueSystemEvent(
+        `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+        {
+          sessionKey,
+          trusted: true,
+        },
+      );
       emitContinuationDisabledSpan({
         chainId: undefined,
         chainStepRemaining: Math.max(0, maxChainLength - currentChainCount),
@@ -334,10 +345,13 @@ export async function dispatchToolDelegates(params: {
         `[continuation:delegate-rejected] ${budgetCheck} task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
       markDelegateFailed(delegate, summary);
-      enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
-        sessionKey,
-        trusted: true,
-      });
+      enqueueSystemEvent(
+        `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+        {
+          sessionKey,
+          trusted: true,
+        },
+      );
       rejected++;
       continue;
     }
@@ -424,7 +438,7 @@ export async function dispatchToolDelegates(params: {
           `[continuation:delegate-spawned] hop=${nextHop}/${maxChainLength} mode=${delegate.mode ?? "normal"} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
         );
         enqueueSystemEvent(
-          `[continuation:delegate-spawned] Spawned turn ${nextHop}/${maxChainLength}: ${delegate.task}`,
+          `[continuation:delegate-spawned] Spawned turn ${nextHop}/${maxChainLength}: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
@@ -443,10 +457,13 @@ export async function dispatchToolDelegates(params: {
         );
         markDelegateFailed(delegate, summary);
         dispatchSpan.setStatus("ERROR", reasonText);
-        enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
-          sessionKey,
-          trusted: true,
-        });
+        enqueueSystemEvent(
+          `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          {
+            sessionKey,
+            trusted: true,
+          },
+        );
         rejected++;
       }
     } catch (err) {
@@ -456,10 +473,13 @@ export async function dispatchToolDelegates(params: {
       dispatchSpan?.setStatus("ERROR", message);
       log.info(`[continuation:delegate-spawn-failed] error=${message} session=${sessionKey}`);
       markDelegateFailed(delegate, summary);
-      enqueueSystemEvent(`[continuation] ${summary}. Task: ${delegate.task}`, {
-        sessionKey,
-        trusted: true,
-      });
+      enqueueSystemEvent(
+        `[continuation] ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+        {
+          sessionKey,
+          trusted: true,
+        },
+      );
       rejected++;
     } finally {
       dispatchSpan?.end();
@@ -601,7 +621,7 @@ export async function dispatchStagedPostCompactionDelegates(
       `[continuation:post-compaction-policy-rejected] cap.delegates_per_turn maxDelegatesPerTurn=${config.maxDelegatesPerTurn} session=${sessionKey} task=${dropped.task.slice(0, 80)}`,
     );
     enqueueSystemEvent(
-      `[continuation] Post-compaction delegate rejected: maxDelegatesPerTurn exceeded (${config.maxDelegatesPerTurn}). Task: ${dropped.task}`,
+      `[continuation] Post-compaction delegate rejected: maxDelegatesPerTurn exceeded (${config.maxDelegatesPerTurn}). Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
       { sessionKey, trusted: true },
     );
     emitContinuationDisabledSpan({
@@ -626,7 +646,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation:post-compaction-policy-rejected] policy.cross_session_targeting session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
       );
       enqueueSystemEvent(
-        `[continuation] Post-compaction delegate rejected: cross-session targeting is disabled by policy. Task: ${delegate.task}`,
+        `[continuation] Post-compaction delegate rejected: cross-session targeting is disabled by policy. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
       emitContinuationDisabledSpan({
@@ -662,7 +682,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation:post-compaction-policy-rejected] ${disabledReason} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
       );
       enqueueSystemEvent(
-        `[continuation] Post-compaction delegate rejected: ${summary}. Task: ${delegate.task}`,
+        `[continuation] Post-compaction delegate rejected: ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
       emitContinuationDisabledSpan({
@@ -708,7 +728,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation:post-compaction-spawn-rejected] status=${spawnResult.status} session=${sessionKey} reason=${spawnResult.error ?? "not accepted"} task=${delegate.task.slice(0, 80)}`,
       );
       enqueueSystemEvent(
-        `[continuation] Post-compaction delegate spawn ${spawnResult.status}: ${spawnResult.error ?? "delegation was not accepted."}. Task: ${delegate.task}`,
+        `[continuation] Post-compaction delegate spawn ${spawnResult.status}: ${spawnResult.error ?? "delegation was not accepted."}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
       failed++;
@@ -717,7 +737,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation:post-compaction-spawn-failed] error=${err instanceof Error ? err.message : String(err)} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
       );
       enqueueSystemEvent(
-        `[continuation] Post-compaction delegate spawn failed: ${String(err)}. Task: ${delegate.task}`,
+        `[continuation] Post-compaction delegate spawn failed: ${String(err)}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
       failed++;
