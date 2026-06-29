@@ -364,13 +364,6 @@ function readPluginAppPolicyContext(
       entry.destructiveApprovalMode,
       bindingSchemaVersion,
     );
-    const destructiveToolNames =
-      Array.isArray(entry.destructiveToolNames) &&
-      entry.destructiveToolNames.every((toolName) => typeof toolName === "string")
-        ? entry.destructiveToolNames
-        : bindingSchemaVersion === 1 && entry.destructiveToolNames === undefined
-          ? []
-          : undefined;
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
@@ -378,7 +371,6 @@ function readPluginAppPolicyContext(
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||
-      !destructiveToolNames ||
       !Array.isArray(entry.mcpServerNames) ||
       entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
     ) {
@@ -390,7 +382,6 @@ function readPluginAppPolicyContext(
       pluginName: entry.pluginName,
       allowDestructiveActions: entry.allowDestructiveActions,
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-      destructiveToolNames,
       mcpServerNames: entry.mcpServerNames,
     };
   }

@@ -98,7 +98,6 @@ describe("codex app-server session binding", () => {
           marketplaceName: "openai-curated" as const,
           pluginName: "google-calendar",
           allowDestructiveActions: true,
-          destructiveToolNames: [],
           mcpServerNames: ["google-calendar"],
         },
       },
@@ -128,7 +127,6 @@ describe("codex app-server session binding", () => {
           pluginName: "google-calendar",
           allowDestructiveActions: true,
           destructiveApprovalMode: "auto" as const,
-          destructiveToolNames: ["create_event"],
           mcpServerNames: ["google-calendar"],
         },
       },
@@ -158,7 +156,6 @@ describe("codex app-server session binding", () => {
           pluginName: "google-calendar",
           allowDestructiveActions: true,
           destructiveApprovalMode: "always" as const,
-          destructiveToolNames: ["create_event"],
           mcpServerNames: ["google-calendar"],
         },
       },
@@ -224,9 +221,6 @@ describe("codex app-server session binding", () => {
     expect(
       binding?.pluginAppPolicyContext?.apps["approval-routed-app"]?.destructiveApprovalMode,
     ).toBe("auto");
-    expect(
-      binding?.pluginAppPolicyContext?.apps["approval-routed-app"]?.destructiveToolNames,
-    ).toStrictEqual([]);
   });
 
   it("round-trips context-engine binding metadata", async () => {

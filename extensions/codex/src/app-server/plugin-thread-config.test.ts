@@ -78,7 +78,6 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
-      destructiveToolNames: [],
       mcpServerNames: ["google-calendar"],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -170,171 +169,12 @@ describe("Codex plugin thread config", () => {
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
-      tools: {
-        "connector.create_event": { approval_mode: "prompt" },
-      },
     });
     expect(apps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
-      destructiveToolNames: ["connector.create_event"],
     });
-  });
-
-  it("prompts tools Codex treats as approval-required when hints are incomplete", async () => {
-    const config = await buildReadyGoogleCalendarThreadConfig(
-      {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "auto",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
-      {
-        toolStatus: {
-          data: [
-            {
-              name: "codex_apps",
-              tools: [
-                {
-                  name: "connector.read_events",
-                  annotations: { readOnlyHint: true, openWorldHint: true },
-                  _meta: { connector_id: "google-calendar-app" },
-                },
-                {
-                  name: "connector.safe_local_action",
-                  annotations: {
-                    readOnlyHint: false,
-                    destructiveHint: false,
-                    openWorldHint: false,
-                  },
-                  _meta: { connector_id: "google-calendar-app" },
-                },
-                {
-                  name: "connector.unannotated_write",
-                  _meta: { connector_id: "google-calendar-app" },
-                },
-                {
-                  name: "connector.open_world_write",
-                  annotations: {
-                    readOnlyHint: false,
-                    destructiveHint: false,
-                    openWorldHint: true,
-                  },
-                  _meta: { connector_id: "google-calendar-app" },
-                },
-              ],
-            },
-          ],
-          nextCursor: null,
-        },
-      },
-    );
-
-    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
-    expect(apps?.["google-calendar-app"]).toMatchObject({
-      tools: {
-        "connector.open_world_write": { approval_mode: "prompt" },
-        "connector.unannotated_write": { approval_mode: "prompt" },
-      },
-    });
-    expect(config.policyContext.apps["google-calendar-app"]?.destructiveToolNames).toEqual([
-      "connector.open_world_write",
-      "connector.unannotated_write",
-    ]);
-  });
-
-  it("ignores connector ownership spoofed by non-Codex app servers", async () => {
-    const config = await buildReadyGoogleCalendarThreadConfig(
-      {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "auto",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
-      {
-        toolStatus: {
-          data: [
-            {
-              name: "untrusted_server",
-              tools: [
-                {
-                  name: "connector.create_event",
-                  annotations: { destructiveHint: true },
-                  _meta: { connector_id: "google-calendar-app" },
-                },
-              ],
-            },
-          ],
-          nextCursor: null,
-        },
-      },
-    );
-
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({
-        code: "destructive_tool_inventory_unavailable",
-        message: expect.stringContaining("contained no tools owned by google-calendar-app"),
-      }),
-    );
-  });
-
-  it("excludes auto policy apps when destructive tool inventory cannot be read", async () => {
-    const config = await buildReadyGoogleCalendarThreadConfig(
-      {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "auto",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
-      { toolInventoryError: new Error("app tool status unavailable") },
-    );
-
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({
-        code: "destructive_tool_inventory_unavailable",
-        message:
-          "Codex tool inventory could not be read: app tool status unavailable Excluding the app so destructive actions fail closed.",
-      }),
-    );
   });
 
   it("routes destructive approvals to the user while clearing durable overrides for always mode", async () => {
@@ -358,9 +198,6 @@ describe("Codex plugin thread config", () => {
           [appSummary("google-calendar-app")],
           ["google-calendar"],
         );
-      }
-      if (method === "mcpServerStatus/list") {
-        return mcpServerStatus("google-calendar-app");
       }
       if (method === "config/read") {
         configReadCount += 1;
@@ -432,20 +269,11 @@ describe("Codex plugin thread config", () => {
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
-      tools: {
-        "connector.create_event": { approval_mode: "prompt" },
-      },
     });
     expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "always",
-      destructiveToolNames: ["connector.create_event"],
-    });
-    expect(request).toHaveBeenCalledWith("mcpServerStatus/list", {
-      cursor: undefined,
-      detail: "toolsAndAuthOnly",
-      limit: 100,
     });
     expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
@@ -507,7 +335,6 @@ describe("Codex plugin thread config", () => {
           pluginName: "always",
           allowDestructiveActions: true,
           destructiveApprovalMode: "always",
-          destructiveToolNames: ["write"],
           mcpServerNames: ["always"],
         },
         "auto-app": {
@@ -516,7 +343,6 @@ describe("Codex plugin thread config", () => {
           pluginName: "auto",
           allowDestructiveActions: true,
           destructiveApprovalMode: "auto",
-          destructiveToolNames: ["write"],
           mcpServerNames: ["auto"],
         },
       },
@@ -539,14 +365,12 @@ describe("Codex plugin thread config", () => {
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
-          tools: { write: { approval_mode: "prompt" } },
         },
         "auto-app": {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
-          tools: { write: { approval_mode: "prompt" } },
         },
       },
     });
@@ -574,9 +398,6 @@ describe("Codex plugin thread config", () => {
           [appSummary("google-calendar-app")],
           ["google-calendar"],
         );
-      }
-      if (method === "mcpServerStatus/list") {
-        return mcpServerStatus("google-calendar-app");
       }
       if (method === "config/read") {
         configReadCount += 1;
@@ -673,9 +494,6 @@ describe("Codex plugin thread config", () => {
           [appSummary("google-calendar-app")],
           ["google-calendar"],
         );
-      }
-      if (method === "mcpServerStatus/list") {
-        return mcpServerStatus("google-calendar-app");
       }
       if (method === "config/read") {
         return {
@@ -782,9 +600,6 @@ describe("Codex plugin thread config", () => {
             [appSummary("google-calendar-app")],
             ["google-calendar"],
           );
-        }
-        if (method === "mcpServerStatus/list") {
-          return mcpServerStatus("google-calendar-app");
         }
         if (method === "config/read") {
           throw new Error("readonly config");
@@ -952,7 +767,6 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
-      destructiveToolNames: [],
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -1256,7 +1070,6 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
-      destructiveToolNames: [],
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -1349,7 +1162,6 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
-      destructiveToolNames: [],
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -1809,38 +1621,8 @@ function appInfo(id: string, accessible: boolean, enabled = true): v2.AppInfo {
   };
 }
 
-function mcpServerStatus(
-  appId: string,
-  destructiveToolName = "create_event",
-  nextCursor: string | null = null,
-): unknown {
-  return {
-    data: [
-      {
-        name: "codex_apps",
-        tools: [
-          {
-            name: "connector.search_events",
-            title: "search_events",
-            annotations: { readOnlyHint: true, destructiveHint: false },
-            _meta: { connector_id: appId },
-          },
-          {
-            name: `connector.${destructiveToolName}`,
-            title: destructiveToolName,
-            annotations: { readOnlyHint: false, destructiveHint: true },
-            _meta: { connector_id: appId },
-          },
-        ],
-      },
-    ],
-    nextCursor,
-  };
-}
-
 async function buildReadyGoogleCalendarThreadConfig(
   pluginConfig: unknown,
-  options: { toolInventoryError?: Error; toolStatus?: unknown } = {},
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
   const appCache = new CodexAppInventoryCache();
   await appCache.refreshNow({
@@ -1863,12 +1645,6 @@ async function buildReadyGoogleCalendarThreadConfig(
       }
       if (method === "plugin/read") {
         return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-      }
-      if (method === "mcpServerStatus/list") {
-        if (options.toolInventoryError) {
-          throw options.toolInventoryError;
-        }
-        return options.toolStatus ?? mcpServerStatus("google-calendar-app");
       }
       if (method === "config/read") {
         return { config: {} };
