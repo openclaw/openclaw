@@ -174,4 +174,63 @@ describe("OpenAI Codex OAuth flow", () => {
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
   });
+
+  it("rejects oversized token exchange responses", async () => {
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: makeOversizedOAuthJsonResponse(),
+      release: vi.fn(async () => undefined),
+    });
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5_000 },
+    );
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: expect.stringContaining("OpenAI Codex token exchange error"),
+    });
+  });
+
+  it("rejects oversized token refresh responses", async () => {
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: makeOversizedOAuthJsonResponse(),
+      release: vi.fn(async () => undefined),
+    });
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5_000 });
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: expect.stringContaining("OpenAI Codex token refresh error"),
+    });
+  });
 });
+
+/**
+ * Builds a JSON response body larger than the 16 MiB OAuth cap so the bounded
+ * reader cancels the stream mid-flight; proves oversized token responses are
+ * rejected before full buffering.
+ */
+function makeOversizedOAuthJsonResponse(): Response {
+  const ONE_MIB = 1024 * 1024;
+  const TOTAL_CHUNKS = 18;
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= TOTAL_CHUNKS) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
