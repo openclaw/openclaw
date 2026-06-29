@@ -100,19 +100,31 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
   return "unknown";
 }
 
+// When a chatId extracted by one of the thread-suffix parsers contains
+// unexpected colons that are not part of a known t.me URL form, the parser
+// is oversplitting — fall back to full-string instead of silently
+// embedding colon-separated residue in chatId.
+const LOOKS_LIKE_TME_URL = /^(?:https?:\/\/)?t\.me\//i;
+
+function hasOversplitColons(chatId: string): boolean {
+  return chatId.includes(":") && !LOOKS_LIKE_TME_URL.test(chatId);
+}
+
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
 
-  // `[^:]+` prevents silent misparse of multi-colon chatIds (e.g. "a:b:topic:42"
-  // should not parse as chatId "a:b" with thread 42 — the whole input is malformed).
-  const topicMatch = /^([^:]+):topic:(\d+)$/.exec(normalized);
+  // Non-greedy (.+?) stops at the first :topic:, which correctly handles
+  // URL forms like "t.me/mychannel:topic:9". The guard rejects chatIds
+  // with unexpected colons (e.g. "a:b:topic:42" → "a:b" is not a real chatId).
+  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
-    const chatId = topicMatch[1];
-    const threadIdText = topicMatch[2];
-    if (chatId === undefined || threadIdText === undefined) {
-      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+    if (hasOversplitColons(topicMatch[1])) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
     }
-    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
+    const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
     if (messageThreadId === undefined) {
       return {
         chatId: normalized,
@@ -126,15 +138,12 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     };
   }
 
-  // Keep (.+) so URL-form targets like "https://t.me/mychannel:9" still parse
-  // correctly (the scheme colon is not a thread-spec delimiter). But when the
-  // left side contains unusual colons not part of a known URL form, oversplit
-  // is likely — fall back to full-string.
+  // Greedy (.+) so URL-form targets like "https://t.me/mychannel:9" still
+  // parse (the scheme colon is not a thread-spec delimiter). Guard rejects
+  // chatIds with unexpected colons, same invariant as the topic parser.
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
-    // If the left side has extra colons that are not part of a known URL form,
-    // oversplit is likely — the user typed a target with multiple colons.
-    if (colonMatch[1].includes(":") && !/^(?:https?:\/\/)?t\.me\//i.test(colonMatch[1])) {
+    if (hasOversplitColons(colonMatch[1])) {
       return {
         chatId: normalized,
         chatType: resolveTelegramChatType(normalized),
