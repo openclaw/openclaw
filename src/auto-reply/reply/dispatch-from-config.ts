@@ -369,6 +369,30 @@ async function maybeApplyTtsToReplyPayload(
     : copyReplyPayloadMetadata(params.payload, ttsPayload);
 }
 
+function isLikelyInternalSourceReplyFinal(params: {
+  reply: ReplyPayload;
+  chatType: string | undefined;
+  hasRepliedRef?: { value: boolean };
+}): boolean {
+  if (params.chatType !== "group" && params.chatType !== "channel") {
+    return false;
+  }
+  if (params.hasRepliedRef?.value !== true) {
+    return false;
+  }
+  const parts = resolveSendableOutboundReplyParts(params.reply);
+  if (!parts.hasText || parts.hasMedia) {
+    return false;
+  }
+  const text = parts.trimmedText.replace(/\s+/g, " ");
+  if (text.length > 500) {
+    return false;
+  }
+  return /^(?:sent\.?|sent[,:; -]|replied(?:\s+in|\s+to)?\b|message sent\b|delivered\b|posted\b|done\b.*\b(?:posted|sent|replied|responded|delivered|confirmed|flagged)\b|confirmed\b.*\b(?:replied|responded|sent|flagged)\b|i (?:replied|responded|sent|flagged)\b)/i.test(
+    text,
+  );
+}
+
 const resolveRoutedPolicyConversationType = (
   ctx: FinalizedMsgContext,
 ): "direct" | "group" | undefined => {
@@ -3482,6 +3506,28 @@ export async function dispatchReplyFromConfig(
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {
+        continue;
+      }
+      if (
+        isLikelyInternalSourceReplyFinal({
+          reply,
+          chatType,
+          hasRepliedRef: params.replyOptions?.hasRepliedRef,
+        }) &&
+        !shouldDeliverDespiteSourceReplySuppression(reply)
+      ) {
+        logVerbose(
+          [
+            "dispatch-from-config: final reply suppressed because a source reply was already delivered",
+            `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `provider=${ctx.Provider ?? "unknown"}`,
+            `surface=${ctx.Surface ?? "unknown"}`,
+            `chatType=${chatType ?? "unknown"}`,
+            `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
+            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+            `${formatSuppressedReplyPayloadForLog(reply)})`,
+          ].join(" "),
+        );
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {

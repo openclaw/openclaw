@@ -7932,6 +7932,81 @@ describe("dispatchReplyFromConfig", () => {
     expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
   });
 
+  it("suppresses short internal final status text after a group source reply was delivered", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: true };
+    const ctx = buildTestCtx({ Provider: "slack", Surface: "slack", ChatType: "group" });
+    const replyResolver = async () => ({ text: "Sent." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses done-posted internal final status text after a group source reply was delivered", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: true };
+    const ctx = buildTestCtx({ Provider: "slack", Surface: "slack", ChatType: "group" });
+    const replyResolver = async () =>
+      ({ text: "Done - posted to #research-tasks." }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps substantive group final text even when a source reply was delivered", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: true };
+    const ctx = buildTestCtx({ Provider: "slack", Surface: "slack", ChatType: "group" });
+    const reply = { text: "Here is the actual answer." } satisfies ReplyPayload;
+    const replyResolver = async () => reply;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reply);
+  });
+
+  it("keeps direct-chat final status text after source reply delivery", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: true };
+    const ctx = buildTestCtx({ Provider: "slack", Surface: "slack", ChatType: "direct" });
+    const reply = { text: "Sent." } satisfies ReplyPayload;
+    const replyResolver = async () => reply;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reply);
+  });
+
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
