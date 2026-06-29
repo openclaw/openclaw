@@ -53,7 +53,7 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
     });
 
     const result = await runCronIsolatedAgentTurn({
-      ...makeIsolatedAgentTurnParams(),
+      ...makeIsolatedAgentParamsFixture(),
       onExecutionPhase: (info) => {
         phases.push(info);
       },
