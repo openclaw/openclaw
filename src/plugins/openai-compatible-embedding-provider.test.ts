@@ -678,4 +678,85 @@ describe("openai-compatible generic embedding provider", () => {
       "openai-compatible embeddings failed: malformed JSON response",
     );
   });
+
+  describe("response size bound (readResponseWithLimit)", () => {
+    async function startOversizedServer(): Promise<{ baseUrl: string }> {
+      const SIXTEEN_MIB = 16 * 1024 * 1024;
+      const server = createServer((_req: IncomingMessage, res: ServerResponse) => {
+        // Stream >16 MiB of JSON-like data without Content-Length to exercise
+        // the streaming code path in readResponseWithLimit.
+        res.writeHead(200, {
+          "content-type": "application/json",
+          // Deliberately omit content-length so the reader must stream.
+        });
+        // Write a valid JSON prefix, then flood with filler to exceed the cap.
+        res.write('{"object":"list","data":[{"embedding":[');
+        const chunk = Buffer.alloc(64 * 1024, "1.0,".charCodeAt(0)); // 64 KiB
+        const iterations = Math.ceil((SIXTEEN_MIB + 64 * 1024) / chunk.length);
+        let written = 0;
+        const writeNext = () => {
+          while (written < iterations) {
+            const ok = res.write(chunk);
+            written++;
+            if (!ok) {
+              res.once("drain", writeNext);
+              return;
+            }
+          }
+          res.end("]}]}");
+        };
+        writeNext();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+
+      servers.push({
+        close: () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          }),
+      });
+
+      const address = server.address() as AddressInfo;
+      return { baseUrl: `http://127.0.0.1:${address.port}/v1` };
+    }
+
+    it("rejects embedding responses larger than 16 MiB with a labelled error", async () => {
+      const server = await startOversizedServer();
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          remote: { baseUrl: server.baseUrl },
+        }),
+      );
+
+      await expect(provider.embed("hello")).rejects.toThrow(
+        "OpenAI-compatible embedding response too large",
+      );
+    });
+
+    it("accepts valid embedding responses that fit within the 16 MiB limit", async () => {
+      const validServer = await startEmbeddingServer({
+        respond: () => ({
+          object: "list",
+          data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
+          model: "text-embedding-bge-m3",
+        }),
+      });
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          remote: { baseUrl: validServer.baseUrl },
+        }),
+      );
+
+      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    });
+  });
 });

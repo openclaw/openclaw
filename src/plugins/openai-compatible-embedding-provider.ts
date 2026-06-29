@@ -1,4 +1,5 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
@@ -14,6 +15,8 @@ import type {
 
 /** Provider id for OpenAI-compatible remote embedding servers. */
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+
+const EMBEDDING_RESPONSE_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 /** Normalized OpenAI-compatible embedding client configuration. */
@@ -282,8 +285,14 @@ function readEmbeddingVectors(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
+  const rawBody = await readResponseWithLimit(response, EMBEDDING_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `OpenAI-compatible embedding response too large: ${size} bytes (limit: ${maxBytes})`,
+      ),
+  });
   try {
-    return await response.json();
+    return JSON.parse(new TextDecoder().decode(rawBody));
   } catch (cause) {
     throw new Error("openai-compatible embeddings failed: malformed JSON response", { cause });
   }
