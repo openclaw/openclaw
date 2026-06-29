@@ -15,6 +15,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
@@ -76,6 +77,24 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
+}
+
+function getParsedConfigString(
+  snapshot: ConfigFileSnapshot | null | undefined,
+  path: string,
+): string | undefined {
+  if (!snapshot?.parsed || typeof snapshot.parsed !== "object") {
+    return undefined;
+  }
+  const parts = path.split(".");
+  let current: unknown = snapshot.parsed;
+  for (const part of parts) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return typeof current === "string" ? current : undefined;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -579,10 +598,14 @@ export function collectSyncedFolderFindings(params: {
 export function collectSecretsInConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
+  configSnapshot?: ConfigFileSnapshot | null,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  const sourcePassword = normalizeOptionalString(sourceConfig?.gateway?.auth?.password) ?? password;
+  const sourcePassword =
+    normalizeOptionalString(getParsedConfigString(configSnapshot, "gateway.auth.password")) ??
+    normalizeOptionalString(sourceConfig?.gateway?.auth?.password) ??
+    password;
   if (password && !looksLikeEnvRef(sourcePassword)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
@@ -596,7 +619,10 @@ export function collectSecretsInConfigFindings(
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  const sourceHooksToken = normalizeOptionalString(sourceConfig?.hooks?.token) ?? hooksToken;
+  const sourceHooksToken =
+    normalizeOptionalString(getParsedConfigString(configSnapshot, "hooks.token")) ??
+    normalizeOptionalString(sourceConfig?.hooks?.token) ??
+    hooksToken;
   if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(sourceHooksToken)) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",

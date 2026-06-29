@@ -1,5 +1,6 @@
 // Covers baseline config security audit findings.
 import { describe, expect, it } from "vitest";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -166,6 +167,35 @@ describe("security audit config basics", () => {
         },
         hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
       },
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: '{"gateway":{"auth":{"password":"${OPENCLAW_GATEWAY_PASSWORD}"}},"hooks":{"enabled":true,"token":"${OPENCLAW_HOOKS_TOKEN}"}}',
+        parsed: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        sourceConfig: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        resolved: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as ConfigFileSnapshot,
       env: {},
       includeFilesystem: false,
       includeChannelSecurity: false,
@@ -193,6 +223,35 @@ describe("security audit config basics", () => {
         },
         hooks: { enabled: true, token: "literal-token" },
       },
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: '{"gateway":{"auth":{"password":"literal-password"}},"hooks":{"enabled":true,"token":"literal-token"}}',
+        parsed: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        sourceConfig: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        resolved: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as ConfigFileSnapshot,
       env: {},
       includeFilesystem: false,
       includeChannelSecurity: false,
