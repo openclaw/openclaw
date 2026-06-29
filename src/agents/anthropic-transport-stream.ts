@@ -53,6 +53,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
+import { createSseByteGuard, type SseByteGuard } from "./streaming-byte-guard.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -69,6 +70,7 @@ const CLAUDE_CODE_VERSION = "2.1.75";
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+const ANTHROPIC_MESSAGES_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -613,7 +615,7 @@ function createAbortError(signal: AbortSignal): Error {
 }
 
 function readAnthropicSseChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: Pick<SseByteGuard, "read" | "cancel">,
   signal?: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (!signal) {
@@ -675,12 +677,17 @@ async function* parseAnthropicSseBody(
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
+  const sseReader = createSseByteGuard(reader, {
+    maxBytes: ANTHROPIC_MESSAGES_SSE_STREAM_MAX_BYTES,
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Anthropic Messages SSE stream exceeded ${maxBytes} bytes`),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
   try {
     while (true) {
-      const { done, value } = await readAnthropicSseChunk(reader, signal);
+      const { done, value } = await readAnthropicSseChunk(sseReader, signal);
       if (done) {
         completed = true;
         break;

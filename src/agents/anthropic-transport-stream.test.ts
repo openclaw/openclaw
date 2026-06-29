@@ -675,6 +675,38 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
+  it("caps unterminated Anthropic SSE success body bytes", async () => {
+    const timedOut = Symbol("timed out");
+    let cancelReason: unknown;
+    guardedFetchMock.mockResolvedValueOnce(
+      createOpenRawSseResponse({
+        body: `data: ${"x".repeat(17 * 1024 * 1024)}`,
+        onCancel: (reason) => {
+          cancelReason = reason;
+        },
+      }),
+    );
+
+    const result = await Promise.race([
+      runTransportStream(
+        makeAnthropicTransportModel(),
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as AnthropicStreamContext,
+        {
+          apiKey: "sk-ant-api",
+        } as AnthropicStreamOptions,
+      ),
+      delay(100, timedOut),
+    ]);
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Anthropic Messages SSE stream exceeded 16777216 bytes",
+    });
+    expect(cancelReason).toBeInstanceOf(Error);
+  });
+
   it.each(["anthropic", "anthropic-vertex"])(
     "surfaces structured Anthropic streaming refusals for %s",
     async (provider) => {
