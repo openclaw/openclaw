@@ -532,15 +532,7 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return cfg;
   }
   const compaction = defaults?.compaction;
-
-  // Apply defaults per-field (not blocked by mode guard) so that
-  // maxPasses/progressThreshold defaults are applied even when
-  // mode is already set.
-  const needsMode = !compaction?.mode;
-  const needsMaxPasses = compaction?.maxPasses === undefined;
-  const needsProgressThreshold = compaction?.progressThreshold === undefined;
-
-  if (!needsMode && !needsMaxPasses && !needsProgressThreshold) {
+  if (compaction?.mode) {
     return cfg;
   }
 
@@ -552,9 +544,7 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
         ...defaults,
         compaction: {
           ...compaction,
-          ...(needsMode ? { mode: "safeguard" as const } : {}),
-          ...(needsMaxPasses ? { maxPasses: 3 } : {}),
-          ...(needsProgressThreshold ? { progressThreshold: 0.05 } : {}),
+          mode: "safeguard",
         },
       },
     },

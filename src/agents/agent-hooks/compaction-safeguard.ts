@@ -964,18 +964,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summarizationInstructions,
     );
 
-    // Pre-compaction pruning: replace old tool results with 1-line
-    // summaries before summarization (reduces input for both provider
-    // and LLM paths). Protects recent turns from modification.
-    const { pruned: prunedMessages, prunedCount } = preCompactionPrune(
-      baseMessagesToSummarize,
-      recentTurnsPreserve * 2, // 2 msgs per user turn (user + assistant)
-    );
-    if (prunedCount > 0) {
-      baseMessagesToSummarize = prunedMessages;
-      log.info(`[compaction-safeguard] pre-pruned ${prunedCount} old tool result(s)`);
-    }
-
     // -----------------------------------------------------------------------
     // Provider path — one call with all messages, no LLM-specific prep.
     // Falls through to the LLM path below on failure.
@@ -1036,6 +1024,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           `Compaction provider "${providerId}" is configured but not registered. Falling back to LLM.`,
         );
       }
+    }
+
+    // Pre-compaction pruning: replace old tool results with 1-line
+    // summaries before LLM summarization. Only applies to the LLM path;
+    // the provider path receives all messages unchanged to preserve
+    // its existing all-message contract.
+    const { pruned: prunedMessages, prunedCount } = preCompactionPrune(
+      baseMessagesToSummarize,
+      recentTurnsPreserve * 2, // 2 msgs per user turn (user + assistant)
+    );
+    if (prunedCount > 0) {
+      baseMessagesToSummarize = prunedMessages;
+      log.info(`[compaction-safeguard] pre-pruned ${prunedCount} old tool result(s)`);
     }
 
     // -----------------------------------------------------------------------

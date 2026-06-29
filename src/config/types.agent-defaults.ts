@@ -570,18 +570,6 @@ export type AgentCompactionConfig = {
    * Default: false (silent by default).
    */
   notifyUser?: boolean;
-  /**
-   * Maximum number of compaction passes per invocation.
-   * Each pass reduces the context further. Set to 1 for single-pass behavior.
-   * Range: 1-10. Default: 3.
-   */
-  maxPasses?: number;
-  /**
-   * Minimum token reduction fraction to count as progress between passes.
-   * If a pass reduces tokens by less than this fraction, the loop stops.
-   * Range: 0.01-0.50. Default: 0.05 (5%).
-   */
-  progressThreshold?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

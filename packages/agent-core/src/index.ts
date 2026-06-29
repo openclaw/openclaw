@@ -45,17 +45,5 @@ export {
   type CompactionResult,
   type CompactionSettings,
   type ContextUsageEstimate,
-  type CutPointResult,
 } from "./harness/compaction/compaction.js";
 export * from "./harness/utils/truncate.js";
-export {
-  CompactionProgressTracker,
-  compactionMadeProgress,
-  MAX_COMPACTION_PASSES,
-  PROGRESS_THRESHOLD,
-  INEFFECTIVE_SAVINGS_THRESHOLD,
-  MAX_INEFFECTIVE_COMPRESSIONS,
-  DEFAULT_COMPACTION_TIMEOUT_MS,
-  type MultiPassCompactionState,
-  type CompactionProgressTrackerState,
-} from "./harness/compaction/compaction-progress.js";

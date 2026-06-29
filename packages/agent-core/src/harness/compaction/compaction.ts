@@ -136,9 +136,9 @@ export interface CompactionSettings {
   reserveTokens: number;
   /** Approximate recent-context tokens to keep after compaction. */
   keepRecentTokens: number;
-  /** Maximum passes for multi-pass compaction. @default 3 */
+  /** @internal Maximum passes for multi-pass compaction. Not user-configurable; controlled by internal constants. @default 3 */
   maxPasses?: number;
-  /** Minimum token reduction fraction to count as progress. @default 0.05 */
+  /** @internal Minimum token reduction fraction to count as progress. Not user-configurable; controlled by internal constants. @default 0.05 */
   progressThreshold?: number;
 }
 

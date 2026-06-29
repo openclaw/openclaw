@@ -18,46 +18,27 @@ function materializeCompactionConfig(input: Record<string, unknown>) {
 
 // -- Suite G: Configuration Schema Extension --
 
-describe("multi-pass compaction configuration defaults", () => {
-  it("applies default maxPasses=3 when not specified", () => {
+describe("compaction configuration defaults", () => {
+  it("applies default mode='safeguard' when not specified", () => {
     const result = materializeCompactionConfig({});
-    expect(result.maxPasses).toBe(3);
+    expect(result.mode).toBe("safeguard");
   });
 
-  it("applies default progressThreshold=0.05 when not specified", () => {
-    const result = materializeCompactionConfig({});
-    expect(result.progressThreshold).toBe(0.05);
-  });
-
-  it("preserves user-specified maxPasses", () => {
-    const result = materializeCompactionConfig({ maxPasses: 5 });
-    expect(result.maxPasses).toBe(5);
-  });
-
-  it("preserves user-specified progressThreshold", () => {
-    const result = materializeCompactionConfig({ progressThreshold: 0.1 });
-    expect(result.progressThreshold).toBe(0.1);
-  });
-
-  it("applies new field defaults even when mode is already set", () => {
+  it("preserves user-specified mode", () => {
     const result = materializeCompactionConfig({ mode: "safeguard" });
     expect(result.mode).toBe("safeguard");
-    expect(result.maxPasses).toBe(3);
-    expect(result.progressThreshold).toBe(0.05);
   });
 
-  it("preserves existing compaction settings alongside new fields", () => {
+  it("preserves existing compaction settings", () => {
     const result = materializeCompactionConfig({
       mode: "safeguard",
       reserveTokens: 16384,
       keepRecentTokens: 20000,
-      maxPasses: 2,
       recentTurnsPreserve: 3,
     });
     expect(result.mode).toBe("safeguard");
     expect(result.reserveTokens).toBe(16384);
     expect(result.keepRecentTokens).toBe(20000);
-    expect(result.maxPasses).toBe(2);
     expect(result.recentTurnsPreserve).toBe(3);
   });
 
@@ -67,47 +48,15 @@ describe("multi-pass compaction configuration defaults", () => {
   });
 });
 
-describe("multi-pass compaction Zod schema validation", () => {
-  it("accepts valid multi-pass config fields", () => {
+describe("compaction Zod schema validation", () => {
+  it("accepts valid compaction config", () => {
     const result = compactionSchema.safeParse({
       mode: "safeguard",
-      maxPasses: 3,
-      progressThreshold: 0.05,
     });
     expect(result.success).toBe(true);
   });
 
-  it("rejects invalid type for maxPasses", () => {
-    const result = compactionSchema.safeParse({ maxPasses: "three" });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid type for progressThreshold", () => {
-    const result = compactionSchema.safeParse({ progressThreshold: "five percent" });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects maxPasses below minimum via Zod schema", () => {
-    const result = compactionSchema.safeParse({ maxPasses: 0 });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects maxPasses above maximum via Zod schema", () => {
-    const result = compactionSchema.safeParse({ maxPasses: 100 });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects progressThreshold at zero via Zod schema", () => {
-    const result = compactionSchema.safeParse({ progressThreshold: 0 });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects progressThreshold at 1.0 via Zod schema", () => {
-    const result = compactionSchema.safeParse({ progressThreshold: 1 });
-    expect(result.success).toBe(false);
-  });
-
-  it("backwards-compatible with pre-multi-pass configs", () => {
+  it("backwards-compatible with standard configs", () => {
     const result = compactionSchema.safeParse({
       mode: "safeguard",
       reserveTokens: 16384,
@@ -118,8 +67,28 @@ describe("multi-pass compaction Zod schema validation", () => {
 
   it("rejects unknown keys in compaction config (strict mode)", () => {
     const result = compactionSchema.safeParse({
-      maxPasses: 3,
       unknownField: "surprise",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects maxPasses since it is an internal-only setting", () => {
+    // maxPasses is intentionally not in the user-facing config schema;
+    // it is an internal constant (MAX_COMPACTION_PASSES = 3) that will
+    // be wired when multi-pass integration is complete.
+    const result = compactionSchema.safeParse({
+      mode: "safeguard",
+      maxPasses: 3,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects progressThreshold since it is an internal-only setting", () => {
+    // progressThreshold is intentionally not in the user-facing config
+    // schema; it is an internal constant (PROGRESS_THRESHOLD = 0.05).
+    const result = compactionSchema.safeParse({
+      mode: "safeguard",
+      progressThreshold: 0.05,
     });
     expect(result.success).toBe(false);
   });
