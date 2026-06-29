@@ -1193,6 +1193,38 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("passes through SSE bodies mislabeled as JSON for streaming OpenAI SDK requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('data: {"ok": true}\n\ndata: [DONE]\n\n', {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({

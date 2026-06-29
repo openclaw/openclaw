@@ -123,6 +123,25 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
   return new Response(capped, response);
 }
 
+function classifyJsonLabeledStreamingBody(buffer: string): "json" | "sse" | undefined {
+  const text = buffer.replace(/^\uFEFF/, "").trimStart();
+  if (!text) {
+    return undefined;
+  }
+  if (/^(?::|data:|event:|id:|retry:)/.test(text)) {
+    return "sse";
+  }
+  const first = text[0];
+  if (first && '{["-0123456789tfn'.includes(first)) {
+    return "json";
+  }
+  const firstLine = text.match(/^[^\r\n]*/)?.[0] ?? "";
+  if (["data", "event", "id", "retry"].some((field) => field.startsWith(firstLine))) {
+    return undefined;
+  }
+  return "json";
+}
+
 function sanitizeOpenAISdkSseResponse(
   response: Response,
   options?: { synthesizeJsonAsSse?: boolean },
@@ -144,6 +163,7 @@ function sanitizeOpenAISdkSseResponse(
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let buffer = "";
     let totalBytes = 0;
+    let bodyKind: "json" | "sse" | undefined;
     const sseBody = new ReadableStream<Uint8Array>({
       start() {
         reader = source.getReader();
@@ -154,6 +174,16 @@ function sanitizeOpenAISdkSseResponse(
             const chunk = await reader?.read();
             if (!chunk || chunk.done) {
               buffer += decoder.decode();
+              if (!bodyKind) {
+                bodyKind = classifyJsonLabeledStreamingBody(buffer) ?? "json";
+              }
+              if (bodyKind === "sse") {
+                if (buffer) {
+                  controller.enqueue(encoder.encode(buffer));
+                }
+                controller.close();
+                return;
+              }
               const data = buffer.trim();
               if (data) {
                 controller.enqueue(encoder.encode(`data: ${data}\n\n`));
@@ -169,7 +199,18 @@ function sanitizeOpenAISdkSseResponse(
               );
             }
             totalBytes = nextTotalBytes;
-            buffer += decoder.decode(chunk.value, { stream: true });
+            const text = decoder.decode(chunk.value, { stream: true });
+            if (bodyKind === "sse") {
+              controller.enqueue(encoder.encode(text));
+              return;
+            }
+            buffer += text;
+            bodyKind = bodyKind ?? classifyJsonLabeledStreamingBody(buffer);
+            if (bodyKind === "sse") {
+              controller.enqueue(encoder.encode(buffer));
+              buffer = "";
+              return;
+            }
           }
         } catch (error) {
           await reader?.cancel(error).catch(() => {});
