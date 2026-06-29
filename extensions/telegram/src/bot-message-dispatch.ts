@@ -965,6 +965,28 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+
+  // Auto-forward the original message when replying in a group chat
+  if (
+    draftReplyToMessageId != null &&
+    msg.chat?.type === "supergroup" &&
+    typeof msg.message_id === "number" &&
+    msg.message_id !== draftReplyToMessageId
+  ) {
+    void (async () => {
+      try {
+        await bot.api.forwardMessage(chatId, chatId, draftReplyToMessageId);
+        logVerbose(
+          `[telegram] Auto-forwarded message ${draftReplyToMessageId} in group chat ${chatId}`,
+        );
+      } catch (err: unknown) {
+        logVerbose(
+          `[telegram] Auto-forward failed for message ${draftReplyToMessageId}: ${String(err)}`,
+        );
+      }
+    })();
+  }
+
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({

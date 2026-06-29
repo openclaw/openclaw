@@ -46,6 +46,7 @@ export const telegramMessageActionRuntime = {
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
   edit: "editMessage",
+  forward: "forwardMessage",
   poll: "poll",
   react: "react",
   send: "sendMessage",
@@ -65,6 +66,8 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
   "edit",
   "editForumTopic",
   "editMessage",
+  "forward",
+  "forwardMessage",
   "poll",
   "react",
   "send",

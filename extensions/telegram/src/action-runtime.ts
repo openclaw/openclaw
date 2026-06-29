@@ -45,6 +45,7 @@ import {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  forwardMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
   sendLocationTelegram,
@@ -65,6 +66,7 @@ export const telegramActionRuntime = {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  forwardMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -1005,6 +1007,36 @@ export async function handleTelegramAction(
       ...(options?.mediaReadFile ? { mediaReadFile: options.mediaReadFile } : {}),
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
+    return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
+  }
+
+  if (action === "forwardMessage") {
+    const fromChatId = readTelegramChatId(params);
+    const messageId = readPositiveIntegerParam(params, "messageId", {
+      message: "messageId must be a positive integer.",
+      required: true,
+    });
+    const toChatId = readStringOrNumberParam(params, "to", {
+      required: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.forwardMessageTelegram(
+      fromChatId,
+      messageId,
+      toChatId,
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
+      },
+    );
+    notifyVisibleOutboundSuccess(String(toChatId));
     return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
   }
 

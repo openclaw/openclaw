@@ -2217,3 +2217,52 @@ export async function sendVideoNoteTelegram(
     asVideoNote: true,
   });
 }
+
+/**
+ * Forward a message to a Telegram chat.
+ */
+export async function forwardMessageTelegram(
+  fromChatIdInput: string | number,
+  messageIdInput: string | number,
+  toChatIdInput: string | number,
+  opts: TelegramDeleteOpts,
+): Promise<{ messageId: string; chatId: string }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const fromChatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: String(fromChatIdInput),
+    persistTarget: String(fromChatIdInput),
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+  const toChatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: String(toChatIdInput),
+    persistTarget: String(toChatIdInput),
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+
+  const result = await requestWithDiag(
+    () => api.forwardMessage(toChatId, fromChatId, messageId),
+    "forwardMessage",
+  );
+
+  const resultMessageId = resolveTelegramMessageIdOrThrow(result, "forward");
+  logVerbose(
+    `[telegram] Forwarded message ${messageId} from chat ${fromChatId} to chat ${toChatId}`,
+  );
+  return {
+    messageId: String(resultMessageId),
+    chatId: String(toChatId),
+  };
+}
