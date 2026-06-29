@@ -6,7 +6,10 @@ read_when: "You want multiple isolated agents (workspaces + auth) in one gateway
 status: active
 ---
 
-Run multiple _isolated_ agents — each with its own workspace, state directory (`agentDir`), and session history — plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are routed to the right agent through bindings.
+Run multiple _isolated_ agents — each with its own workspace, state directory
+(`agentDir`), and SQLite-backed session history — plus multiple channel
+accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are
+routed to the right agent through bindings.
 
 An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and session store. `agentDir` is the on-disk state directory that holds this per-agent config at `~/.openclaw/agents/<agentId>/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
 
@@ -16,7 +19,8 @@ An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
+- **Session store** (chat history + routing state) in
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
@@ -51,7 +55,8 @@ The Gateway can host **one agent** (default) or **many agents** side-by-side.
 - State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
 - Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
 - Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.openclaw/agents/<agentId>/sessions`
+- Sessions and transcripts: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Legacy/archive session artifacts: `~/.openclaw/agents/<agentId>/sessions`
 
 ### Single-agent mode (default)
 
