@@ -395,6 +395,35 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("cannot be saved for future use");
   });
 
+  it("uses explicit allowAlwaysPersistenceKind=one-shot for reason text", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-oneshot",
+      approvalSlug: "slug-oneshot",
+      ask: "on-miss",
+      command: "cmd",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+      allowAlwaysPersistenceKind: "one-shot",
+    });
+
+    expect(payload.text).toContain("cannot be saved for future use");
+  });
+
+  it("uses ask=always policy message regardless of allowAlwaysPersistenceKind", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-always",
+      approvalSlug: "slug-always",
+      ask: "always",
+      command: "cmd",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+      allowAlwaysPersistenceKind: null,
+    });
+
+    expect(payload.text).toContain("requires approval every time");
+    expect(payload.text).not.toContain("cannot be saved for future use");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",
