@@ -1320,7 +1320,7 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
   );
 }
 
-function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
+function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
@@ -3437,7 +3437,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.systemProvenanceReceipt ||
         suppressCommandInterpretation ||
         explicitOriginResult.value) &&
-      !canInjectSystemProvenance(client)
+      !hasGatewayAdminScope(client)
     ) {
       respond(
         false,
@@ -3884,6 +3884,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         text: rawMessage,
         timestamp: now,
         idempotencyKey: `${clientRunId}:user`,
+        ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
         ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       };
       const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({

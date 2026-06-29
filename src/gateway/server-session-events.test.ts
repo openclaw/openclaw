@@ -100,4 +100,16 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       },
     });
   });
+
+  it("broadcasts the authenticated sender ownership decision", async () => {
+    await expect(
+      emitAssistantTranscriptUpdate(false, {
+        role: "user",
+        content: [{ type: "text", text: "Owner turn" }],
+        __openclaw: { senderIsOwner: true },
+      }),
+    ).resolves.toMatchObject({
+      senderIsOwner: true,
+    });
+  });
 });
