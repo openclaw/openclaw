@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { logError } from "../logger.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -716,7 +717,10 @@ export function createAgentEventHandler({
             markPersisted();
             broadcastSessionChange();
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            logError(
+              `gateway: failed to persist terminal session lifecycle event for run ${evt.runId}: ${String(err)}`,
+            );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
             broadcastSessionChange(evt);

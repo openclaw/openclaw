@@ -5,10 +5,15 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const logErrorMock = vi.fn();
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
     persistGatewaySessionLifecycleEventMock(...args),
+}));
+
+vi.mock("../logger.js", () => ({
+  logError: (...args: unknown[]) => logErrorMock(...args),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -74,6 +79,7 @@ describe("agent event handler", () => {
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
+    logErrorMock.mockReset();
     resetAgentRunContextForTest();
   });
 
@@ -2532,6 +2538,9 @@ describe("agent event handler", () => {
       updatedAt: 2_100,
       abortedLastRun: false,
     });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway: failed to persist terminal session lifecycle event for run run-failed-write: Error: disk full",
+    );
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
   });
 
