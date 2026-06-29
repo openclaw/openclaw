@@ -68,4 +68,11 @@ describe("Skill Workshop mode switcher i18n", () => {
     expect(texts).not.toContain("Board");
     expect(texts).not.toContain("Today");
   });
+
+  it("keeps untranslated modeSwitcher strings visible in locale fallback metadata", () => {
+    const metaPath = resolve(import.meta.dirname, "..", ".i18n", "de.meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { fallbackKeys?: string[] };
+
+    expect(meta.fallbackKeys ?? []).toEqual(expect.arrayContaining(Object.keys(expectedEnglish)));
+  });
 });

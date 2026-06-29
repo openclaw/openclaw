@@ -401,9 +401,8 @@ describe("renderApp Skill Workshop mode switcher (rendered proof)", () => {
   });
 
   it("falls back to English for the new keys when locale has no translation", async () => {
-    // The five new keys are still in fallbackKeys for every non-English locale
-    // until translators run, so the rendered switcher should be identical to
-    // the English render in any non-English locale.
+    // These sample locales still render the new keys from fallback metadata
+    // until translators run, so the switcher should match the English render.
     const locales = ["de", "es", "ja-JP", "zh-CN", "ar", "fr"] as const;
     for (const locale of locales) {
       await i18n.setLocale(locale);
