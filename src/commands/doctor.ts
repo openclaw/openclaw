@@ -20,10 +20,22 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       outputRuntime.log(
         `session-sqlite ${report.mode}: ${report.totals.targets} target(s), ${report.totals.legacyEntries} legacy entries, ${report.totals.sqliteEntries} sqlite entries, ${report.totals.issues} issue(s)`,
       );
+      if (report.migrationRun) {
+        outputRuntime.log(`- migration-run=${report.migrationRun.runId}`);
+        outputRuntime.log(`- manifest=${report.migrationRun.manifestPath}`);
+        if (report.migrationRun.failureReportMarkdownPath) {
+          outputRuntime.log(`- failure-report=${report.migrationRun.failureReportMarkdownPath}`);
+        }
+      }
       for (const target of report.targets) {
         outputRuntime.log(
           `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, archived-unreferenced-jsonl=${target.archivedUnreferencedJsonlFiles.length}, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
         );
+        if (target.restore) {
+          outputRuntime.log(
+            `  restored=${target.restore.restoredFiles.length}, skipped=${target.restore.skippedFiles.length}, conflicts=${target.restore.conflicts.length}, manifests=${target.restore.manifestPaths.length}`,
+          );
+        }
         for (const issue of target.issues.slice(0, 10)) {
           outputRuntime.log(
             `  [${issue.code}]${issue.sessionKey ? ` ${issue.sessionKey}:` : ""} ${issue.message}`,

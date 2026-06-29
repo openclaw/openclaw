@@ -9,7 +9,7 @@ export type DoctorOptions = {
   generateGatewayToken?: boolean;
   allowExec?: boolean;
   postUpgrade?: boolean;
-  sessionSqlite?: "dry-run" | "import" | "validate" | "inspect";
+  sessionSqlite?: "dry-run" | "import" | "validate" | "inspect" | "restore";
   sessionSqliteStore?: string;
   sessionSqliteAgent?: string;
   sessionSqliteAllAgents?: boolean;
