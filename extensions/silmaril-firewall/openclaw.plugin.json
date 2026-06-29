@@ -1,0 +1,45 @@
+{
+  "id": "silmaril-firewall",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Silmaril Firewall",
+  "description": "Classifies and optionally replaces malicious agent tool results before model reuse.",
+  "contracts": {
+    "agentToolResultMiddleware": ["pi", "codex"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "apiKey": { "type": "string" },
+      "silmarilApiKey": { "type": "string" },
+      "apiUrl": { "type": "string" },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "maximum": 10000,
+        "default": 2500
+      },
+      "shadowMode": {
+        "type": "boolean",
+        "default": true
+      },
+      "blockMalicious": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "uiHints": {
+    "apiKey": { "label": "API Key", "sensitive": true },
+    "silmarilApiKey": { "label": "Silmaril API Key", "sensitive": true },
+    "apiUrl": { "label": "API URL" },
+    "timeoutMs": { "label": "Classification timeout (ms)", "advanced": true },
+    "shadowMode": { "label": "Shadow mode", "advanced": true },
+    "blockMalicious": {
+      "label": "Block malicious content at supported boundaries",
+      "advanced": true
+    }
+  }
+}
