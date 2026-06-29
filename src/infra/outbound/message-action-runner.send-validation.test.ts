@@ -143,6 +143,52 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
+  it("uses the current internal UI source as the automatic WebChat send sink", async () => {
+    const result = await runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        message: "hello from webchat",
+      },
+      toolContext: {
+        currentChannelProvider: "webchat",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "webchat",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "hello from webchat",
+        },
+      },
+    });
+  });
+
+  it("does not infer the automatic WebChat send sink when delivery mode is omitted", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: {
+          message: "hello from webchat",
+        },
+        toolContext: {
+          currentChannelProvider: "webchat",
+        },
+        sessionKey: "agent:main",
+      }),
+    ).rejects.toThrow(/requires a target/i);
+  });
+
   it.each(["agent:voice:agent:channel:room", "agent:main:telegram::group:room"])(
     "keeps malformed session route %s on the internal source sink",
     async (sessionKey) => {
@@ -237,18 +283,18 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
 
-  it("does not infer an internal UI sink outside message-tool-only source delivery", async () => {
+  it("does not infer a non-webchat source sink outside message-tool-only source delivery", async () => {
     await expect(
       runMessageAction({
         cfg: emptyConfig,
         action: "send",
         params: {
-          message: "hello from codex",
+          message: "telegram reply",
         },
         toolContext: {
-          currentChannelProvider: "webchat",
+          currentChannelProvider: "telegram",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:telegram:direct:123456789",
         sourceReplyDeliveryMode: "automatic",
       }),
     ).rejects.toThrow(/requires a target/i);

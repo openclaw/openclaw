@@ -83,9 +83,17 @@ export async function shouldUseInternalSourceReplySink(
   input: InternalSourceReplySinkInput,
   params: Record<string, unknown>,
 ): Promise<boolean> {
+  const sourceProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  const sourceCanUseImplicitSink =
+    input.sourceReplyDeliveryMode === "message_tool_only" ||
+    (input.sourceReplyDeliveryMode === "automatic" &&
+      sourceProvider === INTERNAL_MESSAGE_CHANNEL &&
+      !hasExternalSessionDeliveryRoute(input.sessionKey));
   const hasImplicitCurrentSourceRoute =
     input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
+    sourceCanUseImplicitSink &&
     hasCurrentSourceReplyContext(input) &&
     Boolean(input.sessionKey?.trim()) &&
     !hasExplicitRouteParam(params);
