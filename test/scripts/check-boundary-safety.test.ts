@@ -121,7 +121,7 @@ describe("check-boundary-safety", () => {
     expect(isBoundarySafetyCandidateFile("scripts/check-boundary-safety.mjs")).toBe(false);
   });
 
-  it("diffs baseline entries by file, line, rule, and match", () => {
+  it("diffs baseline entries by stable file, rule, and match identity", () => {
     const baseline = [
       {
         file: "src/agents/provider-client.ts",
@@ -145,6 +145,29 @@ describe("check-boundary-safety", () => {
     expect(diffBoundaryInventory(baseline, actual)).toEqual({
       missing: [],
       unexpected: [actual[1]],
+    });
+  });
+
+  it("keeps baseline-known findings stable when only line numbers move", () => {
+    const baseline = [
+      {
+        file: "src/agents/provider-client.ts",
+        line: 3,
+        ruleId: "boundary/response-body-limit",
+        match: "res.json()",
+        guidance: "Use readResponseWithLimit(...)",
+      },
+    ];
+    const actual = [
+      {
+        ...baseline[0],
+        line: 9,
+      },
+    ];
+
+    expect(diffBoundaryInventory(baseline, actual)).toEqual({
+      missing: [],
+      unexpected: [],
     });
   });
 });
