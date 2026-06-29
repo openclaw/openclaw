@@ -146,6 +146,74 @@ describe("durable workflow executor", () => {
     }
   });
 
+  it("does not let a stale worker complete a step after ownership changes", async () => {
+    const { store, cleanup } = tempStore();
+    try {
+      const registry = createDurableWorkflowRegistry();
+      registry.registerStepHandler("tool", (context) => {
+        context.store.updateStep({
+          workflowRunId: context.step.workflowRunId,
+          stepId: context.step.stepId,
+          claimedBy: "worker-2",
+          claimExpiresAt: 1_000,
+          now: 300,
+        });
+        return {
+          kind: "succeeded",
+          output: { stale: true },
+          completeRun: true,
+        };
+      });
+      const run = store.createRun({
+        workflowId: "test.workflow",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      const step = store.createStep({
+        workflowRunId: run.workflowRunId,
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 110,
+      });
+
+      const result = await runDurableExecutorOnce({
+        store,
+        registry,
+        workerId: "worker-1",
+        workflowId: "test.workflow",
+        claimTtlMs: 10,
+        now: () => 200,
+      });
+
+      expect(result).toEqual({
+        claimed: true,
+        workflowRunId: run.workflowRunId,
+        stepId: step.stepId,
+        outcome: "claim_lost",
+      });
+      expect(store.getRun(run.workflowRunId)).toMatchObject({
+        status: "running",
+        recoveryState: "running",
+      });
+      expect(store.listSteps(run.workflowRunId)).toMatchObject([
+        {
+          stepId: step.stepId,
+          status: "running",
+          recoveryState: "running",
+          claimedBy: "worker-2",
+        },
+      ]);
+      expect(store.getTimeline(run.workflowRunId).map((event) => event.eventType)).toEqual([
+        "workflow.step.running",
+        "workflow.step.claim_lost",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("marks unhandled step types as unknown instead of replaying blindly", async () => {
     const { store, cleanup } = tempStore();
     try {

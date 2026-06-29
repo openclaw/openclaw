@@ -818,10 +818,10 @@ export function openDurableWorkflowSqliteStore(options?: {
           ? (db
               .prepare(
                 `SELECT *
-                   FROM durable_workflow_runs
-                  WHERE workflow_id = ?
-                    AND status IN ('received', 'queued')
-                    AND recovery_state = 'runnable'
+                  FROM durable_workflow_runs
+                 WHERE workflow_id = ?
+                   AND status IN ('received', 'queued')
+                    AND recovery_state IN ('runnable', 'claimed')
                     AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
                   ORDER BY updated_at ASC, workflow_run_id ASC
                   LIMIT 1`,
@@ -830,9 +830,9 @@ export function openDurableWorkflowSqliteStore(options?: {
           : (db
               .prepare(
                 `SELECT *
-                   FROM durable_workflow_runs
+                  FROM durable_workflow_runs
                   WHERE status IN ('received', 'queued')
-                    AND recovery_state = 'runnable'
+                    AND recovery_state IN ('runnable', 'claimed')
                     AND (claimed_by IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)
                   ORDER BY updated_at ASC, workflow_run_id ASC
                   LIMIT 1`,
@@ -865,7 +865,7 @@ export function openDurableWorkflowSqliteStore(options?: {
     }): DurableWorkflowRun | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
+        const updateResult = db.prepare(
           `UPDATE durable_workflow_runs
               SET recovery_state = 'runnable',
                   claimed_by = NULL,
@@ -874,7 +874,11 @@ export function openDurableWorkflowSqliteStore(options?: {
                   updated_at = ?
             WHERE workflow_run_id = ?
               AND claimed_by = ?`,
-        ).run(now, input.workflowRunId, input.workerId);
+        );
+        const update = updateResult.run(now, input.workflowRunId, input.workerId);
+        if (Number(update.changes ?? 0) === 0) {
+          return undefined;
+        }
         const row = db
           .prepare("SELECT * FROM durable_workflow_runs WHERE workflow_run_id = ?")
           .get(input.workflowRunId) as DurableWorkflowRunRow | undefined;
@@ -948,26 +952,8 @@ export function openDurableWorkflowSqliteStore(options?: {
         if (!current) {
           return undefined;
         }
-        db.prepare(
-          `UPDATE durable_workflow_steps
-              SET status = ?,
-                  recovery_state = ?,
-                  attempt = ?,
-                  max_attempts = ?,
-                  input_ref = ?,
-                  output_ref = ?,
-                  error_ref = ?,
-                  checkpoint_ref = ?,
-                  claimed_by = ?,
-                  claim_expires_at = ?,
-                  heartbeat_at = ?,
-                  started_at = ?,
-                  completed_at = ?,
-                  updated_at = ?,
-                  metadata_json = ?
-            WHERE workflow_run_id = ?
-              AND step_id = ?`,
-        ).run(
+        const expectedClaimedBy = optionalText(input.expectedClaimedBy);
+        const updateValues: SQLInputValue[] = [
           input.status ?? current.status,
           input.recoveryState ?? current.recovery_state,
           input.attempt ?? current.attempt,
@@ -1003,7 +989,35 @@ export function openDurableWorkflowSqliteStore(options?: {
           input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata),
           input.workflowRunId,
           input.stepId,
+        ];
+        if (expectedClaimedBy) {
+          updateValues.push(expectedClaimedBy);
+        }
+        const updateResult = db.prepare(
+          `UPDATE durable_workflow_steps
+              SET status = ?,
+                  recovery_state = ?,
+                  attempt = ?,
+                  max_attempts = ?,
+                  input_ref = ?,
+                  output_ref = ?,
+                  error_ref = ?,
+                  checkpoint_ref = ?,
+                  claimed_by = ?,
+                  claim_expires_at = ?,
+                  heartbeat_at = ?,
+                  started_at = ?,
+                  completed_at = ?,
+                  updated_at = ?,
+                  metadata_json = ?
+            WHERE workflow_run_id = ?
+              AND step_id = ?
+              ${expectedClaimedBy ? "AND claimed_by = ?" : ""}`,
         );
+        const update = updateResult.run(...updateValues);
+        if (expectedClaimedBy && Number(update.changes ?? 0) === 0) {
+          return undefined;
+        }
         const row = db
           .prepare("SELECT * FROM durable_workflow_steps WHERE workflow_run_id = ? AND step_id = ?")
           .get(input.workflowRunId, input.stepId) as DurableWorkflowStepRow;
@@ -1017,7 +1031,7 @@ export function openDurableWorkflowSqliteStore(options?: {
       return runSqliteImmediateTransactionSync(db, () => {
         const filters: string[] = [
           "s.status IN ('pending', 'queued')",
-          "s.recovery_state = 'runnable'",
+          "s.recovery_state IN ('runnable', 'claimed')",
           "(s.claimed_by IS NULL OR s.claim_expires_at IS NULL OR s.claim_expires_at <= ?)",
           "r.status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')",
         ];
@@ -1071,7 +1085,7 @@ export function openDurableWorkflowSqliteStore(options?: {
     }): DurableWorkflowStep | undefined {
       const now = input.now ?? Date.now();
       return runSqliteImmediateTransactionSync(db, () => {
-        db.prepare(
+        const updateResult = db.prepare(
           `UPDATE durable_workflow_steps
               SET status = CASE WHEN status = 'running' THEN 'queued' ELSE status END,
                   recovery_state = 'runnable',
@@ -1082,7 +1096,11 @@ export function openDurableWorkflowSqliteStore(options?: {
             WHERE workflow_run_id = ?
               AND step_id = ?
               AND claimed_by = ?`,
-        ).run(now, input.workflowRunId, input.stepId, input.workerId);
+        );
+        const update = updateResult.run(now, input.workflowRunId, input.stepId, input.workerId);
+        if (Number(update.changes ?? 0) === 0) {
+          return undefined;
+        }
         const row = db
           .prepare("SELECT * FROM durable_workflow_steps WHERE workflow_run_id = ? AND step_id = ?")
           .get(input.workflowRunId, input.stepId) as DurableWorkflowStepRow | undefined;

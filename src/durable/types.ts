@@ -262,6 +262,7 @@ export type CreateDurableWorkflowStepInput = {
 export type UpdateDurableWorkflowStepInput = {
   workflowRunId: string;
   stepId: string;
+  expectedClaimedBy?: string;
   status?: DurableWorkflowStepStatus;
   recoveryState?: DurableRecoveryState;
   attempt?: number;

@@ -5,6 +5,7 @@ import type {
   DurableWorkflowStep,
   DurableWorkflowStepType,
   DurableWorkflowStore,
+  UpdateDurableWorkflowStepInput,
 } from "./types.js";
 
 export type DurableExecutorRunOnceOptions = {
@@ -26,7 +27,11 @@ export type DurableExecutorRunOnceResult =
       claimed: true;
       workflowRunId: string;
       stepId: string;
-      outcome: DurableWorkflowStepHandlerResult["kind"] | "no_handler" | "handler_exception";
+      outcome:
+        | DurableWorkflowStepHandlerResult["kind"]
+        | "no_handler"
+        | "handler_exception"
+        | "claim_lost";
     };
 
 const DEFAULT_CLAIM_TTL_MS = 5 * 60 * 1000;
@@ -74,6 +79,55 @@ function clearStepClaimFields(workerId: string): {
   };
 }
 
+function isStepClaimOwned(params: {
+  store: DurableWorkflowStore;
+  step: DurableWorkflowStep;
+  workerId: string;
+}): boolean {
+  return params.store
+    .listSteps(params.step.workflowRunId)
+    .some((step) => step.stepId === params.step.stepId && step.claimedBy === params.workerId);
+}
+
+function markClaimLost(params: {
+  store: DurableWorkflowStore;
+  run: DurableWorkflowRun;
+  step: DurableWorkflowStep;
+  workerId: string;
+  now: number;
+}): DurableExecutorRunOnceResult {
+  params.store.appendEvent({
+    workflowRunId: params.run.workflowRunId,
+    eventType: "workflow.step.claim_lost",
+    eventTime: params.now,
+    stepId: params.step.stepId,
+    payload: {
+      stepType: params.step.stepType,
+      workerId: params.workerId,
+    },
+  });
+  return {
+    claimed: true,
+    workflowRunId: params.run.workflowRunId,
+    stepId: params.step.stepId,
+    outcome: "claim_lost",
+  };
+}
+
+function updateOwnedStep(params: {
+  store: DurableWorkflowStore;
+  step: DurableWorkflowStep;
+  workerId: string;
+  input: Omit<UpdateDurableWorkflowStepInput, "workflowRunId" | "stepId" | "expectedClaimedBy">;
+}): DurableWorkflowStep | undefined {
+  return params.store.updateStep({
+    workflowRunId: params.step.workflowRunId,
+    stepId: params.step.stepId,
+    expectedClaimedBy: params.workerId,
+    ...params.input,
+  });
+}
+
 function markNoHandler(params: {
   store: DurableWorkflowStore;
   run: DurableWorkflowRun;
@@ -81,14 +135,20 @@ function markNoHandler(params: {
   workerId: string;
   now: number;
 }): DurableExecutorRunOnceResult {
-  params.store.updateStep({
-    workflowRunId: params.step.workflowRunId,
-    stepId: params.step.stepId,
-    status: "waiting",
-    recoveryState: "unknown_after_side_effect",
-    ...clearStepClaimFields(params.workerId),
-    now: params.now,
+  const updatedStep = updateOwnedStep({
+    store: params.store,
+    step: params.step,
+    workerId: params.workerId,
+    input: {
+      status: "waiting",
+      recoveryState: "unknown_after_side_effect",
+      ...clearStepClaimFields(params.workerId),
+      now: params.now,
+    },
   });
+  if (!updatedStep) {
+    return markClaimLost(params);
+  }
   params.store.updateRun({
     workflowRunId: params.run.workflowRunId,
     status: "waiting",
@@ -122,6 +182,9 @@ function markHandlerException(params: {
   now: number;
   err: unknown;
 }): DurableExecutorRunOnceResult {
+  if (!isStepClaimOwned(params)) {
+    return markClaimLost(params);
+  }
   const errorRef = createJsonRef({
     store: params.store,
     run: params.run,
@@ -131,16 +194,22 @@ function markHandlerException(params: {
     metadata: { message: String(params.err) },
     now: params.now,
   });
-  params.store.updateStep({
-    workflowRunId: params.step.workflowRunId,
-    stepId: params.step.stepId,
-    status: "failed",
-    recoveryState: "terminal",
-    errorRef: errorRef.refId,
-    completedAt: params.now,
-    ...clearStepClaimFields(params.workerId),
-    now: params.now,
+  const updatedStep = updateOwnedStep({
+    store: params.store,
+    step: params.step,
+    workerId: params.workerId,
+    input: {
+      status: "failed",
+      recoveryState: "terminal",
+      errorRef: errorRef.refId,
+      completedAt: params.now,
+      ...clearStepClaimFields(params.workerId),
+      now: params.now,
+    },
   });
+  if (!updatedStep) {
+    return markClaimLost(params);
+  }
   params.store.updateRun({
     workflowRunId: params.run.workflowRunId,
     status: "failed",
@@ -176,6 +245,9 @@ function applyStepResult(params: {
   result: DurableWorkflowStepHandlerResult;
 }): DurableExecutorRunOnceResult {
   const { store, run, step, workerId, now, result } = params;
+  if (!isStepClaimOwned({ store, step, workerId })) {
+    return markClaimLost({ store, run, step, workerId, now });
+  }
 
   if (result.kind === "succeeded") {
     const outputRef =
@@ -191,17 +263,23 @@ function applyStepResult(params: {
             now,
           }).refId
         : undefined);
-    store.updateStep({
-      workflowRunId: step.workflowRunId,
-      stepId: step.stepId,
-      status: "succeeded",
-      recoveryState: "terminal",
-      outputRef,
-      checkpointRef: result.checkpointRef ?? null,
-      completedAt: now,
-      ...clearStepClaimFields(workerId),
-      now,
+    const updatedStep = updateOwnedStep({
+      store,
+      step,
+      workerId,
+      input: {
+        status: "succeeded",
+        recoveryState: "terminal",
+        outputRef,
+        checkpointRef: result.checkpointRef ?? null,
+        completedAt: now,
+        ...clearStepClaimFields(workerId),
+        now,
+      },
     });
+    if (!updatedStep) {
+      return markClaimLost({ store, run, step, workerId, now });
+    }
     store.appendEvent({
       workflowRunId: run.workflowRunId,
       eventType: "workflow.step.succeeded",
@@ -259,17 +337,23 @@ function applyStepResult(params: {
         metadata: { errorRef: errorRef.refId },
         now,
       });
-      store.updateStep({
-        workflowRunId: step.workflowRunId,
-        stepId: step.stepId,
-        status: "retry_scheduled",
-        recoveryState: "retry_scheduled",
-        attempt: step.attempt + 1,
-        errorRef: errorRef.refId,
-        checkpointRef: result.checkpointRef ?? null,
-        ...clearStepClaimFields(workerId),
-        now,
+      const updatedStep = updateOwnedStep({
+        store,
+        step,
+        workerId,
+        input: {
+          status: "retry_scheduled",
+          recoveryState: "retry_scheduled",
+          attempt: step.attempt + 1,
+          errorRef: errorRef.refId,
+          checkpointRef: result.checkpointRef ?? null,
+          ...clearStepClaimFields(workerId),
+          now,
+        },
       });
+      if (!updatedStep) {
+        return markClaimLost({ store, run, step, workerId, now });
+      }
       store.updateRun({
         workflowRunId: run.workflowRunId,
         status: "retry_scheduled",
@@ -292,17 +376,23 @@ function applyStepResult(params: {
         outcome: result.kind,
       };
     }
-    store.updateStep({
-      workflowRunId: step.workflowRunId,
-      stepId: step.stepId,
-      status: "failed",
-      recoveryState: "terminal",
-      errorRef: errorRef.refId,
-      checkpointRef: result.checkpointRef ?? null,
-      completedAt: now,
-      ...clearStepClaimFields(workerId),
-      now,
+    const updatedStep = updateOwnedStep({
+      store,
+      step,
+      workerId,
+      input: {
+        status: "failed",
+        recoveryState: "terminal",
+        errorRef: errorRef.refId,
+        checkpointRef: result.checkpointRef ?? null,
+        completedAt: now,
+        ...clearStepClaimFields(workerId),
+        now,
+      },
     });
+    if (!updatedStep) {
+      return markClaimLost({ store, run, step, workerId, now });
+    }
     if (result.completeRun !== false) {
       store.updateRun({
         workflowRunId: run.workflowRunId,
@@ -330,15 +420,21 @@ function applyStepResult(params: {
   }
 
   if (result.kind === "waiting_signal") {
-    store.updateStep({
-      workflowRunId: step.workflowRunId,
-      stepId: step.stepId,
-      status: "waiting",
-      recoveryState: "waiting_signal",
-      checkpointRef: result.checkpointRef ?? null,
-      ...clearStepClaimFields(workerId),
-      now,
+    const updatedStep = updateOwnedStep({
+      store,
+      step,
+      workerId,
+      input: {
+        status: "waiting",
+        recoveryState: "waiting_signal",
+        checkpointRef: result.checkpointRef ?? null,
+        ...clearStepClaimFields(workerId),
+        now,
+      },
     });
+    if (!updatedStep) {
+      return markClaimLost({ store, run, step, workerId, now });
+    }
     store.updateRun({
       workflowRunId: run.workflowRunId,
       status: "waiting_signal",
@@ -371,15 +467,21 @@ function applyStepResult(params: {
       metadata: { reason: result.reason },
       now,
     });
-    store.updateStep({
-      workflowRunId: step.workflowRunId,
-      stepId: step.stepId,
-      status: "waiting",
-      recoveryState: "waiting_timer",
-      checkpointRef: result.checkpointRef ?? null,
-      ...clearStepClaimFields(workerId),
-      now,
+    const updatedStep = updateOwnedStep({
+      store,
+      step,
+      workerId,
+      input: {
+        status: "waiting",
+        recoveryState: "waiting_timer",
+        checkpointRef: result.checkpointRef ?? null,
+        ...clearStepClaimFields(workerId),
+        now,
+      },
     });
+    if (!updatedStep) {
+      return markClaimLost({ store, run, step, workerId, now });
+    }
     store.updateRun({
       workflowRunId: run.workflowRunId,
       status: "waiting_timer",
@@ -403,15 +505,21 @@ function applyStepResult(params: {
     };
   }
 
-  store.updateStep({
-    workflowRunId: step.workflowRunId,
-    stepId: step.stepId,
-    status: "waiting",
-    recoveryState: "unknown_after_side_effect",
-    checkpointRef: result.checkpointRef ?? null,
-    ...clearStepClaimFields(workerId),
-    now,
+  const updatedStep = updateOwnedStep({
+    store,
+    step,
+    workerId,
+    input: {
+      status: "waiting",
+      recoveryState: "unknown_after_side_effect",
+      checkpointRef: result.checkpointRef ?? null,
+      ...clearStepClaimFields(workerId),
+      now,
+    },
   });
+  if (!updatedStep) {
+    return markClaimLost({ store, run, step, workerId, now });
+  }
   store.updateRun({
     workflowRunId: run.workflowRunId,
     status: "waiting",
@@ -462,15 +570,27 @@ export async function runDurableExecutorOnce(
   }
   const handler = options.registry.getStepHandler(step.stepType);
   const startTime = now();
-  options.store.updateStep({
-    workflowRunId: step.workflowRunId,
-    stepId: step.stepId,
-    status: "running",
-    recoveryState: "running",
-    startedAt: step.startedAt ?? startTime,
-    heartbeatAt: startTime,
-    now: startTime,
+  const runningStep = updateOwnedStep({
+    store: options.store,
+    step,
+    workerId: options.workerId,
+    input: {
+      status: "running",
+      recoveryState: "running",
+      startedAt: step.startedAt ?? startTime,
+      heartbeatAt: startTime,
+      now: startTime,
+    },
   });
+  if (!runningStep) {
+    return markClaimLost({
+      store: options.store,
+      run,
+      step,
+      workerId: options.workerId,
+      now: startTime,
+    });
+  }
   options.store.updateRun({
     workflowRunId: run.workflowRunId,
     status: "running",
@@ -507,12 +627,29 @@ export async function runDurableExecutorOnce(
       now,
       heartbeat: (payload?: Record<string, unknown>) => {
         const heartbeatAt = now();
-        options.store.updateStep({
-          workflowRunId: step.workflowRunId,
-          stepId: step.stepId,
-          heartbeatAt,
-          now: heartbeatAt,
+        const heartbeatStep = updateOwnedStep({
+          store: options.store,
+          step,
+          workerId: options.workerId,
+          input: {
+            heartbeatAt,
+            now: heartbeatAt,
+          },
         });
+        if (!heartbeatStep) {
+          options.store.appendEvent({
+            workflowRunId: run.workflowRunId,
+            eventType: "workflow.step.claim_lost",
+            eventTime: heartbeatAt,
+            stepId: step.stepId,
+            payload: {
+              phase: "heartbeat",
+              stepType: step.stepType,
+              workerId: options.workerId,
+            },
+          });
+          return;
+        }
         options.store.updateRun({
           workflowRunId: run.workflowRunId,
           heartbeatAt,

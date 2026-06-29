@@ -364,6 +364,142 @@ describe("durable workflow sqlite store", () => {
     }
   });
 
+  it("reclaims expired run and step leases without accepting stale owner writes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableWorkflowSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        workflowId: "test.workflow",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      const step = store.createStep({
+        workflowRunId: run.workflowRunId,
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 110,
+      });
+
+      expect(
+        store.claimNextRunnableRun({
+          workflowId: "test.workflow",
+          workerId: "worker-1",
+          claimTtlMs: 10,
+          now: 120,
+        }),
+      ).toMatchObject({
+        workflowRunId: run.workflowRunId,
+        claimedBy: "worker-1",
+        claimExpiresAt: 130,
+      });
+      expect(
+        store.claimNextRunnableRun({
+          workflowId: "test.workflow",
+          workerId: "worker-2",
+          claimTtlMs: 10,
+          now: 125,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.claimNextRunnableRun({
+          workflowId: "test.workflow",
+          workerId: "worker-2",
+          claimTtlMs: 10,
+          now: 131,
+        }),
+      ).toMatchObject({
+        workflowRunId: run.workflowRunId,
+        claimedBy: "worker-2",
+        claimExpiresAt: 141,
+      });
+      expect(
+        store.releaseRunClaim({
+          workflowRunId: run.workflowRunId,
+          workerId: "worker-1",
+          now: 132,
+        }),
+      ).toBeUndefined();
+      expect(store.getRun(run.workflowRunId)).toMatchObject({
+        claimedBy: "worker-2",
+        recoveryState: "claimed",
+      });
+
+      expect(
+        store.claimNextRunnableStep({
+          workflowId: "test.workflow",
+          workerId: "worker-1",
+          claimTtlMs: 10,
+          now: 140,
+        }),
+      ).toMatchObject({
+        stepId: step.stepId,
+        claimedBy: "worker-1",
+        claimExpiresAt: 150,
+      });
+      expect(
+        store.claimNextRunnableStep({
+          workflowId: "test.workflow",
+          workerId: "worker-2",
+          claimTtlMs: 10,
+          now: 145,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.claimNextRunnableStep({
+          workflowId: "test.workflow",
+          workerId: "worker-2",
+          claimTtlMs: 10,
+          now: 151,
+        }),
+      ).toMatchObject({
+        stepId: step.stepId,
+        claimedBy: "worker-2",
+        claimExpiresAt: 161,
+      });
+      expect(
+        store.releaseStepClaim({
+          workflowRunId: run.workflowRunId,
+          stepId: step.stepId,
+          workerId: "worker-1",
+          now: 152,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateStep({
+          workflowRunId: run.workflowRunId,
+          stepId: step.stepId,
+          expectedClaimedBy: "worker-1",
+          status: "succeeded",
+          recoveryState: "terminal",
+          now: 155,
+        }),
+      ).toBeUndefined();
+      const completedStep = store.updateStep({
+        workflowRunId: run.workflowRunId,
+        stepId: step.stepId,
+        expectedClaimedBy: "worker-2",
+        status: "succeeded",
+        recoveryState: "terminal",
+        claimedBy: null,
+        claimExpiresAt: null,
+        now: 160,
+      });
+      expect(completedStep).toMatchObject({
+        stepId: step.stepId,
+        status: "succeeded",
+        recoveryState: "terminal",
+      });
+      expect(completedStep?.claimedBy).toBeUndefined();
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("adds durable tables to an existing shared state database without rewriting existing rows", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const dbPath = path.join(dir, "openclaw.sqlite");
