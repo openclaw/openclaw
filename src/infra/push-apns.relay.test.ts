@@ -343,6 +343,24 @@ describe("push-apns.relay", () => {
       });
     });
 
+    it("honors BOM-prefixed relay failure JSON", async () => {
+      const body = `\uFEFF${JSON.stringify({ ok: false, status: 410 })}`;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: false,
+        status: 410,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
+    });
+
     it("normalizes sandbox relay response metadata", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         new Response(

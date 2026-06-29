@@ -284,7 +284,7 @@ async function sendApnsRelayRequest(params: {
     const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
       onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
     });
-    json = JSON.parse(buffer.toString("utf8")) as unknown;
+    json = JSON.parse(new TextDecoder("utf-8").decode(buffer)) as unknown;
   } catch (err) {
     if (err instanceof ApnsRelayResponseTooLargeError) {
       // Fail closed: an oversized relay body must never be reported as a delivered push.
