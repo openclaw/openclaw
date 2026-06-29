@@ -113,6 +113,37 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("does not add rich paragraph spacing inside raw code HTML", () => {
+    const preHtml = markdownToTelegramRichHtml(
+      [
+        "<pre><code>",
+        "- First item",
+        "- Second item",
+        "**Details:**",
+        "Stay literal.",
+        "</code></pre>",
+        "After raw code",
+        "**Visible:**",
+        "Detail line",
+      ].join("\n"),
+    );
+
+    expect(preHtml).toBe(
+      [
+        "<pre><code>",
+        "- First item",
+        "- Second item",
+        "**Details:**",
+        "Stay literal.",
+        "</code></pre>",
+        "After raw code",
+        "",
+        "<b>Visible:</b>",
+        "Detail line",
+      ].join("\n"),
+    );
+  });
+
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.

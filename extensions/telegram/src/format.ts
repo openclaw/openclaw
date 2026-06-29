@@ -135,6 +135,22 @@ function isMarkdownIndentedCodeLine(line: string): boolean {
   return /^(?: {4}|\t)/.test(line);
 }
 
+const TELEGRAM_RAW_LITERAL_HTML_TAG_PATTERN = /<\/?\s*(code|pre)\b[^>]*?>/gi;
+
+function nextTelegramRawLiteralHtmlDepth(line: string, depth: number): number {
+  let nextDepth = depth;
+  TELEGRAM_RAW_LITERAL_HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TELEGRAM_RAW_LITERAL_HTML_TAG_PATTERN.exec(line)) !== null) {
+    const rawTag = match[0];
+    if (rawTag.trimEnd().endsWith("/>")) {
+      continue;
+    }
+    nextDepth = /^<\s*\//.test(rawTag) ? Math.max(0, nextDepth - 1) : nextDepth + 1;
+  }
+  return nextDepth;
+}
+
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   return (
     !isMarkdownIndentedCodeLine(previous) &&
@@ -170,12 +186,17 @@ function preserveTelegramListBoundarySpacing(
   const out: string[] = [];
   let inFence = false;
   let previousLine = "";
+  let previousLineWasRawLiteralHtml = false;
+  let rawLiteralHtmlDepth = 0;
 
   for (const line of lines) {
     const normalizedLine = line.replace(/\r$/, "");
     const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
+    const isRawLiteralHtmlLine = rawLiteralHtmlDepth > 0;
     if (
       !inFence &&
+      !previousLineWasRawLiteralHtml &&
+      !isRawLiteralHtmlLine &&
       (shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) ||
         (options.richStructuredSpacing === true &&
           shouldPreserveTelegramRichStructuredSpacing(previousLine, normalizedLine)))
@@ -186,6 +207,8 @@ function preserveTelegramListBoundarySpacing(
     if (isFenceLine) {
       inFence = !inFence;
     }
+    rawLiteralHtmlDepth = nextTelegramRawLiteralHtmlDepth(normalizedLine, rawLiteralHtmlDepth);
+    previousLineWasRawLiteralHtml = isRawLiteralHtmlLine || rawLiteralHtmlDepth > 0;
     previousLine = normalizedLine;
   }
 
@@ -393,6 +416,10 @@ const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
 const TELEGRAM_RICH_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   simpleTags: TELEGRAM_RICH_SIMPLE_HTML_TAGS,
   attrPatterns: TELEGRAM_RICH_ATTR_HTML_TAG_PATTERNS,
+};
+const TELEGRAM_NO_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
+  simpleTags: new Set(),
+  attrPatterns: new Map(),
 };
 
 function popLastTagName(tags: string[], name: string): boolean {
@@ -642,6 +669,106 @@ function preserveSupportedTelegramHtmlTags(
     codeDepth > 0 || preDepth > 0
       ? remainingText
       : promoteEscapedSupportedTelegramTags(remainingText, openEscapedTags, support);
+  return result;
+}
+
+type TelegramRawLiteralHtmlExtraction = {
+  markdown: string;
+  blocks: string[];
+};
+
+const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX = "TG_RICH_RAW_LITERAL_HTML_BLOCK_";
+const TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX = "_TOKEN";
+
+function buildTelegramRawLiteralHtmlPlaceholder(index: number): string {
+  return `${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_PREFIX}${index}${TELEGRAM_RAW_LITERAL_HTML_PLACEHOLDER_SUFFIX}`;
+}
+
+function preserveTelegramRawLiteralHtmlBlock(block: string): string {
+  let result = "";
+  let lastIndex = 0;
+  const openTags: string[] = [];
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(block)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    const rawTag = match[0];
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+
+    result += escapeUnsupportedTelegramHtml(
+      block.slice(lastIndex, tagStart),
+      TELEGRAM_NO_HTML_TAG_SUPPORT,
+    );
+    result +=
+      tagName === "code" || tagName === "pre"
+        ? preserveTelegramHtmlTag(rawTag, openTags, escapeHtml, TELEGRAM_RICH_HTML_TAG_SUPPORT)
+        : escapeHtml(rawTag);
+    lastIndex = tagEnd;
+  }
+
+  result += escapeUnsupportedTelegramHtml(block.slice(lastIndex), TELEGRAM_NO_HTML_TAG_SUPPORT);
+  return result;
+}
+
+function extractTelegramRawLiteralHtmlBlocks(markdown: string): TelegramRawLiteralHtmlExtraction {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let blockStart = -1;
+  let depth = 0;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(markdown)) !== null) {
+    const rawTag = match[0];
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    if (tagName !== "code" && tagName !== "pre") {
+      continue;
+    }
+    if (rawTag.trimEnd().endsWith("/>")) {
+      continue;
+    }
+    const isClosing = match[1] === "</";
+    if (!isClosing) {
+      if (depth === 0) {
+        blockStart = match.index;
+      }
+      depth++;
+      continue;
+    }
+    if (depth === 0) {
+      continue;
+    }
+    depth--;
+    if (depth === 0 && blockStart >= 0) {
+      ranges.push({ start: blockStart, end: HTML_TAG_PATTERN.lastIndex });
+      blockStart = -1;
+    }
+  }
+
+  if (!ranges.length) {
+    return { markdown, blocks: [] };
+  }
+
+  let out = "";
+  let lastIndex = 0;
+  const blocks: string[] = [];
+  for (const range of ranges) {
+    out += markdown.slice(lastIndex, range.start);
+    const placeholder = buildTelegramRawLiteralHtmlPlaceholder(blocks.length);
+    blocks.push(preserveTelegramRawLiteralHtmlBlock(markdown.slice(range.start, range.end)));
+    out += placeholder;
+    lastIndex = range.end;
+  }
+  out += markdown.slice(lastIndex);
+  return { markdown: out, blocks };
+}
+
+function restoreTelegramRawLiteralHtmlBlocks(html: string, blocks: readonly string[]): string {
+  let result = html;
+  for (const [index, block] of blocks.entries()) {
+    result = result.replaceAll(buildTelegramRawLiteralHtmlPlaceholder(index), block);
+  }
   return result;
 }
 
@@ -1162,7 +1289,8 @@ export function markdownToTelegramRichHtml(
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
 ): string {
   const tableMode = options.tableMode ?? "block";
-  const normalized = normalizeTelegramRichMarkdownMedia(markdown ?? "");
+  const rawLiteralHtml = extractTelegramRawLiteralHtmlBlocks(markdown ?? "");
+  const normalized = normalizeTelegramRichMarkdownMedia(rawLiteralHtml.markdown);
   const { ir, tables } = markdownToIRWithMeta(
     preserveTelegramListBoundarySpacing(normalized.markdown, { richStructuredSpacing: true }),
     {
@@ -1173,11 +1301,12 @@ export function markdownToTelegramRichHtml(
       tableMode,
     },
   );
+  const html = replaceTelegramRichMarkdownMediaPlaceholders(
+    renderTelegramRichHtmlDocument(ir, tables),
+    normalized.mediaBlocks,
+  );
   return isolateTelegramRichMediaBlocks(
-    replaceTelegramRichMarkdownMediaPlaceholders(
-      renderTelegramRichHtmlDocument(ir, tables),
-      normalized.mediaBlocks,
-    ),
+    restoreTelegramRawLiteralHtmlBlocks(html, rawLiteralHtml.blocks),
   );
 }
 
