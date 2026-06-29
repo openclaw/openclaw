@@ -38,6 +38,7 @@ export type PluginAppPolicyContextEntry = {
   pluginName: string;
   allowDestructiveActions: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
+  destructiveToolNames: string[];
   mcpServerNames: string[];
 };
 
@@ -51,11 +52,18 @@ export type PluginAppPolicyContext = {
 /** Diagnostic emitted while building app config for a native Codex thread. */
 export type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
+  | DestructiveToolInventoryDiagnostic
   | {
       code: "plugin_activation_failed" | "app_not_ready" | "approval_overrides_clear_failed";
       plugin?: ResolvedCodexPluginPolicy;
       message: string;
     };
+
+type DestructiveToolInventoryDiagnostic = {
+  code: "destructive_tool_inventory_unavailable";
+  plugin?: ResolvedCodexPluginPolicy;
+  message: string;
+};
 
 /** Complete Codex thread config patch plus inventory and policy fingerprints. */
 export type CodexPluginThreadConfig = {
@@ -79,7 +87,9 @@ export type BuildCodexPluginThreadConfigParams = {
 };
 
 const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 2;
-const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 1;
+const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
+const CODEX_PLUGIN_APP_POLICY_CONTEXT_FINGERPRINT_VERSION = 2;
+const CODEX_MCP_SERVER_STATUS_PAGE_LIMIT = 100;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
@@ -232,6 +242,9 @@ export async function buildCodexPluginThreadConfig(
   };
   const policyApps: Record<string, PluginAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  let destructiveToolInventory:
+    | Awaited<ReturnType<typeof readDestructiveToolInventory>>
+    | undefined;
   for (const record of inventory.records) {
     const activation = activationResults.find(
       (item) => item.identity.configKey === record.policy.configKey,
@@ -252,6 +265,35 @@ export async function buildCodexPluginThreadConfig(
         });
         continue;
       }
+      const requiresDestructiveToolPrompts =
+        record.policy.destructiveApprovalMode === "auto" ||
+        record.policy.destructiveApprovalMode === "always";
+      let destructiveToolNames: string[] = [];
+      if (requiresDestructiveToolPrompts) {
+        destructiveToolInventory ??= await readDestructiveToolInventory({
+          request: params.request,
+          targetAppIds: new Set(
+            inventory.records.flatMap((candidate) => candidate.ownedAppIds),
+          ),
+        });
+        if (
+          destructiveToolInventory.error ||
+          !destructiveToolInventory.observedAppIds.has(app.id)
+        ) {
+          const reason = destructiveToolInventory.error
+            ? `Codex tool inventory could not be read: ${destructiveToolInventory.error}`
+            : `Codex tool inventory contained no tools owned by ${app.id}.`;
+          diagnostics.push({
+            code: "destructive_tool_inventory_unavailable",
+            plugin: record.policy,
+            message: `${reason} Excluding the app so destructive actions fail closed.`,
+          });
+          continue;
+        }
+        destructiveToolNames = [
+          ...(destructiveToolInventory.toolNamesByAppId.get(app.id) ?? []),
+        ].toSorted();
+      }
       if (
         record.policy.destructiveApprovalMode === "always" &&
         !(await clearPersistedAppToolApprovalOverrides({
@@ -271,6 +313,11 @@ export async function buildCodexPluginThreadConfig(
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
       };
+      if (destructiveToolNames.length > 0) {
+        appConfig.tools = Object.fromEntries(
+          destructiveToolNames.map((toolName) => [toolName, { approval_mode: "prompt" }]),
+        );
+      }
       apps[app.id] = appConfig;
       policyApps[app.id] = {
         configKey: record.policy.configKey,
@@ -278,6 +325,7 @@ export async function buildCodexPluginThreadConfig(
         pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
         destructiveApprovalMode: record.policy.destructiveApprovalMode,
+        destructiveToolNames,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };
     }
@@ -393,6 +441,16 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
       destructive_enabled: policy.allowDestructiveActions,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
+      ...(policy.destructiveToolNames.length > 0
+        ? {
+            tools: Object.fromEntries(
+              policy.destructiveToolNames.map((toolName) => [
+                toolName,
+                { approval_mode: "prompt" },
+              ]),
+            ),
+          }
+        : {}),
     };
   }
   return { approvals_reviewer: "user", apps };
@@ -403,10 +461,102 @@ function buildPluginAppPolicyContext(
   pluginAppIds: Record<string, string[]>,
 ): PluginAppPolicyContext {
   return {
-    fingerprint: fingerprintJson({ version: 1, apps, pluginAppIds }),
+    fingerprint: fingerprintJson({
+      version: CODEX_PLUGIN_APP_POLICY_CONTEXT_FINGERPRINT_VERSION,
+      apps,
+      pluginAppIds,
+    }),
     apps,
     pluginAppIds,
   };
+}
+
+type DestructiveToolInventory = {
+  observedAppIds: Set<string>;
+  toolNamesByAppId: Map<string, Set<string>>;
+  error?: string;
+};
+
+async function readDestructiveToolInventory(params: {
+  request: CodexPluginRuntimeRequest;
+  targetAppIds: Set<string>;
+}): Promise<DestructiveToolInventory> {
+  const inventory: DestructiveToolInventory = {
+    observedAppIds: new Set(),
+    toolNamesByAppId: new Map(),
+  };
+  let cursor: string | null | undefined;
+  try {
+    do {
+      const response = await params.request("mcpServerStatus/list", {
+        cursor,
+        detail: "full",
+        limit: CODEX_MCP_SERVER_STATUS_PAGE_LIMIT,
+      });
+      if (!isJsonObject(response) || !Array.isArray(response.data)) {
+        throw new Error("response did not contain a data array");
+      }
+      for (const rawServer of response.data) {
+        if (!isJsonObject(rawServer)) {
+          continue;
+        }
+        for (const rawTool of readMcpServerTools(rawServer.tools)) {
+          const metadata = isJsonObject(rawTool._meta) ? rawTool._meta : undefined;
+          const appId =
+            typeof metadata?.connector_id === "string"
+              ? metadata.connector_id
+              : typeof metadata?.connectorId === "string"
+                ? metadata.connectorId
+                : undefined;
+          if (!appId || !params.targetAppIds.has(appId)) {
+            continue;
+          }
+          inventory.observedAppIds.add(appId);
+          if (!isJsonObject(rawTool.annotations) || rawTool.annotations.destructiveHint !== true) {
+            continue;
+          }
+          const toolName = readMcpToolConfigName(rawTool);
+          if (!toolName) {
+            continue;
+          }
+          const toolNames = inventory.toolNamesByAppId.get(appId) ?? new Set<string>();
+          toolNames.add(toolName);
+          inventory.toolNamesByAppId.set(appId, toolNames);
+        }
+      }
+      cursor =
+        typeof response.nextCursor === "string" && response.nextCursor
+          ? response.nextCursor
+          : undefined;
+    } while (cursor);
+  } catch (error) {
+    inventory.error = error instanceof Error ? error.message : String(error);
+  }
+  return inventory;
+}
+
+function readMcpServerTools(value: JsonValue | undefined): JsonObject[] {
+  if (Array.isArray(value)) {
+    return value.filter(isJsonObject);
+  }
+  if (isJsonObject(value)) {
+    return Object.values(value).filter(isJsonObject);
+  }
+  return [];
+}
+
+function readMcpToolConfigName(tool: JsonObject): string | undefined {
+  if (typeof tool.title === "string" && tool.title.trim()) {
+    return tool.title.trim();
+  }
+  if (typeof tool.name !== "string") {
+    return undefined;
+  }
+  const name = tool.name.trim();
+  if (!name) {
+    return undefined;
+  }
+  return name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name;
 }
 
 async function clearPersistedAppToolApprovalOverrides(params: {
