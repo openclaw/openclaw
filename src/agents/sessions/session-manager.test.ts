@@ -207,6 +207,57 @@ describe("SessionManager.open", () => {
     });
   });
 
+  it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-marker-reload";
+    const sessionKey = "agent:main:dashboard:sqlite-marker-reload";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before reload" },
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    sessionManager.setSessionFile(marker);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question before reload", role: "user" }),
+    ]);
+    sessionManager.appendMessage(buildAssistantMessage("answer after reload"));
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question before reload", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer after reload" }],
+          role: "assistant",
+        }),
+        type: "message",
+      }),
+    ]);
+  });
+
   it("persists user turns when a SQLite marker has no external recorder", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
