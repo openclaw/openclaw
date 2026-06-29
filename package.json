@@ -401,6 +401,10 @@
       "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
       "default": "./dist/plugin-sdk/interactive-runtime.js"
     },
+    "./plugin-sdk/outbound-delivery-report": {
+      "types": "./dist/plugin-sdk/outbound-delivery-report.d.ts",
+      "default": "./dist/plugin-sdk/outbound-delivery-report.js"
+    },
     "./plugin-sdk/outbound-media": {
       "types": "./dist/plugin-sdk/outbound-media.d.ts",
       "default": "./dist/plugin-sdk/outbound-media.js"

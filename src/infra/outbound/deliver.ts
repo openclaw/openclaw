@@ -23,14 +23,7 @@ import type {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import {
-  buildCanonicalSentMessageHookContext,
-  toInternalMessageSentContext,
-  toPluginMessageContext,
-  toPluginMessageSentEvent,
-} from "../../hooks/message-hook-mappers.js";
+import { buildCanonicalSentMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import {
   hasReplyPayloadContent,
   normalizeMessagePresentation,
@@ -71,6 +64,7 @@ import {
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
+import { emitCanonicalMessageSent } from "./emit-canonical-message-sent.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
@@ -1021,60 +1015,34 @@ function createMessageSentEmitter(params: {
   mirrorGroupId?: string;
 }): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
-  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
   const emitMessageSent = (event: MessageSentEvent) => {
-    if (!hasMessageSentHooks && !canEmitInternalHook) {
-      return;
-    }
-    const canonical = buildCanonicalSentMessageHookContext({
-      to: params.to,
-      content: event.content,
-      success: event.success,
-      error: event.error,
-      channelId: params.channel,
-      accountId: params.accountId ?? undefined,
-      conversationId: params.to,
-      // Mirror the canonical outbound session key into the `message_sent`
-      // hook context so plugins that observe both `message_sending` and
-      // `message_sent` see the same `sessionKey` (and so it matches the
-      // value the internal `message:sent` hook fires with). The value is
-      // already computed for the internal hook below; reusing it here
-      // keeps the contract documented in `PluginHookMessageContext`
-      // honest for both outbound delivery hooks.
-      sessionKey: params.sessionKeyForInternalHooks,
-      messageId: event.messageId,
-      isGroup: params.mirrorIsGroup,
-      groupId: params.mirrorGroupId,
+    // Delegate to the single canonical emitter so the explicit outbound path
+    // and the extension-facing delivery-report seam (reportOutboundDelivered)
+    // can never drift in hook order, gating, or context shape.
+    emitCanonicalMessageSent({
+      canonical: buildCanonicalSentMessageHookContext({
+        to: params.to,
+        content: event.content,
+        success: event.success,
+        error: event.error,
+        channelId: params.channel,
+        accountId: params.accountId ?? undefined,
+        conversationId: params.to,
+        // Mirror the canonical outbound session key into the `message_sent`
+        // hook context so plugins that observe both `message_sending` and
+        // `message_sent` see the same `sessionKey` (and so it matches the
+        // value the internal `message:sent` hook fires with). The value is
+        // already computed for the internal hook below; reusing it here
+        // keeps the contract documented in `PluginHookMessageContext`
+        // honest for both outbound delivery hooks.
+        sessionKey: params.sessionKeyForInternalHooks,
+        messageId: event.messageId,
+        isGroup: params.mirrorIsGroup,
+        groupId: params.mirrorGroupId,
+      }),
+      sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+      hookRunner: params.hookRunner,
     });
-    if (hasMessageSentHooks) {
-      fireAndForgetHook(
-        params.hookRunner!.runMessageSent(
-          toPluginMessageSentEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-        "deliverOutboundPayloads: message_sent plugin hook failed",
-        (message) => {
-          log.warn(message);
-        },
-      );
-    }
-    if (!canEmitInternalHook) {
-      return;
-    }
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "sent",
-          params.sessionKeyForInternalHooks!,
-          toInternalMessageSentContext(canonical),
-        ),
-      ),
-      "deliverOutboundPayloads: message:sent internal hook failed",
-      (message) => {
-        log.warn(message);
-      },
-    );
   };
   return { emitMessageSent, hasMessageSentHooks };
 }

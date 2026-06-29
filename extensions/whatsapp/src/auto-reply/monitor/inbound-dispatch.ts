@@ -547,6 +547,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     connectionId?: string;
     skipLog?: boolean;
     tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
+    sessionKey?: string;
   }) => Promise<WhatsAppReplyDeliveryResult>;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
@@ -636,6 +637,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
       connectionId: params.connectionId,
       skipLog: false,
       tableMode,
+      sessionKey: params.route.sessionKey,
     });
     if (!delivery.providerAccepted) {
       params.replyLogger.warn(

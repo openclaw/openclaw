@@ -54,6 +54,7 @@
   "channel-reply-options-runtime",
   "channel-runtime",
   "interactive-runtime",
+  "outbound-delivery-report",
   "outbound-media",
   "outbound-send-deps",
   "outbound-runtime",

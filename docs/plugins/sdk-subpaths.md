@@ -90,6 +90,7 @@ by package contract guardrails.
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
+    | `plugin-sdk/outbound-delivery-report` | Generic outbound delivery-report seam: a channel plugin that self-delivers a message calls `reportOutboundDelivered` so the canonical `message:sent` event still fires (core owns the emission; extensions never touch raw hook emitters). |
     | `plugin-sdk/outbound-media` | Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |

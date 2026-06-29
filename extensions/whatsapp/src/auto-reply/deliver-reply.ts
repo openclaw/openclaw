@@ -5,6 +5,7 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { reportOutboundDelivered } from "openclaw/plugin-sdk/outbound-delivery-report";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -100,6 +101,12 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  /**
+   * Conversation session key. Forwarded to the canonical message:sent emitter so
+   * native-delivered replies fire the internal hook with the same key core uses;
+   * omitted → the internal hook is skipped (delivery is never blocked).
+   */
+  sessionKey?: string;
 }): Promise<WhatsAppReplyDeliveryResult> {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const admission = requireWhatsAppInboundAdmission(msg);
@@ -119,6 +126,30 @@ export async function deliverWebReply(params: {
       receipt,
       providerAccepted: sendResults.some((result) => result.providerAccepted),
     };
+  };
+  // Report a native (provider-self-delivered) WhatsApp send through the generic
+  // delivery-report seam so the canonical message:sent event fires for replies
+  // that bypass core's central outbound delivery path. Prefer a per-outbound-message id
+  // (receipt part / primary platform id) over the inbound correlation id so
+  // multiple reply blocks in one turn each report once and are not deduped.
+  const reportNativeDelivery = (delivery: WhatsAppReplyDeliveryResult, content: string) => {
+    if (!delivery.providerAccepted) {
+      return;
+    }
+    const messageId =
+      delivery.receipt.parts[0]?.platformMessageId ?? delivery.receipt.primaryPlatformMessageId;
+    reportOutboundDelivered({
+      channel: "whatsapp",
+      to: conversationId,
+      sessionKey: params.sessionKey,
+      success: true,
+      content,
+      messageId,
+      correlationId: msg.event.id,
+      accountId: admission.accountId,
+      isGroup: isGroupConversation,
+      groupId: isGroupConversation ? conversationId : undefined,
+    });
   };
   if (isReasoningReplyPayload(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${conversationId}`);
@@ -206,6 +237,7 @@ export async function deliverWebReply(params: {
     };
     if (delivery.providerAccepted) {
       replyLogger.info(logPayload, "auto-reply sent (text)");
+      reportNativeDelivery(delivery, replyResult.text ?? "");
     } else {
       replyLogger.warn(logPayload, "auto-reply text was not accepted by WhatsApp provider");
     }
@@ -361,5 +393,7 @@ export async function deliverWebReply(params: {
       await sendWithRetry(() => msg.platform.reply(chunk, getQuote()), "media:text"),
     );
   }
-  return finishDelivery();
+  const delivery = finishDelivery();
+  reportNativeDelivery(delivery, normalizedReply.text ?? "");
+  return delivery;
 }
