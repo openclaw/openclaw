@@ -575,6 +575,7 @@ describe("sandboxed workspace paths", () => {
     await withTempDir("openclaw-sandbox-gitignore-", async (sandboxDir) => {
       await withTempDir("openclaw-workspace-gitignore-", async (workspaceDir) => {
         await fs.mkdir(path.join(sandboxDir, "nested"), { recursive: true });
+        await fs.mkdir(path.join(sandboxDir, "nested", "deeper"), { recursive: true });
         await fs.mkdir(path.join(sandboxDir, "other"), { recursive: true });
         await fs.writeFile(
           path.join(sandboxDir, ".gitignore"),
@@ -593,6 +594,11 @@ describe("sandboxed workspace paths", () => {
         await fs.writeFile(
           path.join(sandboxDir, "nested", "local.txt"),
           "nested local needle",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "deeper", "local.txt"),
+          "nested deeper local needle",
           "utf8",
         );
         await fs.writeFile(path.join(sandboxDir, "other", "local.txt"), "other needle", "utf8");
@@ -617,6 +623,7 @@ describe("sandboxed workspace paths", () => {
         expect(findText).not.toContain("ignored.txt");
         expect(findText).not.toContain("nested/ignored.log");
         expect(findText).not.toContain("nested/local.txt");
+        expect(findText).not.toContain("nested/deeper/local.txt");
 
         const grepText = getTextContent(
           await expectTool(tools, "grep").execute("sbx-grep-gitignore", {
@@ -630,6 +637,7 @@ describe("sandboxed workspace paths", () => {
         expect(grepText).not.toContain("ignored.txt");
         expect(grepText).not.toContain("nested/ignored.log");
         expect(grepText).not.toContain("nested/local.txt");
+        expect(grepText).not.toContain("nested/deeper/local.txt");
       });
     });
   });

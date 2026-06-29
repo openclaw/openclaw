@@ -1221,7 +1221,11 @@ function prefixIgnorePattern(line: string, prefix: string): string | null {
     pattern = pattern.slice(1);
   }
 
-  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  const slashQualified = pattern.replace(/\/+$/u, "").includes("/");
+  // Slashless nested .gitignore rules match any descendant below that file.
+  // Direct prefixing would make them slash-qualified and miss deeper files.
+  const prefixed =
+    prefix && !slashQualified ? `${prefix}**/${pattern}` : prefix ? `${prefix}${pattern}` : pattern;
   return negated ? `!${prefixed}` : prefixed;
 }
 
