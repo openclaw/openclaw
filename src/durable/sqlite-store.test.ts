@@ -2,7 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+
+const DURABLE_TABLES = [
+  "durable_workflow_events",
+  "durable_workflow_links",
+  "durable_workflow_refs",
+  "durable_workflow_runs",
+  "durable_workflow_signals",
+  "durable_workflow_steps",
+  "durable_workflow_timers",
+] as const;
 
 describe("durable workflow sqlite store", () => {
   it("creates runs, dedupes idempotency keys, and appends ordered events", () => {
@@ -300,6 +311,80 @@ describe("durable workflow sqlite store", () => {
       ).toBeUndefined();
     } finally {
       store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds durable tables to an existing shared state database without rewriting existing rows", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const existingDb = new DatabaseSync(dbPath);
+    try {
+      existingDb.exec(`
+        CREATE TABLE diagnostic_events (
+          scope TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (scope, event_key)
+        );
+      `);
+      existingDb
+        .prepare(
+          `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run("state", "startup", '{"ok":true}', 123);
+      const durableTablesBefore = existingDb
+        .prepare(
+          `SELECT name
+             FROM sqlite_master
+            WHERE type = 'table'
+              AND name LIKE 'durable_workflow_%'
+            ORDER BY name`,
+        )
+        .all() as Array<{ name: string }>;
+      expect(durableTablesBefore).toEqual([]);
+    } finally {
+      existingDb.close();
+    }
+
+    const store = openDurableWorkflowSqliteStore({ path: dbPath });
+    store.close();
+
+    const upgradedDb = new DatabaseSync(dbPath);
+    try {
+      const durableTablesAfter = upgradedDb
+        .prepare(
+          `SELECT name
+             FROM sqlite_master
+            WHERE type = 'table'
+              AND name LIKE 'durable_workflow_%'
+            ORDER BY name`,
+        )
+        .all() as Array<{ name: string }>;
+      expect(durableTablesAfter.map((row) => row.name)).toEqual([...DURABLE_TABLES].sort());
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT scope, event_key, payload_json, created_at
+               FROM diagnostic_events
+              WHERE scope = ?
+                AND event_key = ?`,
+          )
+          .get("state", "startup"),
+      ).toEqual({
+        scope: "state",
+        event_key: "startup",
+        payload_json: '{"ok":true}',
+        created_at: 123,
+      });
+      expect(upgradedDb.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+    } finally {
+      upgradedDb.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
