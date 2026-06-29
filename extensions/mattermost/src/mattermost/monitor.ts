@@ -872,6 +872,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Per-session tracking: each thread historyKey backfilled at most once per
+  // monitor lifecycle.  After a successful turn the shared kernel clears
+  // pending group history (kernel.ts:577), which would otherwise re-trigger
+  // the server fetch on every follow-up message.  This set ensures we only
+  // backfill on true first-sighting — the initial message after gateway
+  // restart or session clear when the in-memory window is genuinely cold.
+  const threadsBackfilledThisSession = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1485,54 +1492,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           });
         };
 
-        // ── Thread history backfill: seed in-memory history from server ──
-        // When a thread reply arrives but the local in-memory history window is
-        // empty (gateway restart, session clear, token expiry), fetch the full
-        // thread from the Mattermost server so the agent has context instead of
-        // replying blind. Best-effort — never blocks inbound dispatch.
-        // Only backfills when history is enabled (historyLimit > 0) to respect
-        // the existing disabled-history contract; bounded with a 10 s timeout
-        // so a slow Mattermost thread endpoint cannot stall the inbound turn.
-        if (threadRootId && historyKey && historyLimit > 0) {
-          const existing = channelHistories.get(historyKey);
-          if (!existing || existing.length === 0) {
-            try {
-              const abort = new AbortController();
-              const timeoutId = setTimeout(() => abort.abort(), 10_000);
-              try {
-                const threadPosts = await fetchMattermostThreadPosts(
-                  client,
-                  threadRootId,
-                  abort.signal,
-                );
-                if (threadPosts.length > 0) {
-                  const entries: HistoryEntry[] = [];
-                  for (const p of threadPosts) {
-                    if (p.id === post.id) {
-                      continue;
-                    }
-                    const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
-                    const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
-                    entries.push({
-                      sender,
-                      body: p.message || "[attachment]",
-                      timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
-                      messageId: p.id ?? undefined,
-                    });
-                  }
-                  if (entries.length > 0) {
-                    channelHistories.set(historyKey, entries.slice(-historyLimit));
-                  }
-                }
-              } finally {
-                clearTimeout(timeoutId);
-              }
-            } catch {
-              // best-effort: server fetch failure or timeout should not block
-            }
-          }
-        }
-
         const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
         const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
         const oncharResult = oncharEnabled
@@ -1586,6 +1545,65 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
         // bodies before model invocation. The guard above ensures this fallback is a bot mention.
         const bodyForAgent = bodyText || rawText.trim();
+
+        // ── Thread history backfill: seed in-memory history from server ──
+        // After all admission gates pass (onchar / mention / empty-body drop),
+        // backfill thread history from the Mattermost server when the local
+        // in-memory window is genuinely cold — i.e. first message seen for this
+        // thread key in the current monitor lifecycle.  One backfill per
+        // thread per session prevents normal post-turn empty windows from
+        // re-triggering the server fetch (kernel.ts:577 clears pending group
+        // history after a successful dispatch).
+        // Best-effort — never blocks inbound dispatch.
+        if (
+          threadRootId &&
+          historyKey &&
+          historyLimit > 0 &&
+          !threadsBackfilledThisSession.has(historyKey)
+        ) {
+          const existing = channelHistories.get(historyKey);
+          if (!existing || existing.length === 0) {
+            try {
+              const abort = new AbortController();
+              const timeoutId = setTimeout(() => abort.abort(), 10_000);
+              try {
+                const threadPosts = await fetchMattermostThreadPosts(
+                  client,
+                  threadRootId,
+                  abort.signal,
+                );
+                threadsBackfilledThisSession.add(historyKey);
+                if (threadPosts.length > 0) {
+                  // Trim to the effective history window before resolving
+                  // sender info so long cold threads don't fan out into
+                  // unnecessary resolveUserInfo lookups.
+                  const windowed = threadPosts.slice(-historyLimit);
+                  const entries: HistoryEntry[] = [];
+                  for (const p of windowed) {
+                    if (p.id === post.id) {
+                      continue;
+                    }
+                    const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+                    const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
+                    entries.push({
+                      sender,
+                      body: p.message || "[attachment]",
+                      timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+                      messageId: p.id ?? undefined,
+                    });
+                  }
+                  if (entries.length > 0) {
+                    channelHistories.set(historyKey, entries);
+                  }
+                }
+              } finally {
+                clearTimeout(timeoutId);
+              }
+            } catch {
+              // best-effort: server fetch failure or timeout should not block
+            }
+          }
+        }
 
         core.channel.activity.record({
           channel: "mattermost",
