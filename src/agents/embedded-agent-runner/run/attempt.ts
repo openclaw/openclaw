@@ -149,6 +149,7 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import {
   addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
@@ -1790,6 +1791,7 @@ export async function runEmbeddedAttempt(
       copyChannelAgentToolMeta(tool as never, wrappedTool as never);
       copyBeforeToolCallHookMarker(tool, wrappedTool);
       copyToolTerminalPresentation(tool, wrappedTool as never);
+      copyCodeModeControlToolIdentity(tool as never, wrappedTool as never);
       return wrappedTool;
     });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
