@@ -20,11 +20,6 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { inferBasePathFromPathname, normalizeBasePath, routeIdFromPath } from "../app-routes.ts";
 import { i18n, t } from "../i18n/index.ts";
-import {
-  blockArtCodeBlockCopyPayloadEncoding,
-  decodeCodeBlockCopyPayload,
-  encodeBlockArtCodeBlockCopyPayload,
-} from "../ui/chat/code-block-copy-payload.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
@@ -95,6 +90,8 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
 const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
+const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
+export const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const DOCS_ORIGIN = "https://docs.openclaw.ai";
@@ -378,6 +375,25 @@ function shouldRenderCodeBlockCopy(env: unknown): boolean {
   return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
+export function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+  return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
+}
+
+export function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
+  if (
+    encoding !== blockArtCodeBlockCopyPayloadEncoding ||
+    !value.startsWith(blockArtCopyPayloadPrefix)
+  ) {
+    return value;
+  }
+  try {
+    const decoded = JSON.parse(value.slice(blockArtCopyPayloadPrefix.length));
+    return typeof decoded === "string" ? decoded : value;
+  } catch {
+    return value;
+  }
+}
+
 export function handleMarkdownCodeBlockCopy(event: Event): void {
   const target = event.target;
   if (!(target instanceof Element)) {
@@ -560,6 +576,10 @@ function normalizeMarkdownInput(markdownLocal: string): string {
   if (!input) {
     return "";
   }
+  return formatTruncatedMarkdownInput(input);
+}
+
+function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
   return appendMarkdownTruncationNotice(truncated).replace(/\r\n?/g, "\n");
 }

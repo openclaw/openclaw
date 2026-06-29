@@ -14,7 +14,7 @@ import {
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
-} from "../../ui/chat/code-block-copy-payload.ts";
+} from "../../components/markdown.ts";
 import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
@@ -156,11 +156,6 @@ vi.mock("./grouped-render.ts", () => ({
     element.textContent = text;
     return element;
   },
-}));
-
-vi.mock("../../ui/markdown.ts", () => ({
-  isMarkdownBlockArtText: () => false,
-  toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
 vi.mock("./tool-expansion-state.ts", () => ({
