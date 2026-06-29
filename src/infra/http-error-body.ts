@@ -42,7 +42,7 @@ export async function readResponseBodySnippet(
       }
       try {
         reader.releaseLock();
-      } catch {}
+      } catch { /* reader already released or stream closed during abort */ }
     }
 
     return new TextDecoder().decode(Buffer.concat(chunks, total)).slice(0, limits.maxChars);

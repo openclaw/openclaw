@@ -457,7 +457,7 @@ async function* responseBodyChunks(
     }
     try {
       reader.releaseLock();
-    } catch {}
+    } catch { /* reader already released or stream closed during abort */ }
   }
 }
 
