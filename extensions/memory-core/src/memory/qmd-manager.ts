@@ -620,13 +620,13 @@ function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: s
       candidates.push(path.join(resolved, "mcporter", "mcporter.json"));
       candidates.push(path.join(resolved, "mcporter", "mcporter.jsonc"));
     }
+  } else {
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
   }
   const projectConfigDir = path.resolve(workspaceDir, "config");
   candidates.push(path.join(projectConfigDir, "mcporter.json"));
   candidates.push(path.join(projectConfigDir, "mcporter.jsonc"));
-
-  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
-  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
 
   return candidates;
 }
