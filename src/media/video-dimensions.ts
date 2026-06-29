@@ -1,4 +1,8 @@
 // Video dimension helpers read video dimensions through ffprobe.
+import { randomUUID } from "node:crypto";
+import { open, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 /** Positive video dimensions reported by ffprobe for the first video stream. */
@@ -23,25 +27,38 @@ export function parseFfprobeVideoDimensions(stdout: string): VideoDimensions | u
   return width && height ? { width, height } : undefined;
 }
 
-/** Probes a video buffer through ffprobe stdin and treats probe failures as unknown dimensions. */
+/**
+ * Probes video dimensions via a seekable temp file. Pipe:0 probing fails for
+ * large MP4s because ffprobe needs to seek the MOOV atom (located at the end
+ * for faststart files), which is impossible over a non-seekable stdin pipe.
+ * Temp-file probing resolves dimensions reliably for any buffer size.
+ */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
+  const tempPath = join(tmpdir(), `openclaw-ffprobe-${randomUUID()}.bin`);
+  let handle;
   try {
-    const stdout = await runFfprobe(
-      [
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "json",
-        "pipe:0",
-      ],
-      { input: buffer },
-    );
+    handle = await open(tempPath, "w", 0o600);
+    await handle.writeFile(buffer);
+    await handle.close();
+    handle = undefined;
+    const stdout = await runFfprobe([
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height",
+      "-of",
+      "json",
+      tempPath,
+    ]);
     return parseFfprobeVideoDimensions(stdout);
   } catch {
     return undefined;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
+    await unlink(tempPath).catch(() => undefined);
   }
 }
