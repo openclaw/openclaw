@@ -143,6 +143,12 @@ function stringifyMultipartFieldValue(value: unknown): string | undefined {
   }
 }
 
+function bufferToBlobPart(value: Buffer): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(value.byteLength);
+  bytes.set(value);
+  return bytes;
+}
+
 function normalizeMultipartUploadData<D>(
   opts: Lark.HttpRequestOptions<D>,
 ): Lark.HttpRequestOptions<D> {
@@ -160,7 +166,11 @@ function normalizeMultipartUploadData<D>(
       continue;
     }
     if (Buffer.isBuffer(value)) {
-      form.append(key, new Blob([value]), key === "file" && fileName ? fileName : `${key}.bin`);
+      form.append(
+        key,
+        new Blob([bufferToBlobPart(value)]),
+        key === "file" && fileName ? fileName : `${key}.bin`,
+      );
       continue;
     }
     const fieldValue = stringifyMultipartFieldValue(value);
