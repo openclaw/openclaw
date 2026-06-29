@@ -1,10 +1,12 @@
 // Storage-neutral session registry maintenance for task-owned cron run cleanup.
+import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -89,6 +91,15 @@ function pruneSessionRegistryStore(params: {
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
 ): Promise<SessionRegistryMaintenanceStoreSummary> {
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(params.storePath);
+  if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
+    return {
+      beforeCount: 0,
+      afterCount: 0,
+      preservedRunning: 0,
+      pruned: 0,
+    };
+  }
   const beforeStore = Object.fromEntries(
     listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
