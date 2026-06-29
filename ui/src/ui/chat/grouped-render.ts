@@ -318,6 +318,14 @@ function extractImages(message: unknown): ImageBlock[] {
             }),
           });
         }
+      } else if (b.type === "openclaw_pairing_qr") {
+        const imageUrl = b.image_url;
+        if (typeof imageUrl === "string") {
+          appendImageBlock(images, {
+            url: imageUrl,
+            alt: typeof b.alt === "string" ? b.alt : undefined,
+          });
+        }
       }
     }
   }

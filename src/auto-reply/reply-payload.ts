@@ -62,6 +62,47 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+// Private device-pair -> Gateway live-display envelope key. Do not re-export
+// through Plugin SDK; this is not a third-party plugin contract.
+export const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+
+export type PairingQrReplyChannelData = {
+  setupCode: string;
+  expiresAtMs: number;
+};
+
+function normalizePairingQrSetupCode(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function buildPairingQrReplyChannelData(
+  params: PairingQrReplyChannelData,
+): Record<string, unknown> {
+  return {
+    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
+      setupCode: params.setupCode,
+      expiresAtMs: params.expiresAtMs,
+    },
+  };
+}
+
+export function readPairingQrReplyChannelData(
+  payload: Pick<ReplyPayload, "channelData">,
+): PairingQrReplyChannelData | undefined {
+  const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
+}
+
 /** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
