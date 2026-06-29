@@ -192,6 +192,17 @@ type RawMcporterEntry = {
   path?: unknown;
 };
 
+const GENERATED_QMD_ENV_OVERRIDE_KEYS = new Set([
+  "NO_COLOR",
+  "QMD_EMBED_CONTEXT_SIZE",
+  "QMD_EMBED_MODEL",
+  "QMD_EXPAND_CONTEXT_SIZE",
+  "QMD_GENERATE_MODEL",
+  "QMD_LLAMA_GPU",
+  "QMD_RERANK_CONTEXT_SIZE",
+  "QMD_RERANK_MODEL",
+]);
+
 const MCPORTER_REMOTE_AUTH_KEYS = new Set(
   [
     "auth",
@@ -301,7 +312,7 @@ function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boo
   return Object.entries(server).some(([key, value]) => {
     const normalizedKey = normalizeMcporterConfigKey(key);
     if (normalizedKey === "env") {
-      return true;
+      return getGeneratedQmdEnvOverrides(value) === null;
     }
     if (normalizedKey === "command") {
       return hasMcporterAuthLikeText(value);
@@ -311,6 +322,27 @@ function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boo
     }
     return isMcporterAuthLikeKey(key);
   });
+}
+
+function getGeneratedQmdEnvOverrides(value: unknown): Record<string, string> | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const env = asRecord(value);
+  if (!env) {
+    return null;
+  }
+  const overrides: Record<string, string> = {};
+  for (const [key, envValue] of Object.entries(env)) {
+    if (!GENERATED_QMD_ENV_OVERRIDE_KEYS.has(key)) {
+      return null;
+    }
+    if (typeof envValue !== "string") {
+      return null;
+    }
+    overrides[key] = envValue;
+  }
+  return overrides;
 }
 
 function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boolean {
@@ -3267,9 +3299,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     server: Record<string, unknown>,
     rawEntry?: RawMcporterEntry | null,
   ): Record<string, unknown> {
+    const envOverrides = getGeneratedQmdEnvOverrides(server.env);
     const generated: Record<string, unknown> = {
       ...server,
-      env: this.buildMcporterQmdEnv(),
+      env: {
+        ...this.buildMcporterQmdEnv(),
+        ...(envOverrides ?? {}),
+      },
     };
     if (rawEntry?.lifecycle !== undefined) {
       generated.lifecycle = rawEntry.lifecycle;
