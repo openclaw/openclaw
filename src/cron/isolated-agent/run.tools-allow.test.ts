@@ -127,4 +127,23 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
     },
   );
+
+  it(
+    "warns when web_search is allowed but no provider is enabled",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.diagnostics?.summary).toContain(
+        "web_search tool requested (toolsAllow) but no web search provider plugin is enabled",
+      );
+      expect(result.diagnostics?.entries[0]).toMatchObject({
+        source: "cron-preflight",
+        severity: "warn",
+      });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      const call = requireEmbeddedAgentCall();
+      expect(call.toolsAllow).toEqual(["web_search"]);
+    },
+  );
 });

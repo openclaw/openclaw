@@ -41,6 +41,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -64,7 +65,6 @@ import type {
   CronRunDiagnostics,
   CronRunTelemetry,
 } from "../types.js";
-import { listWebSearchProviders } from "../../web-search/runtime.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
@@ -890,11 +890,10 @@ async function prepareCronRunContext(params: {
   let preflightDiagnostics: CronRunDiagnostics | undefined;
   const agentPayloadToolsAllow = agentPayload?.toolsAllow;
   if (agentPayloadToolsAllow && agentPayloadToolsAllow.length > 0) {
-    const normalizedAllow = expandToolGroups(agentPayloadToolsAllow).map((t) =>
-      normalizeToolName(t),
+    const normalizedAllow = new Set(
+      expandToolGroups(agentPayloadToolsAllow).map((t) => normalizeToolName(t)),
     );
-    const requestsWebSearch =
-      normalizedAllow.includes("*") || normalizedAllow.includes("web_search");
+    const requestsWebSearch = normalizedAllow.has("*") || normalizedAllow.has("web_search");
     if (requestsWebSearch) {
       const webSearchProviders = listWebSearchProviders({ config: cfgWithAgentDefaults });
       if (webSearchProviders.length === 0) {

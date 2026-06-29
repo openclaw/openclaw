@@ -80,6 +80,7 @@ export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
+export const listWebSearchProvidersMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -159,6 +160,10 @@ vi.mock("./run-model-catalog.runtime.js", () => ({
 
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
+}));
+
+vi.mock("../../web-search/runtime.js", () => ({
+  listWebSearchProviders: listWebSearchProvidersMock,
 }));
 
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
@@ -494,6 +499,8 @@ function resetRunConfigMocks(): void {
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
+  listWebSearchProvidersMock.mockReset();
+  listWebSearchProvidersMock.mockReturnValue([]);
 }
 
 function resetRunExecutionMocks(): void {
