@@ -329,8 +329,11 @@ function findLatestEquivalentAssistantMessageId(
     }
     const record = event as { id?: unknown; message?: unknown };
     const candidate = record.message as SessionTranscriptAssistantMessage | undefined;
-    if (!candidate || candidate.role !== "assistant") {
+    if (!candidate) {
       continue;
+    }
+    if (candidate.role !== "assistant") {
+      return undefined;
     }
     return extractAssistantMirrorComparableText(candidate, config) === expectedText &&
       typeof record.id === "string" &&
