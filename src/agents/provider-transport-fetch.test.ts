@@ -1193,6 +1193,48 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("passes through already-SSE bodies mislabeled as application/json without double-prefixing data:", async () => {
+    // Regression: OpenAI-compatible gateways that return standard SSE
+    // (`data: {...}\n\n`) with an `application/json` content-type caused
+    // `data: data: {...}` after JSON-to-SSE synthesis, which the OpenAI SDK
+    // could not JSON.parse. Verify the sanitizer detects already-SSE bodies
+    // and passes them through verbatim.
+    const events = [
+      `data: ${JSON.stringify({ ok: true })}`,
+      `data: ${JSON.stringify({ ok: false })}`,
+      "data: [DONE]",
+    ].join("\n\n");
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(events, {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }, { ok: false }]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({

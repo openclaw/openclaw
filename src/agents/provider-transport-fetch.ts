@@ -56,6 +56,11 @@ const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
  *  almost certainly hostile or broken — cap the buffer rather than let it grow. */
 const SSE_SANITIZE_BUFFER_MAX_BYTES = 64 * 1024;
 
+/** Matches an SSE `data:` line prefix. Used to detect upstream bodies that are
+ *  already SSE but mislabeled as `application/json` so we do not double-wrap
+ *  them into `data: data: {...}` and break the OpenAI SDK JSON parser. */
+const SSE_DATA_LINE_PREFIX_RE = /^data[ \t]*:[ \t]?/;
+
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 const RETRY_AFTER_HTTP_DATE_RE =
@@ -156,7 +161,16 @@ function sanitizeOpenAISdkSseResponse(
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                // Some OpenAI-compatible gateways return standard SSE
+                // (`data: {...}\n\n`) but mislabel the body as
+                // `application/json`. Re-wrapping would produce
+                // `data: data: {...}` and the OpenAI SDK fails JSON parsing.
+                // Detect already-SSE bodies and pass them through verbatim.
+                if (SSE_DATA_LINE_PREFIX_RE.test(data)) {
+                  controller.enqueue(encoder.encode(`${data}\n\n`));
+                } else {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();
