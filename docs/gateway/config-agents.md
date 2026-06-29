@@ -696,6 +696,48 @@ Outer run loop retry iteration boundaries for the embedded agent runtime to prev
 - `min`: minimum absolute limit for run retry iterations. Default: `32`.
 - `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
 
+### `agents.defaults.iterationBudget`
+
+Hard per-agent iteration budget that caps the total number of LLM tool-calling rounds in a single embedded agent run. When the budget is exhausted the agent stops and returns a `budget_exhausted` error. This is a safety net against runaway agent loops; it is separate from — and complementary to — the outer `runRetries` limit which guards against retry storms.
+
+> **Opt-in:** The budget is disabled by default. Set `enabled: true` to activate it.
+
+```json5
+{
+  agents: {
+    defaults: {
+      iterationBudget: {
+        enabled: true, // default: false - opt-in
+        maxIterations: 90, // max tool-calling rounds for parent agents
+        subagentMaxIterations: 50, // max tool-calling rounds for subagents
+        forceSummaryOnExhaustion: true, // request a text summary on final turn
+      },
+    },
+    list: [
+      {
+        id: "research",
+        iterationBudget: { maxIterations: 120 }, // per-agent override
+      },
+    ],
+  },
+}
+```
+
+- `enabled`: Whether the iteration budget is active. Default: `false`.
+- `maxIterations`: Maximum tool-calling rounds for parent agent runs. Default: `90`.
+- `subagentMaxIterations`: Maximum tool-calling rounds for subagent (spawned) runs. Automatically selected when the run has a `spawnedBy` parent. Default: `50`.
+- `forceSummaryOnExhaustion`: When `true`, the agent gets one final text-only turn to summarize its work before the run ends. Tools are hard-blocked during this turn — the budget cannot be bypassed. Default: `true`.
+
+**Scope and precedence:** Per-agent values in `agents.list[]` override `agents.defaults`. Fields not set in the per-agent entry fall back to defaults, then to hardcoded values.
+
+**Exhaustion behavior:** When the budget runs out:
+
+1. If `forceSummaryOnExhaustion` is `true`: the model receives a summary instruction and responds with text only. Any tool calls the model attempts are blocked (fail-closed).
+2. If `forceSummaryOnExhaustion` is `false`: the run returns immediately with a `budget_exhausted` error.
+3. The result includes `budgetUsed` and `budgetMax` metadata for observability.
+
+**What counts as an iteration:** Only LLM tool-calling rounds count toward the budget. Non-productive retries (compaction, auth failures, timeouts) have their own independent limits and do not consume the budget.
+
 ### `agents.defaults.contextPruning`
 
 Prunes **old tool results** from in-memory context before sending to the LLM. Does **not** modify session history on disk. Disabled by default; set `mode: "cache-ttl"` to enable.

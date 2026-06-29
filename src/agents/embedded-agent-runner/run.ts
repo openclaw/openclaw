@@ -3693,7 +3693,12 @@ async function runEmbeddedAgentInternal(
             !attempt.yieldDetected
           ) {
             if (resolvedBudgetConfig?.forceSummaryOnExhaustion) {
-              iterationBudget.refund();
+              // Do NOT refund the budget here. The summary attempt should be
+              // text-only (no tool calls). If the model ignores the no-tool
+              // instruction and requests tools, the exhausted budget causes
+              // onBeforeToolCallingRound -> consume() to return false, which
+              // makes agent-loop.ts stop cleanly without executing any tools.
+              // This ensures the budget is a hard cap that cannot be bypassed.
               budgetExhaustedSummaryPending = true;
               budgetExhaustedSummaryInstruction = BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION;
               // Clear stale retry instructions so the summary attempt's prompt
