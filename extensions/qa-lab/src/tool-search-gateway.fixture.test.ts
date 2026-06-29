@@ -4,8 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  assertToolSearchLaneResults,
   countSessionLogMentions,
+  countSystemPromptChars,
+  outputText,
+  outputToolNames,
+} from "./fixture-utils.js";
+import {
+  assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
 } from "./tool-search-gateway.fixture.js";
@@ -119,8 +124,11 @@ describe("tool search gateway e2e session log scanner", () => {
 
       await expect(
         countSessionLogMentions({
-          stateDir,
-          targetTool: "fake_plugin_tool_17",
+          sessionsDir,
+          needles: {
+            fake_plugin_tool_17: "fake_plugin_tool_17",
+            tool_search_code: "tool_search_code",
+          },
         }),
       ).resolves.toEqual({
         fake_plugin_tool_17: 1,
@@ -129,6 +137,33 @@ describe("tool search gateway e2e session log scanner", () => {
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("qa fixture response helpers", () => {
+  it("reads Responses API text, function call names, and prompt sizing", () => {
+    const payload = {
+      output: [
+        { type: "function_call", name: "fake_plugin_tool_17" },
+        {
+          type: "message",
+          content: [{ text: "alpha" }, { text: "beta" }],
+        },
+      ],
+    };
+
+    expect(outputToolNames(payload)).toEqual(["fake_plugin_tool_17"]);
+    expect(outputText(payload)).toBe("alpha\nbeta");
+    expect(
+      countSystemPromptChars({
+        instructions: "abc",
+        input: [
+          { role: "system", content: [{ type: "input_text", text: "def" }] },
+          { role: "developer", content: "ghi" },
+          { role: "user", content: [{ type: "input_text", text: "ignored" }] },
+        ],
+      }),
+    ).toBe(9);
   });
 });
 
