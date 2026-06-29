@@ -39,7 +39,7 @@ export type FetchLiveProviderModelIdsParams = {
   endpoint: string;
   apiKey?: string;
   discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogCompatibleFetchGuard;
+  fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
   timeoutMs?: number;
   auditContext?: string;
@@ -138,7 +138,7 @@ function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext)
 }
 
 function buildHeaders(
-  params: FetchLiveProviderModelIdsParams,
+  params: Omit<FetchLiveProviderModelIdsParams, "fetchGuard">,
   safeReplayHeaders?: Headers,
 ): Headers {
   const headers = safeReplayHeaders
@@ -247,7 +247,7 @@ function resolveLiveModelCatalogNextPage(
 }
 
 async function fetchLiveProviderModelCatalogPage(
-  params: FetchLiveProviderModelRowsParams & {
+  params: Omit<FetchLiveProviderModelRowsParams, "fetchGuard"> & {
     fetchGuard: LiveModelCatalogCompatibleFetchGuard;
     url: string;
     timeoutMs: number;
@@ -294,7 +294,7 @@ async function fetchLiveProviderModelCatalogPage(
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
-  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const fetchGuard: LiveModelCatalogCompatibleFetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
   const startedAt = Date.now();
   const rows: unknown[] = [];
