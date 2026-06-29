@@ -83,6 +83,7 @@ const mockState = vi.hoisted(() => ({
   dispatchReplyFromConfig: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  fetchMattermostThreadPosts: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   resolveChannelInfo: vi.fn(),
@@ -98,6 +99,7 @@ vi.mock("./client.js", async () => {
     ...actual,
     createMattermostClient: mockState.createMattermostClient,
     fetchMattermostMe: mockState.fetchMattermostMe,
+    fetchMattermostThreadPosts: mockState.fetchMattermostThreadPosts,
     normalizeMattermostBaseUrl: (value: string | undefined) => value?.trim() ?? "",
     updateMattermostPost: mockState.updateMattermostPost,
   };
@@ -141,14 +143,23 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
+type RouteOverrideValue = string | (() => string);
+
+function resolveRouteOverrideValue(
+  value: RouteOverrideValue | undefined,
+  fallback: string,
+): string {
+  return typeof value === "function" ? value() : (value ?? fallback);
+}
+
 function createRuntimeCore(
   cfg: OpenClawConfig,
   routeOverride?: {
     accountId?: string;
     agentId?: string;
     lastRoutePolicy?: "main" | "session";
-    mainSessionKey?: string;
-    sessionKey?: string;
+    mainSessionKey?: RouteOverrideValue;
+    sessionKey?: RouteOverrideValue;
   },
   overrides: {
     inboundDebounceMs?: number;
@@ -294,8 +305,14 @@ function createRuntimeCore(
           accountId: routeOverride?.accountId ?? "default",
           agentId: routeOverride?.agentId ?? "main",
           lastRoutePolicy: routeOverride?.lastRoutePolicy ?? "main",
-          mainSessionKey: routeOverride?.mainSessionKey ?? "mattermost:default:channel:chan-1",
-          sessionKey: routeOverride?.sessionKey ?? "mattermost:default:channel:chan-1",
+          mainSessionKey: resolveRouteOverrideValue(
+            routeOverride?.mainSessionKey,
+            "mattermost:default:channel:chan-1",
+          ),
+          sessionKey: resolveRouteOverrideValue(
+            routeOverride?.sessionKey,
+            "mattermost:default:channel:chan-1",
+          ),
         }),
       },
       session: {
@@ -390,6 +407,7 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.resolveMattermostMedia.mockResolvedValue([]);
     mockState.resolveUserInfo.mockResolvedValue({ id: "user-1", username: "alice" });
+    mockState.fetchMattermostThreadPosts.mockResolvedValue([]);
     mockState.dispatchReplyFromConfig.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
@@ -443,6 +461,122 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-1");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("backfills cold Mattermost thread history once per agent session through the monitor path", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    let baseSessionKey = "mattermost:default:channel:chan-1";
+    mockState.abortController = undefined;
+    mockState.runtimeCore = createRuntimeCore(testConfig, {
+      mainSessionKey: () => baseSessionKey,
+      sessionKey: () => baseSessionKey,
+    });
+    mockState.dispatchReplyFromConfig.mockImplementation(async () => {
+      if (mockState.dispatchReplyFromConfig.mock.calls.length >= 3) {
+        abortController.abort();
+      }
+    });
+    mockState.resolveUserInfo.mockImplementation(async (userId: string) => ({
+      id: userId,
+      username: userId === "user-2" ? "bob" : "alice",
+    }));
+    mockState.fetchMattermostThreadPosts
+      .mockResolvedValueOnce([
+        {
+          id: "root-1",
+          channel_id: "chan-1",
+          user_id: "user-2",
+          message: "context before restart",
+          create_at: 1_714_000_000_000,
+        },
+        {
+          id: "child-1",
+          root_id: "root-1",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "first post after restart",
+          create_at: 1_714_000_001_000,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "root-1",
+          channel_id: "chan-1",
+          user_id: "user-2",
+          message: "context after reset",
+          create_at: 1_714_000_000_000,
+        },
+      ]);
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    const emitThreadPost = async (id: string, message: string) => {
+      await socket.emitMessage({
+        event: "posted",
+        data: {
+          channel_id: "chan-1",
+          channel_name: "town-square",
+          channel_display_name: "Town Square",
+          sender_name: "alice",
+          post: JSON.stringify({
+            id,
+            root_id: "root-1",
+            channel_id: "chan-1",
+            user_id: "user-1",
+            message,
+            create_at: 1_714_000_001_000,
+          }),
+        },
+        broadcast: {
+          channel_id: "chan-1",
+          user_id: "user-1",
+        },
+      });
+    };
+
+    await emitThreadPost("child-1", "first post after restart");
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    });
+    expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(1);
+    expect(mockState.fetchMattermostThreadPosts).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "root-1",
+      expect.any(AbortSignal),
+    );
+    expect(mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx.Body).toContain(
+      "context before restart",
+    );
+
+    await emitThreadPost("child-2", "same session follow-up");
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+    });
+    expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(1);
+
+    baseSessionKey = "mattermost:default:channel:chan-1:new-session";
+    await emitThreadPost("child-3", "after slash new");
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+    });
+    expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(2);
+    expect(mockState.dispatchReplyFromConfig.mock.calls.at(2)?.[0].ctx.Body).toContain(
+      "context after reset",
+    );
+
+    socket.emitClose(1000);
+    await monitor;
   });
 
   it("dispatches a bare bot mention whose body is empty after normalization as a wake event", async () => {

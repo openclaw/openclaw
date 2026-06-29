@@ -138,6 +138,93 @@ export type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
+type MattermostThreadBackfillFetcher = (
+  client: MattermostClient,
+  rootPostId: string,
+  signal?: AbortSignal,
+) => Promise<MattermostPost[]>;
+
+type MattermostThreadBackfillUserResolver = (
+  userId: string,
+) => Promise<MattermostUser | null | undefined>;
+
+export async function backfillMattermostThreadHistoryForMonitor(params: {
+  client: MattermostClient;
+  post: MattermostPost;
+  threadRootId: string | undefined;
+  historyKey: string | null;
+  baseSessionKey: string;
+  historyLimit: number;
+  channelHistories: Map<string, HistoryEntry[]>;
+  threadsBackfilledThisSession: Set<string>;
+  fetchThreadPosts?: MattermostThreadBackfillFetcher;
+  resolveUserInfo: MattermostThreadBackfillUserResolver;
+  timeoutMs?: number;
+}): Promise<void> {
+  const {
+    client,
+    post,
+    threadRootId,
+    historyKey,
+    baseSessionKey,
+    historyLimit,
+    channelHistories,
+    threadsBackfilledThisSession,
+    fetchThreadPosts = fetchMattermostThreadPosts,
+    resolveUserInfo,
+    timeoutMs = 10_000,
+  } = params;
+  if (!threadRootId || !historyKey || historyLimit <= 0) {
+    return;
+  }
+
+  const backfillKey = `${historyKey}:${baseSessionKey}`;
+  if (threadsBackfilledThisSession.has(backfillKey)) {
+    return;
+  }
+
+  const existing = channelHistories.get(historyKey);
+  if (existing && existing.length > 0) {
+    threadsBackfilledThisSession.add(backfillKey);
+    return;
+  }
+
+  try {
+    const abort = new AbortController();
+    const timeoutId = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      const threadPosts = await fetchThreadPosts(client, threadRootId, abort.signal);
+      threadsBackfilledThisSession.add(backfillKey);
+      if (threadPosts.length === 0) {
+        return;
+      }
+
+      // Filter current post before trimming so the history window is fully
+      // utilized even when the triggering post is among the newest entries.
+      const others = threadPosts.filter((p) => p.id !== post.id);
+      const windowed = others.slice(-historyLimit);
+      const entries: HistoryEntry[] = [];
+      for (const p of windowed) {
+        const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+        const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
+        entries.push({
+          sender,
+          body: p.message || "[attachment]",
+          timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+          messageId: p.id ?? undefined,
+        });
+      }
+      if (entries.length > 0) {
+        channelHistories.set(historyKey, entries);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch {
+    // Best-effort: server fetch failure or timeout should not block inbound dispatch.
+  }
+}
+
 export function shouldUpdateMattermostDraftToolProgress(
   account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
 ): boolean {
@@ -879,6 +966,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // non-empty first sightings prevents normal post-turn empty windows
   // from re-triggering an unnecessary server fetch (kernel.ts:577 clears
   // pending group history after a successful dispatch).
+  const threadsBackfilledThisSession = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1564,58 +1652,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // server fetch.
         //
         // Best-effort — never blocks inbound dispatch.
-        if (threadRootId && historyKey && historyLimit > 0) {
-          const backfillKey = `${historyKey}:${baseSessionKey}`;
-          if (!threadsBackfilledThisSession.has(backfillKey)) {
-            const existing = channelHistories.get(historyKey);
-            if (!existing || existing.length === 0) {
-              try {
-                const abort = new AbortController();
-                const timeoutId = setTimeout(() => abort.abort(), 10_000);
-                try {
-                  const threadPosts = await fetchMattermostThreadPosts(
-                    client,
-                    threadRootId,
-                    abort.signal,
-                  );
-                  threadsBackfilledThisSession.add(backfillKey);
-                  if (threadPosts.length > 0) {
-                    // Filter current post before trimming so the history
-                    // window is fully utilized even when the triggering
-                    // post is among the newest entries.
-                    const others = threadPosts.filter((p) => p.id !== post.id);
-                    const windowed = others.slice(-historyLimit);
-                    const entries: HistoryEntry[] = [];
-                    for (const p of windowed) {
-                      const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
-                      const sender = user?.username
-                        ? `@${user.username}`
-                        : (p.user_id ?? "unknown");
-                      entries.push({
-                        sender,
-                        body: p.message || "[attachment]",
-                        timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
-                        messageId: p.id ?? undefined,
-                      });
-                    }
-                    if (entries.length > 0) {
-                      channelHistories.set(historyKey, entries);
-                    }
-                  }
-                } finally {
-                  clearTimeout(timeoutId);
-                }
-              } catch {
-                // best-effort: server fetch failure or timeout should not block
-              }
-            } else {
-              // Window already populated — mark serviced for this session
-              // so the kernel clearing pending history after this turn
-              // does not falsely trigger a cold-window fetch.
-              threadsBackfilledThisSession.add(backfillKey);
-            }
-          }
-        }
+        await backfillMattermostThreadHistoryForMonitor({
+          client,
+          post,
+          threadRootId,
+          historyKey,
+          baseSessionKey,
+          historyLimit,
+          channelHistories,
+          threadsBackfilledThisSession,
+          resolveUserInfo,
+        });
 
         core.channel.activity.record({
           channel: "mattermost",
