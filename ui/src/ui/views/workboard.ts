@@ -5,6 +5,8 @@ import { t } from "../../i18n/index.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
+  buildWorkboardCardTaskSessionKey,
+  buildWorkboardCardWorkUnitKey,
   configureWorkboardPolling,
   deleteWorkboardCard,
   dispatchWorkboard,
@@ -67,6 +69,14 @@ type WorkboardSelectOption<Value extends string = string> = {
   disabled?: boolean;
 };
 
+type WorkboardCardChatSurfaceContext = {
+  boardId: string;
+  card: WorkboardCard;
+  linkedSessionKey?: string;
+  workUnitKey: string;
+  workUnitSessionKey: string;
+};
+
 type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
@@ -78,6 +88,7 @@ type WorkboardProps = {
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
   onOpenSession: (sessionKey: string) => void;
+  renderChatSurface?: (context: WorkboardCardChatSurfaceContext) => TemplateResult | typeof nothing;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
@@ -1875,12 +1886,26 @@ function renderCardDetailChatPanel(
 ) {
   const state = getWorkboardState(props.host);
   const draft = state.detailChatDraft.trim();
-  const boardId =
-    typeof card.metadata?.automation?.boardId === "string" &&
-    card.metadata.automation.boardId.trim()
-      ? card.metadata.automation.boardId.trim()
-      : "default";
-  const workUnitKey = `workboard:${boardId}:${card.id}`;
+  const workUnitKey = buildWorkboardCardWorkUnitKey(card);
+  const boardId = workUnitKey.split(":")[1] || "default";
+  const workUnitSessionKey = buildWorkboardCardTaskSessionKey(card);
+  if (props.renderChatSurface) {
+    return html`
+      <section class="workboard-detail__section workboard-detail__chat">
+        <div class="workboard-detail__chat-context" title=${workUnitKey}>
+          <span class="chip">WU</span>
+          <code>${workUnitKey}</code>
+        </div>
+        ${props.renderChatSurface({
+          boardId,
+          card,
+          linkedSessionKey,
+          workUnitKey,
+          workUnitSessionKey,
+        })}
+      </section>
+    `;
+  }
   const sendDisabled = !writable || !props.connected || state.detailChatSending || busy || !draft;
   const send = () => {
     if (sendDisabled) {

@@ -1,5 +1,5 @@
 // Control UI tests cover workboard behavior.
-import { nothing, render } from "lit";
+import { html, nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   getWorkboardState,
@@ -1669,6 +1669,69 @@ describe("renderWorkboard", () => {
       expect(container.querySelector(".workboard-detail-drawer")).toBeNull();
       expect(main?.hasAttribute("inert")).toBe(false);
       expect(document.activeElement).toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("renders an embedded chat surface with Workboard context when provided", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Inspect embedded chat",
+        status: "todo",
+        priority: "normal",
+        agentId: "bo",
+        labels: [],
+        position: 1000,
+        sessionKey: "agent:bo:telegram:main",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const renderChatSurface = vi.fn(
+      (context: Parameters<NonNullable<WorkboardRenderProps["renderChatSurface"]>>[0]) =>
+        html`<div class="mock-workboard-chat-surface">${context.workUnitKey}</div>`,
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      renderChatSurface,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      container.querySelector<HTMLButtonElement>("button[aria-label='View details']")?.click();
+      await nextFrame();
+      [...container.querySelectorAll<HTMLButtonElement>("[role='tab']")]
+        .find((button) => button.textContent?.includes("Chat"))
+        ?.click();
+      await nextFrame();
+
+      expect(renderChatSurface).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boardId: "default",
+          linkedSessionKey: "agent:bo:telegram:main",
+          workUnitKey: "workboard:default:card-1",
+          workUnitSessionKey: "agent:bo:subagent:workboard-default-card-1",
+        }),
+      );
+      expect(container.querySelector(".mock-workboard-chat-surface")?.textContent).toContain(
+        "workboard:default:card-1",
+      );
+      expect(container.querySelector(".workboard-detail__chat-input")).toBeNull();
     } finally {
       render(nothing, container);
       container.remove();

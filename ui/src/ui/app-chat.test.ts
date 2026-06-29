@@ -1380,6 +1380,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("applies a message transform while preserving composer cleanup for the original draft", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-transform" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "please inspect this",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, undefined, {
+      messageTransform: (message) => `WU context\n\n${message}`,
+    });
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("WU context\n\nplease inspect this");
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
   it.each([
     {
       input: "/reset soft please reload system prompt",

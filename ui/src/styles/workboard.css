@@ -1617,6 +1617,54 @@
   white-space: nowrap;
 }
 
+.workboard-embedded-chat {
+  display: grid;
+  min-height: 0;
+  gap: 12px;
+}
+
+.workboard-embedded-chat__bar {
+  display: grid;
+  gap: 8px;
+}
+
+.workboard-embedded-chat__status {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workboard-embedded-chat__status code {
+  display: inline-block;
+  max-width: min(32ch, 100%);
+  overflow: hidden;
+  vertical-align: bottom;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-embedded-chat__actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workboard-embedded-chat .card.chat {
+  min-height: min(680px, 68vh);
+  margin: 0;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.workboard-embedded-chat .chat-thread {
+  min-height: 220px;
+}
+
 .workboard textarea.input.workboard-detail__chat-input {
   width: 100%;
   min-height: 156px;

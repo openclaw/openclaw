@@ -153,6 +153,11 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import type { WorkboardCard } from "./controllers/workboard.ts";
+import {
+  buildWorkboardCardChatMessage,
+  buildWorkboardCardTaskSessionKey,
+} from "./controllers/workboard.ts";
 import { captureSessionToWorkboard, getWorkboardState } from "./controllers/workboard.ts";
 import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
@@ -757,6 +762,14 @@ type ControlChatSurfaceOptions = {
   overrides?: Partial<ChatProps>;
 };
 
+type WorkboardChatSurfaceContext = {
+  boardId: string;
+  card: WorkboardCard;
+  linkedSessionKey?: string;
+  workUnitKey: string;
+  workUnitSessionKey: string;
+};
+
 function renderControlChatSurface(options: ControlChatSurfaceOptions) {
   const {
     state,
@@ -942,6 +955,104 @@ function renderControlChatSurface(options: ControlChatSurfaceOptions) {
     basePath: state.basePath ?? "",
     ...options.overrides,
   });
+}
+
+function shouldAttachWorkboardContextToChatMessage(message: string): boolean {
+  const trimmed = message.trim();
+  return Boolean(trimmed) && !trimmed.startsWith("/");
+}
+
+function renderWorkboardCardChatSurface(
+  options: ControlChatSurfaceOptions & { context: WorkboardChatSurfaceContext },
+) {
+  const { state, context, requestHostUpdate } = options;
+  const activeSessionKey = state.sessionKey;
+  const linkedSessionKey = context.linkedSessionKey;
+  const useSession = (sessionKey: string) => {
+    if (sessionKey && sessionKey !== state.sessionKey) {
+      switchChatSession(state, sessionKey);
+    }
+    requestHostUpdate?.();
+  };
+  const linkCardToSession = async (sessionKey: string) => {
+    if (!state.client || !state.connected || !sessionKey.trim()) {
+      return;
+    }
+    try {
+      await state.client.request("workboard.cards.update", {
+        id: context.card.id,
+        patch: { sessionKey },
+      });
+      context.card.sessionKey = sessionKey;
+    } catch (err) {
+      state.lastError = String(err);
+      state.chatError = state.lastError;
+    } finally {
+      requestHostUpdate?.();
+    }
+  };
+  const useWorkUnitSession = () => {
+    useSession(context.workUnitSessionKey);
+    void linkCardToSession(context.workUnitSessionKey);
+  };
+  const linkCurrentSession = () => {
+    void linkCardToSession(state.sessionKey);
+  };
+  return html`
+    <div class="workboard-embedded-chat">
+      <div class="workboard-embedded-chat__bar">
+        <div class="workboard-embedded-chat__status">
+          <span class="chip">${t("workboard.chatContextAttached")}</span>
+          <span title=${activeSessionKey}
+            >${t("workboard.chatActiveSession")}: <code>${activeSessionKey}</code></span
+          >
+        </div>
+        <div class="workboard-embedded-chat__actions">
+          <button
+            class="btn btn--sm"
+            type="button"
+            ?disabled=${activeSessionKey === context.workUnitSessionKey}
+            @click=${useWorkUnitSession}
+          >
+            ${icons.plus} ${t("workboard.chatWorkUnitSession")}
+          </button>
+          ${linkedSessionKey
+            ? html`
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  ?disabled=${activeSessionKey === linkedSessionKey}
+                  @click=${() => useSession(linkedSessionKey)}
+                >
+                  ${icons.messageSquare} ${t("workboard.openLinkedSession")}
+                </button>
+              `
+            : nothing}
+          <button
+            class="btn btn--sm"
+            type="button"
+            ?disabled=${Boolean(linkedSessionKey && activeSessionKey === linkedSessionKey)}
+            @click=${linkCurrentSession}
+          >
+            ${icons.link} ${t("workboard.chatLinkCurrentSession")}
+          </button>
+        </div>
+      </div>
+      ${renderControlChatSurface({
+        ...options,
+        overrides: {
+          onSend: () =>
+            void state.handleSendChat(undefined, {
+              messageTransform: (message) =>
+                shouldAttachWorkboardContextToChatMessage(message)
+                  ? buildWorkboardCardChatMessage(context.card, message)
+                  : message,
+            }),
+          onNewSession: useWorkUnitSession,
+        },
+      })}
+    </div>
+  `;
 }
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
@@ -3243,6 +3354,28 @@ export function renderApp(state: AppViewState) {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                renderChatSurface: (context) =>
+                  renderWorkboardCardChatSurface({
+                    state,
+                    requestHostUpdate,
+                    showThinking,
+                    showToolCalls,
+                    chatAvatarUrl,
+                    chatDisabledReason,
+                    chatViewError,
+                    chatWorkspaceFiles,
+                    onToggleWorkspaceFilesCollapsed: toggleChatWorkspaceFilesCollapsed,
+                    onRefreshWorkspaceFiles: refreshChatWorkspaceFiles,
+                    onBrowseWorkspacePath: browseChatWorkspacePath,
+                    onCopyWorkspacePath: copyChatWorkspacePath,
+                    onOpenWorkspaceFile: openChatWorkspaceFile,
+                    onSearchWorkspaceFiles: searchChatWorkspaceFiles,
+                    onOpenWorkspaceArtifact: openChatWorkspaceArtifact,
+                    chatAgentId,
+                    resolvedAgentId,
+                    effectiveAssistantAvatar,
+                    context,
+                  }),
                 onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onRequestUpdate: requestHostUpdate,
               });

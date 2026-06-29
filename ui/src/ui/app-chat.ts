@@ -185,6 +185,7 @@ function formatTerminalChatSendAckError(
 
 export type ChatSendOptions = {
   confirmReset?: boolean;
+  messageTransform?: (message: string) => string;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
@@ -1789,7 +1790,11 @@ export async function handleSendChat(
   opts?: ChatSendOptions,
 ) {
   const previousDraft = host.chatMessage;
-  const message = (messageOverride ?? host.chatMessage).trim();
+  const submittedMessage = (messageOverride ?? host.chatMessage).trim();
+  const message =
+    messageOverride == null && opts?.messageTransform
+      ? opts.messageTransform(submittedMessage).trim()
+      : submittedMessage;
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];

@@ -3772,7 +3772,7 @@ function sanitizeSessionSegment(value: string | undefined, fallback: string): st
   return (sanitized || fallback).slice(0, 96);
 }
 
-function buildCardTaskSessionKey(card: WorkboardCard): string {
+export function buildWorkboardCardTaskSessionKey(card: WorkboardCard): string {
   const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
   const suffix = `subagent:workboard-${boardId}-${cardId}`;
@@ -3781,6 +3781,12 @@ function buildCardTaskSessionKey(card: WorkboardCard): string {
     : suffix;
   const existing = workboardCardSessionKey(card)?.trim();
   return existing === sessionKey ? existing : sessionKey;
+}
+
+export function buildWorkboardCardWorkUnitKey(card: WorkboardCard): string {
+  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
+  const cardId = sanitizeSessionSegment(card.id, "card");
+  return `workboard:${boardId}:${cardId}`;
 }
 
 function buildCardRunIdempotencyKey(card: WorkboardCard): string {
@@ -3799,9 +3805,8 @@ function buildCardChatIdempotencyKey(card: WorkboardCard, message: string): stri
   return `workboard:${boardId}:${cardId}:chat:${Date.now()}:${Math.abs(hash).toString(36)}`;
 }
 
-function buildCardChatMessage(card: WorkboardCard, message: string): string {
-  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
-  const workUnitKey = `workboard:${boardId}:${sanitizeSessionSegment(card.id, "card")}`;
+export function buildWorkboardCardChatMessage(card: WorkboardCard, message: string): string {
+  const workUnitKey = buildWorkboardCardWorkUnitKey(card);
   const contextLines = [
     "## Workboard context",
     `Work unit key: ${workUnitKey}`,
@@ -3990,7 +3995,7 @@ export async function startWorkboardCard(params: {
     const created =
       mode === "autonomous"
         ? await params.client.request("agent", {
-            sessionKey: buildCardTaskSessionKey(card),
+            sessionKey: buildWorkboardCardTaskSessionKey(card),
             ...(card.agentId ? { agentId: card.agentId } : {}),
             label: buildCardSessionLabel(card),
             ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
@@ -4013,7 +4018,7 @@ export async function startWorkboardCard(params: {
         : isRecord(created) && typeof created.key === "string" && created.key.trim()
           ? created.key.trim()
           : mode === "autonomous"
-            ? buildCardTaskSessionKey(card)
+            ? buildWorkboardCardTaskSessionKey(card)
             : null;
     const runId =
       isRecord(created) && typeof created.runId === "string" && created.runId.trim()
@@ -4119,12 +4124,12 @@ export async function sendWorkboardCardChat(params: {
   params.requestUpdate?.();
   try {
     const currentSessionKey = workboardCardSessionKey(params.card);
-    const sessionKey = currentSessionKey ?? buildCardTaskSessionKey(params.card);
+    const sessionKey = currentSessionKey ?? buildWorkboardCardTaskSessionKey(params.card);
     const result = await params.client.request("agent", {
       sessionKey,
       ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
       label: buildCardSessionLabel(params.card),
-      message: buildCardChatMessage(params.card, message),
+      message: buildWorkboardCardChatMessage(params.card, message),
       deliver: false,
       bootstrapContextMode: "lightweight",
       idempotencyKey: buildCardChatIdempotencyKey(params.card, message),
