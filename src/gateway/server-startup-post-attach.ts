@@ -846,7 +846,9 @@ export async function startGatewaySidecars(params: {
     name: "sidecars.model-catalog-warm",
     log: params.log,
     run: async (isStopped) => {
-      if (isStopped()) return;
+      if (isStopped()) {
+        return;
+      }
       const { loadGatewayModelCatalog, markGatewayModelCatalogStaleForReload } =
         await import("./server-model-catalog.js");
       // Warm read-only cache first (used by models.list RPC), then full cache
@@ -854,12 +856,16 @@ export async function startGatewaySidecars(params: {
       // Then re-run full discovery every 30 minutes so new provider models appear
       // without requiring a gateway restart.
       await loadGatewayModelCatalog({ readOnly: true });
-      if (isStopped()) return;
+      if (isStopped()) {
+        return;
+      }
       await loadGatewayModelCatalog({ readOnly: false });
       while (!isStopped()) {
         // unref so the timer does not keep the process alive on clean shutdown.
         await sleep(30 * 60 * 1000, undefined, { ref: false });
-        if (isStopped()) return;
+        if (isStopped()) {
+          return;
+        }
         try {
           markGatewayModelCatalogStaleForReload();
           await loadGatewayModelCatalog({ readOnly: false });
