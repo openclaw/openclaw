@@ -1,7 +1,11 @@
 // Global Undici dispatcher setup keeps process-wide proxy routing, HTTP/1-only
 // enforcement, and long stream timeouts aligned across root fetch imports.
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
-import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import {
+  hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
+  resolveEnvHttpProxyAgentOptions,
+} from "./proxy-env.js";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
@@ -44,6 +48,15 @@ type TimedProxylineManagedDispatcherState = {
   timeoutMs: number;
   dispatch: UndiciDispatcher["dispatch"];
 };
+
+/** Creates a direct Agent for proxy-bypassed requests, using the same
+ * timeout and connect policy as the EnvHttpProxyAgent would have used. */
+function createDirectBypassAgent(params: {
+  timeoutMs: number;
+  connect?: Record<string, unknown>;
+}): UndiciDispatcher {
+  return createHttp1Agent(params.connect ? { ...params.connect } : undefined, params.timeoutMs);
+}
 
 const UNDICI_DISPATCH_HELPER_METHODS = new Set<PropertyKey>([
   "compose",
@@ -128,6 +141,81 @@ function createTimedProxylineManagedDispatcher(
   });
   timedProxylineManagedDispatchers.set(proxy, state);
   return proxy;
+}
+
+/**
+ * Wraps an EnvHttpProxyAgent so each request is first checked against
+ * the enhanced proxy-bypass matcher (with subdomain/CIDR/wildcard support).
+ * Requests that should bypass the proxy are routed through a direct Agent
+ * instead of the EnvHttpProxyAgent, while requests matching the proxy
+ * configuration use the proxy agent as usual.
+ *
+ * The bypass agent inherits the same timeout and connect policy so bypassed
+ * requests behave identically to proxied ones.
+ */
+function createNoProxyAwareEnvDispatcher(
+  envProxyDispatcher: UndiciDispatcher,
+  bypassAgent: UndiciDispatcher,
+): UndiciDispatcher {
+  return new Proxy(envProxyDispatcher, {
+    get(target, property, receiver) {
+      if (property === "dispatch") {
+        return (options: UndiciDispatchOptions, handler: UndiciDispatchHandler): boolean => {
+          const origin =
+            typeof options.origin === "string"
+              ? options.origin
+              : options.origin instanceof URL
+                ? options.origin.href
+                : undefined;
+          // Global-dispatcher check: use hasEnvHttpProxyAgentConfigured
+          // (which includes ALL_PROXY) instead of the SSRF-safe
+          // HTTP(S)-only shouldUseEnvHttpProxyForUrl, because the
+          // EnvHttpProxyAgent already resolves ALL_PROXY.
+          if (origin && hasEnvHttpProxyAgentConfigured() && matchesNoProxy(origin)) {
+            return bypassAgent.dispatch(options, handler);
+          }
+          return target.dispatch(options, handler);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
+        return (...args: unknown[]) => {
+          // Clean up both the proxy dispatcher and the bypass agent.
+          // The last argument may be a callback; wrap it so the caller's
+          // callback fires only after both dispatchers have settled.
+          const cbIdx = args.length - 1;
+          const originalCallback = typeof args[cbIdx] === "function" ? args[cbIdx] : undefined;
+          let settledCount = 0;
+          const onSettled = originalCallback
+            ? (...cbArgs: unknown[]) => {
+                settledCount++;
+                if (settledCount >= 2) {
+                  Reflect.apply(originalCallback, undefined, cbArgs);
+                }
+              }
+            : undefined;
+          // Build args for the bypass agent (use wrapped callback).
+          const bypassArgs = originalCallback
+            ? [...args.slice(0, cbIdx), onSettled]
+            : args.filter((a) => typeof a !== "function");
+          const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
+          if (typeof bypassValue === "function") {
+            Reflect.apply(bypassValue, bypassAgent, bypassArgs);
+          }
+          // Build args for the proxy dispatcher.
+          const proxyArgs = originalCallback ? [...args.slice(0, cbIdx), onSettled] : args;
+          return Reflect.apply(value, target, proxyArgs);
+        };
+      }
+      if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
+        return (...args: unknown[]) => Reflect.apply(value, receiver, args);
+      }
+      return value;
+    },
+  });
 }
 
 function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
@@ -238,7 +326,15 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   try {
-    setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
+    setGlobalDispatcher(
+      createNoProxyAwareEnvDispatcher(
+        createHttp1EnvHttpProxyAgent(proxyOptions),
+        createDirectBypassAgent({
+          timeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+          connect: proxyOptions?.connect as Record<string, unknown> | undefined,
+        }),
+      ),
+    );
     lastAppliedProxyBootstrapKey = nextBootstrapKey;
   } catch {
     // Best-effort bootstrap only.
@@ -278,7 +374,15 @@ function applyGlobalDispatcherStreamTimeouts(params: {
         ...(connect ? { connect } : {}),
         ...HTTP1_ONLY_DISPATCHER_OPTIONS,
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
-      runtime.setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs));
+      runtime.setGlobalDispatcher(
+        createNoProxyAwareEnvDispatcher(
+          createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs),
+          createDirectBypassAgent({
+            timeoutMs,
+            connect: proxyOptions?.connect as Record<string, unknown> | undefined,
+          }),
+        ),
+      );
     } else {
       runtime.setGlobalDispatcher(createHttp1Agent(connect ? { connect } : undefined, timeoutMs));
     }
@@ -377,7 +481,15 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
         return;
       }
     }
-    setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
+    setGlobalDispatcher(
+      createNoProxyAwareEnvDispatcher(
+        createHttp1EnvHttpProxyAgent(proxyOptions),
+        createDirectBypassAgent({
+          timeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+          connect: proxyOptions?.connect as Record<string, unknown> | undefined,
+        }),
+      ),
+    );
     lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   } catch {
     // Best-effort reset only.
