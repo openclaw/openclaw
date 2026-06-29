@@ -212,6 +212,25 @@ describe("security audit gateway HTTP tool findings", () => {
       );
     });
 
+    it("detail names only the allowlisted write-class tool (subset must not claim the sibling is exposed)", () => {
+      // clawsweeper #63919 [P1]/[P2]: with only `allow: ["edit"]`, the finding
+      // must report `edit` as exposed and NOT also claim the sibling `write`
+      // primitive is reachable.
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { allow: ["edit"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      const finding = findings.find(
+        (f) => f.checkId === "gateway.tools_invoke_http.host_write_allow",
+      );
+      expect(finding?.detail).toContain("`edit`");
+      expect(finding?.detail).not.toContain("`write`");
+    });
+
     it("does NOT fire when only allow includes write (legacy config; write still default-deny)", () => {
       const cfg: OpenClawConfig = {
         gateway: {
