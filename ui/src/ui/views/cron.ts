@@ -629,7 +629,7 @@ export function renderCron(props: CronProps) {
             : nothing}
         </section>
 
-        <section class="card">
+        <section class="card" data-run-history>
           <div
             class="row"
             style="justify-content: space-between; align-items: flex-start; gap: 12px;"
@@ -1691,6 +1691,15 @@ function renderJob(job: CronJob, props: CronProps) {
             @click=${(event: Event) => {
               event.stopPropagation();
               props.onLoadRuns(job.id);
+              requestAnimationFrame(() => {
+                const runHistory = document.querySelector("[data-run-history]");
+                if (
+                  runHistory instanceof HTMLElement &&
+                  typeof runHistory.scrollIntoView === "function"
+                ) {
+                  runHistory.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              });
             }}
           >
             ${t("cron.jobList.history")}
