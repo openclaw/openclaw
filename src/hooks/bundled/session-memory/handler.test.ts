@@ -942,4 +942,40 @@ describe("session-memory hook", () => {
       "assistant: Your number is 123-4567",
     ]);
   });
+
+  it("preserves delivery-mirror after an omitted slash-command user turn", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Done" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "/new" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
+    expect(memoryContent).not.toContain("user: /new");
+  });
 });

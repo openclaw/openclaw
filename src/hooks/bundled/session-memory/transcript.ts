@@ -80,6 +80,11 @@ export async function getRecentSessionContent(
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
+            if (role === "user") {
+              // New turn: reset even when slash commands are omitted from
+              // memory, so later standalone delivery mirrors are preserved.
+              lastAssistantText = undefined;
+            }
             const text = extractTextMessageContent(msg.content);
             const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
             // Skip delivery-mirror rows only when they duplicate the preceding
@@ -94,10 +99,6 @@ export async function getRecentSessionContent(
               allMessages.push(`${role}: ${sanitized}`);
               if (role === "assistant") {
                 lastAssistantText = sanitized;
-              } else if (role === "user") {
-                // New turn: reset so a delivery-mirror echoing the previous
-                // turn's assistant text isn't silently filtered.
-                lastAssistantText = undefined;
               }
             }
           }
