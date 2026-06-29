@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithOptions,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
+import { RTL_ISOLATION_MARKERS } from "./rtl-isolation.js";
 
 describe("stripAssistantInternalScaffolding", () => {
   function expectVisibleText(input: string, expected: string) {
@@ -934,5 +936,58 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
+  });
+
+  // Regression for #68105: outbound delivery surfaces (Discord/Slack/Telegram/
+  // WhatsApp) receive assistant text without bidi isolation, so RTL lines that
+  // end with LTR punctuation render with the punctuation on the wrong visual
+  // side. The delivery profile now applies line-level RTL isolation; storage
+  // and runtime profiles still pass through unchanged so transcripts and
+  // internal inspection paths stay byte-for-byte with the model output.
+  describe("RTL bidi isolation on outbound delivery", () => {
+    const { start: RLI, end: PDI } = RTL_ISOLATION_MARKERS;
+
+    it("wraps Hebrew lines on the delivery profile so trailing punctuation visually trails", () => {
+      const input = "שלום?";
+      expect(sanitizeAssistantVisibleText(input)).toBe(`${RLI}${input}${PDI}`);
+    });
+
+    it("wraps Arabic lines on the delivery profile and leaves LTR-only lines untouched", () => {
+      const input = ["مرحبا!", "Hello there.", "كيف حالك؟"].join("\n");
+      const expected = [`${RLI}مرحبا!${PDI}`, "Hello there.", `${RLI}كيف حالك؟${PDI}`].join("\n");
+      expect(sanitizeAssistantVisibleText(input)).toBe(expected);
+    });
+
+    it("does not wrap RTL examples inside fenced code blocks on the delivery profile", () => {
+      const input = ["Example:", "```text", "שלום?", "```"].join("\n");
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
+
+    it("does not wrap lines where RTL appears only inside inline code on the delivery profile", () => {
+      const input = "Use `שלום?` as the example.";
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
+
+    it("does not wrap RTL lines on the history profile (transcript storage stays byte-clean)", () => {
+      const input = "שלום?";
+      expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
+    });
+
+    it("does not wrap RTL lines through the legacy trim-none history wrapper", () => {
+      const input = "שלום?";
+      expect(sanitizeAssistantVisibleTextWithOptions(input, { trim: "none" })).toBe(input);
+    });
+
+    it("does not wrap RTL lines on the internal-scaffolding profile", () => {
+      const input = "שלום?";
+      expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
+    });
+
+    it("is idempotent on the delivery profile (already-isolated text is not re-wrapped)", () => {
+      const input = "שלום?";
+      const once = sanitizeAssistantVisibleText(input);
+      const twice = sanitizeAssistantVisibleText(once);
+      expect(twice).toBe(once);
+    });
   });
 });
