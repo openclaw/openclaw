@@ -259,7 +259,7 @@ class QQBotMarkdownChunkingState {
     if (!text) {
       return;
     }
-    pushBaseChunks(chunks, text, limit, this.baseChunker);
+    this.enqueuePending(text, "text", limit);
   }
 
   private flushFenceText(chunks: string[], limit: number): boolean {
