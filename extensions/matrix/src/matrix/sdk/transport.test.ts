@@ -551,3 +551,107 @@ describe("createMatrixGuardedFetch", () => {
     expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(url);
   });
 });
+
+describe("matrix transport streaming OOM guard — real HTTP server without Content-Length", () => {
+  // These tests use a real node:http server with NO Content-Length header so that
+  // enforceDeclaredResponseSize() is a no-op and readResponseWithLimit() is the
+  // sole byte-cap enforcement path. They prove the streaming bound cancels the
+  // connection before the full body is buffered (OOM guard).
+
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  it("rejects oversized streaming raw response before fully buffering 20 MiB (OOM guard)", async () => {
+    const CHUNK = Buffer.alloc(1024 * 1024, 0x61); // 1 MiB per chunk
+    const TOTAL_CHUNKS = 20; // 20 MiB total — above 16 MiB cap
+    let chunksWritten = 0;
+
+    const server = http.createServer((_req, res) => {
+      // Deliberately omit Content-Length so enforceDeclaredResponseSize is a no-op.
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      let sent = 0;
+      const sendChunk = () => {
+        if (sent >= TOTAL_CHUNKS) {
+          res.end();
+          return;
+        }
+        sent++;
+        chunksWritten++;
+        const ok = res.write(CHUNK);
+        if (ok) setImmediate(sendChunk);
+        else res.once("drain", sendChunk);
+      };
+      sendChunk();
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+
+    try {
+      // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here.
+      await expect(
+        performMatrixRequest({
+          homeserver: `http://127.0.0.1:${port}`,
+          accessToken: "token",
+          method: "GET",
+          endpoint: "/_matrix/media/v3/download/example/id",
+          timeoutMs: 30_000,
+          raw: true,
+          maxBytes: 16 * 1024 * 1024, // 16 MiB cap — readResponseWithLimit enforces this
+          ssrfPolicy: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+      // Mutation-control: bare response.arrayBuffer() would buffer all 20 MiB.
+      // readResponseWithLimit cancels the stream mid-flight so chunksWritten < TOTAL_CHUNKS.
+      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+      console.log(
+        `[bound-proof] matrix streaming canceled at ${chunksWritten}/${TOTAL_CHUNKS} chunks`,
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  }, 30_000);
+
+  it("reads streaming raw response under the byte cap without Content-Length", async () => {
+    const payload = Buffer.from("hello matrix streaming bound proof");
+
+    const server = http.createServer((_req, res) => {
+      // Omit Content-Length — only readResponseWithLimit guards body size.
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.end(payload);
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+
+    try {
+      const result = await performMatrixRequest({
+        homeserver: `http://127.0.0.1:${port}`,
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 10_000,
+        raw: true,
+        maxBytes: 16 * 1024 * 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      expect(result.buffer).toEqual(payload);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+});
