@@ -1130,6 +1130,54 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("allows valid SSE events larger than 64 KiB before the event boundary", async () => {
+    const largeValue = "x".repeat(128 * 1024);
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(encoder.encode('data: {"payload":"'));
+              return;
+            }
+            if (pulls === 2) {
+              controller.enqueue(encoder.encode(largeValue));
+              return;
+            }
+            if (pulls === 3) {
+              controller.enqueue(encoder.encode('"}\n\n'));
+              return;
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-chatgpt-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ payload: largeValue }]);
+  });
+
   it("handles a large transport chunk containing many valid small SSE events", async () => {
     // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
     // events; the cap must apply only to the unterminated tail, not the full chunk.
@@ -1370,7 +1418,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("errors on oversized SSE body without event boundary in sanitizer", async () => {
-    const oversized = "x".repeat(65 * 1024);
+    const oversized = "x".repeat(4 * 1024 * 1024 + 1);
     const encoder = new TextEncoder();
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
@@ -1410,7 +1458,7 @@ describe("buildGuardedModelFetch", () => {
       caught = e;
     }
     expect(caught).toBeTruthy();
-    expect(String(caught)).toMatch(/exceeded max buffer size/i);
+    expect(String(caught)).toMatch(/exceeded max event size/i);
   });
 
   it("errors on oversized streaming JSON body without content-length in SSE synthesis", async () => {
