@@ -70,6 +70,7 @@ import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type OpenClawToolsDeps = {
@@ -331,6 +332,19 @@ export function createOpenClawTools(
     lateBindRuntimeConfig: true,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-search-tool");
+  if (webSearchTool) {
+    try {
+      const webSearchProviders = listWebSearchProviders({ config: options?.config });
+      if (webSearchProviders.length === 0) {
+        console.warn(
+          "[openclaw] web_search tool is available but no web search provider plugin is enabled. " +
+            "Enable one with: openclaw plugins enable <provider>",
+        );
+      }
+    } catch {
+      // Diagnostic warning is best-effort; tool registration must not fail.
+    }
+  }
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
