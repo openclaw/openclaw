@@ -91,6 +91,66 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
+  it("does not let a legacy sibling base-path setting override the current page gateway", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-a/chat",
+    });
+    setControlUiBasePath("/gateway-a");
+    const gatewayAUrl = expectedGatewayUrl("/gateway-a");
+    saveSettings({
+      gatewayUrl: gatewayAUrl,
+      token: "",
+      sessionKey: "agent:gateway-a:main",
+      lastActiveSessionKey: "agent:gateway-a:main",
+      theme: "dash",
+      themeMode: "dark",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: true,
+      navWidth: 260,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-b/chat",
+    });
+    setControlUiBasePath("/gateway-b");
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.sessionKey).toBe("main");
+  });
+
+  it("keeps a legacy cross-origin custom gateway URL", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-b/chat",
+    });
+    setControlUiBasePath("/gateway-b");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://custom-gateway.example/control",
+        theme: "dash",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://custom-gateway.example/control");
+    expect(settings.theme).toBe("dash");
+  });
+
   it("skips node sessionStorage accessors that warn without a storage file", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
