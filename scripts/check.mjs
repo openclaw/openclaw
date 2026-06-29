@@ -88,6 +88,7 @@ export async function main(argv = process.argv.slice(2)) {
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
         { name: "changelog attributions", args: ["check:changelog-attributions"] },
+        { name: "Kubernetes manifest drift", args: ["k8s:manifest:check"] },
         { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
         {
           name: "guarded extension wildcard re-exports",

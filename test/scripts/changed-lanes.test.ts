@@ -980,6 +980,19 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
+  it("runs the Kubernetes manifest drift guard for manifest source changes", () => {
+    const result = detectChangedLanes(["scripts/k8s/manifests/deployment.yaml"]);
+    const plan = createChangedCheckPlan(result);
+    const commandNames = plan.commands.map((command) => command.args[0]);
+
+    expectLanes(result.lanes, {
+      tooling: true,
+    });
+    expect(commandNames).toContain("k8s:manifest:check");
+    expect(commandNames).toContain("lint:scripts");
+    expect(commandNames).not.toContain("tsgo:all");
+  });
+
   it("routes root hygiene config changes to tooling instead of all lanes", () => {
     const result = detectChangedLanes([
       ".dockerignore",
