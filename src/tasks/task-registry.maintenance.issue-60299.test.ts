@@ -156,7 +156,7 @@ function createTaskRegistryMaintenanceHarness(params: {
           ? { terminalSummary: patch.terminalSummary ?? undefined }
           : {}),
       } satisfies TaskRecord;
-      if (Object.prototype.hasOwnProperty.call(patch, "error")) {
+      if (Object.hasOwn(patch, "error")) {
         if (patch.error === undefined) {
           delete next.error;
         } else {

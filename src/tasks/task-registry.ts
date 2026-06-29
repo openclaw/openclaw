@@ -1180,7 +1180,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
-  if (Object.prototype.hasOwnProperty.call(patch, "error") && patch.error === undefined) {
+  if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
@@ -1572,7 +1572,7 @@ export function markTaskTerminalById(params: {
         }
       : {}),
   };
-  if (Object.prototype.hasOwnProperty.call(params, "error")) {
+  if (Object.hasOwn(params, "error")) {
     patch.error = params.error;
   }
   return updateTask(params.taskId, patch);
