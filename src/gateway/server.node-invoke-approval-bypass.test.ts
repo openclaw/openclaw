@@ -417,7 +417,9 @@ describe("node.invoke approval bypass", () => {
     });
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(ws);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
     const res = await connectReq(ws, {
       skipDefaultAuth: true,
       deviceIdentityPath: issued.identityPath,
