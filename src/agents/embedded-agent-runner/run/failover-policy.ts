@@ -77,11 +77,7 @@ type RunFailoverDecisionParams =
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
-    reason &&
-    reason !== "timeout" &&
-    reason !== "model_not_found" &&
-    reason !== "format" &&
-    reason !== "session_expired",
+    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
   );
 }
 
