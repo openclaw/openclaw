@@ -668,6 +668,36 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.sessionKey).toBe("main");
   });
 
+  it("preserves a legacy custom remote gatewayUrl on first load after upgrade", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "control.example:8443",
+      pathname: "/",
+    });
+
+    // Pre-upgrade profiles only have the legacy unscoped key.  A custom remote
+    // gateway URL should still be migrated even though its scope differs from
+    // the page-derived Control UI URL.
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://remote-gateway.example.com",
+        theme: "dash",
+        themeMode: "dark",
+        chatShowThinking: false,
+        sessionKey: "remote-session",
+        lastActiveSessionKey: "remote-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://remote-gateway.example.com");
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.chatShowThinking).toBe(false);
+    expect(settings.sessionKey).toBe("remote-session");
+  });
+
   it("does not write to the legacy unscoped settings key when saving", () => {
     setTestLocation({
       protocol: "https:",

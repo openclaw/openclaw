@@ -153,6 +153,36 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
   }
 }
 
+function parseGatewayScopeUrl(gatewayUrl: string): URL | null {
+  try {
+    return new URL(normalizeGatewayTokenScope(gatewayUrl));
+  } catch {
+    return null;
+  }
+}
+
+function shouldUseLegacySettingsFallback(storedUrl: string | undefined, pageDerivedUrl: string) {
+  if (!storedUrl) {
+    return true;
+  }
+  const storedScope = normalizeGatewayTokenScope(storedUrl);
+  const pageScope = normalizeGatewayTokenScope(pageDerivedUrl);
+  if (storedScope === pageScope) {
+    return true;
+  }
+
+  const storedScopeUrl = parseGatewayScopeUrl(storedUrl);
+  const pageScopeUrl = parseGatewayScopeUrl(pageDerivedUrl);
+  if (!storedScopeUrl || !pageScopeUrl) {
+    return false;
+  }
+
+  // Same-origin, different-path legacy records are the sibling-gateway
+  // pollution fixed by #97636.  Different origins are explicit custom/remote
+  // gateway endpoints and must remain discoverable on first load after upgrade.
+  return storedScopeUrl.origin !== pageScopeUrl.origin;
+}
+
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -272,12 +302,7 @@ export function loadSettings(): UiSettings {
         try {
           const fallback = JSON.parse(fallbackRaw) as PersistedUiSettings;
           const storedUrl = normalizeOptionalString(fallback.gatewayUrl);
-          // Accept the fallback only when its gateway URL belongs to the same
-          // basePath as this page, or when no URL was persisted (fresh entry).
-          if (
-            !storedUrl ||
-            normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(pageDerivedUrl)
-          ) {
+          if (shouldUseLegacySettingsFallback(storedUrl, pageDerivedUrl)) {
             raw = fallbackRaw;
           }
         } catch {
