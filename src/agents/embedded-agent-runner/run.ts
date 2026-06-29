@@ -602,8 +602,6 @@ function resolveInitialEmbeddedRunModel(params: {
   };
 }
 
-const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
-
 function resolveEmbeddedTaskRuntimeRequesterOrigin(
   params: Pick<
     RunEmbeddedAgentParams,
