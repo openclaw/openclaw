@@ -53,6 +53,35 @@ export function blockId(message: AgentMessage, index: number, partIndex?: number
   }
 }
 
+/**
+ * Per-MESSAGE durable anchor (no part index) — `u:<ts>` / `a:<responseId|t+ts>` /
+ * `r:<toolCallId>` / `s:<ts>`. This is the single source of truth for the anchor
+ * formula shared by capture (turn idempotency key) and the accordion (mapping a live
+ * message back to its captured turn / box). A `null` anchor means the message has no
+ * durable identity (skip it: never captured, never folded).
+ */
+export function messageAnchorId(message: AgentMessage): string | null {
+  const m = message as {
+    role?: string;
+    timestamp?: number;
+    responseId?: string;
+    toolCallId?: string;
+  };
+  switch (m.role) {
+    case "user":
+      return m.timestamp != null ? `u:${m.timestamp}` : null;
+    case "assistant": {
+      const anchor =
+        m.responseId != null ? m.responseId : m.timestamp != null ? `t${m.timestamp}` : null;
+      return anchor != null ? `a:${anchor}` : null;
+    }
+    case "toolResult":
+      return m.toolCallId != null ? `r:${m.toolCallId}` : null;
+    default:
+      return m.timestamp != null ? `s:${m.timestamp}` : null;
+  }
+}
+
 /** True for ids keyed off a durable anchor (foldable); false for positional fallbacks. */
 export function isDurableId(id: string): boolean {
   return id.startsWith("u:") || id.startsWith("a:") || id.startsWith("r:") || id.startsWith("s:");

@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "../runtime/index.js";
 import type { AgentEndEvent, ExtensionAPI, ExtensionFactory } from "../sessions/index.js";
+import { messageAnchorId } from "./accordion-blocks.js";
 import { appendTurns, type NewTurn } from "./turns-store.js";
 
 // Conservative hot-path noise marker; the dreaming light pass (Phase 3) owns durable
@@ -21,6 +22,17 @@ const SILENT_PREFIX = /^\s*\[SILENT\]/;
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Stable per-turn idempotency key = sha256(sessionKey | durable message anchor).
+ * Single source shared by capture (dedupe on append) and the accordion (mapping a
+ * live message back to its captured turn). `null` when the message has no durable
+ * anchor (skip it). No `runId` — the anchor is already replay-stable.
+ */
+export function turnIdempotencyKey(sessionKey: string, message: AgentMessage): string | null {
+  const anchor = messageAnchorId(message);
+  return anchor == null ? null : sha256(`${sessionKey}|${anchor}`);
 }
 
 function textOf(content: unknown): string {
@@ -51,12 +63,7 @@ export function buildCapturedTurns(
 ): NewTurn[] {
   const turns: NewTurn[] = [];
   for (const message of messages) {
-    const m = message as {
-      role?: string;
-      content?: unknown;
-      timestamp?: number;
-      responseId?: string;
-    };
+    const m = message as { role?: string; content?: unknown; timestamp?: number };
     if (m.role !== "user" && m.role !== "assistant") {
       continue;
     }
@@ -65,13 +72,15 @@ export function buildCapturedTurns(
       continue;
     }
     // Per-message durable anchor — stable across restart/compaction, no runId needed.
-    const anchor =
-      m.role === "user" ? `u:${m.timestamp}` : `a:${m.responseId ?? `t${m.timestamp}`}`;
+    const idempotencyKey = turnIdempotencyKey(sessionKey, message);
+    if (idempotencyKey == null) {
+      continue;
+    }
     turns.push({
       role: m.role,
       content: text,
       contentHash: sha256(text),
-      idempotencyKey: sha256(`${sessionKey}|${anchor}`),
+      idempotencyKey,
       ts: typeof m.timestamp === "number" ? m.timestamp : 0,
       noiseClass: SILENT_PREFIX.test(text) ? "suppressed" : null,
     });
