@@ -477,6 +477,67 @@ describe("secrets apply env scrub value collision", () => {
     expect(nextEnv).not.toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
   });
 
+  it("scrubs a non-provider plugin apiKey env line when it is migrated to a non-env (file) ref", async () => {
+    const secretFilePath = path.join(rootDir, "firecrawl.key");
+    await fs.writeFile(secretFilePath, SHARED_KEY, "utf8");
+
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              mounted: {
+                source: "file",
+                path: secretFilePath,
+                mode: "singleValue",
+                allowInsecurePath: true,
+              },
+            },
+          },
+          tools: { web: { fetch: { firecrawl: { apiKey: SHARED_KEY } } } },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await fs.writeFile(
+      envPath,
+      `FIRECRAWL_API_KEY=${SHARED_KEY}\nOPENAI_API_KEY=${SHARED_KEY}\nUNRELATED=value\n`,
+      "utf8",
+    );
+    env.FIRECRAWL_API_KEY = SHARED_KEY;
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "tools.web.fetch.firecrawl.apiKey",
+          path: "tools.web.fetch.firecrawl.apiKey",
+          ref: { source: "file", provider: "mounted", id: "value" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    await runSecretsApply({ plan, env, write: true });
+
+    const nextEnv = await fs.readFile(envPath, "utf8");
+
+    expect(nextEnv).toContain(`OPENAI_API_KEY=${SHARED_KEY}`);
+    expect(nextEnv).toContain("UNRELATED=value");
+    expect(nextEnv).not.toContain(`FIRECRAWL_API_KEY=${SHARED_KEY}`);
+  });
+
   it("does NOT delete OPENAI_API_KEY when a no-op already-ref openai target shares a value with a migrated plugin target", async () => {
     await fs.writeFile(
       configPath,

@@ -151,6 +151,16 @@ function migratesProviderAuthCredential(resolved: ResolvedPlanTargetEntry["resol
   );
 }
 
+function providerEnvVarsForPathSegments(pathSegments: readonly string[]): Set<string> {
+  const envKeys = new Set<string>();
+  for (const segment of pathSegments) {
+    for (const envKey of getProviderEnvVars(segment)) {
+      envKeys.add(envKey);
+    }
+  }
+  return envKeys;
+}
+
 function scrubEnvRaw(
   raw: string,
   scrubByEnvKey: Map<string, Set<string>>,
@@ -318,13 +328,20 @@ async function projectPlanState(params: {
         }
       }
     }
-    const targetOwnsRefEnvVar = migratesProviderAuth || resolved.providerId == null;
-    const envRefId = target.ref.source === "env" ? target.ref.id.trim() : "";
-    if (envRefId && targetOwnsRefEnvVar && knownSecretEnvKeys.has(envRefId)) {
-      const targetValues = targetMutations.scrubbedValuesByTarget.get(target);
-      if (targetValues) {
+    const targetValues = targetMutations.scrubbedValuesByTarget.get(target);
+    if (targetValues) {
+      const targetOwnsRefEnvVar = migratesProviderAuth || resolved.providerId == null;
+      const envRefId = target.ref.source === "env" ? target.ref.id.trim() : "";
+      if (envRefId && targetOwnsRefEnvVar && knownSecretEnvKeys.has(envRefId)) {
         for (const value of targetValues) {
           appendKeyedValue(scrubByEnvKey, envRefId, value);
+        }
+      }
+      if (!migratesProviderAuth && resolved.providerId == null) {
+        for (const envKey of providerEnvVarsForPathSegments(resolved.pathSegments)) {
+          for (const value of targetValues) {
+            appendKeyedValue(scrubByEnvKey, envKey, value);
+          }
         }
       }
     }
