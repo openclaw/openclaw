@@ -2411,6 +2411,7 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  reasoningPayloadsEnabled: resolvedReasoningLevel !== "off",
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
