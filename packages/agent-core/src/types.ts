@@ -196,6 +196,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 
   /**
+   * Optional transform applied to each finalized assistant message before it is
+   * emitted, stored in loop state, or used for tool execution.
+   *
+   * Contract: must not throw or reject. Return the original message or another
+   * safe fallback value instead.
+   */
+  transformAssistantMessage?: (
+    message: AssistantMessage,
+    signal?: AbortSignal,
+  ) => Promise<AssistantMessage> | AssistantMessage;
+
+  /**
    * Resolves an API key dynamically for each LLM call.
    *
    * Useful for short-lived OAuth tokens (e.g., GitHub Copilot) that may expire

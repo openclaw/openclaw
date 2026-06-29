@@ -110,6 +110,8 @@ export interface AgentOptions {
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   /** Optionally rewrite context before each provider request. */
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  /** Optionally rewrite finalized assistant messages before emitting/executing. */
+  transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
   /** Injected stream runtime used when streamFn is not supplied. */
   runtime?: AgentCoreStreamRuntimeDeps;
   /** Explicit stream implementation, preferred over runtime.streamSimple. */
@@ -214,6 +216,7 @@ export class Agent {
     messages: AgentMessage[],
     signal?: AbortSignal,
   ) => Promise<AgentMessage[]>;
+  public transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
   public runtime?: AgentCoreStreamRuntimeDeps;
   public streamFn: StreamFn;
   public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
@@ -247,6 +250,7 @@ export class Agent {
     this.mutableState = createMutableAgentState(options.initialState);
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
+    this.transformAssistantMessage = options.transformAssistantMessage;
     this.runtime = options.runtime;
     this.streamFn = resolveAgentCoreStreamFn(options.runtime, options.streamFn);
     this.getApiKey = options.getApiKey;
@@ -495,6 +499,7 @@ export class Agent {
         : undefined,
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
+      transformAssistantMessage: this.transformAssistantMessage,
       getApiKey: this.getApiKey,
       getSteeringMessages: async () => {
         if (skipInitialSteeringPoll) {

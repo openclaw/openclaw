@@ -56,12 +56,60 @@ function transformContentText(content: unknown, replacements?: PluginTextReplace
     return content;
   }
   const next = { ...content };
+  if (next.type === "toolCall") {
+    transformToolCallFields(next, replacements);
+  }
   if (typeof next.text === "string") {
     next.text = applyPluginTextReplacements(next.text, replacements);
   }
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
+  return next;
+}
+
+function transformToolCallArguments(
+  value: unknown,
+  replacements?: PluginTextReplacement[],
+): unknown {
+  if (typeof value === "string") {
+    return applyPluginTextReplacements(value, replacements);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => transformToolCallArguments(entry, replacements));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      transformToolCallArguments(entry, replacements),
+    ]),
+  );
+}
+
+function transformToolCallFields(
+  toolCall: Record<string, unknown>,
+  replacements?: PluginTextReplacement[],
+): void {
+  if (typeof toolCall.partialArgs === "string") {
+    toolCall.partialArgs = applyPluginTextReplacements(toolCall.partialArgs, replacements);
+  }
+  if (typeof toolCall.partialJson === "string") {
+    toolCall.partialJson = applyPluginTextReplacements(toolCall.partialJson, replacements);
+  }
+  if (Object.hasOwn(toolCall, "arguments")) {
+    toolCall.arguments = transformToolCallArguments(toolCall.arguments, replacements);
+  }
+}
+
+function transformToolCallText(toolCall: unknown, replacements?: PluginTextReplacement[]): unknown {
+  if (!isRecord(toolCall)) {
+    return toolCall;
+  }
+  const next = { ...toolCall };
+  transformToolCallFields(next, replacements);
   return next;
 }
 
@@ -114,6 +162,12 @@ function transformAssistantEventText(
   if (next.type === "text_end" && typeof next.content === "string") {
     next.content = applyPluginTextReplacements(next.content, replacements);
   }
+  if (next.type === "toolcall_delta" && typeof next.delta === "string") {
+    next.delta = applyPluginTextReplacements(next.delta, replacements);
+  }
+  if (next.type === "toolcall_end") {
+    next.toolCall = transformToolCallText(next.toolCall, replacements);
+  }
   if (Object.hasOwn(next, "partial")) {
     next.partial = transformMessageText(next.partial, replacements);
   }
@@ -126,15 +180,25 @@ function transformAssistantEventText(
   return next as AssistantMessageEvent;
 }
 
+export function transformPluginMessageText<T>(
+  message: T,
+  replacements?: PluginTextReplacement[],
+): T {
+  return transformMessageText(message, replacements) as T;
+}
+
 function wrapStreamTextTransforms(
   stream: MutableAssistantMessageEventStream,
   replacements?: PluginTextReplacement[],
+  options?: { transformFinalResult?: boolean },
 ): MutableAssistantMessageEventStream {
   if (!replacements || replacements.length === 0) {
     return stream;
   }
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => transformMessageText(await originalResult(), replacements) as never;
+  if (options?.transformFinalResult !== false) {
+    const originalResult = stream.result.bind(stream);
+    stream.result = async () => transformMessageText(await originalResult(), replacements) as never;
+  }
 
   // Wrap async iteration so streamed deltas and the final result receive the
   // same output replacement policy.
@@ -164,6 +228,7 @@ export function wrapStreamFnTextTransforms(params: {
   input?: PluginTextReplacement[];
   output?: PluginTextReplacement[];
   transformSystemPrompt?: boolean;
+  transformFinalResult?: boolean;
 }): StreamFn {
   return (model, context, options) => {
     const nextContext = transformStreamContextText(context, params.input, {
@@ -172,9 +237,13 @@ export function wrapStreamFnTextTransforms(params: {
     const maybeStream = params.streamFn(model, nextContext, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTextTransforms(stream, params.output),
+        wrapStreamTextTransforms(stream, params.output, {
+          transformFinalResult: params.transformFinalResult,
+        }),
       );
     }
-    return wrapStreamTextTransforms(maybeStream, params.output);
+    return wrapStreamTextTransforms(maybeStream, params.output, {
+      transformFinalResult: params.transformFinalResult,
+    });
   };
 }

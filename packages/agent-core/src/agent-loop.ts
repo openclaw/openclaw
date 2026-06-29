@@ -88,6 +88,17 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   return content.length === message.content.length ? message : { ...message, content };
 }
 
+async function finalizeAssistantMessageForLoop(
+  message: AssistantMessage,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+): Promise<AssistantMessage> {
+  const executableMessage = removeNonExecutableToolCalls(message);
+  return config.transformAssistantMessage
+    ? await config.transformAssistantMessage(executableMessage, signal)
+    : executableMessage;
+}
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -516,7 +527,11 @@ async function streamAssistantResponse(
 
       case "done":
       case "error": {
-        const finalMessage = removeNonExecutableToolCalls(await response.result());
+        const finalMessage = await finalizeAssistantMessageForLoop(
+          await response.result(),
+          config,
+          signal,
+        );
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -531,7 +546,11 @@ async function streamAssistantResponse(
     }
   }
 
-  const finalMessage = removeNonExecutableToolCalls(await response.result());
+  const finalMessage = await finalizeAssistantMessageForLoop(
+    await response.result(),
+    config,
+    signal,
+  );
   if (addedPartial) {
     context.messages[context.messages.length - 1] = finalMessage;
   } else {

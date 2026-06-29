@@ -47,6 +47,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { PluginTextReplacement } from "../../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -178,7 +179,10 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import {
+  transformPluginMessageText,
+  wrapStreamFnTextTransforms,
+} from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -533,6 +537,37 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+
+type AssistantMessageTransform = (
+  message: AssistantMessage,
+  signal?: AbortSignal,
+) => AssistantMessage | Promise<AssistantMessage>;
+type AssistantMessageTransformAgent = {
+  transformAssistantMessage?: AssistantMessageTransform;
+};
+
+const originalAssistantMessageTransformByAgent = new WeakMap<
+  AssistantMessageTransformAgent,
+  AssistantMessageTransform | undefined
+>();
+
+function installAttemptAssistantMessageTextTransform(
+  agent: AssistantMessageTransformAgent,
+  output?: PluginTextReplacement[],
+): void {
+  if (!originalAssistantMessageTransformByAgent.has(agent)) {
+    originalAssistantMessageTransformByAgent.set(agent, agent.transformAssistantMessage);
+  }
+  const originalTransform = originalAssistantMessageTransformByAgent.get(agent);
+  if (!output || output.length === 0) {
+    agent.transformAssistantMessage = originalTransform;
+    return;
+  }
+  agent.transformAssistantMessage = async (message, signal) => {
+    const baseMessage = originalTransform ? await originalTransform(message, signal) : message;
+    return transformPluginMessageText(baseMessage, output);
+  };
+}
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -2876,8 +2911,13 @@ export async function runEmbeddedAttempt(
           input: providerTextTransforms.input,
           output: providerTextTransforms.output,
           transformSystemPrompt: false,
+          transformFinalResult: false,
         });
       }
+      installAttemptAssistantMessageTextTransform(
+        activeSession.agent,
+        providerTextTransforms?.output,
+      );
       const nativeWebSearchPolicyContext = {
         sessionKey: sandboxSessionKey,
         sandboxToolPolicy: sandbox?.tools,
