@@ -931,6 +931,24 @@ describe("forceResetGlobalDispatcher", () => {
     expect(() => dispatcher.destroy?.()).not.toThrow();
   });
 
+  it("promise-style close awaits both dispatchers before settling", async () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    const dispatcher = getCurrentDispatcher() as {
+      close?: () => Promise<void>;
+      destroy?: () => Promise<void>;
+    };
+
+    // Promise-style close: should resolve without error
+    await expect(dispatcher.close?.()).resolves.toBeUndefined();
+    // Promise-style destroy: should resolve without error
+    await expect(dispatcher.destroy?.()).resolves.toBeUndefined();
+  });
+
   it("close invokes bypass agent lifecycle alongside env-proxy dispatcher (#97234)", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
