@@ -97,6 +97,7 @@ describe("agent event handler", () => {
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const nodeSendToSession = vi.fn();
+    const logGateway = { error: vi.fn() };
     const clearAgentRunContext = vi.fn();
     const clearTrackedActiveRun =
       vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
@@ -117,6 +118,7 @@ describe("agent event handler", () => {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
+      logGateway,
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
@@ -131,6 +133,7 @@ describe("agent event handler", () => {
       broadcast,
       broadcastToConnIds,
       nodeSendToSession,
+      logGateway,
       clearAgentRunContext,
       clearTrackedActiveRun,
       agentRunSeq,
@@ -2502,7 +2505,7 @@ describe("agent event handler", () => {
     });
     persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("disk full"));
     const markTrackedRunTerminalPersisted = vi.fn();
-    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+    const { broadcastToConnIds, handler, logGateway, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
       lifecycleErrorRetryGraceMs: 0,
       markTrackedRunTerminalPersisted,
@@ -2532,6 +2535,15 @@ describe("agent event handler", () => {
       updatedAt: 2_100,
       abortedLastRun: false,
     });
+    expect(logGateway.error).toHaveBeenCalledWith(
+      "terminal session persistence failed",
+      expect.objectContaining({
+        runId: "run-failed-write",
+        clientRunId: "run-failed-write",
+        sessionKey: "session-failed-write",
+        error: expect.stringContaining("disk full"),
+      }),
+    );
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
   });
 

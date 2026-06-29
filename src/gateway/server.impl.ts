@@ -1195,6 +1195,7 @@ export async function startGatewayServer(
         sessionMessageSubscribers,
         chatAbortControllers,
         restartRecoveryCandidates,
+        logGateway: log,
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);

@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -268,6 +269,7 @@ export type AgentEventHandlerOptions = {
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
+  logGateway?: Pick<SubsystemLogger, "error">;
   loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
@@ -307,6 +309,7 @@ export function createAgentEventHandler({
   toolEventRecipients,
   sessionEventSubscribers,
   sessionMessageSubscribers,
+  logGateway,
   loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
@@ -716,7 +719,13 @@ export function createAgentEventHandler({
             markPersisted();
             broadcastSessionChange();
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            logGateway?.error("terminal session persistence failed", {
+              runId: evt.runId,
+              clientRunId,
+              sessionKey,
+              error: formatForLog(err),
+            });
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
             broadcastSessionChange(evt);
