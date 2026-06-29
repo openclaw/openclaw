@@ -920,6 +920,37 @@ function revalidateLoadedSessionFile(
   return loadEntriesFromFileWithSnapshot(filePath);
 }
 
+function loadSqliteMarkedSessionFile(
+  sessionFile: string,
+  options: { cwdOverride?: string; fallbackCwd?: string } = {},
+):
+  | {
+      cwd: string;
+      entries: FileEntry[];
+      sessionKey: string;
+      sqliteMarker: SqliteSessionFileMarker;
+    }
+  | undefined {
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (!sqliteMarker) {
+    return undefined;
+  }
+  const sessionKey = resolveTranscriptSessionKeyBySessionId(sqliteMarker);
+  if (!sessionKey) {
+    throw new Error(`Cannot open SQLite session without session entry: ${sqliteMarker.sessionId}`);
+  }
+  const entries = loadTranscriptEventsSync(sqliteMarker) as FileEntry[];
+  const header = entries.find((e) => isJsonRecord(e) && e.type === "session") as
+    | SessionHeader
+    | undefined;
+  return {
+    cwd: options.cwdOverride ?? header?.cwd ?? options.fallbackCwd ?? process.cwd(),
+    entries,
+    sessionKey,
+    sqliteMarker,
+  };
+}
+
 // Cached entries are deep-frozen so warm hits cannot drift from the file bytes
 // that validated the cache key. The session header (entries[0]) is the one entry
 // callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
@@ -1513,6 +1544,20 @@ export class SessionManager {
 
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
+    const sqliteLoaded = loadSqliteMarkedSessionFile(sessionFile, { fallbackCwd: this.cwd });
+    if (sqliteLoaded) {
+      this.cwd = sqliteLoaded.cwd;
+      this.sqlitePersistence = {
+        ...sqliteLoaded.sqliteMarker,
+        sessionKey: sqliteLoaded.sessionKey,
+      };
+      this.setLoadedSqliteSessionFile(sessionFile, {
+        entries: sqliteLoaded.entries,
+        snapshot: undefined,
+      });
+      return;
+    }
+    this.sqlitePersistence = undefined;
     this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
   }
 
@@ -3015,26 +3060,15 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
-    const sqliteMarker = parseSqliteSessionFileMarker(path);
-    if (sqliteMarker) {
-      const sessionKey = resolveTranscriptSessionKeyBySessionId(sqliteMarker);
-      if (!sessionKey) {
-        throw new Error(
-          `Cannot open SQLite session without session entry: ${sqliteMarker.sessionId}`,
-        );
-      }
-      const entries = loadTranscriptEventsSync(sqliteMarker) as FileEntry[];
-      const header = entries.find((e) => isJsonRecord(e) && e.type === "session") as
-        | SessionHeader
-        | undefined;
-      const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
+    const sqliteLoaded = loadSqliteMarkedSessionFile(path, { cwdOverride });
+    if (sqliteLoaded) {
       return new SessionManager(
-        cwd,
+        sqliteLoaded.cwd,
         sessionDir ?? "",
         path,
         true,
-        { entries, snapshot: undefined },
-        { ...sqliteMarker, sessionKey },
+        { entries: sqliteLoaded.entries, snapshot: undefined },
+        { ...sqliteLoaded.sqliteMarker, sessionKey: sqliteLoaded.sessionKey },
       );
     }
     // Re-stat before construction so the single parsed load cannot become
