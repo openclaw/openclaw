@@ -1,4 +1,4 @@
-// Shared MCP-channel Docker E2E harness helpers.
+// Shared MCP-channel QA/Docker E2E fixture helpers.
 // The mounted test harness imports packaged dist modules so bridge assertions run
 // against the OpenClaw npm tarball installed in the functional image.
 import process from "node:process";
@@ -6,14 +6,20 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
-import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
-import { formatErrorMessage } from "../../dist/infra/errors.js";
-import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
-import { createGatewayWsClient, type GatewayEventFrame } from "../lib/gateway-ws-client.ts";
-import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
-import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
-import { createMcpClientTempState, type McpClientTempState } from "./mcp-client-temp-state.ts";
-import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
+import { formatErrorMessage } from "../../../../dist/infra/errors.js";
+import { readStringValue } from "../../../../dist/normalization-core/string-coerce.js";
+import { resolveGatewaySuccessPayload } from "../../../../scripts/e2e/lib/gateway-frame-payload.mjs";
+import { readMcpChannelLimits } from "../../../../scripts/e2e/mcp-channel-limits.ts";
+import {
+  createGatewayWsClient,
+  type GatewayEventFrame,
+} from "../../../../scripts/lib/gateway-ws-client.ts";
+import {
+  connectMcpWithTimeout,
+  createMcpClientTempState,
+  type McpClientTempState,
+} from "./mcp-client-temp-state.fixture.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
