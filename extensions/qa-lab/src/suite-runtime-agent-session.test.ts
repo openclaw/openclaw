@@ -51,7 +51,6 @@ describe("qa suite runtime agent session helpers", () => {
     await upsertSessionEntry({
       agentId: "qa",
       env: qaSessionEnv(params.tempRoot),
-      sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       entry: {
         sessionId: params.sessionId,
