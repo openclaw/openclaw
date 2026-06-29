@@ -6353,6 +6353,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/mxc.md
+
+- Route: /plugins/reference/mxc
+- Headings:
+  - H1: Mxc plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/nextcloud-talk.md
 
 - Route: /plugins/reference/nextcloud-talk
