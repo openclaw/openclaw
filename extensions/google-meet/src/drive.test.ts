@@ -35,7 +35,11 @@ describe("exportGoogleDriveDocumentText bound", () => {
   it("returns document text when response is within the 16 MiB cap", async () => {
     const UNDER_CAP = 256;
     const response = makeStreamResponse(UNDER_CAP);
-    mockFetch.mockResolvedValueOnce({ response, release: vi.fn(async () => undefined) });
+    mockFetch.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://www.googleapis.com/drive/v3/files/doc-id/export?mimeType=text%2Fplain",
+      release: vi.fn(async () => undefined),
+    });
 
     const result = await exportGoogleDriveDocumentText({
       accessToken: "tok",
@@ -50,7 +54,11 @@ describe("exportGoogleDriveDocumentText bound", () => {
     const OVER_CAP = 17 * 1024 * 1024; // 17 MiB
     const response = makeStreamResponse(OVER_CAP);
     const release = vi.fn(async () => undefined);
-    mockFetch.mockResolvedValueOnce({ response, release });
+    mockFetch.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://www.googleapis.com/drive/v3/files/doc-id/export?mimeType=text%2Fplain",
+      release,
+    });
 
     await expect(
       exportGoogleDriveDocumentText({ accessToken: "tok", documentId: "doc-id" }),
