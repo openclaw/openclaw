@@ -2149,6 +2149,43 @@ describe("capability cli", () => {
     expect(enqueued).toBeLessThanOrEqual(18);
   });
 
+  it("redacts provider video URLs when the no-output download fails", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/private-video.mp4?sig=secret-presigned-token",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("download forbidden", {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "text/plain" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("vydra generated video download failed");
+    expectRuntimeErrorContains("HTTP 403");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("https://example.com");
+  });
+
   it("buffers an url-only generated video that stays under the byte cap", async () => {
     mocks.loadConfig.mockReturnValue({});
     mocks.generateVideo.mockResolvedValue({

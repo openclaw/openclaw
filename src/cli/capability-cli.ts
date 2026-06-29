@@ -31,6 +31,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -1319,7 +1320,10 @@ async function runVideoGenerate(params: {
       if (!videoBuffer && video.url) {
         const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
         if (!response.ok) {
-          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+          await assertOkOrThrowHttpError(
+            response,
+            `${result.provider} generated video download failed`,
+          );
         }
         if (params.output && response.body) {
           const mimeType = normalizeMimeType(video.mimeType);
