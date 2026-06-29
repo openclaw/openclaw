@@ -2543,6 +2543,19 @@ export async function runEmbeddedAttempt(
                 const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
                 if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+                  const originalExecute = hydratedTool.execute;
+                  hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
+                    const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+                    interval.unref?.();
+                    try {
+                      notifyToolActivity(params.runId);
+                      const result = await originalExecute(...args);
+                      return result;
+                    } finally {
+                      clearInterval(interval);
+                      notifyToolActivity(params.runId);
+                    }
+                  }) as typeof originalExecute;
                 }
                 return hydratedTool;
               }
