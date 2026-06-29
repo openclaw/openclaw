@@ -670,6 +670,14 @@ watch state. When the last notification is a raw assistant response item, they
 also include a bounded assistant text preview. They do not include raw prompt or
 tool content.
 
+After a tool handoff, completed assistant items are treated as current-turn
+progress rather than a final release boundary. Codex can emit progress or
+intermediate narration as `agentMessage` items while the same native turn is
+still active. OpenClaw therefore waits for `turn/completed`, or for the
+post-tool idle guard to fire, before releasing the OpenClaw session lane. This
+keeps Codex Harness aligned with Codex ACP's turn-level completion boundary and
+avoids returning partial post-tool answers.
+
 Environment overrides remain available for local testing:
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN`
