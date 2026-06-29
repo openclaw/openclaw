@@ -239,7 +239,7 @@ OpenClaw enforces a built-in reserve for embedded runs and caps it against the a
 
 Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
 
-Set `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs` (default `120000`) to bound a single deferred background turn-maintenance run. On timeout the maintenance lane is released so a queued user turn proceeds, and late maintenance side effects (transcript rewrite, task completion) are fenced off. Lower it to free queued messages sooner when maintenance wedges; raise it for engines whose background maintenance legitimately runs long.
+`agents.defaults.compaction.turnMaintenanceTaskTimeoutMs` is disabled by default (opt-in); set a positive value (ms) to bound a deferred background turn-maintenance run. On timeout the maintenance lane is released so a queued user turn proceeds, and late maintenance side effects (transcript rewrite, task completion) are fenced off. Lower it to free queued messages sooner when maintenance wedges; raise it for engines whose background maintenance legitimately runs long.
 
 When `truncateAfterCompaction` is enabled, OpenClaw rotates the active transcript to a compacted successor after compaction. Branch/restore checkpoint actions use that compacted successor; legacy pre-compaction checkpoint files remain readable while referenced.
 

@@ -47,8 +47,6 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
-// Mirrors DEFERRED_TURN_MAINTENANCE_TASK_TIMEOUT_MS in the production module.
-const DEFAULT_TURN_MAINTENANCE_TASK_TIMEOUT_MS = 120_000;
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -1099,7 +1097,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("passes a per-task timeout to the deferred maintenance enqueue", async () => {
+  it("disables the per-task timeout by default and passes the configured bound when set", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-timeout-opt-", async () => {
       vi.useFakeTimers();
       const enqueueSpy = vi
@@ -1139,12 +1137,54 @@ describe("runContextEngineMaintenance", () => {
 
         expect(enqueueSpy).toHaveBeenCalledTimes(2);
         const defaultOpts = requireRecord(enqueueSpy.mock.calls[0]?.[2], "default enqueue options");
-        expect(defaultOpts.taskTimeoutMs).toBe(DEFAULT_TURN_MAINTENANCE_TASK_TIMEOUT_MS);
+        expect(defaultOpts.taskTimeoutMs).toBeUndefined();
+        expect(defaultOpts.onTaskTimeout).toBeUndefined();
         const configuredOpts = requireRecord(
           enqueueSpy.mock.calls[1]?.[2],
           "configured enqueue options",
         );
         expect(configuredOpts.taskTimeoutMs).toBe(45_000);
+        expect(configuredOpts.onTaskTimeout).toBeTypeOf("function");
+      } finally {
+        enqueueSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("treats turnMaintenanceTaskTimeoutMs=0 as disabled", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-zero-", async () => {
+      vi.useFakeTimers();
+      const enqueueSpy = vi
+        .spyOn(commandQueueModule, "enqueueCommandInLane")
+        .mockResolvedValue(undefined);
+      try {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetCommandQueueStateForTest();
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-timeout-zero",
+          sessionKey: "agent:main:session-timeout-zero",
+          sessionFile: "/tmp/session-timeout-zero.jsonl",
+          reason: "turn",
+          config: {
+            agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 0 } } },
+          },
+        });
+        await flushAsyncWork();
+
+        expect(enqueueSpy).toHaveBeenCalledTimes(1);
+        const opts = requireRecord(enqueueSpy.mock.calls[0]?.[2], "zero enqueue options");
+        expect(opts.taskTimeoutMs).toBeUndefined();
+        expect(opts.onTaskTimeout).toBeUndefined();
       } finally {
         enqueueSpy.mockRestore();
         vi.useRealTimers();

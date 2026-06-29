@@ -45,10 +45,6 @@ const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
 const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after turn.";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
-// Bounds a single deferred maintenance run so a wedged worker (e.g. plugin lock
-// contention) releases its lane in seconds instead of blocking a queued user
-// message until the session-level abort fires. Overridable per deployment.
-const DEFERRED_TURN_MAINTENANCE_TASK_TIMEOUT_MS = 120_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
@@ -145,11 +141,18 @@ function resolveDeferredTurnMaintenanceLane(sessionKey: string): string {
   return `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
 }
 
-function resolveDeferredTurnMaintenanceTaskTimeoutMs(config?: OpenClawConfig): number {
+/**
+ * Resolve the opt-in per-deployment bound for a single deferred (background)
+ * turn-maintenance run. Absent or non-positive config means no bound, which
+ * preserves the pre-change upgrade behavior of letting background maintenance
+ * run unbounded. A positive value arms the lane timeout plus the fence so a
+ * wedged run releases its lane and suppresses late side effects (issue #96703).
+ */
+function resolveDeferredTurnMaintenanceTaskTimeoutMs(config?: OpenClawConfig): number | undefined {
   const configured = config?.agents?.defaults?.compaction?.turnMaintenanceTaskTimeoutMs;
   return typeof configured === "number" && Number.isFinite(configured) && configured > 0
     ? configured
-    : DEFERRED_TURN_MAINTENANCE_TASK_TIMEOUT_MS;
+    : undefined;
 }
 
 async function disposeDeferredMaintenanceContextEngine(
@@ -684,6 +687,18 @@ function scheduleDeferredTurnMaintenance(
   // below). The worker and its transcript-rewrite helper read it to suppress
   // late side effects once the lane has been released to a queued user turn.
   const maintenanceFence: DeferredTurnMaintenanceFence = { tripped: false };
+  // Opt-in bound: with no positive config the lane arms no timeout and the fence
+  // never trips, so background maintenance runs unbounded exactly as before the
+  // bound existed. A positive value arms both (issue #96703).
+  const taskTimeoutOptions =
+    taskTimeoutMs === undefined
+      ? {}
+      : {
+          taskTimeoutMs,
+          onTaskTimeout: () => {
+            maintenanceFence.tripped = true;
+          },
+        };
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(
@@ -704,18 +719,12 @@ function scheduleDeferredTurnMaintenance(
           disposeContextEngineAfterMaintenance: params.disposeContextEngineAfterMaintenance,
           maintenanceFence,
         }),
-      // Bound a wedged maintenance run: on timeout the lane is released and the
-      // enqueue promise rejects with CommandLaneTaskTimeoutError. The
-      // onTaskTimeout hook flips the fence synchronously at that moment so the
-      // still-running worker suppresses its remaining transcript/task side
-      // effects (a rewrite already mid-persist is serialized by the session
-      // write lock).
-      {
-        taskTimeoutMs,
-        onTaskTimeout: () => {
-          maintenanceFence.tripped = true;
-        },
-      },
+      // When armed, on timeout the lane is released and the enqueue promise
+      // rejects with CommandLaneTaskTimeoutError. The onTaskTimeout hook flips
+      // the fence synchronously at that moment so the still-running worker
+      // suppresses its remaining transcript/task side effects (a rewrite already
+      // mid-persist is serialized by the session write lock).
+      taskTimeoutOptions,
     );
   } catch (err) {
     schedulerAbort.dispose();
@@ -751,7 +760,7 @@ function scheduleDeferredTurnMaintenance(
       // timeout. The worker may still be unwinding in the background, but the
       // lane is already free; release the task descriptor so the session no
       // longer treats maintenance as active and the queued turn can proceed.
-      if (isCommandLaneTaskTimeoutError(err)) {
+      if (taskTimeoutMs !== undefined && isCommandLaneTaskTimeoutError(err)) {
         // Defensive: the onTaskTimeout hook already flipped this, but keep the
         // fence authoritative even if the hook path changes.
         maintenanceFence.tripped = true;
