@@ -828,13 +828,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
 
     // Surrender active and finalized runs before clearTrackedRunState
-    // clears sessionRuns and finalizedRuns. In-flight runs are surrendered
-    // so late deltas/finals-after-replay are suppressed, while displayable
-    // finals still render (the user may not have seen the streaming text).
-    // Finalized runs are surrendered so the history-replay static row is
-    // not duplicated — for finalized runs, displayable finals are also
-    // suppressed (they were already displayed before the reload) (#96979).
-    if (evt.reason === "new") {
+    // clears sessionRuns and finalizedRuns. Both "new" and "reset" can
+    // race with late chat events — sessionKey is unchanged, loadHistory
+    // replays rows without runIds, and a late chat.final with runId
+    // would append a duplicate (#96979 P1 rank-up).
+    // In-flight runs: render displayable finals (may not be visible yet).
+    // Finalized runs: suppress all finals (already displayed before reload).
+    if (evt.reason === "new" || evt.reason === "reset") {
       for (const [runId] of sessionRuns) {
         surrenderedToHistoryRunIds.set(runId, "in-flight");
       }

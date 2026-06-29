@@ -2099,7 +2099,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
     });
 
-    it("does not surrender runs on sessions.changed reset (#96979)", () => {
+    it("surrenders runs on sessions.changed reset to prevent late-chat-race duplicate (#96979 P1)", () => {
       const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
         {
           state: { activeChatRunId: "run-active" },
@@ -2114,7 +2114,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         message: { content: [{ type: "text", text: "typing" }] },
       });
 
-      // "reset" should NOT surrender runs (only "new" triggers surrender).
+      // "reset" now also surrenders — sessionKey is unchanged, loadHistory
+      // replays rows without runIds, same race pattern (#96979 P1 rank-up).
       handleSessionsChangedEvent({
         sessionKey: state.currentSessionKey,
         reason: "reset",
@@ -2125,7 +2126,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       chatLog.hasStreamingRun.mockReturnValue(false);
       chatLog.updateAssistant.mockClear();
 
-      // Late delta for run-active — not surrendered, should be handled.
+      // Late delta for run-active — should be suppressed (surrendered on reset).
       handleChatEvent({
         runId: "run-active",
         sessionKey: state.currentSessionKey,
@@ -2133,7 +2134,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         message: { content: [{ type: "text", text: "stale stream" }] },
       });
 
-      expect(chatLog.updateAssistant).toHaveBeenCalledWith("stale stream", "run-active");
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
     });
 
     it("suppresses late displayable final for surrendered finalized run — history-replayed-visible (#96979 rank-up)", () => {
