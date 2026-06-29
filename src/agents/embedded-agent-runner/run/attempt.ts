@@ -1769,13 +1769,19 @@ export async function runEmbeddedAttempt(
       const wrappedTool = {
         ...tool,
         execute: (async (...args: Parameters<typeof originalExecute>) => {
+          // Heartbeat every 60s during execution so the 120s idle watchdog
+          // never expires for long-running tools (web_fetch, exec, etc.).
+          const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+          interval.unref?.();
           try {
-            const result = await originalExecute(...args);
             notifyToolActivity(params.runId);
+            const result = await originalExecute(...args);
             return result;
           } catch (error) {
-            notifyToolActivity(params.runId);
             throw error;
+          } finally {
+            clearInterval(interval);
+            notifyToolActivity(params.runId);
           }
         }) as typeof originalExecute,
       };
