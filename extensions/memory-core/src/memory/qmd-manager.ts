@@ -314,6 +314,9 @@ function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boo
     if (normalizedKey === "env") {
       return getGeneratedQmdEnvOverrides(value) === null;
     }
+    if (normalizedKey === "allowedtools" || normalizedKey === "blockedtools") {
+      return true;
+    }
     if (normalizedKey === "command") {
       return hasMcporterAuthLikeText(value);
     }
@@ -3315,7 +3318,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         return { mode: "external" };
       }
       const isGeneratedQmdServer = isGeneratedMcporterQmdStdioServer(stdioServer);
-      const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(stdioServer);
+      const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(server);
       const hasContextPathFields = rawEntry !== null && hasMcporterStdioContextPath(rawEntry);
       if (!isGeneratedQmdServer || hasUserOwnedMaterial || hasContextPathFields) {
         return { mode: "external" };
@@ -3344,7 +3347,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const remoteServer = normalizeMcporterSerializedRemoteServer(server);
       if (!remoteServer) {
-        return null;
+        return { mode: "external" };
       }
       return { mode: "generated", server: remoteServer };
     }
