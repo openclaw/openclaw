@@ -105,7 +105,9 @@ function setRequestUserAgent(req: unknown) {
       defaults: Record<string, unknown>;
     };
     inst.defaults.proxy = false;
-    if (httpAgent) inst.defaults.httpAgent = httpAgent;
+    if (httpAgent) {
+      inst.defaults.httpAgent = httpAgent;
+    }
     inst.defaults.httpsAgent = httpsAgent;
   }
 }
