@@ -96,11 +96,13 @@ function normalizePersistedDefaultProvider(value: unknown): string {
 
 function shouldPreserveProviderlessPersistedModelRaw(params: {
   provider?: string | undefined;
+  model: string;
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): boolean {
   return (
     !params.provider &&
+    !params.model.includes("/") &&
     params.allowManifestNormalization === false &&
     params.allowPluginNormalization === false
   );
@@ -122,6 +124,7 @@ export function resolvePersistedOverrideModelRef(params: {
   if (
     shouldPreserveProviderlessPersistedModelRaw({
       provider: overrideProvider,
+      model: overrideModel,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     })
@@ -162,6 +165,7 @@ export function resolvePersistedModelRef(params: {
     }
     if (
       shouldPreserveProviderlessPersistedModelRaw({
+        model: runtimeModel,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
       })
