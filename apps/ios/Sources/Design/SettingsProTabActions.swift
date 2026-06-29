@@ -218,7 +218,7 @@ extension SettingsProTab {
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.stagedGatewaySetupLink = nil
             self.setupCode = ""
-            self.setupStatusText = "Apple Review demo mode enabled."
+            self.setupStatusText = "OpenClaw preview mode enabled."
             self.appModel.enterAppleReviewDemoMode()
             return false
         }
@@ -280,7 +280,7 @@ extension SettingsProTab {
         self.showQRScanner = false
         self.setupCode = ""
         self.stagedGatewaySetupLink = nil
-        self.setupStatusText = "Apple Review demo mode enabled."
+        self.setupStatusText = "OpenClaw preview mode enabled."
         self.appModel.enterAppleReviewDemoMode()
     }
 
@@ -661,7 +661,7 @@ extension SettingsProTab {
     }
 
     var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        if self.appModel.isAppleReviewDemoModeEnabled { return "OpenClaw preview mode" }
         return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
     }
 
@@ -729,10 +729,26 @@ extension SettingsProTab {
     }
 
     var approvalsDetail: String {
-        if self.notificationsNeedAttention {
-            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
+        Self.approvalsDetail(
+            isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
+            showPreviewApprovalExample: self.showPreviewApprovalExample,
+            notificationsNeedAttention: self.notificationsNeedAttention,
+            hasPendingApproval: self.pendingApproval != nil)
+    }
+
+    static func approvalsDetail(
+        isDemoMode: Bool,
+        showPreviewApprovalExample: Bool,
+        notificationsNeedAttention: Bool,
+        hasPendingApproval: Bool) -> String
+    {
+        if isDemoMode {
+            return showPreviewApprovalExample ? "Example request showing" : "Example available"
         }
-        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+        if notificationsNeedAttention {
+            return hasPendingApproval ? "1 waiting, notifications off" : "Notifications off"
+        }
+        return hasPendingApproval ? "1 request waiting" : "No approvals waiting"
     }
 
     var notificationsNeedAttention: Bool {
@@ -745,6 +761,24 @@ extension SettingsProTab {
     }
 
     var approvalItems: [SettingsApprovalItem] {
+        if self.appModel.isAppleReviewDemoModeEnabled, self.showPreviewApprovalExample {
+            return [
+                SettingsApprovalItem(
+                    id: "preview-approval-command",
+                    icon: "terminal.fill",
+                    title: "Run iOS checks and verify Gateway health",
+                    detail: "Agent: Ops",
+                    priority: "High",
+                    color: OpenClawBrand.danger),
+                SettingsApprovalItem(
+                    id: "preview-approval-context",
+                    icon: "doc.text.fill",
+                    title: "One-time approval",
+                    detail: "Preview request",
+                    priority: "Review",
+                    color: OpenClawBrand.warn),
+            ]
+        }
         guard let pendingApproval else { return [] }
         return [
             SettingsApprovalItem(

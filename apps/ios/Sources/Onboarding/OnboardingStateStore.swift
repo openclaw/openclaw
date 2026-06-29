@@ -31,6 +31,7 @@ enum OnboardingStateStore {
         -> Bool
     {
         if defaults.bool(forKey: self.completedDefaultsKey) { return false }
+        if defaults.bool(forKey: self.firstRunIntroSeenDefaultsKey) { return false }
         let hasSavedGatewayConnection =
             hasSavedGatewayConnection ?? (GatewaySettingsStore.loadLastGatewayConnection() != nil)
         if hasSavedGatewayConnection { return false }
@@ -43,6 +44,15 @@ enum OnboardingStateStore {
             defaults.set(mode.rawValue, forKey: self.lastModeDefaultsKey)
         }
         defaults.set(Int(Date().timeIntervalSince1970), forKey: Self.lastSuccessTimeDefaultsKey)
+    }
+
+    static func shouldMarkCompleted(
+        gatewayServerName: String?,
+        isLocalGatewayFixtureEnabled: Bool) -> Bool
+    {
+        guard !isLocalGatewayFixtureEnabled else { return false }
+        let serverName = gatewayServerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !serverName.isEmpty
     }
 
     static func shouldPresentFirstRunIntro(defaults: UserDefaults = .standard) -> Bool {

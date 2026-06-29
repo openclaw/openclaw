@@ -8,13 +8,25 @@ import UIKit
 private enum OnboardingStep: Int, CaseIterable {
     case intro
     case welcome
+    case setupGateway
     case mode
     case connect
     case auth
     case success
 
-    var previous: Self? {
-        Self(rawValue: self.rawValue - 1)
+    func previous(startScreen: OnboardingWizardStartScreen) -> Self? {
+        switch self {
+        case .intro, .welcome, .success:
+            nil
+        case .setupGateway:
+            startScreen == .setupGateway ? nil : .welcome
+        case .mode:
+            startScreen == .setupGateway ? .setupGateway : .welcome
+        case .connect:
+            .mode
+        case .auth:
+            .connect
+        }
     }
 
     /// Progress label for the manual setup flow (mode → connect → auth → success).
@@ -27,7 +39,8 @@ private enum OnboardingStep: Int, CaseIterable {
     var title: String {
         switch self {
         case .intro: "Welcome"
-        case .welcome: "Connect Gateway"
+        case .welcome: "Get Started"
+        case .setupGateway: "Set up OpenClaw"
         case .mode: "Connection Mode"
         case .connect: "Connect"
         case .auth: "Authentication"
@@ -35,12 +48,27 @@ private enum OnboardingStep: Int, CaseIterable {
         }
     }
 
-    var canGoBack: Bool {
-        self != .intro && self != .welcome && self != .success
+    var requestsLocalNetworkAccess: Bool {
+        switch self {
+        case .mode, .connect, .auth:
+            true
+        case .intro, .welcome, .setupGateway, .success:
+            false
+        }
     }
 }
 
+enum OnboardingWizardStartScreen {
+    case automatic
+    case setupGateway
+}
+
 struct OnboardingWizardView: View {
+    enum CloseReason {
+        case dismissed
+        case explore
+    }
+
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase
@@ -73,23 +101,42 @@ struct OnboardingWizardView: View {
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let startScreen: OnboardingWizardStartScreen
     let onRequestLocalNetworkAccess: (String) -> Void
-    let onClose: () -> Void
+    let onClose: (CloseReason) -> Void
 
     init(
         allowSkip: Bool,
+        startScreen: OnboardingWizardStartScreen = .automatic,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
-        onClose: @escaping () -> Void)
+        onClose: @escaping (CloseReason) -> Void)
     {
         self.allowSkip = allowSkip
+        self.startScreen = startScreen
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
-        _step = State(
-            initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
+        _step = State(initialValue: Self.initialStep(startScreen: startScreen))
+    }
+
+    private static func initialStep(startScreen: OnboardingWizardStartScreen) -> OnboardingStep {
+        switch startScreen {
+        case .automatic:
+            OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome
+        case .setupGateway:
+            .setupGateway
+        }
     }
 
     private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .welcome || self.step == .setupGateway || self.step == .success
+    }
+
+    private var previousStep: OnboardingStep? {
+        self.step.previous(startScreen: self.startScreen)
+    }
+
+    private var canNavigateBack: Bool {
+        self.previousStep != nil
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -104,6 +151,8 @@ struct OnboardingWizardView: View {
                     self.introStep
                 case .welcome:
                     self.welcomeStep
+                case .setupGateway:
+                    self.setupGatewayStep
                 case .success:
                     self.successStep
                 default:
@@ -137,7 +186,7 @@ struct OnboardingWizardView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    if self.step.canGoBack {
+                    if self.canNavigateBack {
                         Button {
                             self.navigateBack()
                         } label: {
@@ -145,7 +194,7 @@ struct OnboardingWizardView: View {
                         }
                     } else if self.allowSkip {
                         Button("Close") {
-                            self.onClose()
+                            self.onClose(.dismissed)
                         }
                     }
                 }
@@ -237,11 +286,14 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
-                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
+                self.requestLocalNetworkAccessIfNeeded(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
+            }
+            .onChange(of: self.step) { _, _ in
+                self.requestLocalNetworkAccessIfNeeded(reason: "onboarding_step")
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
@@ -277,7 +329,10 @@ struct OnboardingWizardView: View {
                 self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
             }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                guard newValue != nil else { return }
+                guard OnboardingStateStore.shouldMarkCompleted(
+                    gatewayServerName: newValue,
+                    isLocalGatewayFixtureEnabled: self.appModel.isLocalGatewayFixtureEnabled)
+                else { return }
                 self.showQRScanner = false
                 self.statusLine = "Connected."
                 if !self.didMarkCompleted, let selectedMode {
@@ -301,12 +356,20 @@ struct OnboardingWizardView: View {
 
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
-            statusLine: self.statusLine,
-            onScanQRCode: {
-                self.statusLine = "Opening QR scanner…"
-                self.showQRScanner = true
+            onConnectGateway: {
+                self.step = .mode
             },
-            onManualSetup: {
+            onExploreOpenClaw: {
+                self.enterExploreMode()
+            },
+            onSetupGateway: {
+                self.step = .setupGateway
+            })
+    }
+
+    private var setupGatewayStep: some View {
+        OnboardingGatewaySetupStep(
+            onConnectGateway: {
                 self.step = .mode
             })
     }
@@ -604,7 +667,7 @@ struct OnboardingWizardView: View {
             Spacer()
 
             Button {
-                self.onClose()
+                self.onClose(.dismissed)
             } label: {
                 Text("Open OpenClaw")
                     .frame(maxWidth: .infinity)
@@ -620,6 +683,13 @@ struct OnboardingWizardView: View {
 extension OnboardingWizardView {
     private var setupCodeSection: some View {
         Section {
+            Button {
+                self.openQRScannerFromOnboarding()
+            } label: {
+                Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+            }
+            .disabled(self.connectingGatewayID != nil)
+
             TextField("Paste setup code", text: self.$setupCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -652,7 +722,7 @@ extension OnboardingWizardView {
         } header: {
             Text("Setup Code")
         } footer: {
-            Text("Use this if you received a setup code instead of a QR code.")
+            Text("Use this if you already have a Gateway QR code or setup code.")
         }
     }
 
@@ -704,7 +774,7 @@ extension OnboardingWizardView {
 
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.setupCode = ""
-            self.setupCodeStatus = "Apple Review demo mode enabled."
+            self.setupCodeStatus = "OpenClaw preview mode enabled."
             self.handleScannedSetupCode(raw)
             return
         }
@@ -760,12 +830,17 @@ extension OnboardingWizardView {
 
     private func handleScannedSetupCode(_ code: String) {
         guard AppleReviewDemoMode.isSetupCode(code) else { return }
+        self.enterExploreMode()
+    }
+
+    private func enterExploreMode() {
         self.showQRScanner = false
         self.connectingGatewayID = nil
-        self.connectMessage = "Apple Review demo mode enabled."
-        self.statusLine = "Apple Review demo mode enabled."
+        self.connectMessage = "OpenClaw preview mode enabled."
+        self.statusLine = "Demo mode is on. Pair a Gateway when you're ready for your workspace."
         self.selectedMode = .homeNetwork
         self.appModel.enterAppleReviewDemoMode()
+        self.onClose(.explore)
     }
 
     private func openQRScannerFromOnboarding() {
@@ -871,13 +946,12 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
     }
 
-    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
-        guard self.step != .intro else { return }
+    private func requestLocalNetworkAccessIfNeeded(reason: String) {
+        guard self.step.requestsLocalNetworkAccess else { return }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -886,7 +960,7 @@ extension OnboardingWizardView {
     }
 
     private func navigateBack() {
-        guard let target = self.step.previous else { return }
+        guard let target = self.previousStep else { return }
         self.connectingGatewayID = nil
         self.connectMessage = nil
         self.step = target

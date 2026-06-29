@@ -41,6 +41,149 @@ import UIKit
         #expect(!shouldPresent)
     }
 
+    @Test func gatewayEntryKeepsConfiguredOfflineUsersInGatewaySettings() {
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: true,
+                isPreviewMode: false) == .gateway)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .gateway)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .gateway)
+    }
+
+    @Test func gatewayEntryOpensOnboardingForFreshAndPreviewUsers() {
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                isPreviewMode: false) == .onboarding)
+        #expect(
+            RootTabs.gatewayEntryPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: true,
+                isPreviewMode: true) == .onboarding)
+    }
+
+    @Test func startupKeepsSavedGatewayUsersOutOfFirstRunOnboarding() {
+        let savedConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: false)
+        let manualConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: true)
+        let completedWithConfigRoute = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: true,
+            onboardingComplete: true,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: false)
+
+        #expect(savedConfigRoute == .none)
+        #expect(manualConfigRoute == .none)
+        #expect(completedWithConfigRoute == .none)
+    }
+
+    @Test func startupGuidesOnlyFreshFirstRunAndKeepsDisconnectedReturnQuiet() {
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: true,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: true) == .none)
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: true) == .onboarding)
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: false,
+                onboardingComplete: false,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: false) == .none)
+        #expect(
+            RootTabs.startupPresentationRoute(
+                gatewayConnected: false,
+                hasConnectedOnce: true,
+                onboardingComplete: true,
+                hasExistingGatewayConfig: false,
+                shouldPresentOnLaunch: false) == .settings)
+    }
+
+    @Test func previewApprovalPresentationStaysSampleOnly() {
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: true,
+                showPreviewApprovalExample: false,
+                notificationsNeedAttention: true,
+                hasPendingApproval: true) == "Example available")
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: true,
+                showPreviewApprovalExample: true,
+                notificationsNeedAttention: false,
+                hasPendingApproval: false) == "Example request showing")
+        #expect(
+            SettingsProTab.shouldShowApprovalRows(
+                hasPendingApproval: false,
+                isDemoMode: true,
+                showPreviewApprovalExample: true))
+        #expect(!SettingsProTab.shouldResolveApprovalThroughGateway(isDemoMode: true))
+    }
+
+    @Test func realApprovalPresentationKeepsGatewayResolvePath() {
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: false,
+                showPreviewApprovalExample: true,
+                notificationsNeedAttention: true,
+                hasPendingApproval: true) == "1 waiting, notifications off")
+        #expect(
+            SettingsProTab.approvalsDetail(
+                isDemoMode: false,
+                showPreviewApprovalExample: false,
+                notificationsNeedAttention: false,
+                hasPendingApproval: true) == "1 request waiting")
+        #expect(
+            SettingsProTab.shouldShowApprovalRows(
+                hasPendingApproval: true,
+                isDemoMode: false,
+                showPreviewApprovalExample: false))
+        #expect(!SettingsProTab.shouldShowApprovalRows(
+            hasPendingApproval: false,
+            isDemoMode: false,
+            showPreviewApprovalExample: true))
+        #expect(SettingsProTab.shouldResolveApprovalThroughGateway(isDemoMode: false))
+    }
+
     @Test func sidebarTabsEnabledForIPadRegularWidth() {
         #expect(
             RootTabs.shouldUseSidebarTabs(
@@ -249,6 +392,128 @@ import UIKit
         #expect(CommandCenterTab.shouldShowHeaderMark(hasLeadingAction: false, showsHeaderMark: true))
         #expect(!CommandCenterTab.shouldShowHeaderMark(hasLeadingAction: true, showsHeaderMark: true))
         #expect(!CommandCenterTab.shouldShowHeaderMark(hasLeadingAction: false, showsHeaderMark: false))
+    }
+
+    @Test func embeddedOverviewDefersNavigationStackOwnership() throws {
+        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let phoneControlSource = try String(contentsOf: Self.phoneControlHubSourceURL(), encoding: .utf8)
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(commandCenterSource.contains("var ownsNavigationStack: Bool = true"))
+        #expect(commandCenterSource.contains("var openSessions: (() -> Void)?"))
+        #expect(commandCenterSource.contains("if let openSessions"))
+        #expect(phoneControlSource.contains("ownsNavigationStack: false"))
+        #expect(phoneControlSource.contains("openSessions: { self.navigationPath.append(.sessions) }"))
+        #expect(rootTabsSource.contains("ownsNavigationStack: false"))
+        #expect(rootTabsSource.contains("openSessions: { self.selectSidebarDestination(.sessions) }"))
+    }
+
+    @Test func exploreModeStartsGuidedPreviewTour() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let tourCardSource = rootTabsSource
+            .split(separator: "private struct RootTabsPreviewTourCard: View")
+            .dropFirst()
+            .first?
+            .split(separator: "private struct RootCameraFlashOverlay")
+            .first ?? ""
+
+        #expect(onboardingSource.contains("case explore"))
+        #expect(onboardingSource.contains("self.onClose(.explore)"))
+        #expect(rootTabsSource.contains("case .explore:"))
+        #expect(rootTabsSource.contains("self.startPreviewTour()"))
+        #expect(rootTabsSource.contains("RootTabsPreviewTourCard("))
+        #expect(rootTabsSource.contains("self.setPreviewTourStep(.chat)"))
+        #expect(rootTabsSource.contains("self.selectSidebarDestination(.talk)"))
+        #expect(rootTabsSource.contains("self.selectSettingsRoute(.approvals)"))
+        #expect(rootTabsSource.contains("self.openGatewayEntryPoint(startScreen: .setupGateway)"))
+        #expect(rootTabsSource.contains("startScreen: self.onboardingStartScreen"))
+        #expect(rootTabsSource.contains("case talk"))
+        #expect(!rootTabsSource.contains("RootTabsPreviewModeBanner"))
+        #expect(!tourCardSource.contains("accessibilityElement(children: .combine)"))
+        #expect(rootTabsSource.contains("Text(\"Preview \\(self.step.index) of \\(PreviewTourStep.allCases.count)\")"))
+    }
+
+    @Test func gatewayOnboardingWelcomeKeepsHumanPreviewChoices() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("OnboardingGatewayExplainer()"))
+        #expect(onboardingStepsSource.contains("Mobile connects to your Gateway"))
+        #expect(onboardingStepsSource.contains("OpenClaw runs on a computer or server."))
+        #expect(onboardingStepsSource.contains("Explore a preview"))
+        #expect(onboardingStepsSource.contains("Open a sample workspace and tap around before setup."))
+        #expect(onboardingStepsSource.contains("Enter a setup code"))
+        #expect(onboardingStepsSource.contains("Preview uses sample data."))
+        #expect(onboardingStepsSource.contains("Pair a Gateway when you're ready to run real agents and actions."))
+        #expect(onboardingStepsSource.contains("OnboardingChoiceDivider()"))
+        #expect(onboardingStepsSource.contains(".fill(Color(uiColor: .secondarySystemGroupedBackground))"))
+        #expect(!onboardingStepsSource.contains("OnboardingPreviewStrip()"))
+        #expect(!onboardingStepsSource.contains("Demo includes chat, tasks, and approvals"))
+        #expect(!onboardingStepsSource.contains(".fill(self.isPrimary ? OpenClawBrand.accent"))
+    }
+
+    @Test func explorePreviewOpensSampleWorkspaceWithoutRequestingPermissions() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingSource.contains("onExploreOpenClaw: {\n                self.enterExploreMode()"))
+        #expect(onboardingSource.contains("self.appModel.enterAppleReviewDemoMode()"))
+        #expect(onboardingSource.contains("self.onClose(.explore)"))
+        #expect(onboardingSource.contains("self.step = .setupGateway"))
+        #expect(onboardingSource.contains("case .mode, .connect, .auth:"))
+        #expect(onboardingSource.contains("guard self.step.requestsLocalNetworkAccess else { return }"))
+        #expect(!onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
+        #expect(onboardingStepsSource.contains("Open a sample workspace and tap around before setup."))
+    }
+
+    @Test func gatewaySetupEducationKeepsNumberedStepsAndUnlocks() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("GatewaySetupNoteCard()"))
+        #expect(onboardingStepsSource.contains("Gateway runs the work"))
+        #expect(onboardingStepsSource.contains("Mobile stays lightweight"))
+        #expect(onboardingStepsSource.contains("GatewaySetupStepRow(index: index + 1, title: step)"))
+        #expect(onboardingStepsSource.contains("GatewayUnlockRow(icon: \"person.2.fill\""))
+        #expect(onboardingStepsSource.contains("After pairing"))
+        #expect(!onboardingStepsSource.contains("let onBack: () -> Void"))
+        #expect(!onboardingStepsSource.contains("Label(\"Back\", systemImage: \"chevron.left\")"))
+    }
+
+    @Test func gatewaySetupCommandCanBeCopiedOrShared() throws {
+        let onboardingStepsSource = try String(contentsOf: Self.onboardingWizardStepsSourceURL(), encoding: .utf8)
+
+        #expect(onboardingStepsSource.contains("UIPasteboard.general.string = self.platform.command"))
+        #expect(onboardingStepsSource.contains("ShareLink("))
+        #expect(onboardingStepsSource.contains("openclaw qr"))
+        #expect(onboardingStepsSource.contains("Open the mobile app and scan or paste the code."))
+    }
+
+    @Test func previewTourOwnsSetupCallToActionWithoutTopBanner() throws {
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+
+        #expect(rootTabsSource.contains("RootTabsPreviewTourCard("))
+        #expect(rootTabsSource.contains("nextTitle: activePreviewTourStep.next == nil ? \"Set up Gateway\" : \"Next\""))
+        #expect(rootTabsSource.contains("Text(self.nextTitle)"))
+        #expect(rootTabsSource.contains("self.openGatewayEntryPoint(startScreen: .setupGateway)"))
+        #expect(!rootTabsSource.contains("RootTabsPreviewModeBanner"))
+    }
+
+    @Test func explicitSetupRequestsSkipFirstRunWelcomeCopy() throws {
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let forceOnboardingSource = rootTabsSource
+            .split(separator: "private func evaluateOnboardingPresentation(force: Bool)")
+            .dropFirst()
+            .first?
+            .split(separator: "private func hasExistingGatewayConfig()")
+            .first ?? ""
+
+        #expect(forceOnboardingSource.contains("if force {"))
+        #expect(forceOnboardingSource.contains("self.onboardingStartScreen = .setupGateway"))
+        #expect(forceOnboardingSource.contains("self.showOnboarding = true"))
+        #expect(onboardingSource.contains("case .setupGateway:\n            startScreen == .setupGateway ? nil : .welcome"))
+        #expect(onboardingSource.contains("case .mode:\n            startScreen == .setupGateway ? .setupGateway : .welcome"))
+        #expect(onboardingSource.contains("guard let target = self.previousStep else { return }"))
     }
 
     @Test func chatSidebarDestinationCanUseRouteHeaderInsteadOfAgentBranding() {
@@ -467,5 +732,36 @@ import UIKit
     @Test func phoneHubLeavesRoomForFloatingTabBar() {
         #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .regular) == 112)
         #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .compact) == 72)
+    }
+
+    private static func rootTabsSourceURL() -> URL {
+        self.iosSourcesURL().appendingPathComponent("RootTabs.swift")
+    }
+
+    private static func phoneControlHubSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Design/RootTabsPhoneControlHub.swift")
+    }
+
+    private static func commandCenterSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Design/CommandCenterTab.swift")
+    }
+
+    private static func onboardingWizardSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func onboardingWizardStepsSourceURL() -> URL {
+        self.iosSourcesURL()
+            .appendingPathComponent("Onboarding/OnboardingWizardSteps.swift")
+    }
+
+    private static func iosSourcesURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources")
     }
 }

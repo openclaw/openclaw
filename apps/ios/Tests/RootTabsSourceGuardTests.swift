@@ -193,7 +193,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("case .docs:"))
         #expect(source.contains("OpenClawDocsScreen("))
         #expect(source.contains("headerLeadingAction: self.phoneDetailBackAction"))
-        #expect(source.contains("gatewayAction: { self.openRootDestination(.gateway) }"))
+        #expect(source.contains("gatewayAction: { self.openPhoneRootDestination(.gateway) }"))
         #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
         #expect(!source.contains("https://docs.openclaw.ai"))
     }
@@ -239,7 +239,11 @@ struct RootTabsSourceGuardTests {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
         #expect(source.contains("private var gatewayActionRow: some View"))
-        #expect(source.contains("self.openRootDestination(.gateway)"))
+        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
+        #expect(source.contains("let openSettingsRoute: (SettingsRoute) -> Void"))
+        #expect(source.contains("openApprovals: { self.openPhoneSettingsRoute(.approvals) }"))
+        #expect(source.contains("private func openPhoneSettingsRoute(_ route: SettingsRoute)"))
+        #expect(source.contains("private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination)"))
         #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
         #expect(source.contains("accessibilityLabel: \"Back to Control\""))
         #expect(source.contains("accessibilityIdentifier: \"OpenClawPhoneDetailBackButton\""))
@@ -484,8 +488,9 @@ struct RootTabsSourceGuardTests {
         #expect(featureSource.matches(of: /gatewayAction: self\.openSettings/).count == 2)
         #expect(rootSource.contains("IPadActivityScreen("))
         #expect(rootSource
-            .matches(of: /IPadActivityScreen\([\s\S]*?openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/)
+            .matches(of: /IPadActivityScreen\([\s\S]*?openSettings: \{ self\.openGatewayEntryPoint\(\) \}/)
             .count == 1)
+        #expect(rootSource.contains("openApprovals: { self.selectSettingsRoute(.approvals) }"))
     }
 
     @Test func `routed gateway pills open gateway settings`() throws {
@@ -501,17 +506,18 @@ struct RootTabsSourceGuardTests {
             contentsOf: Self.notificationPermissionGuidanceDialogSourceURL(),
             encoding: .utf8)
 
-        #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
-        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
+        #expect(rootSource.matches(of: /openSettings: \{ self\.openGatewayEntryPoint\(\) \}/).count >= 2)
+        #expect(rootSource.matches(of: /gatewayAction: \{ self\.openGatewayEntryPoint\(\) \}/).count == 1)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
+        #expect(rootSource.contains("private func openGatewayEntryPoint(startScreen: OnboardingWizardStartScreen = .automatic)"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))
         #expect(overviewSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
         #expect(agentSource.contains("let openSettings: (() -> Void)?"))
         #expect(agentOverviewSource.contains("OpenClawGatewayCompactPill()"))
         #expect(agentOverviewSource.contains("Button(action: openSettings)"))
         #expect(rootSource
-            .matches(of: /AgentProTab\([\s\S]*?openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/)
+            .matches(of: /AgentProTab\([\s\S]*?openSettings: \{ self\.openGatewayEntryPoint\(\) \}/)
             .count >= 3)
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
         #expect(chatSource.contains("private var connectionPillButton: some View"))
@@ -630,10 +636,14 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"onboarding_dismissed\")"))
         #expect(rootSource.contains("self.requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
         #expect(rootSource.contains("guard self.didEvaluateOnboarding else { return }"))
+        #expect(rootSource.contains(
+            "guard self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() else {"))
         #expect(rootSource.contains("onRequestLocalNetworkAccess: { reason in"))
 
-        #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
-        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains("case .mode, .connect, .auth:"))
+        #expect(onboardingSource.contains("case .intro, .welcome, .setupGateway, .success:"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfNeeded(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfNeeded(reason: \"onboarding_step\")"))
         #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 

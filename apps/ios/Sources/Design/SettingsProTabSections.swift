@@ -105,24 +105,37 @@ extension SettingsProTab {
     }
 
     var gatewayActions: some View {
-        HStack(spacing: 10) {
-            self.gatewayActionButton(
-                title: "Reconnect",
-                icon: "arrow.triangle.2.circlepath",
-                color: OpenClawBrand.warn,
-                isBusy: self.isReconnectingGateway,
-                isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
-            {
-                Task { await self.reconnectGateway() }
+        VStack(spacing: 10) {
+            if !self.appModel.isOperatorGatewayConnected {
+                self.gatewayActionButton(
+                    title: "Set up OpenClaw",
+                    icon: "desktopcomputer",
+                    color: OpenClawBrand.accent,
+                    isBusy: false)
+                {
+                    self.onboardingRequestID &+= 1
+                }
             }
 
-            self.gatewayActionButton(
-                title: "Diagnose",
-                icon: "cross.case",
-                color: OpenClawBrand.info,
-                isBusy: self.isRefreshingGateway)
-            {
-                Task { await self.runDiagnostics() }
+            HStack(spacing: 10) {
+                self.gatewayActionButton(
+                    title: "Reconnect",
+                    icon: "arrow.triangle.2.circlepath",
+                    color: OpenClawBrand.warn,
+                    isBusy: self.isReconnectingGateway,
+                    isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
+                {
+                    Task { await self.reconnectGateway() }
+                }
+
+                self.gatewayActionButton(
+                    title: "Diagnose",
+                    icon: "cross.case",
+                    color: OpenClawBrand.info,
+                    isBusy: self.isRefreshingGateway)
+                {
+                    Task { await self.runDiagnostics() }
+                }
             }
         }
     }
@@ -362,7 +375,7 @@ extension SettingsProTab {
     var approvalsReviewCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                if let pendingApproval {
+                if self.shouldShowApprovalRows {
                     VStack(spacing: 0) {
                         ForEach(Array(self.approvalItems.enumerated()), id: \.element.id) { index, item in
                             SettingsApprovalRow(item: item)
@@ -372,7 +385,9 @@ extension SettingsProTab {
                         }
                     }
 
-                    if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
+                    if !self.appModel.isAppleReviewDemoModeEnabled,
+                       let errorText = self.appModel.pendingExecApprovalPromptErrorText
+                    {
                         Text(errorText)
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(OpenClawBrand.danger)
@@ -380,18 +395,16 @@ extension SettingsProTab {
 
                     HStack(spacing: 8) {
                         Button {
-                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
+                            self.handleApprovalPreviewOrResolve(decision: "allow-once")
                         } label: {
                             Label("Allow", systemImage: "checkmark")
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(self.appModel.pendingExecApprovalPromptResolving)
 
-                        if pendingApproval.allowsAllowAlways {
+                        if self.pendingApproval?.allowsAllowAlways == true {
                             Button {
-                                Task {
-                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
-                                }
+                                self.handleApprovalPreviewOrResolve(decision: "allow-always")
                             } label: {
                                 Label("Always", systemImage: "checkmark.shield")
                             }
@@ -400,7 +413,7 @@ extension SettingsProTab {
                         }
 
                         Button(role: .destructive) {
-                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
+                            self.handleApprovalPreviewOrResolve(decision: "deny")
                         } label: {
                             Label("Deny", systemImage: "xmark")
                         }
@@ -422,10 +435,49 @@ extension SettingsProTab {
                                 .lineLimit(2)
                         }
                     }
+
+                    if self.appModel.isAppleReviewDemoModeEnabled {
+                        Button {
+                            self.showPreviewApprovalExample = true
+                        } label: {
+                            Label("Show Example Approval", systemImage: "hand.raised.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    var shouldShowApprovalRows: Bool {
+        Self.shouldShowApprovalRows(
+            hasPendingApproval: self.pendingApproval != nil,
+            isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
+            showPreviewApprovalExample: self.showPreviewApprovalExample)
+    }
+
+    static func shouldShowApprovalRows(
+        hasPendingApproval: Bool,
+        isDemoMode: Bool,
+        showPreviewApprovalExample: Bool) -> Bool
+    {
+        hasPendingApproval || (isDemoMode && showPreviewApprovalExample)
+    }
+
+    func handleApprovalPreviewOrResolve(decision: String) {
+        if !Self.shouldResolveApprovalThroughGateway(isDemoMode: self.appModel.isAppleReviewDemoModeEnabled) {
+            self.showPreviewApprovalExample = false
+            return
+        }
+
+        Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: decision) }
+    }
+
+    static func shouldResolveApprovalThroughGateway(isDemoMode: Bool) -> Bool {
+        !isDemoMode
     }
 
     var permissionsDestination: some View {

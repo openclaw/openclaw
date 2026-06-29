@@ -42,6 +42,8 @@ struct RootTabs: View {
     @State private var didApplyInitialChatSession: Bool = false
     @State private var handledGatewaySetupRequestID: Int = 0
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
+    @State private var activePreviewTourStep: PreviewTourStep?
+    @State private var onboardingStartScreen: OnboardingWizardStartScreen = .automatic
 
     private static var initialTab: AppTab {
         let arguments = ProcessInfo.processInfo.arguments
@@ -139,16 +141,17 @@ struct RootTabs: View {
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
                 initialDestination: Self.requestedInitialSidebarDestination,
-                openRootDestination: { self.selectSidebarDestination($0) })
+                openRootDestination: { self.openRootDestination($0) },
+                openSettingsRoute: { self.selectSettingsRoute($0) })
                 .tabItem { Label("Control", systemImage: "square.grid.2x2") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
-            ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            ChatProTab(openSettings: { self.openGatewayEntryPoint() })
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
 
-            TalkProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            TalkProTab(openSettings: { self.openGatewayEntryPoint() })
                 .tabItem {
                     Label(
                         "Talk",
@@ -159,7 +162,7 @@ struct RootTabs: View {
             NavigationStack {
                 AgentProTab(
                     directRoute: .agents,
-                    openSettings: { self.selectSidebarDestination(.gateway) })
+                    openSettings: { self.openGatewayEntryPoint() })
             }
             .tabItem { Label("Agent", systemImage: "person.2.fill") }
             .tag(AppTab.agent)
@@ -372,7 +375,7 @@ struct RootTabs: View {
         title: String? = nil) -> some View
     {
         Button {
-            self.selectSidebarDestination(destination)
+            self.openRootDestination(destination)
         } label: {
             Label(title ?? destination.sidebarTitle, systemImage: destination.systemImage)
                 .lineLimit(1)
@@ -398,45 +401,48 @@ struct RootTabs: View {
                 headerTitle: "Chat",
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .talk:
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .overview:
             CommandCenterTab(
                 headerTitle: "Overview",
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
+                ownsNavigationStack: false,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() },
+                openSessions: { self.selectSidebarDestination(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() },
+                openApprovals: { self.selectSettingsRoute(.approvals) })
         case .workboard:
             IPadWorkboardScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
         case .agents:
             AgentProTab(
                 directRoute: .agents,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Agents",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Instances",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .sessions:
             CommandSessionsScreen(
@@ -447,26 +453,26 @@ struct RootTabs: View {
                 directRoute: .dreaming,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Dreaming",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Usage",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.openGatewayEntryPoint() })
                 .id(self.selectedSidebarDestination.id)
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
-                gatewayAction: { self.selectSidebarDestination(.gateway) })
+                gatewayAction: { self.openGatewayEntryPoint() })
         case .settings:
             if let selectedSettingsRoute {
                 SettingsProTab(
@@ -573,6 +579,20 @@ struct RootTabs: View {
 
     private func rootOverlays(_ content: some View) -> some View {
         content
+            .overlay(alignment: .bottom) {
+                if self.appModel.isAppleReviewDemoModeEnabled,
+                   let activePreviewTourStep = self.activePreviewTourStep
+                {
+                    RootTabsPreviewTourCard(
+                        step: activePreviewTourStep,
+                        nextTitle: activePreviewTourStep.next == nil ? "Set up Gateway" : "Next",
+                        onNext: { self.advancePreviewTour() },
+                        onSkip: { self.endPreviewTour() })
+                        .padding(.horizontal, 14)
+                        .safeAreaPadding(.bottom, 74)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .overlay(alignment: .top) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem,
                    self.gatewayStatus != .connected
@@ -703,7 +723,10 @@ struct RootTabs: View {
             .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                if newValue != nil {
+                if OnboardingStateStore.shouldMarkCompleted(
+                    gatewayServerName: newValue,
+                    isLocalGatewayFixtureEnabled: self.appModel.isLocalGatewayFixtureEnabled)
+                {
                     self.onboardingComplete = true
                     self.hasConnectedOnce = true
                     OnboardingStateStore.markCompleted(mode: nil)
@@ -772,11 +795,20 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: self.onboardingAllowSkip,
+                    startScreen: self.onboardingStartScreen,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
-                    onClose: {
+                    onClose: { reason in
+                        OnboardingStateStore.markFirstRunIntroSeen()
+                        self.onboardingStartScreen = .automatic
                         self.showOnboarding = false
+                        switch reason {
+                        case .dismissed:
+                            break
+                        case .explore:
+                            self.startPreviewTour()
+                        }
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
@@ -925,6 +957,37 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
+    private func openRootDestination(_ destination: SidebarDestination) {
+        if destination == .gateway {
+            self.openGatewayEntryPoint()
+        } else {
+            self.selectSidebarDestination(destination)
+        }
+    }
+
+    private func openGatewayEntryPoint(startScreen: OnboardingWizardStartScreen = .automatic) {
+        let route = Self.gatewayEntryPresentationRoute(
+            gatewayConnected: self.appModel.isOperatorGatewayConnected,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            isPreviewMode: self.appModel.isAppleReviewDemoModeEnabled)
+
+        switch route {
+        case .gateway:
+            self.selectSidebarDestination(.gateway)
+            return
+        case .onboarding:
+            break
+        }
+
+        self.presentedSheet = nil
+        self.showGatewayProblemDetails = false
+        self.onboardingAllowSkip = true
+        self.onboardingStartScreen = startScreen
+        self.showOnboarding = true
+    }
+
     private func selectSidebarDestination(_ destination: SidebarDestination) {
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
@@ -961,6 +1024,36 @@ extension RootTabs {
             }
         }
         self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+    }
+
+    private func startPreviewTour() {
+        self.setPreviewTourStep(.chat)
+    }
+
+    private func advancePreviewTour() {
+        guard let activePreviewTourStep else { return }
+        guard let nextStep = activePreviewTourStep.next else {
+            self.endPreviewTour()
+            self.openGatewayEntryPoint(startScreen: .setupGateway)
+            return
+        }
+        self.setPreviewTourStep(nextStep)
+    }
+
+    private func endPreviewTour() {
+        self.activePreviewTourStep = nil
+    }
+
+    private func setPreviewTourStep(_ step: PreviewTourStep) {
+        self.activePreviewTourStep = step
+        switch step {
+        case .chat:
+            self.selectSidebarDestination(.chat)
+        case .talk:
+            self.selectSidebarDestination(.talk)
+        case .approvals:
+            self.selectSettingsRoute(.approvals)
+        }
     }
 
     private func showSidebar() {
@@ -1039,6 +1132,7 @@ extension RootTabs {
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
             self.onboardingAllowSkip = true
+            self.onboardingStartScreen = .setupGateway
             self.showOnboarding = true
             return
         }
@@ -1105,6 +1199,9 @@ extension RootTabs {
         guard self.didEvaluateOnboarding else { return }
         guard self.scenePhase == .active else { return }
         guard !self.showOnboarding else { return }
+        guard self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() else {
+            return
+        }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -1159,6 +1256,96 @@ private struct RootTabsHomeCanvasAgentCard: Codable {
     var badge: String
     var caption: String
     var isActive: Bool
+}
+
+private enum PreviewTourStep: CaseIterable {
+    case chat
+    case talk
+    case approvals
+
+    var index: Int {
+        Self.allCases.firstIndex(of: self).map { $0 + 1 } ?? 1
+    }
+
+    var next: Self? {
+        let allCases = Self.allCases
+        guard let currentIndex = allCases.firstIndex(of: self) else { return nil }
+        let nextIndex = allCases.index(after: currentIndex)
+        guard allCases.indices.contains(nextIndex) else { return nil }
+        return allCases[nextIndex]
+    }
+
+    var title: String {
+        switch self {
+        case .chat:
+            "Chat with agents"
+        case .talk:
+            "See voice controls"
+        case .approvals:
+            "Review approvals"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .chat:
+            "Sample chat shows how a Gateway-backed agent can keep context moving from your phone."
+        case .talk:
+            "Talk shows where realtime voice lives once a Gateway provides the needed voice session."
+        case .approvals:
+            "Approvals are examples only here. Pair a Gateway before OpenClaw can approve real actions."
+        }
+    }
+}
+
+private struct RootTabsPreviewTourCard: View {
+    let step: PreviewTourStep
+    let nextTitle: String
+    let onNext: () -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Preview \(self.step.index) of \(PreviewTourStep.allCases.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(OpenClawBrand.accent)
+                Spacer(minLength: 12)
+                Button("Skip") {
+                    self.onSkip()
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(self.step.title)
+                    .font(.headline)
+                Text(self.step.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                self.onNext()
+            } label: {
+                Text(self.nextTitle)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.1), radius: 14, y: 6)
+        .frame(maxWidth: 430)
+    }
 }
 
 private struct RootCameraFlashOverlay: View {

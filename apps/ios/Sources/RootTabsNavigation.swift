@@ -229,6 +229,27 @@ extension RootTabs {
         case settings
     }
 
+    enum GatewayEntryPresentationRoute: Equatable {
+        case gateway
+        case onboarding
+    }
+
+    static func gatewayEntryPresentationRoute(
+        gatewayConnected: Bool,
+        hasConnectedOnce: Bool,
+        onboardingComplete: Bool,
+        hasExistingGatewayConfig: Bool,
+        isPreviewMode: Bool) -> GatewayEntryPresentationRoute
+    {
+        if isPreviewMode {
+            return .onboarding
+        }
+        if gatewayConnected || hasConnectedOnce || onboardingComplete || hasExistingGatewayConfig {
+            return .gateway
+        }
+        return .onboarding
+    }
+
     static func startupPresentationRoute(
         gatewayConnected: Bool,
         hasConnectedOnce: Bool,
@@ -239,10 +260,13 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
-        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+        if hasExistingGatewayConfig {
+            return .none
+        }
+        if shouldPresentOnLaunch {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
+        if hasConnectedOnce || onboardingComplete {
             return .settings
         }
         return .none
