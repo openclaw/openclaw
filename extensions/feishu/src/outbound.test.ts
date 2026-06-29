@@ -359,6 +359,25 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expectFeishuResult(result, "card_msg");
   });
 
+  it("strips prose from identity emoji in renderMode card headers", async () => {
+    const result = await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "| a | b |\n| - | - |",
+      accountId: "main",
+      identity: {
+        name: "Agent",
+        emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      },
+    });
+
+    expect(sendStructuredCardCall()?.header).toEqual({
+      title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent",
+      template: "blue",
+    });
+    expectFeishuResult(result, "card_msg");
+  });
+
   it("forwards replyToId as replyToMessageId on sendText", async () => {
     await sendText({
       cfg: emptyConfig,
@@ -573,6 +592,10 @@ describe("feishuOutbound.sendPayload native cards", () => {
       to: "chat_1",
       text: "Choose an action",
       accountId: "main",
+      identity: {
+        name: "Agent",
+        emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      },
       payload: {
         text: "Choose an action",
         interactive: {
@@ -595,6 +618,10 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendCardCall()?.accountId).toBe("main");
     const card = sendCardCall()?.card;
     expect(card.schema).toBe("2.0");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent" },
+      template: "blue",
+    });
     expect(card.body.elements[0]).toEqual({ tag: "markdown", content: "Choose an action" });
     expect(card.body.elements[1]).toEqual({
       tag: "markdown",
