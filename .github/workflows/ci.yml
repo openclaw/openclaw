@@ -1885,7 +1885,8 @@ jobs:
       max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
-      - name: Checkout
+      - &platform_checkout_step
+        name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
@@ -1895,7 +1896,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
           fetch_timeout_seconds=90
-          fetch_checkout_ref() {
+          fetch_checkout_ref_once() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -1914,6 +1915,21 @@ jobs:
               elapsed=$((elapsed + 1))
             done
             wait "$fetch_pid"
+          }
+          fetch_checkout_ref() {
+            local fetch_status
+            for attempt in 1 2 3; do
+              fetch_checkout_ref_once && return 0
+              fetch_status="$?"
+              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
+                return "$fetch_status"
+              fi
+              if [ "$attempt" = "3" ]; then
+                return "$fetch_status"
+              fi
+              echo "::warning::checkout fetch for '$CHECKOUT_SHA' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
           }
           fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
@@ -2006,38 +2022,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
-      - name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+      - *platform_checkout_step
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -2073,38 +2058,7 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+      - *platform_checkout_step
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
@@ -2211,38 +2165,7 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
-      - name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+      - *platform_checkout_step
 
       - name: Select Xcode 26
         run: |
