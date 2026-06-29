@@ -435,6 +435,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly mcporterEnv: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
@@ -500,12 +501,25 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
 
+    // QMD env with per-agent XDG overrides for qmd subprocesses (index isolation).
     this.env = {
       ...process.env,
       PATH: buildQmdProcessPath(process.env.PATH),
       XDG_CONFIG_HOME: this.xdgConfigHome,
       // QMD resolves index.yml relative to QMD_CONFIG_DIR rather than XDG_CONFIG_HOME.
       // Point it at the nested qmd config directory so per-agent collections are visible.
+      QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
+      XDG_CACHE_HOME: this.xdgCacheHome,
+      NO_COLOR: "1",
+    };
+    // mcporter env omits XDG_CONFIG_HOME so mcporter resolves its own config from
+    // the user-level XDG paths (~/.config/mcporter/) instead of the agent-scoped
+    // qmd xdg-config dir.  QMD_CONFIG_DIR and XDG_CACHE_HOME are kept so that
+    // mcporter-launched local qmd MCP servers still receive the per-agent qmd
+    // index paths.
+    this.mcporterEnv = {
+      ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
@@ -2597,14 +2611,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
-      env: this.env,
+      env: this.mcporterEnv,
       packageName: "mcporter",
     });
     return await runCliCommand({
       commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
       spawnInvocation,
-      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-      env: this.env,
+      // mcporter must not receive XDG_CONFIG_HOME so it resolves its own config
+      // from user-level XDG paths.  QMD_CONFIG_DIR and XDG_CACHE_HOME are kept so
+      // mcporter-launched local qmd MCP servers still find the per-agent index.
+      env: this.mcporterEnv,
       cwd: this.workspaceDir,
       timeoutMs: opts?.timeoutMs,
       maxOutputChars: this.maxQmdOutputChars,

@@ -4864,7 +4864,7 @@ describe("QmdMemoryManager", () => {
     });
   });
 
-  it("passes manager-scoped XDG env to mcporter commands", async () => {
+  it("passes QMD env to mcporter commands without XDG_CONFIG_HOME", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -4897,7 +4897,11 @@ describe("QmdMemoryManager", () => {
     const searchCall = requireValue(mcporterCall, "mcporter search call missing");
     const spawnOpts = searchCall[2] as { env?: NodeJS.ProcessEnv } | undefined;
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
-    expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
+    // XDG_CONFIG_HOME must not leak to mcporter so it resolves its own config
+    // from user-level XDG paths instead of the agent-scoped qmd dir.
+    expect(spawnOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    // QMD_CONFIG_DIR and XDG_CACHE_HOME are kept so mcporter-launched local
+    // qmd MCP servers still find the per-agent index.
     expect(normalizePath(spawnOpts?.env?.QMD_CONFIG_DIR)).toContain(
       "/agents/main/qmd/xdg-config/qmd",
     );
