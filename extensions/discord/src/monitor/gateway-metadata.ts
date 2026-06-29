@@ -2,7 +2,9 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
@@ -17,6 +19,7 @@ const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
+const DISCORD_GATEWAY_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -57,8 +60,25 @@ function resolveFetchInputUrl(input: RequestInfo | URL): string {
 }
 
 async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
-  return new Response(body, {
+  // 16 MiB cap on the gateway metadata body. Without this, a hostile or broken
+  // Discord API (or any man-in-the-middle behind the SSRF-allowlisted
+  // discord.com host) can return an unbounded response body and exhaust
+  // OpenClaw memory before captureHttpExchange reads it downstream. The
+  // returned Response preserves status/headers/BodyInit shape so the
+  // capture path is unchanged.
+  const buffer = await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Discord gateway metadata response exceeds ${maxBytes} bytes (got ${size})`),
+  });
+  // Buffer is a Uint8Array view; rewrap so the Response BodyInit type accepts
+  // it without `any`. Same shape as `src/agents/oauth.http.ts` and the tlon
+  // bounded-read precedents.
+  const bodyInit = new Uint8Array(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.byteLength,
+  ) as unknown as BodyInit;
+  return new Response(bodyInit, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
@@ -187,7 +207,12 @@ export async function fetchDiscordGatewayInfo(params: {
 
   let body: string;
   try {
-    body = await response.text();
+    // The injected DiscordGatewayFetch type is intentionally narrow
+    // (`Pick<Response, "ok" | "status" | "text">`) for test mocks; in
+    // production the fetchImpl returns a full Response from
+    // fetchWithSsrFGuard. The cast widens it back so readProviderTextResponse
+    // (which expects a full Response with .body) can enforce the 16 MiB cap.
+    body = await readProviderTextResponse(response as Response, "Discord gateway metadata");
   } catch (error) {
     throw createGatewayMetadataError({
       detail: formatErrorMessage(error),
