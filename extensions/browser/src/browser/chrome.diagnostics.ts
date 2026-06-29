@@ -5,6 +5,7 @@
  * and formats status output for browser doctor/status flows.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -110,7 +111,12 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      // 16 MiB cap. A hostile CDP endpoint (or a hijacked local Chromium)
+      // cannot force OpenClaw to buffer an unbounded /json/version body
+      // while probing browser version. The /json/version endpoint is
+      // expected to return a small JSON object (Browser/Protocol/etc.)
+      // — anything oversize is by definition not a real version probe.
+      const data = (await readProviderJsonResponse(response, "CDP /json/version")) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }
