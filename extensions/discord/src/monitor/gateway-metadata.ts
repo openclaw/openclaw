@@ -21,7 +21,7 @@ const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 const DISCORD_GATEWAY_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 
-type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
+type DiscordGatewayMetadataResponse = Response;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };
@@ -207,12 +207,12 @@ export async function fetchDiscordGatewayInfo(params: {
 
   let body: string;
   try {
-    // The injected DiscordGatewayFetch type is intentionally narrow
-    // (`Pick<Response, "ok" | "status" | "text">`) for test mocks; in
-    // production the fetchImpl returns a full Response from
-    // fetchWithSsrFGuard. The cast widens it back so readProviderTextResponse
-    // (which expects a full Response with .body) can enforce the 16 MiB cap.
-    body = await readProviderTextResponse(response as Response, "Discord gateway metadata");
+    // DiscordGatewayMetadataResponse is now `Response` (not the narrow
+    // Pick<Response, "ok" | "status" | "text"> it used to be), so
+    // readProviderTextResponse receives the full body-bearing Response
+    // it requires for the 16 MiB cap. Production callers return a real
+    // fetchWithSsrFGuard Response; test mocks must construct one too.
+    body = await readProviderTextResponse(response, "Discord gateway metadata");
   } catch (error) {
     throw createGatewayMetadataError({
       detail: formatErrorMessage(error),

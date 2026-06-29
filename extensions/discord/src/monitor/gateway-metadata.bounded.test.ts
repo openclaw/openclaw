@@ -59,7 +59,9 @@ describe("fetchDiscordGatewayInfo bounded-read real wire proof", () => {
       try {
         await fetchDiscordGatewayInfo({
           token: "Bot test",
-          fetchImpl: fetchImpl as never,
+          fetchImpl: fetchImpl as unknown as Parameters<
+            typeof fetchDiscordGatewayInfo
+          >[0]["fetchImpl"],
           fetchInit: {},
         });
       } catch (err) {
@@ -106,7 +108,9 @@ describe("fetchDiscordGatewayInfo bounded-read real wire proof", () => {
 
       const info = await fetchDiscordGatewayInfo({
         token: "Bot test",
-        fetchImpl: fetchImpl as never,
+        fetchImpl: fetchImpl as unknown as Parameters<
+          typeof fetchDiscordGatewayInfo
+        >[0]["fetchImpl"],
         fetchInit: {},
       });
       expect(info.url).toBe("wss://gateway.discord.gg/");
