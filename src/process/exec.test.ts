@@ -11,7 +11,6 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFilePromiseMock = vi.hoisted(() => vi.fn());
 
-let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
 let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
 let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
 let runExec: typeof import("./exec.js").runExec;
@@ -33,9 +32,13 @@ async function loadExecModules(options?: { mockSpawn?: boolean; mockExecFile?: b
   } else {
     vi.doUnmock("node:child_process");
   }
-  ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
-  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, runExec, shouldSpawnWithShell } =
-    await import("./exec.js"));
+  ({
+    resolveCommandEnv,
+    resolveProcessExitCode,
+    runCommandWithTimeout,
+    runExec,
+    shouldSpawnWithShell,
+  } = await import("./exec.js"));
 }
 
 describe("runCommandWithTimeout", () => {
@@ -340,41 +343,4 @@ describe("runCommandWithTimeout", () => {
       expect(result.code).toBe(0);
     },
   );
-});
-
-describe("attachChildProcessBridge", () => {
-  function createFakeChild() {
-    const emitter = new EventEmitter() as EventEmitter & ChildProcess;
-    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
-    emitter.kill = kill as ChildProcess["kill"];
-    return { child: emitter, kill };
-  }
-
-  it("forwards SIGTERM to the wrapped child and detaches on exit", () => {
-    const beforeSigterm = new Set(process.listeners("SIGTERM"));
-    const { child, kill } = createFakeChild();
-    const observedSignals: NodeJS.Signals[] = [];
-
-    const { detach } = attachChildProcessBridge(child, {
-      signals: ["SIGTERM"],
-      onSignal: (signal) => observedSignals.push(signal),
-    });
-
-    const afterSigterm = process.listeners("SIGTERM");
-    const addedSigterm = afterSigterm.find((listener) => !beforeSigterm.has(listener));
-
-    if (!addedSigterm) {
-      throw new Error("expected SIGTERM listener");
-    }
-
-    addedSigterm("SIGTERM");
-    expect(observedSignals).toEqual(["SIGTERM"]);
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
-
-    child.emit("exit");
-    expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
-
-    // Detached already via exit; should remain a safe no-op.
-    detach();
-  });
 });

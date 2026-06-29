@@ -1,6 +1,7 @@
 // Respawn child runner restarts child processes after configured exits.
 import type { ChildProcess, spawn } from "node:child_process";
 import type { attachChildProcessBridge } from "./child-process-bridge.js";
+import { withChildProcessParentGuardEnv } from "./child-process-bridge.js";
 import { signalProcessTree } from "./kill-tree.js";
 
 const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
@@ -28,7 +29,7 @@ export function runRespawnChildWithSignalBridge(params: {
     params.detachForProcessTree === true && process.platform !== "win32" && !stdioIsTerminal;
   const child = runtime.spawn(command, args, {
     stdio: "inherit",
-    env,
+    env: withChildProcessParentGuardEnv({ env }),
     detached: detachForProcessTree,
   });
 
