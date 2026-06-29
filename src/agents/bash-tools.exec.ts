@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { resolveCarrierCommandArgv } from "../infra/command-carriers.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -562,6 +563,57 @@ function extractInterpreterScriptTargetFromArgv(
   return null;
 }
 
+function commandArgvKey(argv: readonly string[]): string {
+  return argv.join("\0");
+}
+
+function normalizeCommandExecutableToken(token: string | undefined): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(token?.split(/[\\/]/u).at(-1));
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.endsWith(".exe") ? normalized.slice(0, -4) : normalized;
+}
+
+function extractScriptTargetFromArgvRecursive(
+  argv: string[] | null,
+  seenArgv = new Set<string>(),
+): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
+  if (!argv || argv.length === 0) {
+    return null;
+  }
+  const key = commandArgvKey(argv);
+  if (seenArgv.has(key)) {
+    return null;
+  }
+  seenArgv.add(key);
+
+  const directTarget = extractInterpreterScriptTargetFromArgv(argv);
+  if (directTarget) {
+    return directTarget;
+  }
+
+  const carrierArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  if (carrierArgv) {
+    const carrierTarget = extractScriptTargetFromArgvRecursive(carrierArgv, seenArgv);
+    if (carrierTarget) {
+      return carrierTarget;
+    }
+  }
+
+  let commandIdx = 0;
+  while (commandIdx < argv.length && isShellEnvAssignmentToken(argv[commandIdx] ?? "")) {
+    commandIdx += 1;
+  }
+  const executable = normalizeCommandExecutableToken(argv[commandIdx]);
+  const shellPayload = extractShellWrappedCommandPayload(executable, argv.slice(commandIdx + 1));
+  if (!shellPayload) {
+    return null;
+  }
+  const shellPayloadArgv = splitShellArgs(shellPayload);
+  return extractScriptTargetFromArgvRecursive(shellPayloadArgv, seenArgv);
+}
+
 function extractInterpreterScriptPathsFromSegment(rawSegment: string): string[] {
   const argv = splitShellArgs(rawSegment.trim());
   if (!argv || argv.length === 0) {
@@ -641,7 +693,7 @@ function extractScriptTargetFromCommand(
   for (const argv of candidateArgv) {
     const attempts = [argv, argv ? stripPreflightEnvPrefix(argv) : null];
     for (const attempt of attempts) {
-      const target = extractInterpreterScriptTargetFromArgv(attempt);
+      const target = extractScriptTargetFromArgvRecursive(attempt);
       if (target) {
         return target;
       }
@@ -1195,6 +1247,7 @@ async function validateScriptFileForShellBleed(params: {
   const fsSafe = await loadFsSafeModule();
   const { FsSafeError, root: fsRoot } = fsSafe;
   const workspaceRoot = await fsRoot(params.workdir);
+  let checkedAnyScript = false;
   for (const relOrAbsPath of target.relOrAbsPaths) {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
@@ -1235,6 +1288,8 @@ async function validateScriptFileForShellBleed(params: {
       throw error;
     }
 
+    checkedAnyScript = true;
+
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
     const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
@@ -1269,6 +1324,29 @@ async function validateScriptFileForShellBleed(params: {
             `This looks like a shell command, not JavaScript.`,
         );
       }
+    }
+  }
+
+  if (!checkedAnyScript) {
+    const {
+      hasInterpreterInvocation,
+      hasComplexSyntax,
+      hasProcessSubstitution,
+      hasInterpreterSegmentScriptHint,
+      hasInterpreterPipelineScriptHint,
+      isDirectInterpreterCommand,
+    } = shouldFailClosedInterpreterPreflight(params.command);
+    if (
+      hasInterpreterInvocation &&
+      hasComplexSyntax &&
+      (hasInterpreterSegmentScriptHint ||
+        hasInterpreterPipelineScriptHint ||
+        (hasProcessSubstitution && isDirectInterpreterCommand))
+    ) {
+      throw new Error(
+        "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
+          "Use a direct `python <file>.py` or `node <file>.js` command.",
+      );
     }
   }
 }
