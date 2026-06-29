@@ -126,11 +126,14 @@ const FeishuToolsConfigSchema = z
 
 /**
  * Group session scope for routing Feishu group messages.
- * - "group" (default): one session per group chat
+ * - "group": one session per group chat
  * - "group_sender": one session per (group + sender)
  * - "group_topic": one session per group topic thread (falls back to group if no topic)
  * - "group_topic_sender": one session per (group + topic thread + sender),
  *   falls back to (group + sender) if no topic
+ *
+ * Defaults to "group" when unset. Use "group_topic" to isolate native topic
+ * group threads into separate sessions.
  */
 const GroupSessionScopeSchema = z
   .enum(["group", "group_sender", "group_topic", "group_topic_sender"])
@@ -140,8 +143,11 @@ const GroupSessionScopeSchema = z
  * @deprecated Use groupSessionScope instead.
  *
  * Topic session isolation mode for group chats.
- * - "disabled" (default): All messages in a group share one session
+ * - "disabled": All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
+ *
+ * Leave unset to use the current default: group chats, including native topic
+ * groups, are chat-scoped unless groupSessionScope says otherwise.
  *
  * Topic routing uses Feishu topic-group `thread_id` when the event identifies a
  * native topic group, and keeps `root_id` precedence for normal groups so

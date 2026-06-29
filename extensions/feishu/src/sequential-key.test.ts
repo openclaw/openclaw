@@ -7,6 +7,9 @@ function createTextEvent(params: {
   text: string;
   messageId?: string;
   chatId?: string;
+  chatType?: FeishuMessageEvent["message"]["chat_type"];
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   return {
     sender: {
@@ -19,7 +22,9 @@ function createTextEvent(params: {
     message: {
       message_id: params.messageId ?? "om_message_1",
       chat_id: params.chatId ?? "oc_dm_chat",
-      chat_type: "p2p",
+      chat_type: params.chatType ?? "p2p",
+      ...(params.rootId ? { root_id: params.rootId } : {}),
+      ...(params.threadId ? { thread_id: params.threadId } : {}),
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
     },
@@ -69,5 +74,71 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  it("keeps Feishu topic groups on the chat lane by default", () => {
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: createTextEvent({
+          text: "topic one",
+          chatId: "oc_topic_group",
+          chatType: "topic_group",
+          rootId: "om_topic_starter",
+          threadId: "omt_topic_1",
+        }),
+      }),
+    ).toBe("feishu:default:oc_topic_group");
+  });
+
+  it("uses native topic ids when Feishu topic groups opt into topic sessions", () => {
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        cfg: {
+          channels: {
+            feishu: {
+              groups: {
+                oc_topic_group: {
+                  groupSessionScope: "group_topic",
+                },
+              },
+            },
+          },
+        },
+        event: createTextEvent({
+          text: "topic two",
+          chatId: "oc_topic_group",
+          chatType: "topic_group",
+          rootId: "om_other_topic_starter",
+          threadId: "omt_topic_2",
+        }),
+      }),
+    ).toBe("feishu:default:oc_topic_group:topic:omt_topic_2");
+  });
+
+  it("honors explicit chat-scoped topic group configuration for queue keys", () => {
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        cfg: {
+          channels: {
+            feishu: {
+              groups: {
+                oc_topic_group: {
+                  groupSessionScope: "group",
+                },
+              },
+            },
+          },
+        },
+        event: createTextEvent({
+          text: "topic one",
+          chatId: "oc_topic_group",
+          chatType: "topic_group",
+          threadId: "omt_topic_1",
+        }),
+      }),
+    ).toBe("feishu:default:oc_topic_group");
   });
 });

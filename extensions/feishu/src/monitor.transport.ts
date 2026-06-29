@@ -210,6 +210,28 @@ function waitForFeishuWsCycleEnd(params: {
   });
 }
 
+function createFeishuWebSocketEventDispatcher(params: {
+  accountId: string;
+  eventDispatcher: Lark.EventDispatcher;
+  error: (message: string) => void;
+}): Lark.EventDispatcher {
+  const { accountId, eventDispatcher, error } = params;
+  const asyncDispatcher = Object.create(eventDispatcher) as Lark.EventDispatcher & {
+    invoke: (data: unknown, invokeParams?: { needCheck?: boolean }) => Promise<unknown>;
+  };
+  asyncDispatcher.invoke = (data, invokeParams): Promise<unknown> => {
+    // The Feishu SDK awaits invoke before acking/reading the next websocket event.
+    // Hand off immediately so independent topic sessions can run in parallel.
+    setImmediate(() => {
+      void eventDispatcher.invoke(data, invokeParams).catch((err: unknown) => {
+        error(`feishu[${accountId}]: error handling websocket event: ${String(err)}`);
+      });
+    });
+    return Promise.resolve(undefined);
+  };
+  return asyncDispatcher;
+}
+
 export async function monitorWebSocket({
   account,
   accountId,
@@ -251,7 +273,13 @@ export async function monitorWebSocket({
         break;
       }
       wsClients.set(accountId, wsClient);
-      await wsClient.start({ eventDispatcher });
+      await wsClient.start({
+        eventDispatcher: createFeishuWebSocketEventDispatcher({
+          accountId,
+          eventDispatcher,
+          error,
+        }),
+      });
       attempt = 0;
       log(`feishu[${accountId}]: WebSocket client started`);
       const cycleEnd = await waitForFeishuWsCycleEnd({ abortSignal, terminalError });

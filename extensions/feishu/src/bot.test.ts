@@ -3214,6 +3214,73 @@ describe("handleFeishuMessage command authorization", () => {
     expect(replyRouteRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
   });
 
+  it("keeps native topic groups chat-scoped by default", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_default_topic_message",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        root_id: "om_default_topic_root",
+        thread_id: "omt_default_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "default topic scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expectResolvedRouteCall(0, { kind: "group", id: "oc-group" }, null);
+  });
+
+  it("keeps native topic groups chat-scoped when groupSessionScope=group", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_chat_scoped_topic_message",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        root_id: "om_chat_scoped_topic_root",
+        thread_id: "omt_chat_scoped_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "chat-scoped topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expectResolvedRouteCall(0, { kind: "group", id: "oc-group" }, null);
+  });
+
   it("uses thread_id as topic key when root_id is missing", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
