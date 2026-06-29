@@ -5,7 +5,10 @@ import {
   sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import type {
+  ChannelOutboundAdapter,
+  OutboundDeliveryResult,
+} from "openclaw/plugin-sdk/channel-send-result";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
@@ -14,7 +17,6 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
