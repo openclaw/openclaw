@@ -81,6 +81,7 @@ type MonitorOptions = {
   codexHome?: string;
   transcriptPollDelaysMs?: readonly number[];
   completionDeliveryRetryDelaysMs?: readonly number[];
+  completionDeliveryDeadlineMs?: number;
   taskRowReconcileIntervalMs?: number;
 };
 
@@ -148,6 +149,7 @@ export class CodexNativeSubagentMonitor {
   private codexHome?: string;
   private transcriptPollDelaysMs: readonly number[];
   private completionDeliveryRetryDelaysMs: readonly number[];
+  private completionDeliveryDeadlineMs: number;
   private taskRowReconcileTimer?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -160,6 +162,8 @@ export class CodexNativeSubagentMonitor {
       options.transcriptPollDelaysMs ?? DEFAULT_TRANSCRIPT_POLL_DELAYS_MS;
     this.completionDeliveryRetryDelaysMs =
       options.completionDeliveryRetryDelaysMs ?? DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS;
+    this.completionDeliveryDeadlineMs =
+      options.completionDeliveryDeadlineMs ?? COMPLETION_DELIVERY_DEADLINE_MS;
     this.startTaskRowReconciler(
       options.taskRowReconcileIntervalMs ?? DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS,
     );
@@ -639,7 +643,7 @@ export class CodexNativeSubagentMonitor {
     // This prevents an unbounded retry loop on permanently non-durable delivery.
     if (
       attempt >= MAX_COMPLETION_DELIVERY_RETRY_ATTEMPTS ||
-      Date.now() - childState.completionDeliveryStartedAt >= COMPLETION_DELIVERY_DEADLINE_MS
+      Date.now() - childState.completionDeliveryStartedAt >= this.completionDeliveryDeadlineMs
     ) {
       this.giveUpCompletionDelivery(childState);
       return;
@@ -652,6 +656,19 @@ export class CodexNativeSubagentMonitor {
     childState.completionDeliveryAttempt += 1;
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
+
+      // Re-check deadline — it may have expired while waiting on the timer.
+      // Without this check, a timer scheduled just before the deadline can
+      // fire after the deadline and re-enter the parent past the advertised
+      // hard deadline (e.g. 5-min timer set at 28m50s fires at 33m50s).
+      if (
+        childState.completionDeliveryStartedAt !== undefined &&
+        Date.now() - childState.completionDeliveryStartedAt >= this.completionDeliveryDeadlineMs
+      ) {
+        this.giveUpCompletionDelivery(childState);
+        return;
+      }
+
       const state = this.parentStates.get(childState.parentThreadId);
       if (!state) {
         return;

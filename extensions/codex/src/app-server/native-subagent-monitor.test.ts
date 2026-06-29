@@ -1400,6 +1400,75 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  // FIX #97593: Hard deadline must be enforced in the timer callback, not only
+  // when scheduling the next retry. Otherwise a timer scheduled just before the
+  // deadline can fire after it and re-enter the parent past the advertised cap.
+  it("enforces hard deadline in timer callback, preventing post-deadline delivery", async () => {
+    vi.useFakeTimers();
+    // Track fake time so Date.now() advances in lockstep with the fake timer.
+    // Without this, the deadline check (Date.now() - startedAt >= deadline)
+    // would always see ~0ms elapsed since real wall time doesn't advance.
+    let fakeNow = Date.now();
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "non-durable",
+      });
+      // Short deadline (500ms) with delay (1000ms) means the 1st retry
+      // fires past the deadline.
+      //   t=0:    initial delivery → schedule timer (delay 1000)
+      //   t=1000: timer fires → deadline check: 1000 >= 500 → giveUp
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [1000],
+        completionDeliveryDeadlineMs: 500,
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child result",
+        }),
+      );
+
+      // Initial delivery already happened during client.notify.
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // Advance fake time past the deadline and fire the timer.
+      fakeNow += 1000;
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // The timer callback should have hit the deadline check and given up.
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith(
+        expect.objectContaining({ deliveryStatus: "failed" }),
+      );
+
+      // No additional delivery attempt should have fired (deadline caught it).
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // Advance further — still no delivery growth.
+      fakeNow += 5000;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      client.close();
+    } finally {
+      dateNowSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("reconciles completed native subagents from child rollout transcripts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");
