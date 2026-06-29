@@ -68,6 +68,8 @@ export type SessionMcpRuntime = {
   sessionKey?: string;
   workspaceDir: string;
   configFingerprint: string;
+  /** Opaque key encoding the caller context baked into this runtime's MCP connections. Empty when no trusted servers exist. Used by getOrCreate to detect stale caller identity across turns. */
+  callerContextKey: string;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;

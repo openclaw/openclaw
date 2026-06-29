@@ -75,10 +75,11 @@ export type McpServerConfig = {
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;
   /**
-   * When true, bundle MCP merges OpenClaw caller HTTP headers onto this server's
-   * remote (`url`) transport: `x-openclaw-agent-id`, `x-openclaw-account-id`,
-   * `x-openclaw-message-channel`, and `x-session-key`, using `OPENCLAW_MCP_*`
-   * placeholders. Default off (omit or false).
+   * When true, bundle MCP merges OpenClaw caller identity HTTP headers onto this
+   * server's remote (`url`) transport: `x-openclaw-agent-id`,
+   * `x-openclaw-account-id`, and `x-openclaw-message-channel`. These headers
+   * identify who is calling but carry no bearer-token power. Default off (omit
+   * or false).
    *
    * Trust requirements (all enforced):
    *  - The flag is honored only in owner-managed `mcp.servers` (this property)

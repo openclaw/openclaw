@@ -543,6 +543,12 @@ export function createSessionMcpRuntime(params: {
   // (before expansion) so that cache invalidation tracks config file changes, not
   // per-call identity differences.
   const trustedServers = ownerCallerContextTrustedServers(params.cfg);
+  // Stable key encoding the caller identity baked into this runtime's MCP connections.
+  // getOrCreate uses it to detect a stale runtime when account or channel changes between turns.
+  const callerContextKey =
+    trustedServers.size > 0 && params.callerContext
+      ? `${params.callerContext.agentId ?? ""}::${params.callerContext.accountId ?? ""}::${params.callerContext.messageChannel ?? ""}`
+      : "";
   const effectiveMcpServers =
     trustedServers.size > 0 && params.callerContext
       ? expandEmbeddedMcpCallerContextInConfig(
@@ -918,6 +924,7 @@ export function createSessionMcpRuntime(params: {
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     configFingerprint,
+    callerContextKey,
     createdAt,
     get lastUsedAt() {
       return lastUsedAt;
@@ -1049,6 +1056,7 @@ function createSessionMcpRuntimeManager(
       promise: Promise<SessionMcpRuntime>;
       workspaceDir: string;
       configFingerprint: string;
+      callerContextKey: string;
     }
   >();
   const idleSweepIntervalMs = opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS;
@@ -1132,11 +1140,17 @@ function createSessionMcpRuntimeManager(
         cfg: params.cfg,
         logDiagnostics: false,
       });
+      const nextTrustedServers = ownerCallerContextTrustedServers(params.cfg);
+      const nextCallerContextKey =
+        nextTrustedServers.size > 0 && params.callerContext
+          ? `${params.callerContext.agentId ?? ""}::${params.callerContext.accountId ?? ""}::${params.callerContext.messageChannel ?? ""}`
+          : "";
       const existing = runtimesBySessionId.get(params.sessionId);
       if (existing) {
         if (
           existing.workspaceDir !== params.workspaceDir ||
-          existing.configFingerprint !== nextFingerprint
+          existing.configFingerprint !== nextFingerprint ||
+          existing.callerContextKey !== nextCallerContextKey
         ) {
           runtimesBySessionId.delete(params.sessionId);
           await existing.dispose();
@@ -1150,7 +1164,8 @@ function createSessionMcpRuntimeManager(
       if (inFlight) {
         if (
           inFlight.workspaceDir === params.workspaceDir &&
-          inFlight.configFingerprint === nextFingerprint
+          inFlight.configFingerprint === nextFingerprint &&
+          inFlight.callerContextKey === nextCallerContextKey
         ) {
           return inFlight.promise;
         }
@@ -1179,6 +1194,7 @@ function createSessionMcpRuntimeManager(
         promise: created,
         workspaceDir: params.workspaceDir,
         configFingerprint: nextFingerprint,
+        callerContextKey: nextCallerContextKey,
       });
       try {
         return await created;
