@@ -605,7 +605,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
           "src/cli/run-main.test.ts",
@@ -951,7 +951,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/openai-image-auth-docker-client.ts",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
         [
           "test/scripts/openai-image-auth-docker-client.test.ts",
           "extensions/openai/image-generation-provider.test.ts",
@@ -2442,7 +2442,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
       "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
@@ -2476,7 +2476,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/openai-image-auth-docker.sh",
-      "scripts/e2e/openai-image-auth-docker-client.ts",
+      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2518,7 +2518,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/crestodian-first-run-docker.sh",
-      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
       "scripts/e2e/crestodian-planner-docker.sh",
       "scripts/e2e/crestodian-planner-docker-client.mjs",
