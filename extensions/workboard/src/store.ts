@@ -39,6 +39,8 @@ import {
   type WorkboardDiagnosticAction,
   type WorkboardDiagnosticKind,
   type WorkboardDiagnosticSeverity,
+  type WorkboardDurableChildCounts,
+  type WorkboardDurableMetadata,
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
@@ -460,6 +462,147 @@ function normalizeNotificationSubscription(
     ...preservedFields,
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
+  };
+}
+
+function normalizeNonNegativeCount(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeDurableChildCounts(value: unknown): WorkboardDurableChildCounts | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const next: WorkboardDurableChildCounts = {};
+  for (const key of [
+    "total",
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "lost",
+    "terminal",
+    "open",
+  ] as const) {
+    const count = normalizeNonNegativeCount(record[key]);
+    if (count !== undefined) {
+      next[key] = count;
+    }
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+function normalizeDurableMetadata(
+  value: unknown,
+  fallback?: WorkboardDurableMetadata,
+): WorkboardDurableMetadata | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const workflowRunId = normalizeBoundedString(
+    record.workflowRunId,
+    fallback?.workflowRunId,
+    160,
+    "durable workflow run id",
+  );
+  if (!workflowRunId) {
+    return fallback;
+  }
+  const updatedAt = normalizeTimestamp(record.updatedAt, fallback?.updatedAt ?? Date.now());
+  const workflowId = normalizeBoundedString(
+    record.workflowId,
+    fallback?.workflowId,
+    160,
+    "durable workflow id",
+  );
+  const workflowVersion = normalizeBoundedString(
+    record.workflowVersion,
+    fallback?.workflowVersion,
+    80,
+    "durable workflow version",
+  );
+  const status = normalizeBoundedString(record.status, fallback?.status, 80, "durable status");
+  const recoveryState = normalizeBoundedString(
+    record.recoveryState,
+    fallback?.recoveryState,
+    80,
+    "durable recovery state",
+  );
+  const waitingReason = normalizeBoundedString(
+    record.waitingReason,
+    fallback?.waitingReason,
+    80,
+    "durable waiting reason",
+  );
+  const currentStepId = normalizeBoundedString(
+    record.currentStepId,
+    fallback?.currentStepId,
+    160,
+    "durable current step id",
+  );
+  const taskId = normalizeBoundedString(record.taskId, fallback?.taskId, 160, "durable task id");
+  const taskFlowId = normalizeBoundedString(
+    record.taskFlowId,
+    fallback?.taskFlowId,
+    160,
+    "durable task flow id",
+  );
+  const sessionKey = normalizeBoundedString(
+    record.sessionKey,
+    fallback?.sessionKey,
+    240,
+    "durable session key",
+  );
+  const childSessionKey = normalizeBoundedString(
+    record.childSessionKey,
+    fallback?.childSessionKey,
+    240,
+    "durable child session key",
+  );
+  const runId = normalizeBoundedString(record.runId, fallback?.runId, 160, "durable run id");
+  const agentId = normalizeBoundedString(
+    record.agentId,
+    fallback?.agentId,
+    120,
+    "durable agent id",
+  );
+  const requesterAgentId = normalizeBoundedString(
+    record.requesterAgentId,
+    fallback?.requesterAgentId,
+    120,
+    "durable requester agent id",
+  );
+  const timelineCommand = normalizeBoundedString(
+    record.timelineCommand,
+    fallback?.timelineCommand,
+    240,
+    "durable timeline command",
+  );
+  const children = normalizeDurableChildCounts(record.children) ?? fallback?.children;
+  return {
+    workflowRunId,
+    ...(workflowId ? { workflowId } : {}),
+    ...(workflowVersion ? { workflowVersion } : {}),
+    ...(status ? { status } : {}),
+    ...(recoveryState ? { recoveryState } : {}),
+    ...(waitingReason ? { waitingReason } : {}),
+    ...(currentStepId ? { currentStepId } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(taskFlowId ? { taskFlowId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(childSessionKey ? { childSessionKey } : {}),
+    ...(runId ? { runId } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(requesterAgentId ? { requesterAgentId } : {}),
+    ...(timelineCommand ? { timelineCommand } : {}),
+    ...(children ? { children } : {}),
+    updatedAt,
   };
 }
 
@@ -1311,6 +1454,9 @@ function normalizeMetadata(
           .filter((notification): notification is WorkboardNotification => notification !== null)
           .slice(-MAX_CARD_NOTIFICATIONS)
       : fallback.notifications,
+    durable: Object.hasOwn(record, "durable")
+      ? normalizeDurableMetadata(record.durable, fallback.durable)
+      : fallback.durable,
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -1434,6 +1580,7 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     "claim",
     "diagnostics",
     "notifications",
+    "durable",
     "templateId",
     "archivedAt",
     "stale",

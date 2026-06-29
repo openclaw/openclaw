@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { buildWorkboardPatchFromDurableProjection } from "./durable-adapter.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WorkboardStore,
@@ -254,6 +255,71 @@ describe("WorkboardStore", () => {
             startedAt: 10,
           }),
         ],
+      },
+    });
+  });
+
+  it("preserves durable projection metadata when updating cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Durable child", status: "ready" });
+    const durableUpdatedAt = Date.now() + 1_000;
+
+    const updated = await store.update(
+      card.id,
+      buildWorkboardPatchFromDurableProjection({
+        workflowRunId: "wfr_child",
+        workflowId: "openclaw.subagent.run",
+        workflowVersion: "1",
+        status: "waiting_child",
+        recoveryState: "waiting_child",
+        waitingReason: "child",
+        currentStepId: "subagents",
+        updatedAt: durableUpdatedAt,
+        external: {
+          taskId: "task-child",
+          taskFlowId: "flow-child",
+          childSessionKey: "agent:bo:subagent:workboard-default-card",
+          runId: "run-child",
+          agentId: "bo",
+        },
+        children: {
+          total: 2,
+          running: 1,
+          succeeded: 1,
+          terminal: 1,
+          open: 1,
+        },
+      }),
+    );
+
+    expect(updated).toMatchObject({
+      status: "running",
+      sessionKey: "agent:bo:subagent:workboard-default-card",
+      runId: "run-child",
+      taskId: "task-child",
+      metadata: {
+        durable: {
+          workflowRunId: "wfr_child",
+          workflowId: "openclaw.subagent.run",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          waitingReason: "child",
+          currentStepId: "subagents",
+          taskId: "task-child",
+          taskFlowId: "flow-child",
+          childSessionKey: "agent:bo:subagent:workboard-default-card",
+          runId: "run-child",
+          agentId: "bo",
+          timelineCommand: "openclaw durable timeline wfr_child",
+          children: {
+            total: 2,
+            running: 1,
+            succeeded: 1,
+            terminal: 1,
+            open: 1,
+          },
+          updatedAt: durableUpdatedAt,
+        },
       },
     });
   });

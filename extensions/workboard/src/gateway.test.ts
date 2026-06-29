@@ -48,6 +48,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.list",
       "workboard.cards.create",
       "workboard.cards.update",
+      "workboard.cards.applyDurableProjection",
       "workboard.cards.move",
       "workboard.cards.delete",
       "workboard.cards.comment",
@@ -97,6 +98,9 @@ describe("workboard gateway methods", () => {
     });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("workboard.cards.applyDurableProjection")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("workboard.cards.runs")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.attachments.get")?.opts).toEqual({
       scope: "operator.read",
@@ -180,6 +184,72 @@ describe("workboard gateway methods", () => {
           comments: [expect.objectContaining({ body: "Waiting on CI" })],
         },
         events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
+      },
+    });
+  });
+
+  it("applies durable projection updates through gateway", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+
+    const createRespond = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Durable card", status: "ready" },
+      respond: createRespond,
+    } as never);
+    const cardId = createRespond.mock.calls[0]?.[1]?.card.id;
+
+    const applyRespond = vi.fn();
+    await methods.get("workboard.cards.applyDurableProjection")?.handler({
+      params: {
+        id: cardId,
+        projection: {
+          workflowRunId: "wfr-card",
+          workflowId: "openclaw.subagent.run",
+          status: "succeeded",
+          recoveryState: "terminal",
+          updatedAt: Date.now() + 1_000,
+          external: {
+            taskId: "task-card",
+            childSessionKey: "agent:bo:subagent:workboard-card",
+            runId: "run-card",
+          },
+        },
+      },
+      respond: applyRespond,
+    } as never);
+
+    expect(applyRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(applyRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: {
+        status: "review",
+        taskId: "task-card",
+        sessionKey: "agent:bo:subagent:workboard-card",
+        runId: "run-card",
+        metadata: {
+          durable: {
+            workflowRunId: "wfr-card",
+            status: "succeeded",
+            recoveryState: "terminal",
+          },
+        },
       },
     });
   });

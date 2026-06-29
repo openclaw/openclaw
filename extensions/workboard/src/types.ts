@@ -224,6 +224,38 @@ export type WorkboardNotification = {
   runId?: string;
 };
 
+export type WorkboardDurableChildCounts = {
+  total?: number;
+  pending?: number;
+  running?: number;
+  succeeded?: number;
+  failed?: number;
+  cancelled?: number;
+  lost?: number;
+  terminal?: number;
+  open?: number;
+};
+
+export type WorkboardDurableMetadata = {
+  workflowRunId: string;
+  workflowId?: string;
+  workflowVersion?: string;
+  status?: string;
+  recoveryState?: string;
+  waitingReason?: string;
+  currentStepId?: string;
+  taskId?: string;
+  taskFlowId?: string;
+  sessionKey?: string;
+  childSessionKey?: string;
+  runId?: string;
+  agentId?: string;
+  requesterAgentId?: string;
+  timelineCommand?: string;
+  children?: WorkboardDurableChildCounts;
+  updatedAt: number;
+};
+
 export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;
@@ -298,6 +330,7 @@ export type WorkboardMetadata = {
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;
+  durable?: WorkboardDurableMetadata;
   lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
 };

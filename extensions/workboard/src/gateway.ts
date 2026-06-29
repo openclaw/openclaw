@@ -2,6 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import { buildWorkboardPatchFromDurableProjection } from "./durable-adapter.js";
 import { WorkboardStore } from "./store.js";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
@@ -108,6 +109,25 @@ export function registerWorkboardGatewayMethods(params: {
           card: redactClaimToken(
             await store.update(readId(requestParams), readPatch(requestParams)),
           ),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.applyDurableProjection",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const projection = requestParams.projection ?? requestParams;
+        const patch = buildWorkboardPatchFromDurableProjection(projection);
+        if (!patch.metadata) {
+          throw new Error("durable projection with workflowRunId is required.");
+        }
+        respond(true, {
+          card: redactClaimToken(await store.update(readId(requestParams), patch)),
         });
       } catch (error) {
         respondError(respond, error);
