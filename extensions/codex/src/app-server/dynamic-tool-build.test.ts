@@ -13,6 +13,7 @@ import {
   addSandboxShellDynamicToolsIfAvailable,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
+  filterCodexDynamicToolsForDenylist,
   hasWildcardCodexToolsAllow,
   includeForcedCodexDynamicToolAllow,
   mapCodexAppServerRemoteWorkspacePath,
@@ -1209,6 +1210,70 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
     expect(hasWildcardCodexToolsAllow([" * "])).toBe(true);
+  });
+
+  it("applies explicit tools.deny after Codex dynamic allowlist expansion", () => {
+    const tools = ["message", "skill_workshop", "web_search"].map((name) => ({ name }));
+    const allowFiltered = filterCodexDynamicToolsForAllowlist(tools, ["*"]);
+
+    expect(filterCodexDynamicToolsForDenylist(allowFiltered, ["skill_*"])).toEqual([
+      { name: "message" },
+      { name: "web_search" },
+    ]);
+    expect(filterCodexDynamicToolsForDenylist(allowFiltered, ["*"])).toEqual([]);
+  });
+
+  it("applies explicit tools.deny to Codex shell aliases", () => {
+    const tools = [
+      "exec",
+      "sandbox_exec",
+      "node_exec",
+      "process",
+      "sandbox_process",
+      "node_process",
+      "message",
+    ].map((name) => ({ name }));
+
+    expect(filterCodexDynamicToolsForDenylist(tools, ["exec"])).toEqual([
+      { name: "process" },
+      { name: "sandbox_process" },
+      { name: "node_process" },
+      { name: "message" },
+    ]);
+    expect(filterCodexDynamicToolsForDenylist(tools, ["process"])).toEqual([
+      { name: "exec" },
+      { name: "sandbox_exec" },
+      { name: "node_exec" },
+      { name: "message" },
+    ]);
+    expect(filterCodexDynamicToolsForDenylist(tools, ["bash"])).toEqual([
+      { name: "process" },
+      { name: "sandbox_process" },
+      { name: "node_process" },
+      { name: "message" },
+    ]);
+  });
+
+  it("hides config-denied deferred tools from Codex developer instructions", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = { tools: { deny: ["skill_workshop"] } };
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("skill_workshop"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+    const specs = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "searchable",
+    }).availableSpecs;
+    const toolNames = flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
+
+    expect(toolNames).toEqual(["message"]);
   });
 
   it("disables Codex native tool surfaces for restricted runtime allowlists", () => {

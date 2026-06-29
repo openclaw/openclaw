@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
+import { isToolAllowedByPolicyName } from "../../../../src/agents/tool-policy-match.js";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
   filterCodexDynamicTools,
@@ -381,7 +382,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         webSearchPolicy.persistentAllowed),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const allowFilteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForDenylist(
+    allowFilteredTools,
+    params.config?.tools?.deny,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -933,6 +938,28 @@ export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
       (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
       (normalized === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME &&
         (allowSet.has("exec") || allowSet.has("process")))
+    );
+  });
+}
+
+/** Applies the explicit OpenClaw tools.deny policy to the Codex dynamic-tool projection. */
+export function filterCodexDynamicToolsForDenylist<T extends { name: string }>(
+  tools: T[],
+  toolsDeny?: string[],
+): T[] {
+  if (!toolsDeny || toolsDeny.length === 0) {
+    return tools;
+  }
+  return tools.filter((tool) => {
+    const normalized = normalizeCodexDynamicToolName(tool.name);
+    return (
+      isToolAllowedByPolicyName(normalized, { deny: toolsDeny }) &&
+      (normalized === "sandbox_exec" || normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME
+        ? isToolAllowedByPolicyName("exec", { deny: toolsDeny })
+        : true) &&
+      (normalized === "sandbox_process" || normalized === CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME
+        ? isToolAllowedByPolicyName("process", { deny: toolsDeny })
+        : true)
     );
   });
 }
