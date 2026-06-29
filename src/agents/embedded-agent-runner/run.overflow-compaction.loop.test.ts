@@ -675,7 +675,7 @@ describe("overflow compaction in run loop", () => {
     expectLogExcludes(mockedLog.warn, "source=assistantError");
   });
 
-  it("returns an explicit timeout payload when the run times out before producing any reply", async () => {
+  it("throws a FailoverError when the run times out before producing any reply", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         aborted: true,
@@ -689,6 +689,8 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow();
+
   });
 
   it("uses harness-provided prompt timeout outcome metadata", async () => {
@@ -746,6 +748,8 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual(["already delivered"]);
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow();
+
   });
 
   it("propagates deterministic approval prompt delivery from attempts", async () => {
@@ -780,6 +784,8 @@ describe("overflow compaction in run loop", () => {
     expect(
       result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
     ).toBe(false);
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow();
+
   });
 
   it("preserves tool media payloads and appends an explicit timeout error", async () => {

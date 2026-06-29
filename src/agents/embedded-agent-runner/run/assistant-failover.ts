@@ -346,9 +346,9 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
-    // Only current provider failures throw here. External aborts, timeout
-    // payload synthesis, and stale classified text without failoverFailure
-    // keep the normal payload path.
+    // Timeout is handled through the dedicated timedOut path (failover-policy.ts).
+    // Only concrete provider failures throw here — external aborts (user stop)
+    // and timeouts keep the normal payload path for downstream synthesis.
     if (!params.externalAbort && !params.timedOut && params.failoverFailure) {
       const message = resolveAssistantFailoverErrorMessage(params);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
@@ -421,6 +421,12 @@ function resolveAssistantFailoverErrorMessage(params: {
   );
 }
 
+// surface_error decisions can arrive with `reason: null` when
+// shouldRotateAssistant fired on `failoverFailure` without a classified
+// upstream reason. FailoverError requires a concrete reason, so map
+// null onto the most specific failure the run observed, falling back
+// to "unknown" when no signal is set (e.g. a bare timeout without any
+// other classified failure).
 function resolveSurfaceErrorReason(
   declared: FailoverReason | null,
   params: {

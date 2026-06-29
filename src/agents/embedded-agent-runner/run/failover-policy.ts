@@ -77,7 +77,7 @@ type RunFailoverDecisionParams =
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
-    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
+  return params.timedOut || (params.failoverFailure && params.failoverReason !== "timeout");
   );
 }
 
