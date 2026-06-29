@@ -1306,6 +1306,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("thinking=low");
   });
 
+  it("renders darwin runtime line with macOS marketing version and no duplicated arch (#95145)", () => {
+    // Simulates what the runtime callers now pass after using
+    // resolveRuntimePromptOs(): `macOS <productVersion>` plus a separate
+    // `arch` field, instead of the legacy `${os.type()} ${os.release()}`
+    // (e.g. "Darwin 25.5.0") that maps incorrectly to macOS 15 on Tahoe.
+    const line = buildRuntimeLine(
+      {
+        host: "host",
+        os: "macOS 26.5.1",
+        arch: "arm64",
+        node: "v20",
+      },
+      "telegram",
+      ["inlineButtons"],
+    );
+
+    expect(line).toContain("os=macOS 26.5.1 (arm64)");
+    // Guard: arch must not appear twice when both `os` and `arch` are set.
+    expect(line).not.toContain("(arm64) (arm64)");
+    // Guard: the legacy Darwin kernel release must not leak through.
+    expect(line).not.toContain("Darwin 25");
+  });
+
   it("renders extra system prompt exactly once", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
