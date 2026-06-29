@@ -409,7 +409,9 @@ export function streamProxy(
     } finally {
       try {
         reader?.releaseLock();
-      } catch {}
+      } catch {
+        // Best-effort: reader may already be released or stream closed.
+      }
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }
