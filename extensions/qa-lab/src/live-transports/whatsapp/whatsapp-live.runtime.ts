@@ -3282,6 +3282,7 @@ export async function runWhatsAppQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "whatsapp",
   });
   await fs.writeFile(

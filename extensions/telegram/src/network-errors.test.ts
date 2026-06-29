@@ -139,6 +139,16 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
+  it("treats delete/react (idempotent) contexts like polling, not send", () => {
+    const undiciSnippetErr = new Error("Undici: socket failure");
+    // delete and react are idempotent Telegram operations; a transient
+    // snippet-only error must be retried (allowMessageMatch defaults true),
+    // matching polling/webhook. send stays strict as the regression guard.
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "delete" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "react" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
+  });
+
   it("treats grammY failed-after envelope errors as recoverable in send context", () => {
     expect(
       isRecoverableTelegramNetworkError(

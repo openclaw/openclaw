@@ -69,6 +69,7 @@ export type CopilotToolCompletion = {
 };
 
 export interface CopilotToolBridgeInput {
+  allowModelTools?: boolean;
   modelProvider: string;
   modelId: string;
   agentId: string;
@@ -151,7 +152,7 @@ export function supportsModelTools(modelProvider: string): boolean {
 export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
-  if (!supportsModelTools(input.modelProvider)) {
+  if (!input.allowModelTools && !supportsModelTools(input.modelProvider)) {
     return { sdkTools: [], sourceTools: [] };
   }
 

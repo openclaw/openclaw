@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkQQBotMarkdownText,
   createQQBotMarkdownChunker,
+  testing,
   type QQBotBaseMarkdownChunker,
 } from "./markdown-table-chunking.js";
 
@@ -259,5 +260,26 @@ describe("chunkQQBotMarkdownText", () => {
       ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
       "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
     ]);
+  });
+});
+
+describe("table-cell splitting", () => {
+  it("treats a backslash-escaped pipe as literal cell content, not a delimiter", () => {
+    // GFM: `\|` inside a cell is a literal "|", so this row has two cells, not
+    // three. Splitting on every "|" previously mis-counted columns, so the
+    // oversized-row fallback rendered the trailing content under the wrong header.
+    expect(testing.splitTableCells("| a \\| b | c |")).toEqual(["a | b", "c"]);
+  });
+
+  it("leaves ordinary rows unchanged", () => {
+    expect(testing.splitTableCells("| a | b |")).toEqual(["a", "b"]);
+  });
+
+  it("unescapes a literal backslash and still splits on the following pipe", () => {
+    expect(testing.splitTableCells("| a \\\\ | b |")).toEqual(["a \\", "b"]);
+  });
+
+  it("handles escaped pipes in partial (unterminated) rows", () => {
+    expect(testing.splitPartialTableCells("| a \\| b")).toEqual(["a | b"]);
   });
 });
