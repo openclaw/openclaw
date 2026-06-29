@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
+import { resolveTelegramBlockStreamingEnabled } from "./preview-streaming.js";
 
 describe("resolveTelegramStreamMode", () => {
   it("defaults to partial when telegram streaming is unset", () => {
@@ -23,6 +24,47 @@ describe("resolveTelegramStreamMode", () => {
 
   it("preserves unified progress mode on Telegram", () => {
     expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
+  });
+});
+
+describe("resolveTelegramBlockStreamingEnabled", () => {
+  it("lets partial and progress modes override the legacy global block default", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "partial" } },
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(false);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "progress" } },
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat block preview mode as explicit blocked delivery", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "block" } },
+        legacyBlockStreamingDefault: "off",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps explicit Telegram block streaming ahead of preview mode", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "partial", block: { enabled: true } } },
+        legacyBlockStreamingDefault: "off",
+      }),
+    ).toBe(true);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "block", block: { enabled: true } } },
+        legacyBlockStreamingDefault: "off",
+      }),
+    ).toBe(true);
   });
 });
 

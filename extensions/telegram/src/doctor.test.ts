@@ -580,6 +580,20 @@ describe("telegram doctor", () => {
         channels: {
           telegram: {
             replyToMode: "first",
+            streaming: { block: { enabled: true } },
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toStrictEqual([]);
+  });
+
+  it("warns for selected quote tool progress when partial streaming overrides legacy block default", () => {
+    expect(
+      scanTelegramSelectedQuoteToolProgressWarnings({
+        channels: {
+          telegram: {
+            replyToMode: "first",
+            streaming: { mode: "partial" },
           },
         },
         agents: {
@@ -588,7 +602,7 @@ describe("telegram doctor", () => {
           },
         },
       } as unknown as OpenClawConfig),
-    ).toStrictEqual([]);
+    ).toStrictEqual([{ path: "channels.telegram", replyToMode: "first" }]);
   });
 
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {

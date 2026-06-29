@@ -26,7 +26,6 @@ import {
   type ChannelProgressDraftLine,
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
-  resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -118,6 +117,7 @@ import {
 } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { resolveTelegramBlockStreamingEnabled } from "./preview-streaming.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -887,9 +887,11 @@ export const dispatchTelegramMessage = async ({
           text: renderTelegramHtmlText(text, { tableMode }),
           parseMode: "HTML",
         };
-  const accountBlockStreamingEnabled =
-    resolveChannelStreamingBlockEnabled(telegramCfg) ??
-    cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const accountBlockStreamingEnabled = resolveTelegramBlockStreamingEnabled({
+    account: telegramCfg,
+    streamMode,
+    legacyBlockStreamingDefault: cfg.agents?.defaults?.blockStreamingDefault,
+  });
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
@@ -1385,16 +1387,11 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
-  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
   const disableBlockStreaming = !streamDeliveryEnabled
     ? true
     : forceBlockStreamingForReasoning
       ? false
-      : typeof resolvedBlockStreamingEnabled === "boolean"
-        ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+      : !accountBlockStreamingEnabled;
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 

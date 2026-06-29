@@ -3,10 +3,7 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import {
-  resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -24,7 +21,10 @@ import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
-import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import {
+  resolveTelegramBlockStreamingEnabled,
+  resolveTelegramPreviewStreamMode,
+} from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramMalformedGroupsHit = { path: string; actualType: string };
@@ -276,9 +276,10 @@ export function scanTelegramSelectedQuoteToolProgressWarnings(
     if (resolveTelegramPreviewStreamMode(account) === "off") {
       return [];
     }
-    const blockStreamingEnabled =
-      resolveChannelStreamingBlockEnabled(account) ??
-      cfg.agents?.defaults?.blockStreamingDefault === "on";
+    const blockStreamingEnabled = resolveTelegramBlockStreamingEnabled({
+      account,
+      legacyBlockStreamingDefault: cfg.agents?.defaults?.blockStreamingDefault,
+    });
     if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
       return [];
     }
