@@ -10,7 +10,7 @@ vi.mock("../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: vi.fn(),
 }));
 
-import { createNonExitingRuntime, writeRuntimeJson } from "./runtime.js";
+import { createNonExitingRuntime, RuntimeExitError, writeRuntimeJson } from "./runtime.js";
 
 describe("createNonExitingRuntime", () => {
   it("returns runtime with exit function", () => {
@@ -18,9 +18,22 @@ describe("createNonExitingRuntime", () => {
     expect(typeof runtime.exit).toBe("function");
   });
 
-  it("exit function throws error", () => {
+  it("exit function throws typed runtime exit error", () => {
     const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(1)).toThrow("exit 1");
+    let thrown: unknown;
+
+    try {
+      runtime.exit(42);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(RuntimeExitError);
+    expect(thrown).toMatchObject({
+      name: "RuntimeExitError",
+      code: 42,
+      message: "exit 42",
+    });
   });
 
   it("exit function includes code in error message", () => {

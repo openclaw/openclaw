@@ -2,7 +2,7 @@
  * Public SDK subpath for runtime logging, env, backup, and process helpers.
  */
 export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
-export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+export { createNonExitingRuntime, defaultRuntime, RuntimeExitError } from "../runtime.js";
 export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 export { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 export {

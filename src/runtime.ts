@@ -13,6 +13,16 @@ export type OutputRuntimeEnv = RuntimeEnv & {
   writeJson: (value: unknown, space?: number) => void;
 };
 
+export class RuntimeExitError extends Error {
+  readonly code: number;
+
+  constructor(code: number) {
+    super(`exit ${code}`);
+    this.name = "RuntimeExitError";
+    this.code = code;
+  }
+}
+
 function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.VITEST !== "true") {
     return true;
@@ -99,7 +109,7 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new RuntimeExitError(code);
     },
   };
 }

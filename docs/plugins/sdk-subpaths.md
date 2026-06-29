@@ -215,8 +215,8 @@ usage endpoint failed or returned no usable usage data.
   <Accordion title="Runtime and storage subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
-    | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
+    | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers, including `RuntimeExitError` for non-exiting runtime control flow |
+    | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, backoff, and `RuntimeExitError` helpers |
     | `plugin-sdk/browser-config` | Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/codex-mcp-projection` | Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
