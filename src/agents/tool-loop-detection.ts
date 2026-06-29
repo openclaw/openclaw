@@ -221,8 +221,9 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
 
   // #93917: Do not include output text for failed exec — error output often
   // carries volatile noise (timestamps, PIDs, connection-refused-at-${time})
-  // that defeats no-progress detection. Stable {status, exitCode, timedOut}
-  // across consecutive failed calls is sufficient to signal a stuck exec loop.
+  // that defeats no-progress detection. Stable failure discriminators
+  // (failureKind, exitSignal) are kept so different failure modes with the
+  // same exitCode do not incorrectly merge into one no-progress streak.
   // Completed exec output is intentionally kept in the hash because varying
   // completed output is a real progress signal.
   if (status === "failed") {
@@ -230,6 +231,8 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
+      exitSignal: stringField(details.exitSignal),
+      failureKind: stringField(details.failureKind),
     });
   }
 
