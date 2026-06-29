@@ -2,9 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  listWebSearchProvidersMock,
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
+  resolveWebSearchProviderIdMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -125,6 +127,85 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+    },
+  );
+
+  it(
+    "adds a warning diagnostic when web_search is allowed but no provider is enabled",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([]);
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(resolveWebSearchProviderIdMock).toHaveBeenCalledWith({
+        config: expect.any(Object),
+        agentDir: "/tmp/agent-dir",
+        providers: [],
+      });
+      expect(result.diagnostics?.summary).toContain(
+        "web_search is in toolsAllow but no web search provider is selected or available",
+      );
+      expect(result.diagnostics?.entries).toContainEqual({
+        ts: expect.any(Number),
+        source: "cron-preflight",
+        severity: "warn",
+        message:
+          "web_search is in toolsAllow but no web search provider is selected or available. Enable or configure one with: openclaw plugins enable duckduckgo",
+        toolName: "web_search",
+      });
+    },
+  );
+
+  it(
+    "adds a warning diagnostic when web_search has providers but no selected provider",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
+      resolveWebSearchProviderIdMock.mockReturnValue("");
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics?.summary).toContain(
+        "web_search is in toolsAllow but no web search provider is selected or available",
+      );
+    },
+  );
+
+  it(
+    "keeps cron execution non-fatal when web_search availability diagnostics fail",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockImplementation(() => {
+        throw new Error("provider registry unavailable");
+      });
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics?.entries).toContainEqual({
+        ts: expect.any(Number),
+        source: "cron-preflight",
+        severity: "warn",
+        message: "provider registry unavailable",
+        toolName: "web_search",
+      });
+    },
+  );
+
+  it(
+    "does not warn when web_search has a selected provider",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
+      resolveWebSearchProviderIdMock.mockReturnValue("duckduckgo");
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics).toBeUndefined();
     },
   );
 });

@@ -129,9 +129,12 @@ const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-del
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
+const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
+const WEB_SEARCH_TOOLS_ALLOW_NO_PROVIDER_MESSAGE =
+  "web_search is in toolsAllow but no web search provider is selected or available. Enable or configure one with: openclaw plugins enable duckduckgo";
 
 async function loadSessionStoreRuntime() {
   return await sessionStoreRuntimeLoader.load();
@@ -163,6 +166,10 @@ async function loadCronDeliveryRuntime() {
 
 async function loadCronModelPreflightRuntime() {
   return await cronModelPreflightRuntimeLoader.load();
+}
+
+async function loadWebSearchRuntime() {
+  return await webSearchRuntimeLoader.load();
 }
 
 async function loadRuntimePlugins() {
@@ -323,6 +330,48 @@ function canPromptForMessageTool(params: {
     params.toolsAllow === undefined ||
     normalizedToolsAllow?.includes("*") === true ||
     normalizedToolsAllow?.includes("message") === true
+  );
+}
+
+async function createCronToolsAllowWebSearchDiagnostics(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  toolsAllow?: string[];
+}) {
+  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+    return undefined;
+  }
+  const normalizedAllow = expandToolGroups(params.toolsAllow).map((toolName) =>
+    normalizeToolName(toolName),
+  );
+  if (!normalizedAllow.includes("web_search") || normalizedAllow.includes("*")) {
+    return undefined;
+  }
+  try {
+    const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
+    const providers = listWebSearchProviders({ config: params.cfg });
+    if (
+      resolveWebSearchProviderId({
+        config: params.cfg,
+        agentDir: params.agentDir,
+        providers,
+      })
+    ) {
+      return undefined;
+    }
+  } catch (error) {
+    return createCronRunDiagnosticsFromError("cron-preflight", error, {
+      severity: "warn",
+      toolName: "web_search",
+    });
+  }
+  return createCronRunDiagnosticsFromError(
+    "cron-preflight",
+    WEB_SEARCH_TOOLS_ALLOW_NO_PROVIDER_MESSAGE,
+    {
+      severity: "warn",
+      toolName: "web_search",
+    },
   );
 }
 
@@ -915,6 +964,7 @@ async function prepareCronRunContext(params: {
 async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   execution: CronExecutionResult;
+  preflightDiagnostics: Awaited<ReturnType<typeof createCronToolsAllowWebSearchDiagnostics>>;
   abortReason: () => string;
   isAborted: () => boolean;
   markCronRunSessionCleanupAttempted: () => void;
@@ -922,6 +972,9 @@ async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  const mergeWithPreflightDiagnostics = (
+    ...diagnostics: Parameters<typeof mergeCronRunDiagnostics>
+  ) => mergeCronRunDiagnostics(params.preflightDiagnostics, ...diagnostics);
   let telemetry: CronRunTelemetry | undefined;
 
   // Late aborted results may still contain billable usage. Recheck before each
@@ -1088,7 +1141,7 @@ async function finalizeCronRun(params: {
     return prepared.withRunSession({
       status: "error",
       error: params.abortReason(),
-      diagnostics: mergeCronRunDiagnostics(
+      diagnostics: mergeWithPreflightDiagnostics(
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
@@ -1120,7 +1173,7 @@ async function finalizeCronRun(params: {
     return prepared.withRunSession({
       status: "error",
       error,
-      diagnostics: mergeCronRunDiagnostics(
+      diagnostics: mergeWithPreflightDiagnostics(
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
@@ -1154,14 +1207,14 @@ async function finalizeCronRun(params: {
       deliveryAttempted: result?.deliveryAttempted,
       delivery: result?.delivery,
       diagnostics: hasFatalErrorPayload
-        ? mergeCronRunDiagnostics(
+        ? mergeWithPreflightDiagnostics(
             agentDiagnostics,
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : agentDiagnostics,
+        : mergeWithPreflightDiagnostics(agentDiagnostics),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1264,7 +1317,7 @@ async function finalizeCronRun(params: {
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
-      diagnostics: mergeCronRunDiagnostics(
+      diagnostics: mergeWithPreflightDiagnostics(
         agentDiagnostics,
         deliveryResult.result.diagnostics,
         deliveryResult.result.status === "error" && deliveryResult.result.error
@@ -1401,8 +1454,16 @@ export async function runCronIsolatedAgentTurn(params: {
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
   let cronRunSessionCleanupAttempted = false;
+  let preflightDiagnostics: Awaited<
+    ReturnType<typeof createCronToolsAllowWebSearchDiagnostics>
+  >;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
+    preflightDiagnostics = await createCronToolsAllowWebSearchDiagnostics({
+      cfg: prepared.context.cfgWithAgentDefaults,
+      agentDir: prepared.context.agentDir,
+      toolsAllow: prepared.context.agentPayload?.toolsAllow,
+    });
     const existingRunContext = getAgentRunContext(initialSessionId);
     runContextOwnerToken = claimAgentRunContext(
       initialSessionId,
@@ -1465,6 +1526,7 @@ export async function runCronIsolatedAgentTurn(params: {
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
+      preflightDiagnostics,
       abortReason,
       isAborted,
       markCronRunSessionCleanupAttempted: () => {
@@ -1484,9 +1546,12 @@ export async function runCronIsolatedAgentTurn(params: {
     return prepared.context.withRunSession({
       status: "error",
       error,
-      diagnostics: createCronRunDiagnosticsFromError(
-        isCronLaneTimeout ? "cron-setup" : "agent-run",
-        isCronLaneTimeout ? error : err,
+      diagnostics: mergeCronRunDiagnostics(
+        preflightDiagnostics,
+        createCronRunDiagnosticsFromError(
+          isCronLaneTimeout ? "cron-setup" : "agent-run",
+          isCronLaneTimeout ? error : err,
+        ),
       ),
     });
   } finally {
