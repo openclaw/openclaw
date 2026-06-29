@@ -649,6 +649,18 @@ export function createEventHandlers(context: EventHandlerContext) {
         surrenderedToHistoryRunIds.delete(evt.runId);
         clearPendingTerminalLifecycleError(evt.runId);
         chatLog.dismissPendingSystem(evt.runId);
+        // Render the late final when loadHistory did not restore this run
+        // as streaming AND the event has displayable content — otherwise
+        // the user would never see the assistant reply (#96979 rank-up).
+        if (hasDisplayableFinalEvent(evt)) {
+          const finalText = streamAssembler.finalize(
+            evt.runId,
+            evt.message,
+            state.showThinking,
+            evt.errorMessage,
+          );
+          chatLog.finalizeAssistant(finalText, evt.runId);
+        }
         // Mark as finalized with display so future late events
         // (errors, deltas) are also suppressed by the existing
         // finalizedRuns / chatFinalizedRuns guard.

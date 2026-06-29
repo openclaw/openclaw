@@ -1951,7 +1951,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(chatLog.updateAssistant).toHaveBeenCalledWith("live stream", "run-active");
     });
 
-    it("suppresses late final for surrendered non-streaming run and tracks in chatFinalizedRuns (#96979)", () => {
+    it("renders displayable late final for surrendered non-streaming run and tracks in chatFinalizedRuns (#96979)", () => {
       const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
         {
           state: { activeChatRunId: "run-active" },
@@ -1976,7 +1976,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       chatLog.hasStreamingRun.mockReturnValue(false);
       chatLog.finalizeAssistant.mockClear();
 
-      // Late final for surrendered run.
+      // Late displayable final for surrendered run — should render.
       handleChatEvent({
         runId: "run-active",
         sessionKey: state.currentSessionKey,
@@ -1984,7 +1984,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         message: { content: [{ type: "text", text: "done" }] },
       });
 
-      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
 
       // A subsequent late error is suppressed because chatFinalizedRuns was set.
       chatLog.addSystem.mockClear();
@@ -1995,6 +1995,40 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         errorMessage: "stale error",
       });
       expect(chatLog.addSystem).not.toHaveBeenCalledWith(expect.stringContaining("stale error"));
+    });
+
+    it("suppresses late non-displayable final for surrendered run (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late final without message and without errorMessage — not displayable.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
     });
 
     it("suppresses late aborted for surrendered run (#96979)", () => {
