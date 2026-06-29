@@ -935,6 +935,13 @@ function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverR
   }
 }
 
+function classifyFailoverClassificationFromErrorType(
+  raw: string | undefined,
+): FailoverClassification | null {
+  const reason = classifyFailoverReasonFromErrorType(raw);
+  return reason ? toReasonClassification(reason) : null;
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1194,14 +1201,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
           errorType: signal.errorType,
         })
       : null;
-  const errorTypeReason = classifyFailoverReasonFromErrorType(signal.errorType);
-  const genericErrorTypeClassification = errorTypeReason
-    ? toReasonClassification(errorTypeReason)
-    : null;
+  const messageOrDetailClassification = mergeMessageAndDetailClassification(
+    messageClassification,
+    detailClassification,
+  );
+  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
-    : (mergeMessageAndDetailClassification(messageClassification, detailClassification) ??
-      genericErrorTypeClassification);
+    : (messageOrDetailClassification ?? errorTypeClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
