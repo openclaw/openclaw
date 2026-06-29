@@ -137,13 +137,17 @@ describe("harness context engine lifecycle", () => {
       hook: "bootstrap" | "assemble" | "afterTurn" | "maintain" | "compact";
       runtimeContext?: ContextEngineRuntimeContext;
       runtimeSettings?: ContextEngineRuntimeSettings;
+      sessionTarget?: ContextEngineRuntimeContext["sessionTarget"];
     }> = [];
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      storePath: "/tmp/state/openclaw.sqlite",
+    };
     const bootstrapRuntimeContext = {
       transcriptStorage: { kind: "sqlite" as const },
-      sessionTarget: {
-        sessionId: sessionParams.sessionId,
-        sessionKey: sessionParams.sessionKey,
-      },
+      sessionTarget,
     };
     const engine = createContextEngine({
       info: { id: engineId, name: "Configured runtime settings proof engine" },
@@ -152,6 +156,7 @@ describe("harness context engine lifecycle", () => {
           hook: "bootstrap",
           runtimeContext: params.runtimeContext,
           runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
         });
         return { bootstrapped: true };
       }),
@@ -163,10 +168,19 @@ describe("harness context engine lifecycle", () => {
         };
       }),
       afterTurn: vi.fn(async (params) => {
-        captured.push({ hook: "afterTurn", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "afterTurn",
+          runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
+        });
       }),
       maintain: vi.fn(async (params) => {
-        captured.push({ hook: "maintain", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "maintain",
+          runtimeContext: params.runtimeContext,
+          runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
+        });
         return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
       }),
       compact: vi.fn(async (params) => {
@@ -184,6 +198,7 @@ describe("harness context engine lifecycle", () => {
       contextEngine: configuredEngine,
       sessionId: sessionParams.sessionId,
       sessionKey: sessionParams.sessionKey,
+      sessionTarget,
       sessionFile: sessionParams.sessionFile,
       providerId: "openai",
       requestedModelId: "openai/gpt-5.5",
@@ -212,6 +227,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      sessionTarget,
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         textMessage("user", "old ask", 1),
@@ -259,6 +275,18 @@ describe("harness context engine lifecycle", () => {
     expect(captured.find((entry) => entry.hook === "bootstrap")?.runtimeContext).toEqual(
       bootstrapRuntimeContext,
     );
+    expect(captured.find((entry) => entry.hook === "bootstrap")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(captured.find((entry) => entry.hook === "afterTurn")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(captured.find((entry) => entry.hook === "maintain")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(
+      captured.find((entry) => entry.hook === "maintain")?.runtimeContext?.sessionTarget,
+    ).toEqual(sessionTarget);
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
         schemaVersion: 1,

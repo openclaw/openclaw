@@ -333,6 +333,8 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
@@ -347,6 +349,8 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
@@ -382,6 +386,8 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */

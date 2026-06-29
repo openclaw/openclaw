@@ -2935,6 +2935,7 @@ async function runEmbeddedAgentInternal(
                     contextEngine,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    sessionTarget: activeSessionTarget,
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
