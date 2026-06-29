@@ -2756,7 +2756,40 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("does not retry errored thinking-only turns after side effects", () => {
+  it("does not retry errored thinking-only turns when the current turn had tool activity", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          clientToolCalls: [
+            {
+              id: "call_prior",
+              name: "read",
+              arguments: { path: "README.md" },
+              outcome: { kind: "success", summary: "ok" },
+            },
+          ],
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("retries errored thinking-only turns when prior session turns had side effects but the current turn is clean (#97877)", () => {
     const assistant = {
       role: "assistant",
       stopReason: "error",
@@ -2782,7 +2815,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }),
         assistant,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {

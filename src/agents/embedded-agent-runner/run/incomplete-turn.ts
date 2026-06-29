@@ -535,7 +535,6 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "toolTrustedLocalMedia"
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
-    | "replayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -543,9 +542,6 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     return false;
   }
   if (hasAttemptTerminalState(params.attempt)) {
-    return false;
-  }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
     return false;
   }
 
