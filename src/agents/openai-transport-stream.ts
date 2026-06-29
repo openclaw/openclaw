@@ -812,7 +812,12 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   return (
     typeof record.message === "string" &&
     (record.message.includes("invalid_encrypted_content") ||
-      record.message.includes("thinking_signature_invalid"))
+      record.message.includes("thinking_signature_invalid") ||
+      // xAI/Grok returns a prose 400 with no error code when a replayed reasoning blob
+      // is stale: "Could not decrypt the provided encrypted_content. Ensure the value is
+      // the unmodified encrypted_content from a previous response." Strip and retry too.
+      (record.message.includes("encrypted_content") &&
+        record.message.toLowerCase().includes("decrypt")))
   );
 }
 

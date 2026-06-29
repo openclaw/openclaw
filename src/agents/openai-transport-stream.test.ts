@@ -4997,6 +4997,129 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("retries xAI's code-less 'could not decrypt encrypted_content' 400 once without encrypted reasoning content", async () => {
+    const request = {
+      model: "grok-4.3",
+      stream: true,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          summary: [],
+        },
+        {
+          type: "message",
+          id: "msg_prior",
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible answer" }],
+        },
+      ],
+    };
+    const recoveredStream = streamChunks([]);
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(
+        // xAI/Grok returns no error code — only this prose message — so the match must
+        // come from the message text, not `code`.
+        new OpenAI.BadRequestError(
+          400,
+          {
+            message:
+              "Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.",
+            type: "invalid_request_error",
+          },
+          undefined,
+          new Headers(),
+        ),
+      )
+      .mockResolvedValueOnce(recoveredStream);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: {
+          id: "grok-4.3",
+          name: "Grok 4.3",
+          api: "openai-responses",
+          provider: "xai",
+          baseUrl: "https://api.x.ai/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).resolves.toBe(recoveredStream);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0]).toBe(request);
+    expect(create.mock.calls[1]?.[0]).toEqual({
+      ...request,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          summary: [],
+        },
+        request.input[1],
+      ],
+    });
+  });
+
+  it("does not retry an unrelated 'could not decrypt' error that does not mention encrypted_content", async () => {
+    // Same shape as above (a reasoning item with encrypted_content IS present, so a retry
+    // WOULD strip something) — proving it is the message matcher, not a strip no-op, that
+    // correctly declines: this message has "decrypt" but no "encrypted_content" token.
+    const request = {
+      model: "grok-4.3",
+      stream: true,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          summary: [],
+        },
+      ],
+    };
+    const unrelated = new OpenAI.BadRequestError(
+      400,
+      {
+        message: "Could not decrypt legacy OAuth sidecar for profile foo; re-authenticate this profile.",
+        type: "invalid_request_error",
+      },
+      undefined,
+      new Headers(),
+    );
+    const create = vi.fn().mockRejectedValue(unrelated);
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: {
+          id: "grok-4.3",
+          name: "Grok 4.3",
+          api: "openai-responses",
+          provider: "xai",
+          baseUrl: "https://api.x.ai/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      }),
+    ).rejects.toBe(unrelated);
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
     const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
