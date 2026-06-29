@@ -500,7 +500,14 @@ describe("session accessor file-backed seam", () => {
       const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
 
       expect(snapshot.currentEntry?.skillsSnapshot?.prompt).toBe(prompt);
-      snapshot.currentEntry!.skillsSnapshot!.resolvedSkills = [
+      clearSessionStoreCacheForTest();
+      const writerStore = loadSessionStore(storePath, { clone: false });
+      const writerEntry = writerStore[sessionKey];
+      if (!writerEntry?.skillsSnapshot) {
+        throw new Error("expected hydrated writer skills snapshot");
+      }
+      expect(writerEntry.skillsSnapshot.prompt).toBe(prompt);
+      writerEntry.skillsSnapshot.resolvedSkills = [
         {
           name: "reply-skill",
           description: "runtime-only resolved skill body",
