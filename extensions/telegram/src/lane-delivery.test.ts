@@ -228,10 +228,7 @@ describe("createLaneTextDeliverer", () => {
     expect(answer.update).toHaveBeenCalledWith(previousBlock);
     expect(answer.update).not.toHaveBeenCalledWith(nextAssistantBlock);
     expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      { text: previousBlock },
-      { durable: false },
-    );
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: previousBlock }, { durable: false });
     expect(harness.sendPayload).not.toHaveBeenCalledWith(
       { text: nextAssistantBlock },
       expect.anything(),
@@ -924,7 +921,7 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
-  it("does not resend chunks retained while stopping a long streamed final", async () => {
+  it("sends chunks after the reported delivered text when stop advances the retained index", async () => {
     const answer = createTestDraftStream({ messageId: 999 });
     const harness = createHarness({
       answerStream: answer,
@@ -940,9 +937,33 @@ describe("createLaneTextDeliverer", () => {
 
     const delivery = expectPreviewFinalized(result);
     expect(delivery.content).toBe("Hello world again");
-    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+    expect(delivery.promptContextContent).toBe("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not skip middle chunks when stop advances past the reported delivered chunk", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 6,
+      splitFinalTextForStream: () => ["chunk0", "chunk1", "chunk2", "chunk3"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+    answer.stop.mockImplementation(async () => {
+      harness.lanes.answer.activeChunkIndex = 2;
+    });
+
+    const result = await deliverFinalAnswer(harness, "chunk0chunk1chunk2chunk3");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.promptContextContent).toBe("chunk0");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(3);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: "chunk1" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: "chunk2" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(3, { text: "chunk3" });
   });
 
   it("compares retained delivered prefixes against the full final text", async () => {
@@ -995,11 +1016,15 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editStreamMessage).toHaveBeenCalledWith({
       laneName: "answer",
       messageId: 999,
-      text: " world",
+      text: "Hello",
       buttons,
     });
-    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith({
+    expect(harness.sendPayload).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, {
+      text: " world",
+      channelData: { telegram: { buttons } },
+    });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, {
       text: " again",
       channelData: { telegram: { buttons } },
     });

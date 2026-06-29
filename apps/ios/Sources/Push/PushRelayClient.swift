@@ -276,7 +276,20 @@ final class PushRelayClient: @unchecked Sendable {
     }
 
     func register(_ input: PushRelayRegistrationInput) async throws -> PushRelayRegisterResponse {
-        let challenge = try await self.fetchChallenge()
+        GatewayDiagnostics.pushRelay.stage(
+            "registration start origin=\(self.normalizedBaseURLString) "
+                + "apns=\(input.environment.rawValue) "
+                + "profile=\(input.relayProfile.rawValue) "
+                + "proof=\(input.proofPolicy.rawValue)")
+        let challenge: PushRelayChallengeResponse
+        do {
+            GatewayDiagnostics.pushRelay.stage("challenge request start")
+            challenge = try await self.fetchChallenge()
+            GatewayDiagnostics.pushRelay.stage("challenge received")
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("challenge request", error: error)
+            throw error
+        }
         let signedPayload = PushRelayRegisterSignedPayload(
             challengeId: challenge.challengeId,
             installationId: input.installationId,
@@ -295,15 +308,38 @@ final class PushRelayClient: @unchecked Sendable {
             apnsEnvironment: input.environment.rawValue,
             relayProfile: input.relayProfile.rawValue,
             proofPolicy: input.proofPolicy.rawValue)
-        let appAttest = try await self.createAppAttestProofIfNeeded(
-            proofPolicy: input.proofPolicy,
-            challenge: challenge.challenge,
-            signedPayloadData: signedPayloadData,
-            scope: appAttestScope)
-        let receipt = try await self.createReceiptIfNeeded(proofPolicy: input.proofPolicy)
-        let simulatorProof = try self.createSimulatorProofIfNeeded(
-            proofPolicy: input.proofPolicy,
-            signedPayloadData: signedPayloadData)
+        let appAttest: PushRelayAppAttestProof?
+        do {
+            GatewayDiagnostics.pushRelay.stage("app attest proof start")
+            appAttest = try await self.createAppAttestProofIfNeeded(
+                proofPolicy: input.proofPolicy,
+                challenge: challenge.challenge,
+                signedPayloadData: signedPayloadData,
+                scope: appAttestScope)
+            GatewayDiagnostics.pushRelay.stage("app attest proof complete included=\(appAttest != nil)")
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("app attest proof", error: error)
+            throw error
+        }
+        let receipt: PushRelayReceiptPayload?
+        do {
+            GatewayDiagnostics.pushRelay.stage("receipt proof start")
+            receipt = try await self.createReceiptIfNeeded(proofPolicy: input.proofPolicy)
+            GatewayDiagnostics.pushRelay.stage("receipt proof complete included=\(receipt != nil)")
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("receipt proof", error: error)
+            throw error
+        }
+        let simulatorProof: PushRelaySimulatorProofPayload?
+        do {
+            simulatorProof = try self.createSimulatorProofIfNeeded(
+                proofPolicy: input.proofPolicy,
+                signedPayloadData: signedPayloadData)
+            GatewayDiagnostics.pushRelay.stage("simulator proof complete included=\(simulatorProof != nil)")
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("simulator proof", error: error)
+            throw error
+        }
         let requestBody = PushRelayRegisterRequest(
             challengeId: signedPayload.challengeId,
             installationId: signedPayload.installationId,
@@ -334,8 +370,17 @@ final class PushRelayClient: @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try self.jsonEncoder.encode(requestBody)
 
-        let (data, response) = try await self.session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            GatewayDiagnostics.pushRelay.stage("register request start")
+            (data, response) = try await self.session.data(for: request)
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("register request", error: error)
+            throw error
+        }
         let status = Self.statusCode(from: response)
+        GatewayDiagnostics.pushRelay.stage("register response status=\(status)")
         guard (200..<300).contains(status) else {
             if status == 401 {
                 // If the relay rejects registration, drop local App Attest state so the next
@@ -343,11 +388,20 @@ final class PushRelayClient: @unchecked Sendable {
                 _ = PushRelayRegistrationStore.clearAppAttestKeyID(scope: appAttestScope)
                 _ = PushRelayRegistrationStore.clearAttestedKeyID(scope: appAttestScope)
             }
-            throw PushRelayError.requestFailed(
+            let relayError = PushRelayError.requestFailed(
                 status: status,
                 message: Self.decodeErrorMessage(data: data))
+            GatewayDiagnostics.pushRelay.stage("register response failed status=\(status)")
+            throw relayError
         }
-        return try self.decode(PushRelayRegisterResponse.self, from: data)
+        do {
+            let decoded = try self.decode(PushRelayRegisterResponse.self, from: data)
+            GatewayDiagnostics.pushRelay.stage("registration response decoded")
+            return decoded
+        } catch {
+            GatewayDiagnostics.pushRelay.failed("registration response decode", error: error)
+            throw error
+        }
     }
 
     private func createAppAttestProofIfNeeded(

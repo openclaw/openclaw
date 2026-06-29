@@ -386,6 +386,10 @@ describe("scripts/docker/setup.sh", () => {
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output`,
     );
     expect(result.stdout).toContain("Gateway token: stored in Docker environment/config");
+    expect(result.stdout).toContain("Gateway running with host port mapping.");
+    expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
+    expect(result.stdout).toContain("Commands:");
+    expect(result.stdout).toContain("logs -f openclaw-gateway");
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(

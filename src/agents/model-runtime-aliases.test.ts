@@ -134,6 +134,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
   it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
     expect(
       resolveCliRuntimeExecutionProvider({

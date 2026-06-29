@@ -41,6 +41,11 @@ type QaChatHistoryResponse = {
   messages?: unknown[];
 };
 
+type QaAgentWaitResult = {
+  status?: string;
+  error?: string;
+};
+
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
@@ -368,7 +373,7 @@ async function waitForAgentRun(
       {
         timeoutMs: resolveQaGatewayTimeoutWithGraceMs(waitTimeoutMs),
       },
-    )) as { status?: string; error?: string };
+    )) as QaAgentWaitResult;
   } catch (error) {
     throw new QaSuiteInfraError(
       "agent_wait_failed",
@@ -376,6 +381,13 @@ async function waitForAgentRun(
       { cause: error },
     );
   }
+}
+
+function isSuccessfulAgentWaitResult(waited: QaAgentWaitResult) {
+  if (waited.status === "ok" || waited.status === "completed" || waited.status === "succeeded") {
+    return true;
+  }
+  return waited.status === "error" && waited.error?.trim().toLowerCase() === "completed";
 }
 
 function readLatestAssistantTextFromHistory(history: QaChatHistoryResponse | undefined) {
@@ -543,7 +555,7 @@ async function runAgentPrompt(
 ) {
   const started = await startAgentRun(env, params);
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
-  if (waited.status === "error" || waited.status === "timeout" || waited.status === "pending") {
+  if (!isSuccessfulAgentWaitResult(waited)) {
     throw new Error(
       `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );

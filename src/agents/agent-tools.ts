@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -469,6 +470,8 @@ export function createOpenClawCodingTools(options?: {
   currentMessagingTarget?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
+  /** Channel-owned sender/chat metadata exposed to subprocess environments. */
+  channelContext?: PluginHookChannelContext;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -836,6 +839,7 @@ export function createOpenClawCodingTools(options?: {
         messageProvider: options?.messageProvider,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
+        channelContext: options?.channelContext,
         accountId: options?.agentAccountId,
         approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
@@ -850,6 +854,12 @@ export function createOpenClawCodingTools(options?: {
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,
+              workdirValidation: sandbox.backend?.workdirValidation,
+              validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
+              discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(
+                sandbox.backend,
+              ),
+              workdirRoots: sandbox.backend?.workdirRoots,
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),

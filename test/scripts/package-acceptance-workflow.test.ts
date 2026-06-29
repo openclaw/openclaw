@@ -9,6 +9,15 @@ const LIVE_MEDIA_RUNNER_DOCKERFILE = ".github/images/live-media-runner/Dockerfil
 const LIVE_MEDIA_RUNNER_IMAGE = "ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04";
 const LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW = ".github/workflows/live-media-runner-image.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
+const MANTIS_DISCORD_SMOKE_WORKFLOW = ".github/workflows/mantis-discord-smoke.yml";
+const MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW =
+  ".github/workflows/mantis-discord-status-reactions.yml";
+const MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW =
+  ".github/workflows/mantis-discord-thread-attachment.yml";
+const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desktop-smoke.yml";
+const MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW =
+  ".github/workflows/mantis-telegram-desktop-proof.yml";
+const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
@@ -22,6 +31,7 @@ const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
 const CI_CHECK_ARM_TESTBOX_WORKFLOW = ".github/workflows/ci-check-arm-testbox.yml";
 const CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW = ".github/workflows/ci-build-artifacts-testbox.yml";
+const WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW = ".github/workflows/windows-blacksmith-testbox.yml";
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
@@ -280,6 +290,11 @@ describe("package acceptance workflow", () => {
       '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
+    const prepareCrabboxShell = workflowStep(hydrate, "Prepare Crabbox shell").run;
+    expect(prepareCrabboxShell).toContain("link_node_tool()");
+    expect(prepareCrabboxShell).toContain('readlink -f "$source"');
+    expect(prepareCrabboxShell).toContain('readlink -f "$target"');
+    expect(prepareCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
@@ -353,6 +368,11 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
     );
+    const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
@@ -1061,6 +1081,9 @@ describe("package artifact reuse", () => {
       '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      '-e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
@@ -1254,17 +1277,35 @@ describe("package artifact reuse", () => {
     ).toHaveLength(2);
   });
 
-  it("fails Testbox changed-check delegation when the remote command fails", () => {
+  it("finalizes Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
-    const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
-      (step) => step.name === "Run Testbox",
+    const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
+    const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const runArmTestboxStep = workflowStep(
+      workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
+      "Run Testbox",
+    );
+    const runBuildArtifactsTestboxStep = workflowStep(
+      workflowJob(CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW, "build-artifacts"),
+      "Run Testbox",
+    );
+    const runWindowsTestboxStep = workflowStep(
+      workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows"),
+      "Run Testbox",
     );
 
     expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
+    expect(checkTestboxJob["timeout-minutes"]).toBe(
+      "${{ fromJSON(inputs.timeout_minutes || '120') }}",
+    );
+    expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
+    expect(runTestboxStep.if).toBe("always()");
+    expect(runArmTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runWindowsTestboxStep.if).toBe("always()");
+    expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {
@@ -1397,6 +1438,110 @@ describe("package artifact reuse", () => {
         `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
       );
       expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
+  });
+
+  it("requires QA live evidence artifacts when lanes run", () => {
+    const cases = [
+      ["run_mock_parity", "Upload parity artifacts"],
+      ["run_live_runtime_token_efficiency", "Upload live runtime token-efficiency artifacts"],
+      ["run_live_matrix", "Upload Matrix QA artifacts"],
+      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts"],
+      ["run_live_telegram", "Upload Telegram QA artifacts"],
+      ["run_live_discord", "Upload Discord QA artifacts"],
+      ["run_live_whatsapp", "Upload WhatsApp QA artifacts"],
+      ["run_live_slack", "Upload Slack QA artifacts"],
+    ];
+
+    for (const [jobName, stepName] of cases) {
+      const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
+
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+  });
+
+  it("requires release-check QA evidence artifacts when lanes run", () => {
+    const cases = [
+      ["qa_lab_parity_lane_release_checks", "Upload parity lane artifacts"],
+      ["qa_lab_parity_report_release_checks", "Upload parity artifacts"],
+      ["qa_lab_runtime_parity_release_checks", "Upload runtime parity artifacts"],
+      ["qa_live_matrix_release_checks", "Upload Matrix QA artifacts"],
+      ["qa_live_telegram_release_checks", "Upload Telegram QA artifacts"],
+      ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
+      ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
+      ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
+    ];
+
+    for (const [jobName, stepName] of cases) {
+      const uploadStep = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);
+
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.uses, jobName).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+
+    const runtimeCoverageUpload = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "runtime_tool_coverage_release_checks"),
+      "Upload runtime tool coverage artifacts",
+    );
+    expect(runtimeCoverageUpload.if).toContain("always()");
+    expect(runtimeCoverageUpload.if).toContain(
+      "steps.verify_runtime_parity_status.outputs.ready == 'true'",
+    );
+    expect(runtimeCoverageUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("requires live proof evidence artifacts when proof jobs run", () => {
+    const cases = [
+      {
+        workflowPath: MANTIS_DISCORD_SMOKE_WORKFLOW,
+        jobName: "run_discord_smoke",
+        stepName: "Upload Mantis artifacts",
+      },
+      {
+        workflowPath: MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW,
+        jobName: "run_status_reactions",
+        stepName: "Upload Mantis status reaction artifacts",
+      },
+      {
+        workflowPath: MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW,
+        jobName: "run_thread_attachment",
+        stepName: "Upload Mantis thread attachment artifacts",
+      },
+      {
+        workflowPath: MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW,
+        jobName: "run_slack_desktop",
+        stepName: "Upload Mantis Slack desktop artifacts",
+      },
+      {
+        workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
+        jobName: "run_telegram_desktop_proof",
+        stepName: "Upload Mantis Telegram desktop artifacts",
+      },
+      {
+        workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
+        jobName: "run_telegram_live",
+        stepName: "Upload Mantis Telegram artifacts",
+      },
+      {
+        workflowPath: NPM_TELEGRAM_WORKFLOW,
+        jobName: "run_package_telegram_e2e",
+        stepName: "Upload npm Telegram E2E artifacts",
+      },
+    ];
+
+    for (const item of cases) {
+      const label = `${item.workflowPath} ${item.jobName}`;
+      const uploadStep = workflowStep(
+        workflowJob(item.workflowPath, item.jobName),
+        item.stepName,
+      );
+
+      expect(uploadStep.if, label).toContain("always()");
+      expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with?.["if-no-files-found"], label).toBe("error");
     }
   });
 
@@ -2105,6 +2250,13 @@ describe("package artifact reuse", () => {
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
+    const postpublishEvidenceUpload = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Upload postpublish evidence",
+    );
+    expect(postpublishEvidenceUpload.if).toContain("always()");
+    expect(postpublishEvidenceUpload.if).toContain("inputs.publish_openclaw_npm");
+    expect(postpublishEvidenceUpload.with?.["if-no-files-found"]).toBe("error");
     expect(releaseWorkflow).toContain("Failed child job summary");
     expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");

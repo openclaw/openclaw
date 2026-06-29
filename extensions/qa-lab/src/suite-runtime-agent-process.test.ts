@@ -707,6 +707,33 @@ describe("qa suite runtime agent process helpers", () => {
     });
   });
 
+  it("accepts malformed completed wait errors as successful terminal runs", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-error-completed" })
+      .mockResolvedValueOnce({ status: "error", error: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-error-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-error-completed" },
+      waited: { status: "error", error: "completed" },
+    });
+  });
+
   it("waits for the latest assistant history reply", async () => {
     const gatewayCall = vi
       .fn()

@@ -155,9 +155,13 @@ shorthand before OpenClaw builds app-server start options, and unresolved
 structured SecretRefs fail before any token or header is sent. When native Codex
 plugins are configured, OpenClaw uses the connected app-server's plugin control
 plane to install or refresh those plugins and then refreshes app inventory so
-plugin-owned apps are visible to the Codex thread. Only connect OpenClaw to
-remote app-servers that are trusted to accept OpenClaw-managed plugin installs
-and app inventory refreshes.
+plugin-owned apps are visible to the Codex thread. `app/list` is still the
+authoritative inventory and metadata source, but OpenClaw policy decides whether
+`thread/start` sends `config.apps[appId].enabled = true` for a listed accessible
+app even if Codex currently marks it disabled. Unknown or missing app ids remain
+fail-closed; this path only activates marketplace plugins via `plugin/install`
+and refreshes inventory. Only connect OpenClaw to remote app-servers that are
+trusted to accept OpenClaw-managed plugin installs and app inventory refreshes.
 
 ## Approval and sandbox modes
 

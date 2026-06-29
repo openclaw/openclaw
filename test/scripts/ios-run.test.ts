@@ -189,14 +189,10 @@ describe("scripts/ios-run.sh", () => {
     );
 
     const log = readFileSync(fixture.logFile, "utf8");
-    expect(log).toContain("OPENCLAW_PUSH_TRANSPORT=relay");
-    expect(log).toContain("OPENCLAW_PUSH_DISTRIBUTION=official");
+    expect(log).toContain("OPENCLAW_PUSH_MODE=simulatorSandbox");
     expect(log).toContain(
       "OPENCLAW_PUSH_RELAY_BASE_URL=https://ios-push-relay-sandbox.openclaw.ai",
     );
-    expect(log).toContain("OPENCLAW_PUSH_APNS_ENVIRONMENT=sandbox");
-    expect(log).toContain("OPENCLAW_PUSH_RELAY_PROFILE=simulatorSandbox");
-    expect(log).toContain("OPENCLAW_PUSH_PROOF_POLICY=internalSimulator");
     expect(log).toContain("simctl launch iPhone 17 ai.openclawfoundation.app");
     expect(log).toContain("simctl-launch-proof set");
     expect(log).not.toContain("proof-env leaked");

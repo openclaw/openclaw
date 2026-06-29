@@ -18,6 +18,7 @@ import {
 } from "../../auto-reply/reply/inbound-text.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type {
   AccessFacts,
@@ -76,6 +77,7 @@ export type BuildChannelInboundEventContextParams = {
   commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: ChannelInboundSupplementalFacts;
+  channelContext?: PluginHookChannelContext;
   contextVisibility?: ContextVisibilityMode;
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
@@ -493,6 +495,7 @@ export function buildChannelInboundEventContext(
     ReplyToId: params.reply.replyToId,
     ReplyToIdFull: params.reply.replyToIdFull,
     ChatType: params.conversation.kind,
+    ChatId: params.conversation.id,
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
@@ -500,6 +503,7 @@ export function buildChannelInboundEventContext(
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
     SenderTag: params.sender.tag,
+    SenderIsBot: params.sender.isBot,
     MemberRoleIds: params.sender.roles,
     Timestamp: params.timestamp,
     Provider: params.provider ?? params.channel,
@@ -514,6 +518,7 @@ export function buildChannelInboundEventContext(
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
+    ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,
     ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,

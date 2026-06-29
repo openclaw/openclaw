@@ -683,6 +683,7 @@ struct RootTabs: View {
                 self.updateIdleTimer()
                 self.updateHomeCanvasState()
                 guard newValue == .active else { return }
+                self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
                     await MainActor.run {
@@ -729,6 +730,10 @@ struct RootTabs: View {
             .onChange(of: self.onboardingRequestID) { _, _ in
                 self.evaluateOnboardingPresentation(force: true)
             }
+            .onChange(of: self.showOnboarding) { _, newValue in
+                guard !newValue else { return }
+                self.maybeRequestLocalNetworkAccess(reason: "onboarding_dismissed")
+            }
             .onChange(of: self.appModel.openChatRequestID) { _, _ in
                 self.selectSidebarDestination(.chat)
             }
@@ -767,6 +772,9 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: self.onboardingAllowSkip,
+                    onRequestLocalNetworkAccess: { reason in
+                        self.requestLocalNetworkAccess(reason: reason)
+                    },
                     onClose: {
                         self.showOnboarding = false
                     })
@@ -1045,13 +1053,14 @@ extension RootTabs {
             shouldPresentOnLaunch: OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel))
         switch route {
         case .none:
-            break
+            self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
             self.onboardingAllowSkip = true
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true
             self.selectSidebarDestination(.gateway)
+            self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         }
     }
 
@@ -1078,6 +1087,7 @@ extension RootTabs {
         guard route == .settings else { return }
         self.didAutoOpenSettings = true
         self.selectSidebarDestination(.gateway)
+        self.maybeRequestLocalNetworkAccess(reason: "auto_open_settings")
     }
 
     private func maybeOpenSettingsForGatewaySetup() {
@@ -1088,6 +1098,19 @@ extension RootTabs {
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
         self.selectSidebarDestination(.gateway)
+        self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
+    }
+
+    private func maybeRequestLocalNetworkAccess(reason: String) {
+        guard self.didEvaluateOnboarding else { return }
+        guard self.scenePhase == .active else { return }
+        guard !self.showOnboarding else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
+        self.gatewayController.requestLocalNetworkAccess(reason: reason)
     }
 
     private func applyInitialChatSessionIfNeeded() {

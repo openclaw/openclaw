@@ -9,10 +9,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-const tryListenOnPortMock = vi.hoisted(() => vi.fn());
+const probePortUsageMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/ports-probe.js", () => ({
-  tryListenOnPort: (...args: unknown[]) => tryListenOnPortMock(...args),
+  probePortUsage: (...args: unknown[]) => probePortUsageMock(...args),
 }));
 
 import { execFileSync } from "node:child_process";
@@ -33,10 +33,8 @@ describe("gateway --force helpers", () => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
     originalPlatform = process.platform;
-    tryListenOnPortMock.mockReset();
-    tryListenOnPortMock.mockRejectedValue(
-      Object.assign(new Error("in use"), { code: "EADDRINUSE" }),
-    );
+    probePortUsageMock.mockReset();
+    probePortUsageMock.mockResolvedValue("busy");
     // Pin to linux so all lsof tests are platform-invariant.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
@@ -65,7 +63,7 @@ describe("gateway --force helpers", () => {
   });
 
   it("skips lsof when the port is already bindable", async () => {
-    tryListenOnPortMock.mockResolvedValue(undefined);
+    probePortUsageMock.mockResolvedValue("free");
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -199,9 +197,7 @@ describe("gateway --force helpers", () => {
       }
       return "18789/tcp: 4242\n";
     });
-    tryListenOnPortMock
-      .mockRejectedValueOnce(Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
-      .mockResolvedValue(undefined);
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -231,13 +227,12 @@ describe("gateway --force helpers", () => {
       return "";
     });
 
-    const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
-    tryListenOnPortMock
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockResolvedValueOnce(undefined);
+    probePortUsageMock
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValue("free");
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 300,
@@ -258,6 +253,8 @@ describe("gateway --force helpers", () => {
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
+    // An inconclusive four-host probe must continue into the cleanup tools.
+    probePortUsageMock.mockResolvedValue("unknown");
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       const err = new Error(`spawnSync ${cmd} ENOENT`) as NodeJS.ErrnoException;
       err.code = "ENOENT";

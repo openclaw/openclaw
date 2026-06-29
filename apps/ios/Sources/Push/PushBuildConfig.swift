@@ -27,7 +27,16 @@ enum PushProofPolicy: String {
     case internalSimulator
 }
 
+enum PushBuildMode: String {
+    case localSandbox
+    case localProduction
+    case appStore
+    case deviceSandbox
+    case simulatorSandbox
+}
+
 struct PushBuildConfig {
+    let mode: PushBuildMode
     let transport: PushTransportMode
     let distribution: PushDistributionMode
     let relayBaseURL: URL?
@@ -54,31 +63,64 @@ struct PushBuildConfig {
     }
 
     init(bundle: Bundle = .main) {
-        self.transport = Self.readEnum(
-            bundle: bundle,
-            key: "OpenClawPushTransport",
-            fallback: .direct)
-        self.distribution = Self.readEnum(
-            bundle: bundle,
-            key: "OpenClawPushDistribution",
-            fallback: .local)
-        self.apnsEnvironment = Self.readEnum(
-            bundle: bundle,
-            key: "OpenClawPushAPNsEnvironment",
-            fallback: Self.defaultAPNsEnvironment)
-        self.relayProfile = Self.readEnum(
-            bundle: bundle,
-            key: "OpenClawPushRelayProfile",
-            fallback: Self.defaultRelayProfile(apnsEnvironment: self.apnsEnvironment))
-        self.proofPolicy = Self.readEnum(
-            bundle: bundle,
-            key: "OpenClawPushProofPolicy",
-            fallback: Self.defaultProofPolicy(relayProfile: self.relayProfile))
-        self.relayBaseURL = Self.readURL(bundle: bundle, key: "OpenClawPushRelayBaseURL")
+        self.init(readValue: { bundle.object(forInfoDictionaryKey: $0) })
     }
 
-    private static func readURL(bundle: Bundle, key: String) -> URL? {
-        guard let raw = bundle.object(forInfoDictionaryKey: key) as? String else { return nil }
+    init(infoDictionary: [String: Any]) {
+        self.init(readValue: { infoDictionary[$0] })
+    }
+
+    private init(readValue: (String) -> Any?) {
+        self.mode = Self.readEnum(
+            readValue: readValue,
+            key: "OpenClawPushMode",
+            fallback: .localSandbox)
+        let relayBaseURLOverride = Self.readURL(
+            readValue: readValue,
+            key: "OpenClawPushRelayBaseURL")
+        switch self.mode {
+        case .localSandbox:
+            self.transport = .direct
+            self.distribution = .local
+            self.relayBaseURL = nil
+            self.apnsEnvironment = .sandbox
+            self.relayProfile = .deviceSandbox
+            self.proofPolicy = .appleDevelopment
+        case .localProduction:
+            self.transport = .direct
+            self.distribution = .local
+            self.relayBaseURL = nil
+            self.apnsEnvironment = .production
+            self.relayProfile = .production
+            self.proofPolicy = .appleStrict
+        case .appStore:
+            self.transport = .relay
+            self.distribution = .official
+            self.relayBaseURL = URL(string: "https://\(Self.openClawHostedRelayHost)")!
+            self.apnsEnvironment = .production
+            self.relayProfile = .production
+            self.proofPolicy = .appleStrict
+        case .deviceSandbox:
+            self.transport = .relay
+            self.distribution = .official
+            self.relayBaseURL = relayBaseURLOverride
+                ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
+            self.apnsEnvironment = .sandbox
+            self.relayProfile = .deviceSandbox
+            self.proofPolicy = .appleDevelopment
+        case .simulatorSandbox:
+            self.transport = .relay
+            self.distribution = .official
+            self.relayBaseURL = relayBaseURLOverride
+                ?? URL(string: "https://\(Self.openClawSandboxRelayHost)")!
+            self.apnsEnvironment = .sandbox
+            self.relayProfile = .simulatorSandbox
+            self.proofPolicy = .internalSimulator
+        }
+    }
+
+    private static func readURL(readValue: (String) -> Any?, key: String) -> URL? {
+        guard let raw = readValue(key) as? String else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard let components = URLComponents(string: trimmed),
@@ -96,29 +138,12 @@ struct PushBuildConfig {
     }
 
     private static func readEnum<T: RawRepresentable>(
-        bundle: Bundle,
+        readValue: (String) -> Any?,
         key: String,
         fallback: T)
     -> T where T.RawValue == String {
-        guard let raw = bundle.object(forInfoDictionaryKey: key) as? String else { return fallback }
+        guard let raw = readValue(key) as? String else { return fallback }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return T(rawValue: trimmed) ?? T(rawValue: trimmed.lowercased()) ?? fallback
-    }
-
-    private static let defaultAPNsEnvironment: PushAPNsEnvironment = .sandbox
-
-    private static func defaultRelayProfile(apnsEnvironment: PushAPNsEnvironment) -> PushRelayProfile {
-        apnsEnvironment == .production ? .production : .deviceSandbox
-    }
-
-    private static func defaultProofPolicy(relayProfile: PushRelayProfile) -> PushProofPolicy {
-        switch relayProfile {
-        case .production:
-            .appleStrict
-        case .deviceSandbox:
-            .appleDevelopment
-        case .simulatorSandbox:
-            .internalSimulator
-        }
     }
 }

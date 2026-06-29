@@ -17,6 +17,7 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -88,6 +89,14 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
+}
+
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -186,6 +195,7 @@ export const streamOpenAICompletions: StreamFunction<
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+      const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
       // text-lane transition) and again by the end-of-stream loop; guard so its
@@ -197,6 +207,11 @@ export const streamOpenAICompletions: StreamFunction<
         blocks.push(block);
       };
       const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
+      const rememberFirstToolCallById = (id: string, block: StreamingToolCallBlock) => {
+        if (!toolCallBlocksByFirstId.has(id)) {
+          toolCallBlocksByFirstId.set(id, block);
+        }
+      };
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1 || finishedBlocks.has(block)) {
@@ -311,6 +326,7 @@ export const streamOpenAICompletions: StreamFunction<
           }
           if (toolCall.id) {
             toolCallBlocksById.set(toolCall.id, block);
+            rememberFirstToolCallById(toolCall.id, block);
           }
           appendBlock(block);
           stream.push({
@@ -432,6 +448,7 @@ export const streamOpenAICompletions: StreamFunction<
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
                 toolCallBlocksById.set(toolCall.id, block);
+                rememberFirstToolCallById(toolCall.id, block);
               }
               if (!block.name && toolCall.function?.name) {
                 block.name = toolCall.function.name;
@@ -457,9 +474,7 @@ export const streamOpenAICompletions: StreamFunction<
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
               if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
-                const matchingToolCall = output.content.find(
-                  (b) => b.type === "toolCall" && b.id === detail.id,
-                ) as ToolCall | undefined;
+                const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
                 if (matchingToolCall) {
                   matchingToolCall.thoughtSignature = JSON.stringify(detail);
                 }
@@ -602,6 +617,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    fetch: buildGuardedModelFetch(model),
   });
 }
 
@@ -1129,11 +1145,14 @@ export function convertMessages(
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
-        const hasText = textResult.length > 0;
+        const content = sanitizeToolResultText(
+          textResult,
+          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
+        );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
-          content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+          content,
           tool_call_id: toolMsg.toolCallId,
         };
         if (compat.requiresToolResultName && toolMsg.toolName) {

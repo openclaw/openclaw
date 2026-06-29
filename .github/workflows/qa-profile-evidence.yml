@@ -16,15 +16,10 @@ on:
         default: ""
         type: string
       qa_profile:
-        description: Taxonomy QA profile id to run
+        description: Taxonomy QA profile id to run (for example release or all)
         required: true
-        default: release
+        default: all
         type: string
-      fail_on_qa_failure:
-        description: Fail the workflow when the QA profile command exits non-zero
-        required: false
-        default: true
-        type: boolean
   workflow_call:
     inputs:
       ref:
@@ -40,14 +35,9 @@ on:
         description: Taxonomy QA profile id to run
         required: true
         type: string
-      fail_on_qa_failure:
-        description: Fail the reusable workflow when the QA profile command exits non-zero
-        required: false
-        default: false
-        type: boolean
     secrets:
       OPENAI_API_KEY:
-        description: OpenAI API key used by release QA profile scenarios
+        description: OpenAI API key used by live QA profile scenarios
         required: true
     outputs:
       artifact_name:
@@ -99,6 +89,13 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            // Reusable workflow jobs inherit the caller event but run as
+            // github-actions[bot]; selected ref validation still gates secrets.
+            if (context.actor === "github-actions[bot]") {
+              core.info("Skipping manual actor permission check for a reusable workflow call.");
+              core.setOutput("authorized", "true");
+              return;
+            }
             if (context.eventName !== "workflow_dispatch") {
               core.info(`Skipping manual actor permission check for ${context.eventName}.`);
               core.setOutput("authorized", "true");
@@ -253,6 +250,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/build-all.mjs qaRuntime
 
+      - name: Ensure Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
       - name: Run QA profile
         id: run_profile
         env:
@@ -367,8 +367,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Fail if configured QA gate failed
-        if: always() && inputs.fail_on_qa_failure
+      - name: Fail if QA profile failed
+        if: always()
         env:
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}

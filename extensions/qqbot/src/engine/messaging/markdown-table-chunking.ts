@@ -439,19 +439,40 @@ function isTableSeparatorLine(line: string): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
 }
 
+// Split a markdown table row's inner text on its column delimiters. A
+// backslash-escaped pipe (`\|`) is literal cell content per GFM, not a column
+// delimiter, so it must not start a new cell; it is unescaped to a bare `|`.
+// (`\\` is likewise unescaped to a single backslash so a following `|` still
+// delimits.) Splitting on every `|` previously mis-counted columns whenever a
+// cell contained an escaped pipe.
+function splitTableRowCells(inner: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+    if (char === "\\" && i + 1 < inner.length) {
+      const next = inner[i + 1];
+      current += next === "|" || next === "\\" ? next : `\\${next}`;
+      i++;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells;
+}
+
 function splitTableCells(line: string): string[] {
-  const trimmed = line.trim();
-  return trimmed
-    .slice(1, -1)
-    .split("|")
-    .map((cell) => cell.trim());
+  return splitTableRowCells(line.trim().slice(1, -1)).map((cell) => cell.trim());
 }
 
 function splitPartialTableCells(line: string): string[] {
-  const trimmed = line.trim();
-  return trimmed
-    .replace(/^\|/, "")
-    .split("|")
+  return splitTableRowCells(line.trim().replace(/^\|/, ""))
     .map((cell) => cell.trim())
     .filter((cell) => cell.length > 0);
 }
@@ -595,3 +616,6 @@ function isClosingFenceLine(line: string, fence: ActiveFence): boolean {
     match?.[2] && match[2][0] === markerChar && match[2].length >= fence.marker.length,
   );
 }
+
+// Exposed for unit testing of the table-cell splitting logic only.
+export const testing = { splitTableCells, splitPartialTableCells };

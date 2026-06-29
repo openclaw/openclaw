@@ -122,21 +122,13 @@ targets:
         Debug:
           OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
-          OPENCLAW_PUSH_TRANSPORT: direct
-          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_MODE: localSandbox
           OPENCLAW_PUSH_RELAY_BASE_URL: ""
-          OPENCLAW_PUSH_APNS_ENVIRONMENT: sandbox
-          OPENCLAW_PUSH_RELAY_PROFILE: deviceSandbox
-          OPENCLAW_PUSH_PROOF_POLICY: appleDevelopment
         Release:
           OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: production
-          OPENCLAW_PUSH_TRANSPORT: direct
-          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_MODE: localProduction
           OPENCLAW_PUSH_RELAY_BASE_URL: ""
-          OPENCLAW_PUSH_APNS_ENVIRONMENT: production
-          OPENCLAW_PUSH_RELAY_PROFILE: production
-          OPENCLAW_PUSH_PROOF_POLICY: appleStrict
     info:
       path: Sources/Info.plist
       properties:
@@ -164,7 +156,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
         NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
@@ -178,12 +170,8 @@ targets:
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
-        OpenClawPushTransport: "$(OPENCLAW_PUSH_TRANSPORT)"
-        OpenClawPushDistribution: "$(OPENCLAW_PUSH_DISTRIBUTION)"
+        OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
-        OpenClawPushAPNsEnvironment: "$(OPENCLAW_PUSH_APNS_ENVIRONMENT)"
-        OpenClawPushRelayProfile: "$(OPENCLAW_PUSH_RELAY_PROFILE)"
-        OpenClawPushProofPolicy: "$(OPENCLAW_PUSH_PROOF_POLICY)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

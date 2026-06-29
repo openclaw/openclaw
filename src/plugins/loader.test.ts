@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -53,6 +55,7 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
+import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import {
   testing,
   clearPluginLoaderCache,
@@ -2968,6 +2971,163 @@ module.exports = { id: "throws-after-import", register() {} };`,
     await triggerInternalHook(event);
     expect(event.messages).toEqual(["plugin-config-visible"]);
     expect(event.context).toStrictEqual({});
+
+    clearInternalHooks();
+  });
+
+  it("preserves plugin hook context mutations for bootstrap hooks", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-bootstrap-mutation",
+      filename: "hook-bootstrap-mutation.cjs",
+      body: `module.exports = {
+        id: "hook-bootstrap-mutation",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              event.context.bootstrapFiles = [
+                {
+                  name: "AGENTS.md",
+                  path: "/tmp/override-AGENTS.md",
+                  content: "override bootstrap rules",
+                  missing: false,
+                },
+              ];
+            },
+            { name: "hook-bootstrap-mutation" },
+          );
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-bootstrap-mutation"],
+      },
+      options: {
+        onlyPluginIds: ["hook-bootstrap-mutation"],
+      },
+    });
+
+    const updated = await applyBootstrapHookOverrides({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/base-AGENTS.md",
+          content: "base bootstrap rules",
+          missing: false,
+        } satisfies WorkspaceBootstrapFile,
+      ],
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:subagent:test-bootstrap",
+    });
+
+    expect(updated).toEqual([
+      {
+        name: "AGENTS.md",
+        path: "/tmp/override-AGENTS.md",
+        content: "override bootstrap rules",
+        missing: false,
+      },
+    ]);
+
+    clearInternalHooks();
+  });
+
+  it("runs consecutive plugin hook handlers with shared mutable context but isolated plugin config", async () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "hook-context-first",
+      filename: "hook-context-first.cjs",
+      body: `module.exports = {
+        id: "hook-context-first",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("first-config=" + event.context.pluginConfig?.marker);
+              event.context.note = "mutation-from-first";
+            },
+            { name: "hook-context-first" },
+          );
+        },
+      };`,
+    });
+    const second = writePlugin({
+      id: "hook-context-second",
+      filename: "hook-context-second.cjs",
+      body: `module.exports = {
+        id: "hook-context-second",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push(
+                "second-config=" + String(event.context.pluginConfig?.marker ?? "none"),
+              );
+              event.messages.push("note=" + String(event.context.note ?? "missing-note"));
+            },
+            { name: "hook-context-second" },
+          );
+        },
+      };`,
+    });
+    for (const plugin of [first, second]) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: first.dir,
+      onlyPluginIds: ["hook-context-first", "hook-context-second"],
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["hook-context-first", "hook-context-second"],
+          entries: {
+            "hook-context-first": {
+              config: {
+                marker: "visible-to-first",
+              },
+            },
+            "hook-context-second": {
+              config: {
+                marker: "visible-to-second",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+
+    expect(event.messages).toEqual([
+      "first-config=visible-to-first",
+      "second-config=visible-to-second",
+      "note=mutation-from-first",
+    ]);
+    expect(event.context).toEqual({
+      note: "mutation-from-first",
+    });
 
     clearInternalHooks();
   });
@@ -8722,6 +8882,109 @@ module.exports = {
       openAllowWarnings,
       "bundled-only allowlists should not trip the mismatch warning",
     ).toHaveLength(0);
+  });
+
+  it("includes actionable plugins.allow remediation hints in the open allowlist warning", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-open-allow-remediation",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const openAllowWarning = warnings.find((msg) => msg.includes("plugins.allow is empty"));
+    expect(openAllowWarning).toBeDefined();
+    expect(openAllowWarning).toContain('"warn-open-allow-remediation"');
+    expect(openAllowWarning).toContain('"plugins": { "allow": [');
+    expect(openAllowWarning).toContain("openclaw plugins list --enabled --verbose");
+    expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
+  });
+
+  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "warn-untracked-remediation");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "warn-untracked-remediation",
+        body: simplePluginBody("warn-untracked-remediation"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      const untrackedWarning = warnings.find(
+        (msg) =>
+          msg.includes("warn-untracked-remediation") &&
+          msg.includes("loaded without install/load-path provenance"),
+      );
+      expect(untrackedWarning).toBeDefined();
+      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(untrackedWarning).toContain("reinstall from a trusted source");
+
+      const diagnostic = registry.diagnostics.find(
+        (entry) =>
+          entry.pluginId === "warn-untracked-remediation" &&
+          entry.message.includes("loaded without install/load-path provenance"),
+      );
+      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+    });
+  });
+
+  it("omits the truncated plugins.allow snippet when more than six plugins are discovered", () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `discovered-plugin-${index + 1}`);
+    const warnings: string[] = [];
+    const seenWarningKeys = new Set<string>();
+    const cache = {
+      hasOpenAllowlistWarning(key: string) {
+        return seenWarningKeys.has(key);
+      },
+      recordOpenAllowlistWarning(key: string) {
+        seenWarningKeys.add(key);
+      },
+    };
+    warnWhenAllowlistIsOpen({
+      emitWarning: true,
+      logger: createWarningLogger(warnings),
+      pluginsEnabled: true,
+      allow: [],
+      warningCacheKey: "truncated",
+      warningCache: cache,
+      discoverablePlugins: ids.map((id) => ({ id, source: `/tmp/${id}`, origin: "global" })),
+    });
+
+    expect(warnings).toHaveLength(1);
+    const message = warnings[0] ?? "";
+    expect(message).toContain("plugins.allow is empty");
+    expect(message).toContain("(+2 more)");
+    expect(message).not.toContain('"plugins": { "allow": [');
+    expect(message).toContain("openclaw plugins list --enabled --verbose");
+    expect(message).toContain("openclaw plugins inspect <id>");
   });
 
   it("handles workspace-discovered plugins according to trust and precedence", () => {
