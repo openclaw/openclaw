@@ -2009,6 +2009,26 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
+  it("keeps partial previews live when the global block default is on", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: {
+        agents: { defaults: { blockStreamingDefault: "on" } },
+      },
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+    expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
+    expectSinglePreviewEdit();
+  });
+
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
@@ -2122,11 +2142,15 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: {
+        agents: { defaults: { blockStreamingDefault: "on" } },
+      },
       discordConfig: { maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
 
+    expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
     expectPreviewEditContent("done");
@@ -2712,6 +2736,50 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("keeps block preview mode live when the global block default is on", async () => {
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "HelloWorld" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: {
+        agents: { defaults: { blockStreamingDefault: "on" } },
+      },
+      discordConfig: { streaming: { mode: "block" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+    expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("lets explicit Discord block streaming override preview modes", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: {
+        agents: { defaults: { blockStreamingDefault: "on" } },
+      },
+      discordConfig: {
+        streaming: { mode: "partial", block: { enabled: true } },
+        maxLinesPerMessage: 5,
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(false);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("keeps progress label visible when Discord tool progress lines are disabled", async () => {

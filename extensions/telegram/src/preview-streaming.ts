@@ -29,7 +29,7 @@ export function resolveTelegramBlockStreamingEnabled(params: {
   }
 
   const streamMode = params.streamMode ?? resolveTelegramPreviewStreamMode(params.account ?? {});
-  if (streamMode === "partial" || streamMode === "progress") {
+  if (streamMode !== "off") {
     return false;
   }
   return params.legacyBlockStreamingDefault === "on";

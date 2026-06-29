@@ -1,7 +1,6 @@
 // Discord plugin module implements native command agent reply behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -13,6 +12,7 @@ import type {
   CommandInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
+import { resolveDiscordBlockStreamingEnabled } from "../preview-streaming.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
@@ -49,7 +49,10 @@ export async function dispatchDiscordNativeAgentReply(params: {
     channel: "discord",
     accountId: params.effectiveRoute.accountId,
   });
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
+  const blockStreamingEnabled = resolveDiscordBlockStreamingEnabled({
+    account: params.discordConfig,
+    legacyBlockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+  });
 
   let didReply = false;
   const dispatchResult = await nativeCommandRuntime.dispatchReplyWithDispatcher({

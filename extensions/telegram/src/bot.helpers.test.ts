@@ -28,7 +28,7 @@ describe("resolveTelegramStreamMode", () => {
 });
 
 describe("resolveTelegramBlockStreamingEnabled", () => {
-  it("lets partial and progress modes override the legacy global block default", () => {
+  it("lets live preview modes override the legacy global block default", () => {
     expect(
       resolveTelegramBlockStreamingEnabled({
         account: { streaming: { mode: "partial" } },
@@ -41,13 +41,10 @@ describe("resolveTelegramBlockStreamingEnabled", () => {
         legacyBlockStreamingDefault: "on",
       }),
     ).toBe(false);
-  });
-
-  it("does not treat block preview mode as explicit blocked delivery", () => {
     expect(
       resolveTelegramBlockStreamingEnabled({
         account: { streaming: { mode: "block" } },
-        legacyBlockStreamingDefault: "off",
+        legacyBlockStreamingDefault: "on",
       }),
     ).toBe(false);
   });
