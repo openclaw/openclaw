@@ -65,7 +65,7 @@ async function readResponsePrefix(
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
     if (typeof res.arrayBuffer !== "function") {
-      return { buffer: Buffer.alloc(0), size: 0, truncated: false };
+      throw new Error("Response body is not readable under the byte limit");
     }
     const fallback = Buffer.from(await res.arrayBuffer());
     if (fallback.length > maxBytes) {
