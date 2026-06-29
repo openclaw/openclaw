@@ -54,6 +54,12 @@ import {
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  deleteQmdSessionExportCacheEntries,
+  listQmdSessionExportCacheEntries,
+  upsertQmdSessionExportCacheEntry,
+  type QmdSessionExportCacheOptions,
+} from "openclaw/plugin-sdk/memory-core-qmd-export-cache-internal";
+import {
   addTimerTimeoutGraceMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -123,6 +129,27 @@ const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
+// Bump SESSION_EXPORT_RENDER_VERSION when changing renderSessionMarkdown,
+// redactSensitiveText, line-wrapping, or anything else that affects the bytes
+// written to <qmdDir>/sessions/*.md. The persistent export-state cache uses
+// this to invalidate stale entries cleanly across deploys.
+const SESSION_EXPORT_RENDER_VERSION = 1;
+// Compute a full content fingerprint before taking the export fast path. Stat
+// fields keep this to likely-unchanged files, while the hash prevents stale QMD
+// markdown when a transcript is rewritten without changing size or mtime.
+async function computeContentFingerprint(filePath: string): Promise<string> {
+  const content = await fs.readFile(filePath);
+  return crypto.createHash("sha1").update(content).digest("hex");
+}
+
+// Fingerprint the rendered export markdown so the persistent fast path can
+// detect a target that was externally modified or corrupted on disk. Hashing
+// the rendered string (rather than re-reading the file we just wrote) keeps the
+// stored value authoritative: it is exactly what the export *should* contain.
+function computeStringFingerprint(content: string): string {
+  return crypto.createHash("sha1").update(content, "utf-8").digest("hex");
+}
+
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
@@ -440,14 +467,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<string, DocLocation>();
-  private readonly exportedSessionState = new Map<
-    string,
-    {
-      hash: string;
-      mtimeMs: number;
-      target: string;
-    }
-  >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
@@ -2838,6 +2857,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.db;
   }
 
+  private exportCacheOptions(): QmdSessionExportCacheOptions {
+    return { agentId: this.agentId, env: process.env };
+  }
+
   private async exportSessions(): Promise<void> {
     if (!this.sessionExporter) {
       return;
@@ -2852,8 +2875,101 @@ export class QmdMemoryManager implements MemorySearchManager {
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
+    const exportCacheOptions = this.exportCacheOptions();
+    const cachedEntries = listQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+    });
+    const cachedBySessionFile = new Map(
+      cachedEntries.map((entry) => [entry.sessionFile, entry] as const),
+    );
     for (const corpusEntry of corpusEntries) {
       const sessionFile = corpusEntry.sessionFile;
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(sessionFile);
+      } catch (err) {
+        // Only treat genuinely-missing files (ENOENT / ENOTDIR / not-found) as
+        // "vanished between listing and stat" and let orphan cleanup handle the
+        // stale export below. Every other stat failure (EACCES, EPERM, an
+        // fs-safe policy rejection, a non-regular path, etc.) must abort the
+        // whole sync by rethrowing — matching statRegularFile()'s contract on
+        // the slow path. If we swallowed those here the session would be left
+        // out of `keep`/`tracked`, and the cleanup pass below would DELETE the
+        // existing markdown export and drop its artifact mapping on a transient
+        // or permission error. That is the data-loss regression we must avoid:
+        // aborting preserves the existing export until the next clean sync.
+        if (isFileMissingError(err)) {
+          continue;
+        }
+        throw err;
+      }
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
+      const cached = cachedBySessionFile.get(sessionFile) ?? null;
+      // Fast path: stat fields match the cached identity AND the content
+      // fingerprint confirms the file bytes are unchanged. Skip the full
+      // entry build, redaction, hashing, and write entirely.
+      let cachedTargetMissing = false;
+      const cachedTargetMatches = cached?.target === target;
+      if (
+        cached &&
+        cachedTargetMatches &&
+        cached.size === stat.size &&
+        cached.mtimeMs === stat.mtimeMs &&
+        cached.ino === stat.ino
+      ) {
+        if (cutoff && stat.mtimeMs < cutoff) {
+          continue;
+        }
+        // Verify a full content hash so same-size rewrites with preserved mtime
+        // still invalidate the cache before we skip rebuild/render/write.
+        const fingerprint = await computeContentFingerprint(sessionFile);
+        if (fingerprint === cached.contentFingerprint) {
+          // Source bytes are unchanged. Before skipping the rebuild, confirm the
+          // export TARGET on disk still holds the bytes we rendered. Existence
+          // alone is not enough: an externally modified or corrupted target
+          // would otherwise be preserved across restarts. Read the target and
+          // compare its fingerprint against the cached rendered-markdown hash.
+          // A null cached fingerprint means the row predates this column, so we
+          // cannot trust the target's bytes — fall through to rebuild and
+          // repopulate the fingerprint.
+          let targetBytes: string | null = null;
+          try {
+            targetBytes = await fs.readFile(target, "utf-8");
+          } catch {
+            cachedTargetMissing = true;
+          }
+          if (
+            targetBytes !== null &&
+            cached.targetFingerprint !== null &&
+            computeStringFingerprint(targetBytes) === cached.targetFingerprint
+          ) {
+            tracked.add(sessionFile);
+            const identity = this.buildSessionArtifactMapping(
+              sessionFile,
+              targetName,
+              target,
+              corpusEntry,
+            );
+            if (identity) {
+              artifactMappings.push(identity);
+            }
+            keep.add(target);
+            continue;
+          }
+        }
+      }
+      // Slow path: rebuild the entry and write the markdown if needed.
+      // Capture the source content fingerprint immediately before rendering so
+      // the value we persist is bound to (approximately) the same bytes that
+      // produce the rendered markdown. Re-validating this fingerprint after the
+      // write (below) closes the cache-identity race: a same-size,
+      // mtime-preserving transcript rewrite landing between render and the
+      // fingerprint reread would otherwise persist a NEW source fingerprint
+      // paired with OLD rendered target bytes, yielding a later stale fast-path
+      // cache hit.
+      const preRenderFingerprint = await computeContentFingerprint(sessionFile);
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
@@ -2864,8 +2980,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
-      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const identity = this.buildSessionArtifactMapping(
         sessionFile,
@@ -2876,17 +2990,69 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (identity) {
         artifactMappings.push(identity);
       }
-      const state = this.exportedSessionState.get(sessionFile);
-      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
+      const renderedMarkdown = this.renderSessionMarkdown(entry);
+      const renderedFingerprint = computeStringFingerprint(renderedMarkdown);
+      // Decide whether the target on disk needs to be (re)written. Beyond the
+      // identity drift the cache already tracks, also rewrite when the on-disk
+      // target's bytes no longer match what we just rendered — this is what
+      // self-heals an externally modified or corrupted export. When the cache
+      // identity is unchanged we still verify the target bytes here, because a
+      // matching source hash would otherwise let a corrupted target survive.
+      let needsWrite =
+        cachedTargetMissing ||
+        !cachedTargetMatches ||
+        !cached ||
+        cached.hash !== entry.hash ||
+        cached.mtimeMs !== entry.mtimeMs;
+      if (!needsWrite) {
+        try {
+          const onDisk = await fs.readFile(target, "utf-8");
+          needsWrite = computeStringFingerprint(onDisk) !== renderedFingerprint;
+        } catch {
+          needsWrite = true;
+        }
+      }
+      if (needsWrite) {
+        await exportRoot.write(targetName, renderedMarkdown, {
           encoding: "utf-8",
         });
       }
-      this.exportedSessionState.set(sessionFile, {
-        hash: entry.hash,
-        mtimeMs: entry.mtimeMs,
-        target,
-      });
+      // Re-validate the source identity AFTER rendering and writing. If the
+      // transcript was rewritten during our render window (even a same-size,
+      // mtime-preserving rewrite that the stat precheck cannot see), the source
+      // bytes no longer match what `renderedMarkdown`/`targetFingerprint`
+      // describe. Persisting (postFingerprint, oldTargetFingerprint) here would
+      // let a future fast path content-match the NEW source while serving the
+      // OLD rendered target. Bind the persisted source fingerprint to the
+      // rendered bytes: only cache when the pre-render and post-write
+      // fingerprints agree. On any disagreement, skip the cache upsert for this
+      // entry so the next sync re-derives against the settled bytes — the
+      // target we just wrote stays on disk and tracked, but no stale cache row
+      // is persisted to be served on the fast path.
+      const postWriteFingerprint = await computeContentFingerprint(sessionFile);
+      if (postWriteFingerprint === preRenderFingerprint) {
+        upsertQmdSessionExportCacheEntry(exportCacheOptions, {
+          sessionFile,
+          exportDir,
+          renderVersion: SESSION_EXPORT_RENDER_VERSION,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          contentFingerprint: preRenderFingerprint,
+          hash: entry.hash,
+          target,
+          targetFingerprint: renderedFingerprint,
+          updatedAt: Date.now(),
+        });
+      } else {
+        // Source mutated mid-render: drop any prior cache row so the next sync
+        // cannot take the fast path against a now-mismatched rendered target.
+        deleteQmdSessionExportCacheEntries(exportCacheOptions, {
+          exportDir,
+          renderVersion: SESSION_EXPORT_RENDER_VERSION,
+          sessionFiles: [sessionFile],
+        });
+      }
       keep.add(target);
     }
     const exported = await exportRoot.list(".").catch(() => []);
@@ -2899,11 +3065,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         await exportRoot.remove(name).catch(() => undefined);
       }
     }
-    for (const [sessionFile, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
-        this.exportedSessionState.delete(sessionFile);
-      }
-    }
+    // Remove stale cache entries: session files no longer tracked or whose
+    // cached target has drifted outside the current export dir.
+    const staleSessionFiles = cachedEntries
+      .map((entry) => entry.sessionFile)
+      .filter((sessionFile) => !tracked.has(sessionFile));
+    deleteQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+      sessionFiles: staleSessionFiles,
+    });
     replaceQmdSessionArtifactMappings({
       collection: this.sessionExporter.collectionName,
       indexPath: this.indexPath,

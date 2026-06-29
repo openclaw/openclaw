@@ -72,6 +72,20 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface QmdSessionExportCache {
+  content_fingerprint: string;
+  export_dir: string;
+  hash: string;
+  ino: number;
+  mtime_ms: number;
+  render_version: number;
+  session_file: string;
+  size: number;
+  target: string;
+  target_fingerprint: string | null;
+  updated_at: number;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -91,5 +105,6 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  qmd_session_export_cache: QmdSessionExportCache;
   schema_meta: SchemaMeta;
 }

@@ -392,7 +392,7 @@ describe("openclaw agent database", () => {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA user_version = 2;");
+    db.exec("PRAGMA user_version = 3;");
     db.close();
 
     expect(() =>
@@ -400,6 +400,6 @@ describe("openclaw agent database", () => {
         agentId: "worker-1",
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(/newer schema version 2/);
+    ).toThrow(/newer schema version 3/);
   });
 });

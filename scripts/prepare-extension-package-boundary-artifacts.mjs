@@ -5,7 +5,11 @@ import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import {
+  pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -147,6 +151,9 @@ const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
   outputPrefix: "packages/plugin-sdk/dist/packages/acp-core/src",
 });
+const PRIVATE_LOCAL_ONLY_PACKAGE_DTS_OUTPUTS = privateLocalOnlyPluginSdkEntrypoints.map(
+  (entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+);
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
@@ -207,6 +214,7 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/video-generation.d.ts",
+  ...PRIVATE_LOCAL_ONLY_PACKAGE_DTS_OUTPUTS,
 ];
 const QA_CHANNEL_DTS_INPUTS = [
   "extensions/qa-channel/api.ts",

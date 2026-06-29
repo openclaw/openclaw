@@ -37,6 +37,33 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   updated_at INTEGER NOT NULL
 );
 
+-- QMD session-export cache: tracks per-JSONL identity so cold export walks can
+-- skip unchanged transcripts across restarts. Keyed by absolute session file
+-- path + export_dir + render_version so cache entries invalidate cleanly on
+-- export-dir change or SESSION_EXPORT_RENDER_VERSION bumps.
+CREATE TABLE IF NOT EXISTS qmd_session_export_cache (
+  session_file TEXT NOT NULL,
+  export_dir TEXT NOT NULL,
+  render_version INTEGER NOT NULL,
+  size INTEGER NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  ino INTEGER NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  target TEXT NOT NULL,
+  -- Nullable so the column can be added to schema-1 agent DBs via an additive
+  -- ALTER without a rewrite. Rows written before this column existed read back
+  -- NULL, which forces a one-time rebuild that repopulates it. Stores the SHA-1
+  -- of the rendered markdown bytes so the fast path can detect an externally
+  -- modified or corrupted export target and rebuild instead of preserving it.
+  target_fingerprint TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_file, export_dir, render_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qmd_export_cache_export_dir
+  ON qmd_session_export_cache(export_dir, render_version);
+
 CREATE TABLE IF NOT EXISTS memory_index_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

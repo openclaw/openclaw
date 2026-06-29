@@ -203,6 +203,10 @@ import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  readQmdSessionExportCacheEntry,
+  upsertQmdSessionExportCacheEntry,
+} from "openclaw/plugin-sdk/memory-core-qmd-export-cache-internal";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -6048,6 +6052,592 @@ describe("QmdMemoryManager", () => {
       expect(secondExport).toBe(firstExport);
     } finally {
       await manager.close();
+    }
+  });
+
+  it("persists session-export state and reloads it across restarts", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot: sync should write export markdown and persist cache to SQLite.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      const firstExport = await fs.readFile(exportFile, "utf-8");
+      expect(firstExport).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Capture the export markdown's mtime so we can verify the second boot's
+    // sync did NOT rewrite it (SQLite fast path takes effect).
+    const writtenStat = await fs.stat(exportFile);
+
+    // Second boot, same input files: SQLite cache read + stat fast path should
+    // skip the write entirely.
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const secondStat = await fs.stat(exportFile);
+      expect(secondStat.mtimeMs).toBe(writtenStat.mtimeMs);
+      expect(secondStat.size).toBe(writtenStat.size);
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("rebuilds session-export markdown after same-size transcript rewrites", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const firstTranscript = '{"type":"message","message":{"role":"user","content":"hello"}}\n';
+    const rewrittenTranscript = '{"type":"message","message":{"role":"user","content":"hullo"}}\n';
+    expect(rewrittenTranscript.length).toBe(firstTranscript.length);
+    await fs.writeFile(sessionFile, firstTranscript, "utf-8");
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    const originalStat = await fs.stat(sessionFile);
+    await fs.writeFile(sessionFile, rewrittenTranscript, "utf-8");
+    await fs.utimes(sessionFile, originalStat.atime, originalStat.mtime);
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hullo");
+      expect(rebuilt).not.toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("does not persist a stale cache entry when the transcript is rewritten mid-render", async () => {
+    // Cache-identity race regression. In the slow path the manager renders the
+    // markdown from one read of the transcript, then re-reads the transcript to
+    // compute the persisted source content fingerprint. A same-size,
+    // mtime-preserving rewrite landing BETWEEN those two reads would persist a
+    // NEW source fingerprint paired with the OLD rendered target bytes. A later
+    // fast path then content-matches the NEW source, finds the OLD target bytes
+    // intact, and serves stale markdown forever. The fix binds the persisted
+    // fingerprint to the rendered bytes: it captures the source fingerprint
+    // before rendering and re-validates it after the write, refusing to cache
+    // when the two disagree. This test injects exactly that interleaving and
+    // asserts no stale fast-path cache survives.
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const firstTranscript = '{"type":"message","message":{"role":"user","content":"hello"}}\n';
+    const slowPathTranscript = '{"type":"message","message":{"role":"user","content":"howdy"}}\n';
+    const racedTranscript = '{"type":"message","message":{"role":"user","content":"hullo"}}\n';
+    // All three are the same byte length so the stat precheck cannot distinguish
+    // them once mtime is preserved — this is what makes the race observable.
+    expect(slowPathTranscript.length).toBe(firstTranscript.length);
+    expect(racedTranscript.length).toBe(firstTranscript.length);
+    await fs.writeFile(sessionFile, firstTranscript, "utf-8");
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot: export the original transcript and persist a clean cache row.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Drive the slow path on the second boot by changing the transcript content
+    // (same byte length, mtime preserved) so the cached fingerprint no longer
+    // matches and the manager rebuilds. The slow-path rebuild is where the race
+    // window lives.
+    const firstStat = await fs.stat(sessionFile);
+    await fs.writeFile(sessionFile, slowPathTranscript, "utf-8");
+    await fs.utimes(sessionFile, firstStat.atime, firstStat.mtime);
+
+    // Inject the rewrite at the render -> fingerprint boundary. The manager's
+    // source content fingerprint is computed via fs.readFile(path) in Buffer
+    // mode (no encoding); the render reads the transcript through a different
+    // SDK primitive, and the rendered markdown is written to the export target
+    // BEFORE the post-write fingerprint read. So a Buffer-mode read of the
+    // session file that happens AFTER the freshly-rendered slow-path markdown
+    // ("howdy") has already landed on the export target is the post-write
+    // fingerprint read. At that exact point — render done, target written, but
+    // the persisted source fingerprint not yet taken — we slip in a same-size,
+    // mtime-preserving transcript rewrite ("hullo"). This reproduces the
+    // (newSrcFp, oldTargetBytes) interleaving precisely.
+    //
+    // This trigger is robust to the fix: the pre-render fingerprint read (which
+    // the fix adds) happens while the export target still holds the PREVIOUS
+    // boot's render ("hello"), so it does not fire; only the post-write read,
+    // by which time the target reads "howdy", does.
+    const realReadFile = fs.readFile.bind(fs);
+    const realWriteFile = fs.writeFile.bind(fs);
+    const realUtimes = fs.utimes.bind(fs);
+    let racedOnce = false;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+      target: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      const isSessionBufferRead =
+        target === sessionFile && (options === undefined || options === null);
+      if (isSessionBufferRead && !racedOnce) {
+        // Has the freshly-rendered slow-path markdown already hit the target?
+        let renderedTarget: string;
+        try {
+          renderedTarget = await realReadFile(exportFile, "utf-8");
+        } catch {
+          renderedTarget = "";
+        }
+        if (renderedTarget.includes("howdy")) {
+          racedOnce = true;
+          await realWriteFile(sessionFile, racedTranscript, "utf-8");
+          await realUtimes(sessionFile, firstStat.atime, firstStat.mtime);
+        }
+      }
+      return realReadFile(target as never, options as never);
+    }) as typeof fs.readFile);
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+    } finally {
+      readSpy.mockRestore();
+      await second.manager.close();
+    }
+    // The injection must have fired, or the test proves nothing.
+    expect(racedOnce).toBe(true);
+
+    // The on-disk transcript now holds the raced bytes ("hullo"). The critical
+    // invariant: the next clean sync must NOT serve a stale fast-path hit. If a
+    // mismatched (newSrcFp, oldTargetBytes) row had been persisted, a third sync
+    // would content-match the source, find the old target bytes, and skip the
+    // rebuild — leaving the export stale. With the fix, no such row exists, so
+    // the third sync re-renders from the current transcript.
+    const third = await createManager();
+    try {
+      await third.manager.sync({ reason: "manual" });
+      const settled = await fs.readFile(exportFile, "utf-8");
+      expect(settled).toContain("hullo");
+      expect(settled).not.toContain("howdy");
+    } finally {
+      await third.manager.close();
+    }
+  });
+
+  it("ignores stale cache entries scoped to a previous exportDir", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const firstExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions-a");
+    const secondExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions-b");
+    const firstExportFile = path.join(firstExportDir, "session-1.md");
+    const secondExportFile = path.join(secondExportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true, exportDir: firstExportDir },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First sync: exports markdown and writes a SQLite cache row for firstExportDir.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(firstExportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    cfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: {
+          ...cfg.memory?.qmd,
+          sessions: { enabled: true, exportDir: secondExportDir },
+        },
+      },
+    } as OpenClawConfig;
+
+    // Second sync points at a different exportDir. The old cache row still
+    // exists, but the lookup key includes export_dir, so this must rebuild into
+    // the new directory instead of trusting the previous target.
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(secondExportFile, "utf-8")).toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("rebuilds the session-export markdown when the cached target is missing", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot writes the markdown and persists the export-state cache.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      const firstExport = await fs.readFile(exportFile, "utf-8");
+      expect(firstExport).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Simulate the export markdown being deleted out from under us while
+    // the source jsonl and SQLite cache entry pointing at it remain intact.
+    await fs.rm(exportFile);
+    await expect(fs.access(exportFile)).rejects.toThrow();
+
+    // Second boot: cache says "size+mtime match, target=session-1.md", but
+    // the target is missing. The fast path must fall through to the slow
+    // rebuild path so the markdown is regenerated.
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("rebuilds the session-export markdown when the cached target bytes are corrupted", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot writes the markdown and persists the export-state cache,
+    // including the rendered target's content fingerprint.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Corrupt the export target out from under us while the source jsonl and
+    // its SQLite cache entry (size+mtime+content fingerprint) stay intact.
+    // Existence-only validation would preserve this corruption; target-byte
+    // validation must detect the drift and rebuild.
+    await fs.writeFile(exportFile, "corrupted external edit\n", "utf-8");
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hello");
+      expect(rebuilt).not.toContain("corrupted external edit");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("preserves an existing export when the source stat fails with a non-missing error", async () => {
+    // Regression: the stat precheck on the fast path must only swallow
+    // genuinely-missing errors (ENOENT/ENOTDIR/not-found). A non-missing stat
+    // failure (EACCES, EPERM, an fs policy rejection, a non-regular path, ...)
+    // must abort the whole sync by rethrowing — matching statRegularFile()'s
+    // contract on the slow path. If it were swallowed, the session would drop
+    // out of `keep`/`tracked` and the orphan-cleanup pass would DELETE the
+    // existing markdown export. Aborting preserves the existing export until a
+    // later clean sync can re-derive it.
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot writes the markdown export and persists the export-state cache.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (
+      target: Parameters<typeof fs.stat>[0],
+      options?: Parameters<typeof fs.stat>[1],
+    ) => {
+      if (target === sessionFile) {
+        const denied = Object.assign(
+          new Error(`EACCES: permission denied, stat '${target}'`),
+          { code: "EACCES" },
+        );
+        throw denied;
+      }
+      return realStat(target, options);
+    });
+
+    // Second boot: the stat precheck for session-1.jsonl throws EACCES. The sync
+    // must abort (surfacing the error) WITHOUT deleting the existing export.
+    const second = await createManager();
+    try {
+      await expect(second.manager.sync({ reason: "manual" })).rejects.toMatchObject({
+        code: "EACCES",
+      });
+    } finally {
+      statSpy.mockRestore();
+      await second.manager.close();
+    }
+
+    // The existing markdown export must still be on disk and unchanged.
+    const preserved = await fs.readFile(exportFile, "utf-8");
+    expect(preserved).toContain("hello");
+  });
+
+  it("takes the fast continue path when the source vanishes with ENOENT", async () => {
+    // The optimization itself must not regress: a genuinely-missing source file
+    // (ENOENT between listing and stat) still continues past that entry rather
+    // than aborting the sync. The orphan-cleanup pass then prunes its stale
+    // export, and any other sessions still export normally.
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const survivingSessionFile = path.join(sessionsDir, "session-keep.jsonl");
+    const vanishingSessionFile = path.join(sessionsDir, "session-gone.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const survivingExportFile = path.join(exportDir, "session-keep.md");
+    await fs.writeFile(
+      survivingSessionFile,
+      '{"type":"message","message":{"role":"user","content":"keep me"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      vanishingSessionFile,
+      '{"type":"message","message":{"role":"user","content":"gone soon"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (
+      target: Parameters<typeof fs.stat>[0],
+      options?: Parameters<typeof fs.stat>[1],
+    ) => {
+      if (target === vanishingSessionFile) {
+        const missing = Object.assign(
+          new Error(`ENOENT: no such file or directory, stat '${target}'`),
+          { code: "ENOENT" },
+        );
+        throw missing;
+      }
+      return realStat(target, options);
+    });
+
+    const { manager } = await createManager();
+    try {
+      // The ENOENT on session-gone.jsonl must NOT abort the sync; session-keep
+      // still exports successfully.
+      await manager.sync({ reason: "manual" });
+      expect(await fs.readFile(survivingExportFile, "utf-8")).toContain("keep me");
+    } finally {
+      statSpy.mockRestore();
+      await manager.close();
+    }
+  });
+
+  it("rebuilds the expected export when a current-scope cache row points elsewhere", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const wrongTarget = path.join(stateDir, "wrong-target.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(wrongTarget, "stale wrong target\n", "utf-8");
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    const key = {
+      agentId,
+      env: process.env,
+    };
+    const cached = readQmdSessionExportCacheEntry(key, {
+      sessionFile,
+      exportDir,
+      renderVersion: 1,
+    });
+    expect(cached).not.toBeNull();
+    upsertQmdSessionExportCacheEntry(key, {
+      ...requireValue(cached, "missing cache row"),
+      target: wrongTarget,
+      updatedAt: Date.now(),
+    });
+    await fs.rm(exportFile);
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hello");
+      expect(await fs.readFile(wrongTarget, "utf-8")).toBe("stale wrong target\n");
+      expect(
+        readQmdSessionExportCacheEntry(key, {
+          sessionFile,
+          exportDir,
+          renderVersion: 1,
+        })?.target,
+      ).toBe(exportFile);
+    } finally {
+      await second.manager.close();
     }
   });
 

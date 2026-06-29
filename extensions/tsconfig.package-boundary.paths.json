@@ -89,6 +89,9 @@
       "openclaw/plugin-sdk/error-runtime": [
         "../dist/plugin-sdk/error-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/memory-core-qmd-export-cache-internal": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts"
+      ],
       "openclaw/plugin-sdk/provider-catalog-live-runtime": [
         "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts"
       ],

@@ -43,6 +43,8 @@
     "!dist/plugin-sdk/channel-test-helpers.d.ts",
     "!dist/plugin-sdk/codex-native-task-runtime.js",
     "!dist/plugin-sdk/codex-native-task-runtime.d.ts",
+    "!dist/plugin-sdk/memory-core-qmd-export-cache-internal.js",
+    "!dist/plugin-sdk/memory-core-qmd-export-cache-internal.d.ts",
     "!dist/plugin-sdk/plugin-test-api.js",
     "!dist/plugin-sdk/plugin-test-api.d.ts",
     "!dist/plugin-sdk/plugin-test-contracts.js",
