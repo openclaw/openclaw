@@ -15,8 +15,12 @@ type PrefixFlagSpec = {
   prefix: string;
 };
 
-type InterpreterFlagSpec = {
+type InterpreterNameSpec = {
   names: readonly string[];
+  versionedNames?: readonly string[];
+};
+
+type InterpreterFlagSpec = InterpreterNameSpec & {
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
   rawPrefixFlags?: readonly PrefixFlagSpec[];
@@ -24,8 +28,7 @@ type InterpreterFlagSpec = {
   scanPastDoubleDash?: boolean;
 };
 
-type PositionalInterpreterSpec = {
-  names: readonly string[];
+type PositionalInterpreterSpec = InterpreterNameSpec & {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
@@ -37,7 +40,11 @@ type PositionalInterpreterSpec = {
 const VERSION_SUFFIX_PATTERN = /-?\d+(?:\.\d+)*$/;
 
 const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
-  { names: ["python", "python2", "python3", "pypy", "pypy3"], exactFlags: new Set(["-c"]) },
+  {
+    names: ["python", "python2", "python3", "pypy", "pypy3"],
+    versionedNames: ["python", "pypy"],
+    exactFlags: new Set(["-c"]),
+  },
   {
     names: ["node", "nodejs", "bun", "deno"],
     exactFlags: new Set(["-e", "--eval", "-p", "--print"]),
@@ -51,6 +58,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["perl"], exactFlags: new Set(["-e", "-E"]) },
   {
     names: ["php"],
+    versionedNames: ["php"],
     exactFlags: new Set(["-r"]),
     rawExactFlags: new Map([
       ["-B", "-B"],
@@ -58,7 +66,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       ["-R", "-R"],
     ]),
   },
-  { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
+  { names: ["r", "rscript"], versionedNames: ["rscript"], exactFlags: new Set(["-e"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -160,9 +168,9 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
 ];
 
 const INTERPRETER_ALLOWLIST_NAMES = new Set(
-  FLAG_INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names).concat(
-    POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names),
-  ),
+  FLAG_INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) =>
+    entry.names.concat(entry.versionedNames ?? []),
+  ).concat(POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names)),
 );
 
 function stripInterpreterVersionSuffix(value: string): string {
@@ -177,16 +185,21 @@ function interpreterNameVariants(value: string): readonly string[] {
   return stripped === value || stripped.length < 2 ? [value] : [value, stripped];
 }
 
-function specNamesInclude(names: readonly string[], normalizedExecutable: string): boolean {
-  return interpreterNameVariants(normalizedExecutable).some((candidate) =>
-    names.includes(candidate),
-  );
+function specNamesInclude(spec: InterpreterNameSpec, normalizedExecutable: string): boolean {
+  if (spec.names.includes(normalizedExecutable)) {
+    return true;
+  }
+  const stripped = stripInterpreterVersionSuffix(normalizedExecutable);
+  if (stripped === normalizedExecutable || stripped.length < 2) {
+    return false;
+  }
+  return (spec.versionedNames ?? spec.names).includes(stripped);
 }
 
 function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
+    if (specNamesInclude(spec, normalized)) {
       return spec;
     }
   }
@@ -196,7 +209,7 @@ function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
 function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (specNamesInclude(spec.names, normalized)) {
+    if (specNamesInclude(spec, normalized)) {
       return spec;
     }
   }

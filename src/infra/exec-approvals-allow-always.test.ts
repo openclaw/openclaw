@@ -434,6 +434,54 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(persisted).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "versioned Python",
+      executable: "python3.13",
+      command: "python3.13 -c 'print(1)'",
+    },
+    {
+      name: "versioned PyPy",
+      executable: "pypy3.10",
+      command: "pypy3.10 -c 'print(1)'",
+    },
+    {
+      name: "PHP begin flag",
+      executable: "php",
+      command: "php -B 'system(\"id\")'",
+    },
+    {
+      name: "PHP end flag",
+      executable: "php",
+      command: "php -E 'system(\"id\")'",
+    },
+    {
+      name: "Rscript eval",
+      executable: "Rscript",
+      command: "Rscript -e 'system(\"id\")'",
+    },
+  ])(
+    "keeps $name inline-eval commands out of allow-always persistence in strict mode",
+    async ({ command, executable }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      makeExecutable(dir, executable);
+      const env = makePathEnv(dir);
+      const safeBins = resolveSafeBins(undefined);
+
+      const { persisted } = await resolvePersistedPatterns({
+        command,
+        dir,
+        env,
+        safeBins,
+        strictInlineEval: true,
+      });
+      expect(persisted).toStrictEqual([]);
+    },
+  );
+
   it("unwraps reusable shell wrappers and persists the inner executable instead", async () => {
     if (process.platform === "win32") {
       return;
