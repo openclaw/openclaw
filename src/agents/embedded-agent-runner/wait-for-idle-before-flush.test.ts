@@ -1,5 +1,4 @@
-// Verifies flushPendingToolResultsAfterIdle defers via setImmediate.
-import { setImmediate } from "node:timers";
+// Verifies flushPendingToolResultsAfterIdle defer behavior.
 import { describe, expect, it, vi } from "vitest";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -16,7 +15,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(flush).toHaveBeenCalledOnce();
   });
 
-  it("skips idle wait but still defers when timeoutMs=0", async () => {
+  it("flushes synchronously when timeoutMs=0 (abort path)", async () => {
+    // Abort/timeout callers use timeoutMs=0 for synchronous flush
+    // before releasing the session lock. This path skips the defer.
     const flush = vi.fn();
     const sessionManager = { flushPendingToolResults: flush };
 
@@ -25,7 +26,8 @@ describe("flushPendingToolResultsAfterIdle", () => {
       sessionManager,
       timeoutMs: 0,
     });
-    expect(flush).not.toHaveBeenCalled();
+    // Flush runs synchronously — no defer in abort path
+    expect(flush).toHaveBeenCalledOnce();
 
     await promise;
     expect(flush).toHaveBeenCalledOnce();
