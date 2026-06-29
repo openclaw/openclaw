@@ -19,13 +19,6 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
-  it("supports the canonical openai routing id (documented Codex path)", () => {
-    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
-      supported: true,
-      priority: 100,
-    });
-  });
-
   it("rejects providers Codex app-server cannot resolve from its own config", () => {
     const result = harness.supports({ provider: "9router", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
@@ -45,14 +38,24 @@ describe("Codex agent harness supports()", () => {
     expect(result.supported).toBe(false);
   });
 
-  it("matches multi-token ids composed entirely of recognized tokens", () => {
-    // The separator-normalized canonical Codex ids must still resolve.
+  it("rejects legacy multi-token provider ids by default", () => {
     for (const provider of ["openai-codex", "OpenAI-Codex", "openai_codex", "openai:codex"]) {
-      expect(harness.supports({ provider, requestedRuntime: "codex" })).toEqual({
+      const result = harness.supports({ provider, requestedRuntime: "codex" });
+      expect(result.supported).toBe(false);
+    }
+  });
+
+  it("supports legacy exact provider ids when explicitly configured", () => {
+    const legacyHarness = createCodexAppServerAgentHarness({
+      providerIds: ["codex", "openai", "openai-codex"],
+    });
+
+    expect(legacyHarness.supports({ provider: "openai-codex", requestedRuntime: "codex" })).toEqual(
+      {
         supported: true,
         priority: 100,
-      });
-    }
+      },
+    );
   });
 
   it("does NOT hijack non-Codex providers that merely contain a recognized token (#918 codex P2)", () => {
