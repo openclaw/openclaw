@@ -1211,7 +1211,14 @@ export async function importSqliteSessionRows(
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
-      writeSessionEntry(database, resolved.sessionKey, params.entry);
+      const importedEntry = {
+        ...params.entry,
+        sessionFile: formatSqliteTranscriptTarget({
+          ...resolved,
+          sessionId: params.entry.sessionId,
+        }),
+      };
+      writeSessionEntry(database, resolved.sessionKey, importedEntry);
       if (params.readTranscriptEvents) {
         const transcriptScope = {
           ...resolved,

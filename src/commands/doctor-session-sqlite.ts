@@ -13,7 +13,6 @@ import {
   loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -348,7 +347,7 @@ async function importLegacySessionRecord(
     }
     const imported = await importSqliteSessionRows({
       agentId: target.agentId,
-      entry: normalizeImportedSqliteSessionEntry(target, record),
+      entry: record.entry,
       sessionKey: record.sessionKey,
       storePath: target.storePath,
     });
@@ -370,7 +369,7 @@ async function importLegacySessionRecord(
   }
   const imported = await importSqliteSessionRows({
     agentId: target.agentId,
-    entry: normalizeImportedSqliteSessionEntry(target, record),
+    entry: record.entry,
     sessionKey: record.sessionKey,
     storePath: target.storePath,
     ...(record.transcriptPath && result.status === "ok"
@@ -379,20 +378,6 @@ async function importLegacySessionRecord(
   });
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
-}
-
-function normalizeImportedSqliteSessionEntry(
-  target: SessionStoreTarget,
-  record: LegacySessionRecord,
-): SessionEntry {
-  return {
-    ...record.entry,
-    sessionFile: formatSqliteSessionFileMarker({
-      agentId: target.agentId,
-      sessionId: record.entry.sessionId,
-      storePath: target.storePath,
-    }),
-  };
 }
 
 function markAlreadyMigratedTranscript(
