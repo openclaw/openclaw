@@ -36,6 +36,13 @@ function buildFetchGuard(body: unknown): {
   return { fetchGuard: fetchGuardMock, fetchGuardMock, release };
 }
 
+type CompatibleFetchGuardForTest = (params: Parameters<LiveModelCatalogFetchGuard>[0]) => Promise<
+  Omit<Awaited<ReturnType<LiveModelCatalogFetchGuard>>, "finalUrl" | "requestHeaders"> & {
+    finalUrl?: string;
+    requestHeaders?: HeadersInit;
+  }
+>;
+
 describe("provider-catalog-live-runtime", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
@@ -340,7 +347,7 @@ describe("provider-catalog-live-runtime", () => {
     Object.defineProperty(firstResponse, "url", {
       value: "https://redirected.example.test/v1/models/",
     });
-    const fetchGuard = vi
+    const fetchGuard: CompatibleFetchGuardForTest = vi
       .fn(async ({ url }: Parameters<LiveModelCatalogFetchGuard>[0]) => ({
         response:
           url === "https://provider.example.test/v1/models"
@@ -354,11 +361,11 @@ describe("provider-catalog-live-runtime", () => {
       fetchLiveProviderModelIds({
         providerId: "provider",
         endpoint: "https://provider.example.test/v1/models",
-        fetchGuard,
+        fetchGuard: fetchGuard as LiveModelCatalogFetchGuard,
       }),
     ).resolves.toEqual(["model-a", "model-b"]);
 
-    expect(fetchGuard.mock.calls[1]?.[0].url).toBe(
+    expect(vi.mocked(fetchGuard).mock.calls[1]?.[0].url).toBe(
       "https://redirected.example.test/v1/models/?page=2",
     );
   });
