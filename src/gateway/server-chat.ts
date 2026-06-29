@@ -7,8 +7,9 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-re
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
-import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
+import { detectErrorKind, formatErrorMessage, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -290,6 +291,7 @@ export type AgentEventHandlerOptions = {
     persistence: Promise<void>;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
+  log?: SubsystemLogger;
 };
 
 function roundedChatSendTimingMs(value: number): number {
@@ -314,6 +316,7 @@ export function createAgentEventHandler({
   markTrackedRunTerminalPersisted,
   trackTrackedRunTerminalPersistence,
   resolveActiveLifecycleGenerationForRun = () => undefined,
+  log,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = {
     skipChatErrorFinal?: boolean;
@@ -716,7 +719,11 @@ export function createAgentEventHandler({
             markPersisted();
             broadcastSessionChange();
           })
-          .catch(() => {
+          .catch((err) => {
+            log?.error(
+              `Failed to persist terminal lifecycle event for run ${evt.runId}: ${formatErrorMessage(err)}`,
+              { error: err, runId: evt.runId },
+            );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
             broadcastSessionChange(evt);

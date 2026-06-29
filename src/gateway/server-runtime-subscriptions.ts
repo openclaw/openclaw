@@ -1,6 +1,8 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
@@ -28,6 +30,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  log?: SubsystemLogger;
 }) {
   let agentEventHandlerPromise: Promise<
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
@@ -49,6 +52,7 @@ export function startGatewayEventSubscriptions(params: {
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
+        log: params.log,
         clearTrackedActiveRun: ({ runId, clientRunId }) => {
           const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
           for (const candidateRunId of candidateRunIds) {
@@ -99,7 +103,13 @@ export function startGatewayEventSubscriptions(params: {
               entry.projectSessionTerminalPersistence = persistence;
               if (entry.registrationCleanupRequested === true) {
                 void persistence
-                  .catch(() => undefined)
+                  .catch((err) => {
+                    params.log?.error(
+                      `Failed to persist tracked terminal state for run ${candidateRunId}: ${formatErrorMessage(err)}`,
+                      { error: err, runId: candidateRunId },
+                    );
+                    return undefined;
+                  })
                   .then(() => {
                     if (params.chatAbortControllers.get(candidateRunId) === entry) {
                       params.chatAbortControllers.delete(candidateRunId);

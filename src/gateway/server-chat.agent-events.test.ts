@@ -105,6 +105,7 @@ describe("agent event handler", () => {
     const toolEventRecipients = createToolEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    const log = { error: vi.fn() } as unknown as import("../logging/subsystem.js").SubsystemLogger;
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -124,6 +125,7 @@ describe("agent event handler", () => {
       markTrackedRunTerminalPersisted: params?.markTrackedRunTerminalPersisted,
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
       resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
+      log,
     });
 
     return {
@@ -139,6 +141,7 @@ describe("agent event handler", () => {
       sessionEventSubscribers,
       sessionMessageSubscribers,
       handler,
+      log,
     };
   }
 
@@ -2502,7 +2505,7 @@ describe("agent event handler", () => {
     });
     persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("disk full"));
     const markTrackedRunTerminalPersisted = vi.fn();
-    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+    const { broadcastToConnIds, handler, log, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
       lifecycleErrorRetryGraceMs: 0,
       markTrackedRunTerminalPersisted,
@@ -2533,6 +2536,13 @@ describe("agent event handler", () => {
       abortedLastRun: false,
     });
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Failed to persist terminal lifecycle event for run run-failed-write",
+      ),
+      expect.objectContaining({ runId: "run-failed-write" }),
+    );
   });
 
   it("does not clear a same-id retry when an old restart terminal arrives", () => {
