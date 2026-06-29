@@ -376,7 +376,9 @@ describe("performMatrixRequest", () => {
       res.writeHead(200, { "content-length": String(overCapBytes) });
       res.write(Buffer.alloc(1)); // one sentinel byte; transport cancels before reading more
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const { port } = server.address() as { port: number };
 
     try {
@@ -394,7 +396,9 @@ describe("performMatrixRequest", () => {
         }),
       ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -405,7 +409,9 @@ describe("performMatrixRequest", () => {
       res.writeHead(200, { "content-length": String(payload.length) });
       res.end(payload);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const { port } = server.address() as { port: number };
 
     try {
@@ -422,7 +428,9 @@ describe("performMatrixRequest", () => {
       });
       expect(result.buffer).toEqual(payload);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
