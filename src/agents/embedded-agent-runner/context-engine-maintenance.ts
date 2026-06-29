@@ -676,9 +676,12 @@ function scheduleDeferredTurnMaintenance(
     log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
     return undefined;
   }
+  // Resolve the lane once and reuse it for the enqueue and the timeout
+  // classification below so the two can never drift onto different lanes.
+  const maintenanceLane = resolveDeferredTurnMaintenanceLane(sessionKey);
   log.info(
     `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
-      `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
+      `taskId=${task.taskId} sessionKey=${sessionKey} lane=${maintenanceLane}`,
   );
 
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
@@ -702,7 +705,7 @@ function scheduleDeferredTurnMaintenance(
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(
-      resolveDeferredTurnMaintenanceLane(sessionKey),
+      maintenanceLane,
       async () =>
         runDeferredTurnMaintenanceWorker({
           contextEngine: params.contextEngine,
@@ -760,7 +763,10 @@ function scheduleDeferredTurnMaintenance(
       // timeout. The worker may still be unwinding in the background, but the
       // lane is already free; release the task descriptor so the session no
       // longer treats maintenance as active and the queued turn can proceed.
-      if (taskTimeoutMs !== undefined && isCommandLaneTaskTimeoutError(err)) {
+      // Scope the match to this maintenance lane: only THIS lane's timeout trips
+      // the fence/timeout path. A foreign-lane timeout error falls through to the
+      // normal schedule-failure path below.
+      if (taskTimeoutMs !== undefined && isCommandLaneTaskTimeoutError(err, maintenanceLane)) {
         // Defensive: the onTaskTimeout hook already flipped this, but keep the
         // fence authoritative even if the hook path changes.
         maintenanceFence.tripped = true;
