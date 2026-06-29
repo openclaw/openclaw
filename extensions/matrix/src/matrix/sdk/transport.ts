@@ -285,7 +285,10 @@ export async function performMatrixRequest(params: {
 
   const baseUrl = isAbsoluteEndpoint
     ? new URL(params.endpoint)
-    : new URL(normalizeEndpoint(params.endpoint), params.homeserver);
+    : new URL(
+        normalizeEndpoint(params.endpoint),
+        params.homeserver.endsWith("/") ? params.homeserver : `${params.homeserver}/`,
+      );
   applyQuery(baseUrl, params.qs);
 
   const headers = new Headers();
