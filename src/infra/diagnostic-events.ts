@@ -619,7 +619,7 @@ export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   usage?: DiagnosticModelCallUsage;
 };
 
-export type DiagnosticModelCallPromptStats = Readonly<{
+type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
   inputMessagesChars?: number;
   systemPromptChars?: number;
@@ -628,7 +628,7 @@ export type DiagnosticModelCallPromptStats = Readonly<{
   totalChars?: number;
 }>;
 
-export type DiagnosticModelCallUsage = Readonly<{
+type DiagnosticModelCallUsage = Readonly<{
   input?: number;
   output?: number;
   cacheRead?: number;
