@@ -74,7 +74,6 @@ final class DeepLinkHandler {
                 self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
                 return
             }
-            break
         }
     }
 
