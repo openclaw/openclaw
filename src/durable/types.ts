@@ -358,6 +358,7 @@ export type ClaimDurableWorkflowStepInput = {
 
 export type DurableWorkflowStoreStats = {
   path: string;
+  schemaVersion: number;
   runs: number;
   events: number;
   steps: number;

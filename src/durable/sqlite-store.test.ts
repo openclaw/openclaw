@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { openDurableWorkflowSqliteStore } from "./sqlite-store.js";
+import {
+  DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION,
+  openDurableWorkflowSqliteStore,
+} from "./sqlite-store.js";
 
 const DURABLE_TABLES = [
   "durable_workflow_events",
@@ -16,6 +19,52 @@ const DURABLE_TABLES = [
 ] as const;
 
 describe("durable workflow sqlite store", () => {
+  it("records the supported durable schema version", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableWorkflowSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      expect(store.getStats()).toMatchObject({
+        schemaVersion: DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION,
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects durable stores from a newer schema version", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE durable_schema_migrations (
+          schema_name TEXT NOT NULL PRIMARY KEY,
+          version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL,
+          metadata_json TEXT
+        );
+      `);
+      db.prepare(
+        `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+         VALUES (?, ?, ?, ?)`,
+      ).run("durable_workflows", DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION + 1, 100, null);
+    } finally {
+      db.close();
+    }
+
+    try {
+      expect(() => openDurableWorkflowSqliteStore({ path: dbPath })).toThrow(
+        /newer than supported version/,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates runs, dedupes idempotency keys, and appends ordered events", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableWorkflowSqliteStore({

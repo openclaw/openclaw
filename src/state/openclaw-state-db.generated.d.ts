@@ -455,6 +455,13 @@ export interface DiagnosticStabilityBundles {
   reason: string;
 }
 
+export interface DurableSchemaMigrations {
+  applied_at: number;
+  metadata_json: string | null;
+  schema_name: string;
+  version: number;
+}
+
 export interface DurableWorkflowEvents {
   agent_invocation_id: string | null;
   causation_event_id: string | null;
@@ -1101,6 +1108,7 @@ export interface DB {
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
+  durable_schema_migrations: DurableSchemaMigrations;
   durable_workflow_events: DurableWorkflowEvents;
   durable_workflow_links: DurableWorkflowLinks;
   durable_workflow_refs: DurableWorkflowRefs;
