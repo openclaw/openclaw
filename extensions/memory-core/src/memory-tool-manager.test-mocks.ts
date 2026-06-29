@@ -22,6 +22,7 @@ type MemoryReadResult = {
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
+let resolvedBackend: MemoryBackend | undefined;
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
@@ -74,7 +75,7 @@ vi.mock("./tools.runtime.js", () => ({
   }: {
     cfg?: { memory?: { backend?: string; qmd?: unknown } };
   }) => ({
-    backend,
+    backend: resolvedBackend ?? backend,
     qmd: cfg?.memory?.qmd,
   }),
   getMemorySearchManager: getMemorySearchManagerMock,
@@ -83,6 +84,10 @@ vi.mock("./tools.runtime.js", () => ({
 
 export function setMemoryBackend(next: MemoryBackend): void {
   backend = next;
+}
+
+export function setResolvedMemoryBackend(next: MemoryBackend | undefined): void {
+  resolvedBackend = next;
 }
 
 export function setMemoryWorkspaceDir(next: string): void {
@@ -118,6 +123,7 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl?: (params: MemoryReadParams) => Promise<MemoryReadResult>;
 }): void {
   backend = overrides?.backend ?? "builtin";
+  resolvedBackend = undefined;
   workspaceDir = "/workspace";
   customStatus = undefined;
   getManagerImpl = undefined;

@@ -1,4 +1,8 @@
 // Memory Core tests cover tools plugin behavior.
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -9,6 +13,7 @@ import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemoryCustomStatus,
+  setResolvedMemoryBackend,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
@@ -60,6 +65,7 @@ describe("memory tool schemas", () => {
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
+    clearMemoryPluginState();
     resetMemoryToolMockState({ searchImpl: async () => [] });
     memoryToolsTesting.resetMemorySearchToolCooldowns();
   });
@@ -252,6 +258,88 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 45s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps qmd-configured wiki-only searches on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => await new Promise(() => {}),
+        get: async () => null,
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 45_000 } },
+          },
+        }),
+      });
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-wiki-timeout", { query: "hello", corpus: "wiki" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(true);
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(getMemorySearchManagerMockCalls()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps qmd-to-builtin fallback searches on the default deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setResolvedMemoryBackend("qmd");
+      setMemoryBackend("builtin");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 45_000 } },
+          },
+        }),
+      });
+
+      let settled = false;
+      const resultPromise = tool
+        .execute("qmd-fallback-timeout", { query: "hello" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(true);
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
