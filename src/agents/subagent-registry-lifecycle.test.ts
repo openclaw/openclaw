@@ -941,6 +941,66 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
+  it("escalates an expected completion with a result on give-up instead of dropping it", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
+      outcome: { status: "ok" },
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    // Not suspendable (cleanup=delete) but a result exists: it must be escalated
+    // and preserved for user-visible delivery, never silently cleared.
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.delivery?.escalated).toBe(true);
+    expect(entry.delivery?.payload).toMatchObject({ frozenResultText: "final answer" });
+    expect(entry.cleanupHandled).toBe(false);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+  });
+
+  it("still clears delivery on give-up when no completion message was expected", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: false,
+      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
+      outcome: { status: "ok" },
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.delivery?.escalated).toBeUndefined();
+  });
+
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

@@ -3098,7 +3098,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
+  it("escalates delete-mode completion runs with a captured result when announce cleanup gives up after retry limit", async () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({
@@ -3135,11 +3135,14 @@ describe("subagent registry seam flow", () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeUndefined();
+    // The run produced a result a parent was waiting for, so on give-up it is
+    // escalated (preserved for user-visible delivery, bounded by the existing
+    // suspended-delivery prune/expiry) rather than silently dropped.
+    const giveUpRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-delete-give-up");
+    expect(giveUpRun?.delivery?.status).toBe("suspended");
+    expect(giveUpRun?.delivery?.escalated).toBe(true);
   });
 
   it("finalizes retry-budgeted completion delete runs during resume", async () => {

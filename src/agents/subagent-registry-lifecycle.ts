@@ -582,6 +582,7 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
     error?: string;
+    escalated?: boolean;
   }) => {
     markPendingFinalDelivery({
       entry: args.entry,
@@ -592,6 +593,9 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.status = "suspended";
     delivery.suspendedAt ??= now;
     delivery.suspendedReason = args.reason;
+    if (args.escalated === true) {
+      delivery.escalated = true;
+    }
     args.entry.cleanupHandled = false;
     args.entry.wakeOnDescendantSettle = undefined;
     const completion = ensureCompletionState(args.entry);
@@ -618,6 +622,29 @@ export function createSubagentRegistryLifecycleController(params: {
     entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
     entry.outcome?.status === "ok";
 
+  // When normal parent delivery gives up but the run already produced a result,
+  // preserve and surface it to the user (escalation) instead of dropping it.
+  // Returns true when the completion was escalated.
+  const escalateExpectedCompletionOnGiveUp = (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: "retry-limit" | "expiry";
+  }): boolean => {
+    const result =
+      args.entry.completion?.resultText ?? args.entry.completion?.fallbackResultText;
+    if (args.entry.expectsCompletionMessage !== true || result == null) {
+      return false;
+    }
+    suspendPendingFinalDelivery({
+      runId: args.runId,
+      entry: args.entry,
+      reason: args.reason,
+      error: getDeliveryLastError(args.entry),
+      escalated: true,
+    });
+    return true;
+  };
+
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
@@ -630,6 +657,9 @@ export function createSubagentRegistryLifecycleController(params: {
         reason: giveUpParams.reason,
         error: getDeliveryLastError(giveUpParams.entry),
       });
+      return;
+    }
+    if (escalateExpectedCompletionOnGiveUp(giveUpParams)) {
       return;
     }
     const deliveryError = getDeliveryLastError(giveUpParams.entry) ?? giveUpParams.reason;
@@ -907,6 +937,13 @@ export function createSubagentRegistryLifecycleController(params: {
           reason: deferredDecision.reason,
           error: getDeliveryLastError(entry),
         });
+        return;
+      }
+      // Never silently drop an expected completion that already produced a
+      // result. Surface it to the user (escalation) instead of clearing.
+      if (
+        escalateExpectedCompletionOnGiveUp({ runId, entry, reason: deferredDecision.reason })
+      ) {
         return;
       }
       const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;

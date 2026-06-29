@@ -66,6 +66,12 @@ export type SubagentCompletionDeliveryState = {
   steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "retry-limit" | "expiry";
+  /**
+   * Set when normal parent delivery gave up but the run already produced a
+   * result, so the completion is preserved and surfaced to the user as an
+   * escalation instead of being silently dropped.
+   */
+  escalated?: boolean;
   discardedAt?: number;
   discardReason?: "expired" | "pressure-pruned";
   discardedPayloadSummary?: {
