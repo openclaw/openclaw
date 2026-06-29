@@ -228,9 +228,11 @@ class QQBotMarkdownChunkingState {
     this.tableLines.push(line);
   }
 
-  private pushOversizedTableRow(line: string, limit: number, chunks: string[]): void {
+  private pushOversizedTableRow(line: string, limit: number, _chunks: string[]): void {
     const text = renderTableRowAsFields(this.activeTable!.cells, splitTableCells(line));
-    pushBaseChunks(chunks, text, limit, this.baseChunker);
+    for (const piece of this.baseChunker(text, limit)) {
+      if (piece) this.enqueuePending(piece, "text", limit);
+    }
   }
 
   private ensureTableHeader(): void {
@@ -343,7 +345,9 @@ class QQBotMarkdownChunkingState {
     const text = this.activeTable
       ? renderTableRowAsFields(this.activeTable.cells, splitPartialTableCells(fragment))
       : renderMalformedPipeLineAsText(fragment);
-    pushBaseChunks(chunks, text, limit, this.baseChunker);
+    for (const piece of this.baseChunker(text, limit)) {
+      if (piece) this.enqueuePending(piece, "text", limit);
+    }
   }
 
   private flushTable(chunks: string[]): void {
