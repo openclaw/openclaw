@@ -2,9 +2,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 type SilmarilFirewallPackageManifest = {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  name?: string;
+  id?: string;
 };
 
 type SilmarilFirewallPluginManifest = {
@@ -14,16 +12,15 @@ type SilmarilFirewallPluginManifest = {
 };
 
 describe("silmaril-firewall manifest", () => {
-  it("keeps the package manifest runtime-neutral", () => {
-    expect(fs.existsSync(new URL("./package.json", import.meta.url))).toBe(true);
+  it("does not require package-boundary or dependency graph manifests", () => {
+    expect(fs.existsSync(new URL("./package.json", import.meta.url))).toBe(false);
+    expect(fs.existsSync(new URL("./tsconfig.json", import.meta.url))).toBe(false);
 
-    const packageManifest = JSON.parse(
-      fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as SilmarilFirewallPackageManifest;
 
-    expect(packageManifest.name).toBe("@openclaw/silmaril-firewall");
-    expect(packageManifest.dependencies).toBeUndefined();
-    expect(packageManifest.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
+    expect(manifest.id).toBe("silmaril-firewall");
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {
