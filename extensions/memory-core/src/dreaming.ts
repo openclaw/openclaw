@@ -35,7 +35,7 @@ import {
   includesSystemEventToken,
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
-import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
+import { resolveMemoryCoreTimestamp } from "./time.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
