@@ -163,7 +163,6 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
 }
 
 function resolvePersistedGatewayUrl(params: {
-  source: LoadedSettingsSource;
   parsedGatewayUrl: string;
   pageDerivedUrl: string;
   defaultUrl: string;
@@ -171,21 +170,48 @@ function resolvePersistedGatewayUrl(params: {
   if (params.parsedGatewayUrl === params.pageDerivedUrl) {
     return params.defaultUrl;
   }
+  return params.parsedGatewayUrl;
+}
+
+function isRootRelativeGatewayUrl(gatewayUrl: string): boolean {
+  const trimmed = gatewayUrl.trim();
+  return trimmed.startsWith("/") && !trimmed.startsWith("//");
+}
+
+function isWebSocketEndpointPath(pathname: string): boolean {
+  const segments = pathname.split("/");
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment) {
+      return segment.toLowerCase() === "ws";
+    }
+  }
+  return false;
+}
+
+function shouldIgnoreLegacySettingsForPage(params: {
+  source: LoadedSettingsSource;
+  parsedGatewayUrl: string;
+  pageDerivedUrl: string;
+}): boolean {
   if (params.source !== "legacy") {
-    return params.parsedGatewayUrl;
+    return false;
   }
   const parsed = parseGatewayScopeParts(params.parsedGatewayUrl);
   const page = parseGatewayScopeParts(params.pageDerivedUrl);
-  if (
-    parsed &&
-    page &&
-    page.pathname &&
-    parsed.origin === page.origin &&
-    parsed.pathname !== page.pathname
-  ) {
-    return params.defaultUrl;
+  if (!parsed || !page || !page.pathname || parsed.origin !== page.origin) {
+    return false;
   }
-  return params.parsedGatewayUrl;
+  if (parsed.pathname === page.pathname) {
+    return false;
+  }
+  if (
+    isRootRelativeGatewayUrl(params.parsedGatewayUrl) ||
+    isWebSocketEndpointPath(parsed.pathname)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -294,24 +320,37 @@ export function loadSettings(): UiSettings {
   try {
     // Prefer the current scoped record; legacy global settings are a fallback for older installs.
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
+    const pageScopedKey = settingsKeyForGateway(pageDerivedUrl);
     const scopedRaw = storage?.getItem(scopedKey);
+    const pageScopedRaw = pageScopedKey === scopedKey ? null : storage?.getItem(pageScopedKey);
     const defaultRaw = storage?.getItem(SETTINGS_KEY_PREFIX + "default");
     const legacyRaw = storage?.getItem(LEGACY_SETTINGS_KEY);
     const loaded =
       scopedRaw != null
         ? { raw: scopedRaw, source: "scoped" as const }
-        : defaultRaw != null
-          ? { raw: defaultRaw, source: "default" as const }
-          : legacyRaw != null
-            ? { raw: legacyRaw, source: "legacy" as const }
-            : null;
+        : pageScopedRaw != null
+          ? { raw: pageScopedRaw, source: "scoped" as const }
+          : defaultRaw != null
+            ? { raw: defaultRaw, source: "default" as const }
+            : legacyRaw != null
+              ? { raw: legacyRaw, source: "legacy" as const }
+              : null;
     if (!loaded?.raw) {
       return defaults;
     }
     const parsed = JSON.parse(loaded.raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
+    if (
+      shouldIgnoreLegacySettingsForPage({
+        source: loaded.source,
+        parsedGatewayUrl,
+        pageDerivedUrl,
+      })
+    ) {
+      persistSettings(defaults);
+      return defaults;
+    }
     const gatewayUrl = resolvePersistedGatewayUrl({
-      source: loaded.source,
       parsedGatewayUrl,
       pageDerivedUrl,
       defaultUrl,
@@ -369,7 +408,7 @@ export function loadSettings(): UiSettings {
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
-    if ("token" in parsed) {
+    if (loaded.source === "legacy" || "token" in parsed) {
       persistSettings(settings);
     }
     return settings;
@@ -552,7 +591,12 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    const { pageUrl: pageDerivedUrl } = deriveDefaultGatewayUrl();
+    const pageScopedKey = settingsKeyForGateway(pageDerivedUrl);
+    if (pageScopedKey !== scopedKey) {
+      storage?.setItem(pageScopedKey, serialized);
+    }
+    storage?.removeItem(LEGACY_SETTINGS_KEY);
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
