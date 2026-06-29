@@ -22,6 +22,13 @@ type OAuthRefreshFailure = {
   reason: OAuthRefreshFailureReason | null;
 };
 
+type StructuredClaudeCliAuthFailure = {
+  provider?: unknown;
+  rawError?: unknown;
+  reason?: unknown;
+  status?: unknown;
+};
+
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
@@ -50,6 +57,36 @@ const CLAUDE_CLI_AUTH_FAILURE_RE =
 
 function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
+}
+
+function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
+  if (
+    candidate.name !== "FailoverError" ||
+    candidate.provider !== "claude-cli" ||
+    candidate.reason !== "auth" ||
+    candidate.status !== 401
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function isStructuredClaudeCliExpiredOAuthFailure(err: unknown): boolean {
+  const failure = readStructuredClaudeCliAuthFailure(err);
+  if (!failure) {
+    return false;
+  }
+  const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
+  const message = err instanceof Error ? err.message : "";
+  const combined = `${message}\n${rawError}`;
+  const lower = combined.toLowerCase();
+  return (
+    lower.includes("failed to authenticate") || lower.includes("invalid authentication credentials")
+  );
 }
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
@@ -144,6 +181,12 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   const seen = new Set<object>();
   let candidate = err;
   while (candidate && typeof candidate === "object") {
+    if (isStructuredClaudeCliExpiredOAuthFailure(candidate)) {
+      return {
+        provider: "claude-cli",
+        reason: "revoked",
+      };
+    }
     if (candidate instanceof OAuthRefreshFailureError) {
       const profileId = sanitizeOAuthRefreshFailureProfileId(candidate.profileId);
       return {
