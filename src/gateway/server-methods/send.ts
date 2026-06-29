@@ -26,7 +26,10 @@ import {
   selectApplicableRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
+import {
+  resolveOutboundChannelPlugin,
+  resolveOutboundChannelPluginForDelivery,
+} from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -967,7 +970,15 @@ export const sendHandlers: GatewayRequestHandlers = {
         return { ok: false, error: resolvedChannel.error };
       }
       const { cfg, channel } = resolvedChannel;
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      // Poll delivery is operation-gated: route through the delivery resolver so a
+      // setup-only/text-only first-match plugin cannot shadow a poll-capable
+      // runtime fallback and force a spurious "unsupported poll channel".
+      const plugin = resolveOutboundChannelPluginForDelivery({
+        channel,
+        cfg,
+        allowBootstrap: true,
+        operation: "poll",
+      });
       const outbound = plugin?.outbound;
       if (
         typeof request.durationSeconds === "number" &&

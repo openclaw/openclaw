@@ -1345,6 +1345,57 @@ describe("gateway send mirroring", () => {
     expect(response?.[2]?.message).toContain("Channel is required");
   });
 
+  it("dispatches gateway polls through a poll-capable fallback when the first plugin is text-only", async () => {
+    // First match is a text-only shell with no sendPoll; the operation-aware
+    // delivery resolver must skip it for a poll and use the poll-capable runtime
+    // plugin instead of returning "unsupported poll channel".
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "slack",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "slack", messageId: "shell-text" }),
+      },
+    });
+    const fallbackSendPoll = vi.fn(async () => ({ messageId: "poll-fallback-1" }));
+    const pollCapablePlugin = {
+      id: "slack",
+      meta: {
+        id: "slack",
+        label: "Slack",
+        selectionLabel: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "Slack poll fallback test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      outbound: { deliveryMode: "direct", sendPoll: fallbackSendPoll },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: pollCapablePlugin }]),
+      "send-test-poll-capable-fallback",
+    );
+
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-capable-fallback",
+    });
+
+    expect(fallbackSendPoll).toHaveBeenCalledTimes(1);
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(response?.[1]?.messageId).toBe("poll-fallback-1");
+    expect(response?.[2]).toBeUndefined();
+    expect(response?.[3]?.channel).toBe("slack");
+  });
+
   it("does not mirror when delivery returns no results", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
 
