@@ -40,7 +40,12 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import * as sessionStore from "./store.js";
-import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStoreEntry,
+} from "./store.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -457,6 +462,70 @@ describe("session accessor file-backed seam", () => {
     });
     expect(committed.previousSessionTranscript.transcriptArchived).toBe(true);
     expect(fs.existsSync(previousTranscript)).toBe(false);
+  });
+
+  it("does not treat skillsSnapshot promptRef hydration as a stale reply initialization", async () => {
+    const previousCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "45000";
+    clearSessionStoreCacheForTest();
+    const sessionKey = "agent:main:discord:channel:123";
+    const prompt = `<available_skills>\n${"reply initialization skill prompt\n".repeat(
+      200,
+    )}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          sessionId: "previous-discord-session",
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "reply-skill" }],
+            version: 1,
+          },
+          updatedAt: 10,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persistedStore[sessionKey]?.skillsSnapshot?.prompt).toBeUndefined();
+    expect(persistedStore[sessionKey]?.skillsSnapshot?.promptRef?.hash).toMatch(/^[a-f0-9]{64}$/);
+
+    clearSessionStoreCacheForTest();
+    await saveSessionStore(storePath, persistedStore, { skipMaintenance: true });
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    try {
+      expect(snapshot.currentEntry?.skillsSnapshot?.prompt).toBe(prompt);
+      const committed = await commitReplySessionInitialization({
+        activeSessionKey: sessionKey,
+        agentId: "main",
+        expectedRevision: snapshot.revision,
+        previousEntry: snapshot.currentEntry,
+        sessionEntry: {
+          sessionId: "next-discord-session",
+          updatedAt: 20,
+        },
+        sessionKey,
+        storePath,
+      });
+
+      if (!committed.ok) {
+        throw new Error(`expected reply session initialization to commit, got ${committed.reason}`);
+      }
+      expect(committed.ok).toBe(true);
+      expect(committed.sessionEntry.sessionId).toBe("next-discord-session");
+    } finally {
+      if (previousCacheTtl === undefined) {
+        delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
+      } else {
+        process.env.OPENCLAW_SESSION_CACHE_TTL_MS = previousCacheTtl;
+      }
+      clearSessionStoreCacheForTest();
+    }
   });
 
   it("does not reuse the previous transcript file when initialization rotates session ids", async () => {
