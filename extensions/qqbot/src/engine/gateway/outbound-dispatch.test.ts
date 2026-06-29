@@ -678,12 +678,16 @@ describe("dispatchOutbound", () => {
       account,
     });
 
-    expect(sendTextMock).toHaveBeenCalledTimes(2);
+    // Under the lazy-flush chunker contract, consecutive block deliveries under
+    // the byte limit are merged into one chunk (joined with a blank line). The
+    // invariant is that each table remains self-contained: the continuation
+    // table is re-prefixed with the active header so it renders on its own.
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
     expect(sendTextMock.mock.calls[0]?.[1]).toBe(
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
-    );
-    expect(sendTextMock.mock.calls[1]?.[1]).toBe(
-      ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+      [
+        ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+        ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+      ].join("\n\n"),
     );
   });
 
@@ -725,9 +729,15 @@ describe("dispatchOutbound", () => {
       account,
     });
 
+    // Under the lazy-flush chunker contract, the complete table and the
+    // following unfinished row fragment are merged into one chunk. The
+    // invariant is that the unfinished fragment is still rendered as plain
+    // "Field: value" fields rather than a malformed pipe row.
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
-      ["Id: 10", "Function: analyzeerror_patterns", "Status: 无需重试"].join("\n"),
+      [
+        ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+        ["Id: 10", "Function: analyzeerror_patterns", "Status: 无需重试"].join("\n"),
+      ].join("\n\n"),
     ]);
   });
 
@@ -755,13 +765,21 @@ describe("dispatchOutbound", () => {
       account,
     });
 
+    // Under the lazy-flush chunker contract, the two block deliveries are
+    // merged into one chunk. The invariant is that the short row fragment
+    // ("| 17 | 100ms |") is held until the following block completes its
+    // columns, then emitted as a full row re-prefixed with the active header.
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join("\n"),
       [
-        "| Id | Time | Owner | Note |",
-        "|---:|---|---|---|",
-        "| 17 | 100ms | Lin | daily cap |",
-      ].join("\n"),
+        ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join(
+          "\n",
+        ),
+        [
+          "| Id | Time | Owner | Note |",
+          "|---:|---|---|---|",
+          "| 17 | 100ms | Lin | daily cap |",
+        ].join("\n"),
+      ].join("\n\n"),
     ]);
   });
 });

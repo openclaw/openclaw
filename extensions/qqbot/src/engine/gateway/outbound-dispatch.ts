@@ -293,15 +293,15 @@ export async function dispatchOutbound(
     },
     chunkText: (text, limit) => markdownChunker.chunkText(text, limit),
   };
+  const passthroughDeps: DeliverDeps = {
+    ...deliverDeps,
+    chunkText: (text) => [text],
+  };
   const flushPendingMarkdownText = async (): Promise<void> => {
     const pendingChunks = markdownChunker.flushPendingText(TEXT_CHUNK_LIMIT);
     if (pendingChunks.length === 0) {
       return;
     }
-    const passthroughDeps: DeliverDeps = {
-      ...deliverDeps,
-      chunkText: (text) => [text],
-    };
     for (const chunk of pendingChunks) {
       await sendTextOnlyReply(
         chunk,
@@ -358,7 +358,7 @@ export async function dispatchOutbound(
           { account, qualifiedTarget, log },
           sendWithRetry,
           () => undefined,
-          deliverDeps,
+          passthroughDeps,
         );
       }
     }
@@ -473,7 +473,7 @@ export async function dispatchOutbound(
                       { account, qualifiedTarget, log },
                       sendWithRetry,
                       () => undefined,
-                      deliverDeps,
+                      passthroughDeps,
                     );
                     recordOutbound();
                     return;
