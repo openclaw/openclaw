@@ -29,7 +29,7 @@ Doctor has four postures:
 | Inspect                  | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
 | Repair                   | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
 | Lint                     | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
-| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, or restores legacy session JSON/JSONL state.      |
+| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, recovers, or restores legacy session state.       |
 
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a
 human operator intentionally wants doctor to edit config or state.
@@ -53,6 +53,7 @@ openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-agent main --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
 openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite recover --github-issue
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
@@ -78,10 +79,11 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
-- `--session-sqlite <mode>`: run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, or `restore`
+- `--session-sqlite <mode>`: run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `recover`, or `restore`
 - `--session-sqlite-store <path>`: with `--session-sqlite`, select one legacy `sessions.json` store path
 - `--session-sqlite-agent <id>`: with `--session-sqlite`, select one configured agent
 - `--session-sqlite-all-agents`: with `--session-sqlite`, select configured and discovered agent stores
+- `--github-issue`: with `--session-sqlite recover`, prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation
 - `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`); with `--session-sqlite`, emit the migration report as JSON
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
 - `--all`: with `--lint`, run all registered checks, including opt-in checks excluded from the default automation set
@@ -245,6 +247,7 @@ Modes:
 | `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
 | `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
+| `recover`  | Restore the latest failed migration run, validate its targets, and prepare a sanitized GitHub issue report.            |
 | `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
 
 Selectors:
@@ -261,6 +264,7 @@ openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
 openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite recover --github-issue
 ```
 
 Back up the OpenClaw state directory before running `import` on an install with
@@ -272,16 +276,24 @@ expected target count; a nonexistent explicit store path selects no targets.
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
 into the archive. If startup reports a failed session SQLite migration after
-artifacts moved, review the generated `.failure.md` or `.failure.json` report
-and run:
+artifacts moved, run recovery:
 
 ```bash
-openclaw doctor --session-sqlite restore --session-sqlite-all-agents
+openclaw doctor --session-sqlite recover --github-issue
 ```
 
-Restore uses manifest `sourcePath -> archivePath` records. It moves archived
-artifacts back only when the original path is missing, reports conflicts when
-both paths exist, and leaves the SQLite database in place.
+Recovery selects the latest failed migration manifest, restores only the
+manifest's archived artifacts, validates the affected targets, refreshes the
+sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
+body that avoids transcript contents, raw environment, secrets, and unbounded
+config. With `--github-issue --yes`, doctor uses the GitHub CLI to create the
+issue in `openclaw/openclaw`; without confirmation it writes the local support
+report and prints a prefilled issue URL.
+
+`restore` remains the lower-level undo operation. It uses manifest
+`sourcePath -> archivePath` records, moves archived artifacts back only when the
+original path is missing, reports conflicts when both paths exist, and leaves
+the SQLite database in place.
 
 Notes:
 

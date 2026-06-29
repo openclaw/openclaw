@@ -124,6 +124,19 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
+  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("recover");
+    expect(options.sessionSqliteGithubIssue).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
   it("rejects session sqlite selectors without session sqlite mode", async () => {
     await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
 

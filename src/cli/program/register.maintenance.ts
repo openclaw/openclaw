@@ -36,13 +36,18 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--session-sqlite <mode>",
-      "Run session SQLite migration mode (dry-run|import|validate|inspect|restore)",
+      "Run session SQLite migration mode (dry-run|import|validate|inspect|restore|recover)",
     )
     .option("--session-sqlite-store <path>", "With --session-sqlite: inspect one session store")
     .option("--session-sqlite-agent <id>", "With --session-sqlite: inspect one agent")
     .option(
       "--session-sqlite-all-agents",
       "With --session-sqlite: inspect configured and discovered agent stores",
+      false,
+    )
+    .option(
+      "--github-issue",
+      "With --session-sqlite recover: prepare and optionally create an openclaw/openclaw issue",
       false,
     )
     .option(
@@ -126,6 +131,7 @@ export function registerMaintenanceCommands(program: Command) {
             ? { sessionSqliteAgent: opts.sessionSqliteAgent }
             : {}),
           sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
+          sessionSqliteGithubIssue: Boolean(opts.githubIssue),
           json: Boolean(opts.json),
         });
         defaultRuntime.exit(0);
@@ -231,11 +237,13 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
   readonly sessionSqlite?: unknown;
   readonly sessionSqliteAgent?: unknown;
   readonly sessionSqliteAllAgents?: unknown;
+  readonly githubIssue?: unknown;
   readonly sessionSqliteStore?: unknown;
 }): boolean {
   return (
     typeof opts.sessionSqlite !== "string" &&
     (typeof opts.sessionSqliteAgent === "string" ||
+      opts.githubIssue === true ||
       opts.sessionSqliteAllAgents === true ||
       typeof opts.sessionSqliteStore === "string")
   );
@@ -243,7 +251,7 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
 
 function parseDoctorSessionSqliteMode(
   value: unknown,
-): "dry-run" | "import" | "validate" | "inspect" | "restore" | undefined {
+): "dry-run" | "import" | "validate" | "inspect" | "restore" | "recover" | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -252,12 +260,13 @@ function parseDoctorSessionSqliteMode(
     value === "import" ||
     value === "validate" ||
     value === "inspect" ||
-    value === "restore"
+    value === "restore" ||
+    value === "recover"
   ) {
     return value;
   }
   defaultRuntime.error(
-    "Invalid --session-sqlite mode. Use dry-run, import, validate, inspect, or restore.",
+    "Invalid --session-sqlite mode. Use dry-run, import, validate, inspect, restore, or recover.",
   );
   defaultRuntime.exit(2);
   throw new Error("unreachable");
