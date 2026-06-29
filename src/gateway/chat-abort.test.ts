@@ -265,6 +265,45 @@ describe("registerChatAbortController", () => {
     expect(chatAbortControllers.has("run-persisting")).toBe(false);
   });
 
+  it("logs an error and still removes the registration when terminal persistence fails", async () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const errorSpy = vi.fn();
+    const log = { error: errorSpy } as unknown as import("../logging/subsystem.js").SubsystemLogger;
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-persist-failure",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      log,
+    });
+    const persistenceError = new Error("persist failed");
+    let rejectPersistence: (err: Error) => void = () => undefined;
+    const persistence = new Promise<void>((_, reject) => {
+      rejectPersistence = reject;
+    });
+    if (!registration.entry) {
+      throw new Error("expected registered entry");
+    }
+    registration.entry.projectSessionActive = false;
+    registration.entry.projectSessionTerminalPersistence = persistence;
+
+    registration.cleanup();
+
+    expect(chatAbortControllers.has("run-persist-failure")).toBe(true);
+    rejectPersistence(persistenceError);
+    await expect(persistence).rejects.toThrow("persist failed");
+    await Promise.resolve();
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Failed to persist chat abort terminal state for run run-persist-failure",
+      ),
+      expect.objectContaining({ error: persistenceError }),
+    );
+    expect(chatAbortControllers.has("run-persist-failure")).toBe(false);
+  });
+
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({

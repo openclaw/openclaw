@@ -3655,6 +3655,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       authProviderId: resolvedSessionAuthProvider,
       kind: "chat-send",
       lifecycleGeneration,
+      log: context.logGateway,
     });
     if (!activeRunAbort.registered) {
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {

@@ -2547,6 +2547,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
         lifecycleGeneration,
+        log: context.logGateway,
       });
       const existingRunAbort = context.chatAbortControllers.get(runId);
       if (!activeRunAbort.registered && existingRunAbort) {
