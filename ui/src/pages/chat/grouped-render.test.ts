@@ -1135,6 +1135,47 @@ describe("grouped chat rendering", () => {
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", true);
   });
 
+  it("keeps succeeded grouped tool activity collapsed without error styling", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      turnSucceeded: true,
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "web_search",
+            isError: true,
+            content: JSON.stringify({ error: "No matches" }),
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "read_file",
+            content: "Fallback context",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group]);
+
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
+    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
   it("hides grouped tool activity when tool calls are disabled", () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
@@ -1458,96 +1499,33 @@ describe("grouped chat rendering", () => {
     ).toEqual({ status: "error" });
   });
 
-  describe("non-terminal internal tool failure de-promotion (#89683)", () => {
-    function failedToolMessage(callId = "call-failed") {
-      return {
-        id: `tool-${callId}`,
-        role: "toolResult",
-        toolCallId: callId,
-        toolName: "shell",
-        content: JSON.stringify({ status: "failed", exitCode: 1, stdout: "" }, null, 2),
-        isError: true,
-        timestamp: Date.now(),
-      };
-    }
-
-    it("renders a failed tool collapsed (no error banner) when the turn succeeded", () => {
-      const container = document.createElement("div");
-      const group: MessageGroup = {
-        ...createMessageGroup(failedToolMessage(), "tool"),
+  it("keeps succeeded standalone tool-result summaries collapsed without error styling", () => {
+    const container = document.createElement("div");
+    const groups = [
+      {
+        ...createMessageGroup(
+          {
+            id: "tool-status-error",
+            role: "toolResult",
+            toolCallId: "call-status-error",
+            toolName: "sessions_spawn",
+            content: JSON.stringify({ status: "error" }, null, 2),
+            timestamp: Date.now(),
+          },
+          "tool",
+        ),
         turnSucceeded: true,
-      };
-      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
+      },
+    ];
 
-      const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
-      expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-      expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).not.toBe(
-        "Tool error",
-      );
-      expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
+    renderMessageGroups(container, groups, {
+      isToolMessageExpanded: () => false,
     });
 
-    it("still surfaces a failed tool as an error when the turn did not produce a reply", () => {
-      const container = document.createElement("div");
-      // turnSucceeded undefined = terminal/in-progress failure; behavior unchanged.
-      const group = createMessageGroup(failedToolMessage(), "tool");
-      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
-
-      const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
-      expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-      expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-        "Tool error",
-      );
-      expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
-    });
-
-    it("keeps the failed tool detail on expand even when de-promoted", () => {
-      const container = document.createElement("div");
-      const group: MessageGroup = {
-        ...createMessageGroup(failedToolMessage(), "tool"),
-        turnSucceeded: true,
-      };
-      renderMessageGroups(container, [group], { isToolMessageExpanded: () => true });
-      // Info is not deleted: the expanded body still shows the failed tool output.
-      const body = container.querySelector(".chat-tool-msg-body");
-      expect(body).not.toBeNull();
-      expect(body?.textContent).toContain("failed");
-    });
-
-    it("de-promotes a multi-tool activity group when the turn succeeded", () => {
-      const container = document.createElement("div");
-      const group: MessageGroup = {
-        kind: "group",
-        key: "tool:multi",
-        role: "tool",
-        messages: [
-          { key: "t1", message: failedToolMessage("call-1") },
-          { key: "t2", message: failedToolMessage("call-2") },
-        ],
-        timestamp: Date.now(),
-        isStreaming: false,
-        turnSucceeded: true,
-      };
-      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
-
-      const summary = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
-      expect(summary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-      expect(summary.querySelector(".chat-activity-group__badge")).toBeNull();
-      expect(summary.getAttribute("aria-expanded")).toBe("false");
-    });
-
-    it("keeps failed tools hidden when showToolCalls is false regardless of outcome", () => {
-      const container = document.createElement("div");
-      const group: MessageGroup = {
-        ...createMessageGroup(failedToolMessage(), "tool"),
-        turnSucceeded: true,
-      };
-      renderMessageGroups(container, [group], {
-        showToolCalls: false,
-        isToolMessageExpanded: () => false,
-      });
-      expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
-    });
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
   it("collapses an inline tool call while keeping matching tool output visible", () => {

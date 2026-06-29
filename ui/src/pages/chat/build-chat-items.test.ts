@@ -110,6 +110,35 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.senderLabel)).toEqual([null, "Forwarded from main"]);
   });
 
+  it("marks earlier tool groups as succeeded when the same turn has an assistant reply", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "search", timestamp: 1000 },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "web_search",
+          isError: true,
+          content: JSON.stringify({ error: "No matches" }),
+          timestamp: 1001,
+        },
+        { role: "assistant", content: "I found another route.", timestamp: 1002 },
+        { role: "user", content: "again", timestamp: 1003 },
+        {
+          role: "toolResult",
+          toolCallId: "call-2",
+          toolName: "web_search",
+          isError: true,
+          content: JSON.stringify({ error: "No matches" }),
+          timestamp: 1004,
+        },
+      ],
+    });
+
+    const toolGroups = groups.filter((group) => group.role === "tool");
+    expect(toolGroups.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
   it("keeps empty forwarded assistant display groups", () => {
     const groups = messageGroups({
       messages: [

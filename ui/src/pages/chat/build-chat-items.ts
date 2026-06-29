@@ -237,6 +237,33 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function assistantGroupHasReplyText(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+}
+
+function annotateToolTurnOutcome(
+  items: Array<ChatItem | MessageGroup>,
+): Array<ChatItem | MessageGroup> {
+  let sawAssistantReply = false;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind !== "group") {
+      continue;
+    }
+    const role = item.role.toLowerCase();
+    if (role === "user") {
+      sawAssistantReply = false;
+    } else if (role === "assistant") {
+      if (assistantGroupHasReplyText(item)) {
+        sawAssistantReply = true;
+      }
+    } else if (role === "tool") {
+      item.turnSucceeded = sawAssistantReply;
+    }
+  }
+  return items;
+}
+
 function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
 }
