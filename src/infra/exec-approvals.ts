@@ -1835,6 +1835,29 @@ export function resolveExecApprovalUnavailableDecisions(params?: {
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
 }
 
+/** Returns the user-facing reason why Allow Always is not available, or null if it is. */
+export function getAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  allowAlwaysPersistenceKind?: "one-shot" | null;
+}): string | null {
+  const ask = normalizeExecAsk(params?.ask);
+  // Explicit one-shot kind → command cannot be persisted.
+  if (params?.allowAlwaysPersistenceKind === "one-shot") {
+    return "Allow Always is unavailable because this command cannot be saved for future use (e.g., shell redirection or one-shot arguments).";
+  }
+  // ask=always → policy truly requires every-time approval.
+  if (ask === "always") {
+    return "The effective approval policy requires approval every time, so Allow Always is unavailable.";
+  }
+  // ask is known and not "always" but allowAlwaysPersistence is missing —
+  // infer one-shot since there is no other reason allow-always would be excluded.
+  if (ask !== null) {
+    return "Allow Always is unavailable because this command cannot be saved for future use (e.g., shell redirection or one-shot arguments).";
+  }
+  // No information available — safe default to policy message.
+  return "The effective approval policy requires approval every time, so Allow Always is unavailable.";
+}
+
 export function resolveExecApprovalRequestAllowedDecisions(params?: {
   ask?: string | null;
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;

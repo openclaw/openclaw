@@ -32,6 +32,7 @@ import {
 } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
+  getAllowAlwaysUnavailableReason,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -293,11 +294,10 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    const reason =
-      request.request.ask === "always" || request.request.ask == null
-        ? "Allow Always is unavailable because the effective policy requires approval every time."
-        : "Allow Always is unavailable because this command cannot be saved for future use (e.g., shell redirection or one-shot arguments).";
-    lines.push(reason);
+    const reason = getAllowAlwaysUnavailableReason({ ask: request.request.ask });
+    if (reason) {
+      lines.push(reason);
+    }
   }
   return lines.join("\n");
 }
