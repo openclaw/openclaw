@@ -2075,10 +2075,12 @@ describe("memory index", () => {
     // 30s, but first attempt always allowed), reloads the primary, pings it,
     // and restores it. Manager state must reflect primary restored.
     const callsBeforeRecoverySearch = providerCalls.length;
-    await manager.search("alpha");
+    const recoveredResults = await manager.search("alpha");
 
     // Recovery restored the primary: provider id flipped back to "mock" and
     // fallbackFrom cleared.
+    expect(recoveredResults.length).toBeGreaterThan(0);
+    expect(recoveredResults[0]?.path).toContain("memory/2026-01-12.md");
     expect(fields.provider.id).toBe("mock");
     expect(fields.fallbackFrom).toBeUndefined();
     // Recovery reloaded the primary via loadProviderResult, which registered
