@@ -1,6 +1,5 @@
 // Discord tests cover api plugin behavior.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +40,7 @@ async function listenLoopbackServer(server: Server): Promise<number> {
         reject(new Error("expected loopback TCP address"));
         return;
       }
-      resolve((address as AddressInfo).port);
+      resolve(address.port);
     });
   });
 }
