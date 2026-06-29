@@ -1195,7 +1195,7 @@ describe("buildGuardedModelFetch", () => {
 
   it("passes through SSE bodies mislabeled as JSON for streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('data: {"ok": true}\n\ndata: [DONE]\n\n', {
+      response: new Response('event: response.created\n\ndata: {"ok": true}\n\ndata: [DONE]\n\n', {
         headers: { "content-type": "application/json; charset=utf-8" },
       }),
       finalUrl: "https://api.openai.com/v1/chat/completions",
@@ -1226,7 +1226,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("does not apply the JSON synthesis byte cap after recognizing mislabeled SSE", async () => {
-    const oversizedSse = `data: {"ok": true}\n\n: ${"x".repeat(16 * 1024 * 1024 + 1)}\n\ndata: [DONE]\n\n`;
+    const oversizedSse = `data: {"padding":"${"x".repeat(16 * 1024 * 1024 + 1)}"}\n\ndata: [DONE]\n\n`;
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(oversizedSse, {
         headers: { "content-type": "application/json; charset=utf-8" },

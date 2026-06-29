@@ -50,6 +50,7 @@ const log = createSubsystemLogger("provider-transport-fetch");
  *  when a hostile streaming endpoint returns a never-ending JSON response
  *  without Content-Length. */
 const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const JSON_LABELED_STREAM_KIND_SNIFF_CHARS = 256;
 
 /** Max bytes for the internal SSE sanitization buffer between event boundaries.
  *  A response that cannot find a \n\n boundary within this many characters is
@@ -197,20 +198,30 @@ function sanitizeOpenAISdkSseResponse(
               controller.enqueue(encoder.encode(text));
               return;
             }
-            buffer += text;
-            bodyKind = bodyKind ?? classifyJsonLabeledStreamingBody(buffer);
-            if (bodyKind === "sse") {
-              controller.enqueue(encoder.encode(buffer));
-              buffer = "";
-              return;
+            if (!bodyKind) {
+              const remainingSniffChars = Math.max(
+                0,
+                JSON_LABELED_STREAM_KIND_SNIFF_CHARS - buffer.length,
+              );
+              const classificationBuffer = `${buffer}${text.slice(0, remainingSniffChars)}`;
+              bodyKind = classifyJsonLabeledStreamingBody(classificationBuffer);
             }
             const nextTotalBytes = totalBytes + chunk.value.byteLength;
-            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
+            if (bodyKind !== "sse" && nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
               throw new Error(
                 `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
               );
             }
+            if (bodyKind === "sse") {
+              if (buffer) {
+                controller.enqueue(encoder.encode(buffer));
+              }
+              controller.enqueue(encoder.encode(text));
+              buffer = "";
+              return;
+            }
             totalBytes = nextTotalBytes;
+            buffer += text;
           }
         } catch (error) {
           await reader?.cancel(error).catch(() => {});
@@ -223,11 +234,13 @@ function sanitizeOpenAISdkSseResponse(
     });
     const headers = new Headers(response.headers);
     headers.set("content-type", "text/event-stream; charset=utf-8");
-    return new Response(sseBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+    return sanitizeOpenAISdkSseResponse(
+      new Response(sseBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      }),
+    );
   }
   if (!/\btext\/event-stream\b/i.test(contentType)) {
     return response;
