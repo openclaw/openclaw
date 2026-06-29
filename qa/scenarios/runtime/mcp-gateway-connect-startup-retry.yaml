@@ -1,0 +1,28 @@
+title: MCP Gateway connect startup retry
+
+scenario:
+  id: mcp-gateway-connect-startup-retry
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.connect-request
+      - gateway.protocol-version-negotiation
+      - gateway.startup-retry
+  objective: Verify the Gateway client connect frame, protocol range, and retry behavior used by MCP channel bridge clients.
+  successCriteria:
+    - GatewayClient sends a `connect` request after `connect.challenge`.
+    - The connect request advertises the current supported protocol range.
+    - Retryable startup-unavailable connect responses do not fire terminal callbacks and schedule a reconnect.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/cli/mcp.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/client.test.ts
+    - test/e2e/qa-lab/runtime/mcp-channels.fixture.ts
+    - test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts
+    - test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/gateway/client.test.ts
+    summary: Vitest coverage for Gateway connect request, protocol negotiation, and startup retry behavior used by MCP bridge clients.
