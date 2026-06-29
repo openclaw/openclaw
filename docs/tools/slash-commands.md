@@ -301,14 +301,14 @@ must be in the same identity group.
 
 ### Bundled plugin commands
 
-| Command                                                                                      | Description                                                                       |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `/dreaming [on\|off\|status\|help]`                                                          | Toggle memory dreaming. See [Dreaming](/concepts/dreaming)                        |
-| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                                      | Manage device pairing. See [Pairing](/channels/pairing)                           |
-| `/phone status\|arm ...\|disarm`                                                             | Temporarily arm high-risk phone node commands                                     |
-| `/voice status\|list\|set <voiceId>`                                                         | Manage Talk voice config. Discord native name: `/talkvoice`                       |
-| `/card ...`                                                                                  | Send LINE rich card presets. See [LINE](/channels/line)                           |
-| `/codex status\|models\|threads\|resume\|compact\|review\|diagnostics\|account\|mcp\|skills` | Control the Codex app-server harness. See [Codex harness](/plugins/codex-harness) |
+| Command                                                                                      | Description                                                                         |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `/dreaming [on\|off\|status\|help]`                                                          | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming) |
+| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                                      | Manage device pairing. See [Pairing](/channels/pairing)                             |
+| `/phone status\|arm ...\|disarm`                                                             | Temporarily arm high-risk phone node commands                                       |
+| `/voice status\|list\|set <voiceId>`                                                         | Manage Talk voice config. Discord native name: `/talkvoice`                         |
+| `/card ...`                                                                                  | Send LINE rich card presets. See [LINE](/channels/line)                             |
+| `/codex status\|models\|threads\|resume\|compact\|review\|diagnostics\|account\|mcp\|skills` | Control the Codex app-server harness. See [Codex harness](/plugins/codex-harness)   |
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 

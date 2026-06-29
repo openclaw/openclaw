@@ -209,6 +209,7 @@ export default definePluginEntry({
       name: "dreaming",
       description: "Enable or disable memory dreaming.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const { handleDreamingCommand } = await import("./src/dreaming-command.js");
         return await handleDreamingCommand(api, ctx);

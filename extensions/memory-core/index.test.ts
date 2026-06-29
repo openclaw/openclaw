@@ -101,6 +101,7 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(command?.name).toBe("dreaming");
     expect(command?.acceptsArgs).toBe(true);
+    expect(command?.exposeSenderIsOwner).toBe(true);
     expect(command?.description).toContain("Enable or disable");
   });
 
