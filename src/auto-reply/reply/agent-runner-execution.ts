@@ -792,7 +792,7 @@ function collapseRepeatedFailureDetail(message: string): string {
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const CLAUDE_CLI_LOCAL_AUTH_COMMAND = "claude auth login";
 const CLAUDE_CLI_OPENCLAW_AUTH_COMMAND =
-  "openclaw models auth login --provider anthropic --method cli --set-default";
+  "openclaw models auth login --provider anthropic --method cli";
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
