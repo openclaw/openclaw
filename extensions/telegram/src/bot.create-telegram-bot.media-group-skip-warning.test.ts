@@ -73,6 +73,7 @@ function setOpenChannelPostConfig() {
     channels: {
       telegram: {
         groupPolicy: "open",
+        botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
         groups: {
           "-100777111222": {
             enabled: true,
@@ -126,7 +127,12 @@ function createChannelPostContext(params: {
 }) {
   return {
     channelPost: {
-      chat: { id: CHANNEL_ID, type: "channel", title: "Wake Channel" },
+      chat: {
+        id: CHANNEL_ID,
+        type: "channel",
+        title: "Wake Channel",
+        username: "wake_channel",
+      },
       message_id: params.messageId,
       date: params.date,
       ...(params.caption ? { caption: params.caption } : {}),
