@@ -539,7 +539,8 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
-      - name: Checkout
+      - &linux_node_checkout_step
+        name: Checkout
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -604,50 +605,7 @@ jobs:
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
       gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit
@@ -861,50 +819,7 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -980,50 +895,7 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1061,50 +933,7 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1138,50 +967,7 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1216,50 +1002,7 @@ jobs:
       max-parallel: 24
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1376,50 +1119,7 @@ jobs:
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1529,50 +1229,7 @@ jobs:
             group: runtime-topology-architecture
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1714,50 +1371,7 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
+      - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
