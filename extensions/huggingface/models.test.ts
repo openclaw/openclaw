@@ -108,6 +108,85 @@ describe("huggingface models", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
+  describe("model discovery JSON response reading", () => {
+    const MOCK_MODEL_ID = "test-model/mock-1";
+
+    function setupLiveFetchEnv() {
+      process.env.VITEST = "false";
+      process.env.NODE_ENV = "development";
+      stubAbortSignalTimeout();
+    }
+
+    function mockModelsResponse(models: Array<{ id: string; name?: string }>) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ object: "list", data: models }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+        ),
+      );
+    }
+
+    it("parses a valid model-discovery JSON response and returns discovered models", async () => {
+      setupLiveFetchEnv();
+      mockModelsResponse([{ id: MOCK_MODEL_ID, name: "Mock Model" }]);
+
+      const models = await discoverHuggingfaceModels("hf_test_token");
+      const found = models.filter((m) => m.id === MOCK_MODEL_ID);
+      expect(found).toHaveLength(1);
+      expect(found[0].name).toBe("Mock Model");
+    });
+
+    it("falls back to static catalog on malformed JSON response body", async () => {
+      setupLiveFetchEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response("NOT JSON {{{", {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+        ),
+      );
+
+      const models = await discoverHuggingfaceModels("hf_test_token");
+      expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
+    });
+
+    it("falls back to static catalog when response body exceeds the provider JSON cap", async () => {
+      setupLiveFetchEnv();
+      // The shared provider JSON reader uses a 16 MiB cap. A 17 MiB body
+      // exercises the overflow path and cancels the stream.
+      const largeBody = new Uint8Array(17 * 1024 * 1024);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(largeBody, {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+        ),
+      );
+
+      const models = await discoverHuggingfaceModels("hf_test_token");
+      // On overflow the outer try/catch returns the static catalog.
+      expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
+    });
+
+    it("returns static catalog when the response data array is empty", async () => {
+      setupLiveFetchEnv();
+      mockModelsResponse([]);
+
+      const models = await discoverHuggingfaceModels("hf_test_token");
+      expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
+    });
+  });
+
   describe("isHuggingfacePolicyLocked", () => {
     it("returns true for :cheapest and :fastest refs", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);
