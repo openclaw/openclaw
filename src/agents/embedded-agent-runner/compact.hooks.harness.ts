@@ -548,6 +548,7 @@ export async function loadCompactHooksHarness(): Promise<{
       mode: "env",
       source: "test harness",
     })),
+    resolveEnvApiKey: vi.fn(() => null),
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
 

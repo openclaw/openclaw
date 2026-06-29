@@ -664,6 +664,7 @@ vi.mock("../../custom-api-registry.js", () => ({
 }));
 
 vi.mock("../../model-auth.js", () => ({
+  resolveEnvApiKey: () => null,
   resolveModelAuthMode: () => undefined,
 }));
 
