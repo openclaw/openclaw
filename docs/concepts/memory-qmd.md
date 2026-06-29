@@ -102,7 +102,7 @@ mcporter's supported config locations:
 1. `MCPORTER_CONFIG`, if set. It may point to `.json` or `.jsonc`; relative
    paths resolve from `<workspaceDir>`.
 2. `$XDG_CONFIG_HOME/mcporter/mcporter.json` or `.jsonc`.
-3. `<workspaceDir>/config/mcporter.json` or `.jsonc` for project-scoped config.
+3. `<workspaceDir>/config/mcporter.json` for project-scoped config.
 4. The legacy `~/.mcporter/mcporter.json` or `.jsonc` fallback.
 
 For a bare QMD stdio entry (`command` or `executable` ending in `qmd`,
