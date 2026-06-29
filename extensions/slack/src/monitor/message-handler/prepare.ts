@@ -1271,6 +1271,7 @@ export async function prepareSlackMessage(params: {
       id: senderId,
       name: senderName,
       displayLabel: senderName,
+      isBot: isBotMessage || undefined,
     },
     conversation: {
       kind: chatType,
