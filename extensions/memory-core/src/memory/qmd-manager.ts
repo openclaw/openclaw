@@ -948,7 +948,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private vectorStatusDetail: string | null = null;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
-  private mcporterConfigMode: Promise<McporterConfigMode> | null = null;
+  private mcporterConfigMode: McporterConfigMode | null = null;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
@@ -3090,13 +3090,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (signal?.aborted) {
       throw asAbortError(signal);
     }
-    if (!this.mcporterConfigMode) {
-      this.mcporterConfigMode = this.resolveMcporterConfigMode(signal).catch((err: unknown) => {
-        this.mcporterConfigMode = null;
-        throw err;
-      });
+    if (this.mcporterConfigMode) {
+      return this.mcporterConfigMode;
     }
-    return await this.mcporterConfigMode;
+    const mode = await this.resolveMcporterConfigMode(signal);
+    this.mcporterConfigMode = mode;
+    return mode;
   }
 
   private async resolveMcporterConfigMode(signal?: AbortSignal): Promise<McporterConfigMode> {
@@ -3274,6 +3273,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
     if (rawEntry?.lifecycle !== undefined) {
       generated.lifecycle = rawEntry.lifecycle;
+    } else if (generated.lifecycle === undefined && this.qmd.mcporter.startDaemon) {
+      generated.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
     }
     if (rawEntry?.logging !== undefined) {
       generated.logging = rawEntry.logging;

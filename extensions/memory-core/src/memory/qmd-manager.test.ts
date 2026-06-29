@@ -3475,6 +3475,70 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not fail another mcporter search when one config probe aborts", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    let configProbeCount = 0;
+    let firstConfigProbeKill: ReturnType<typeof vi.fn> | undefined;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        configProbeCount += 1;
+        if (configProbeCount === 1) {
+          const kill = vi.fn(() => {
+            queueMicrotask(() => child.emit("close", null));
+          });
+          Object.assign(child, { kill });
+          firstConfigProbeKill = kill;
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const firstController = new AbortController();
+
+    const firstSearch = manager.search("first", {
+      sessionKey: "agent:main:slack:dm:first",
+      signal: firstController.signal,
+    });
+    firstSearch.catch(() => undefined);
+    await waitUntil(() => firstConfigProbeKill !== undefined);
+
+    const secondSearch = manager.search("second", {
+      sessionKey: "agent:main:slack:dm:second",
+    });
+    await waitUntil(() => configProbeCount >= 2);
+
+    firstController.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(firstSearch).rejects.toThrow("memory_search timed out after 15s");
+    await expect(secondSearch).resolves.toEqual([]);
+    expect(firstConfigProbeKill).toHaveBeenCalledWith("SIGKILL");
+    expect(configProbeCount).toBe(2);
+    await manager.close();
+  });
+
   it("rejects the mcporter search before spawning a call subprocess when the caller signal is already aborted", async () => {
     cfg = {
       ...cfg,
@@ -6767,6 +6831,17 @@ describe("QmdMemoryManager", () => {
       | string[]
       | undefined;
     expect(daemonArgs).toContain("--config");
+    const daemonConfigPath = requireValue(
+      daemonArgs?.[daemonArgs.indexOf("--config") + 1],
+      "mcporter daemon config path missing",
+    );
+    const daemonConfig = JSON.parse(await fs.readFile(daemonConfigPath, "utf8")) as {
+      mcpServers?: Record<string, { lifecycle?: { mode?: string; idleTimeoutMs?: number } }>;
+    };
+    expect(daemonConfig.mcpServers?.["custom-qmd"]?.lifecycle).toEqual({
+      mode: "keep-alive",
+      idleTimeoutMs: 300_000,
+    });
     const daemonOpts = daemonStart?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(daemonOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
     expect(daemonOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
