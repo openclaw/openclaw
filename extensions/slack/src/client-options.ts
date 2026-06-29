@@ -35,6 +35,7 @@ function resolveSlackProxyAgent(targetUrl: string): Agent | undefined {
     return createNodeProxyAgent({
       mode: "env",
       targetUrl,
+      protocol: "https",
     });
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
