@@ -89,6 +89,8 @@ export type FeishuMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
+  /** Source image_key/file_key; content_v2 inline replacement aligns key->path so partial download failures do not misalign. */
+  sourceKey?: string;
 };
 
 export type FeishuToolsConfig = {

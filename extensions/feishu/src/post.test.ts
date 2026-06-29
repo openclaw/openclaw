@@ -103,4 +103,100 @@ describe("parsePostContent", () => {
       mentionedOpenIds: [],
     });
   });
+
+  it("prefers content_v2 native markdown when present (AC-M1-H1)", () => {
+    const content = JSON.stringify({
+      title: "周报",
+      content: [[{ tag: "text", text: "降级文本" }, { tag: "img", image_key: "img_abc123" }]],
+      content_v2: [
+        [{ tag: "md", text: "本周进展：\n\n![架构图](img_abc123)\n\n详见 [文档](https://example.com)" }],
+      ],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.textContent).toContain("![架构图](img_abc123)");
+    expect(result.textContent).toContain("[文档](https://example.com)");
+    expect(result.textContent).not.toContain("降级文本");
+    expect(result.imageKeys).toStrictEqual(["img_abc123"]);
+  });
+
+  it("keeps code-block image syntax literal and unextracted (AC-M1-H3)", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "x" }]],
+      content_v2: [
+        [
+          {
+            tag: "md",
+            text: "真图：\n\n![real](img_real)\n\n```md\n![fake](img_in_code)\n```\n\n行内 `![inline](img_inline)` 也保留",
+          },
+        ],
+      ],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.imageKeys).toStrictEqual(["img_real"]);
+    expect(result.textContent).toContain("![fake](img_in_code)");
+    expect(result.textContent).toContain("`![inline](img_inline)`");
+  });
+
+  it("falls back to content structurally when content_v2 missing/empty/invalid (AC-M1-E1, AC-M1-R2)", () => {
+    const base = {
+      title: "标题",
+      content: [[{ tag: "text", text: "正文" }, { tag: "img", image_key: "img_x" }]],
+    };
+    const expected = parsePostContent(JSON.stringify(base));
+
+    for (const bad of [undefined, [], "not-an-array", {}, 42]) {
+      const withV2 = JSON.stringify({ ...base, content_v2: bad });
+      const result = parsePostContent(withV2);
+      expect(result.textContent).toBe(expected.textContent);
+      expect(result.imageKeys).toStrictEqual(expected.imageKeys);
+    }
+  });
+
+  it("falls back to content when content_v2 is non-empty but renders no usable text/media", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "real body" }]],
+      // non-empty array, but the only element renders to nothing usable
+      content_v2: [[{ tag: "md", text: "   " }]],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.textContent).toBe("real body");
+  });
+
+  it("keeps dedupe-relevant media keys stable across content / content_v2 (AC-M1-E2)", () => {
+    const contentOnly = JSON.stringify({
+      title: "",
+      content: [[{ tag: "img", image_key: "img_same" }]],
+    });
+    const withV2 = JSON.stringify({
+      title: "",
+      content: [[{ tag: "img", image_key: "img_same" }]],
+      content_v2: [[{ tag: "md", text: "![a](img_same)" }]],
+    });
+
+    expect(parsePostContent(withV2).imageKeys).toStrictEqual(
+      parsePostContent(contentOnly).imageKeys,
+    );
+  });
+
+  it("renders content_v2 mentions via existing at handling (AC-M1-E3)", () => {
+    // 默认 content_v2 @ 仍走结构化 tag:at（与 content 一致），renderElement case "at" 抽 open_id。
+    const content = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "x" }]],
+      content_v2: [[{ tag: "at", open_id: "ou_bot" }, { tag: "md", text: " /help" }]],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.mentionedOpenIds).toStrictEqual(["ou_bot"]);
+    expect(result.textContent).toContain("/help");
+  });
 });

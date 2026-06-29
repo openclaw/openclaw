@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { extractMarkdownImageKeys } from "./post-image-inline.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
 const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
@@ -16,6 +17,7 @@ type PostParseResult = {
 type PostPayload = {
   title: string;
   content: unknown[];
+  contentV2?: unknown[];
 };
 
 function toStringOrEmpty(value: unknown): string {
@@ -193,6 +195,9 @@ function toPostPayload(candidate: unknown): PostPayload | null {
   return {
     title: toStringOrEmpty(candidate.title),
     content: candidate.content,
+    // content_v2 is a sibling array carrying native markdown (tag:md). Non-array
+    // shapes are treated as absent so parsePostContent falls back to content.
+    contentV2: Array.isArray(candidate.content_v2) ? candidate.content_v2 : undefined,
   };
 }
 
@@ -231,6 +236,48 @@ function resolvePostPayload(parsed: unknown): PostPayload | null {
   return resolveLocalePayload(parsed);
 }
 
+type RenderedPostBody = {
+  body: string;
+  imageKeys: string[];
+  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
+  mentionedOpenIds: string[];
+};
+
+function renderPostParagraphs(source: unknown[], useV2: boolean): RenderedPostBody {
+  const imageKeys: string[] = [];
+  const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
+  const mentionedOpenIds: string[] = [];
+  const paragraphs: string[] = [];
+
+  for (const paragraph of source) {
+    if (!Array.isArray(paragraph)) {
+      continue;
+    }
+    let renderedParagraph = "";
+    for (const element of paragraph) {
+      renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+      // content_v2 md elements: collect non-code-block image_key from the native
+      // markdown text (content-path tag:img is already collected by renderElement;
+      // md inline images need this separate scan).
+      if (useV2 && isRecord(element)) {
+        const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
+        if (tag === "md" || tag === "lark_md") {
+          const mdText = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+          imageKeys.push(...extractMarkdownImageKeys(mdText));
+        }
+      }
+    }
+    paragraphs.push(renderedParagraph);
+  }
+
+  return { body: paragraphs.join("\n").trim(), imageKeys, mediaKeys, mentionedOpenIds };
+}
+
+/** A render with no body text and no media carries nothing usable for the agent. */
+function isUnusablePostBody(rendered: RenderedPostBody): boolean {
+  return rendered.body === "" && rendered.imageKeys.length === 0 && rendered.mediaKeys.length === 0;
+}
+
 export function parsePostContent(content: string): PostParseResult {
   try {
     const parsed = JSON.parse(content);
@@ -244,31 +291,30 @@ export function parsePostContent(content: string): PostParseResult {
       };
     }
 
-    const imageKeys: string[] = [];
-    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
-    const mentionedOpenIds: string[] = [];
-    const paragraphs: string[] = [];
-
-    for (const paragraph of payload.content) {
-      if (!Array.isArray(paragraph)) {
-        continue;
-      }
-      let renderedParagraph = "";
-      for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
-      }
-      paragraphs.push(renderedParagraph);
+    // Prefer the parallel content_v2 (native markdown) when present; an absent or
+    // empty content_v2 falls back to content with byte-identical behavior.
+    const hasV2 = Array.isArray(payload.contentV2) && payload.contentV2.length > 0;
+    let rendered = renderPostParagraphs(
+      hasV2 ? (payload.contentV2 as unknown[]) : payload.content,
+      hasV2,
+    );
+    // content_v2 can be a non-empty array that still renders no usable text/media
+    // (e.g. only unknown tags); fall back to content so the agent isn't fed an empty body.
+    if (hasV2 && isUnusablePostBody(rendered)) {
+      rendered = renderPostParagraphs(payload.content, false);
     }
 
     const title = escapeMarkdownText(payload.title.trim());
-    const body = paragraphs.join("\n").trim();
-    const textContent = [title, body].filter(Boolean).join("\n\n").trim();
+    const textContent = [title, rendered.body].filter(Boolean).join("\n\n").trim();
 
     return {
       textContent: textContent || FALLBACK_POST_TEXT,
-      imageKeys,
-      mediaKeys,
-      mentionedOpenIds,
+      // One image referenced twice (common in content_v2 markdown) is one download
+      // and one dedupe-key part; order-preserving dedup keeps content/content_v2 key
+      // sets identical so the message dedupe key stays stable.
+      imageKeys: [...new Set(rendered.imageKeys)],
+      mediaKeys: rendered.mediaKeys,
+      mentionedOpenIds: rendered.mentionedOpenIds,
     };
   } catch {
     return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };

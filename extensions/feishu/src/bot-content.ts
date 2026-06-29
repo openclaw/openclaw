@@ -415,10 +415,17 @@ export async function resolveFeishuMediaList(params: {
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:image>",
+          sourceKey: imageKey,
         });
-        log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
+        log?.(
+          `feishu: post ${messageId}: downloaded embedded image ${imageKey}, saved to ${saved.path}`,
+        );
       } catch (err) {
-        log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
+        // Keep the original ![alt](image_key) ref (no inline replace for this key) and
+        // continue; one failed image must not drop the whole message.
+        log?.(
+          `feishu: post ${messageId}: failed to download embedded image ${imageKey}: ${String(err)}`,
+        );
       }
     }
 

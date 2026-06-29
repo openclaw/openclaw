@@ -457,31 +457,32 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
+  it("keeps oversized auto mode markdown final text on the chunked message path (AC-M2-H1)", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
 
     const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
     await options.onIdle?.();
 
+    // auto mode no longer upgrades code blocks to a static card; markdown goes to the tag:md post message path.
     expect(streamingInstances).toHaveLength(0);
-    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
-    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
-    expectMockArgFields(sendStructuredCardFeishuMock, "first card send params", {
+    expect(runtime.channel.text.chunkTextWithMode).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", {
       text: "```ts\nx\n```",
     });
     expectMockArgFields(
-      sendStructuredCardFeishuMock,
-      "second card send params",
+      sendMessageFeishuMock,
+      "second message send params",
       {
         text: "tail",
       },
       1,
     );
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("discards partial streaming preview before oversized final text fallback", async () => {
@@ -703,19 +704,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("closes streaming with block text when final reply is missing", async () => {
+  it("suppresses internal markdown block payloads when block streaming is disabled (AC-M2-H1)", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
+    // auto mode no longer upgrades code-block block payloads to a streaming card; block streaming
+    // stays gated on Feishu blockStreaming, so internal block chunks are dropped without it.
     await options.deliver({ text: "```md\npartial answer\n```" }, { kind: "block" });
     await options.onIdle?.();
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```", {
-      note: "Agent: agent",
-    });
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("coalesces cumulative final payloads into one streaming card until idle", async () => {
