@@ -37,6 +37,7 @@ import {
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
@@ -1155,8 +1156,24 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
-function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
-  return JSON.stringify(entry ?? null);
+const REPLY_SESSION_INITIALIZATION_REVISION_KEY = "__replySessionInitializationRevision";
+
+function createReplySessionInitializationRevision(params: {
+  entry: SessionEntry | undefined;
+  storePath: string;
+}): string {
+  if (!params.entry) {
+    return "null";
+  }
+  // Reply-init guards compare the durable JSON shape. Skills promptRef hydration
+  // can turn the same persisted snapshot into a runtime-only prompt string.
+  const projected = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: {
+      [REPLY_SESSION_INITIALIZATION_REVISION_KEY]: params.entry,
+    },
+  });
+  return JSON.stringify(projected.store[REPLY_SESSION_INITIALIZATION_REVISION_KEY] ?? null);
 }
 
 function resolveInitializedReplySessionEntry(params: {
@@ -1711,7 +1728,10 @@ export function loadReplySessionInitializationSnapshot(params: {
       const entry = resolveSessionStoreEntry({ store: entries, sessionKey }).existing;
       return entry ? { ...entry } : undefined;
     },
-    revision: createReplySessionInitializationRevision(currentEntry),
+    revision: createReplySessionInitializationRevision({
+      entry: currentEntry,
+      storePath: params.storePath,
+    }),
   };
 }
 
@@ -1742,7 +1762,10 @@ export async function commitReplySessionInitialization(params: {
     async (store): Promise<ReplySessionInitializationCommitResult> => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
       const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
-      const revision = createReplySessionInitializationRevision(currentEntry);
+      const revision = createReplySessionInitializationRevision({
+        entry: currentEntry,
+        storePath: params.storePath,
+      });
       if (revision !== params.expectedRevision) {
         return {
           ok: false,

@@ -468,37 +468,37 @@ describe("session accessor file-backed seam", () => {
     const previousCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "45000";
     clearSessionStoreCacheForTest();
-    const sessionKey = "agent:main:discord:channel:123";
-    const prompt = `<available_skills>\n${"reply initialization skill prompt\n".repeat(
-      200,
-    )}</available_skills>`;
-    await saveSessionStore(
-      storePath,
-      {
-        [sessionKey]: {
-          sessionId: "previous-discord-session",
-          skillsSnapshot: {
-            prompt,
-            skills: [{ name: "reply-skill" }],
-            version: 1,
-          },
-          updatedAt: 10,
-        },
-      },
-      { skipMaintenance: true },
-    );
-    const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(persistedStore[sessionKey]?.skillsSnapshot?.prompt).toBeUndefined();
-    expect(persistedStore[sessionKey]?.skillsSnapshot?.promptRef?.hash).toMatch(/^[a-f0-9]{64}$/);
-
-    clearSessionStoreCacheForTest();
-    await saveSessionStore(storePath, persistedStore, { skipMaintenance: true });
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
-
     try {
+      const sessionKey = "agent:main:discord:channel:123";
+      const prompt = `<available_skills>\n${"reply initialization skill prompt\n".repeat(
+        200,
+      )}</available_skills>`;
+      await saveSessionStore(
+        storePath,
+        {
+          [sessionKey]: {
+            sessionId: "previous-discord-session",
+            skillsSnapshot: {
+              prompt,
+              skills: [{ name: "reply-skill" }],
+              version: 1,
+            },
+            updatedAt: 10,
+          },
+        },
+        { skipMaintenance: true },
+      );
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(persistedStore[sessionKey]?.skillsSnapshot?.prompt).toBeUndefined();
+      expect(persistedStore[sessionKey]?.skillsSnapshot?.promptRef?.hash).toMatch(/^[a-f0-9]{64}$/);
+
+      clearSessionStoreCacheForTest();
+      await saveSessionStore(storePath, persistedStore, { skipMaintenance: true });
+      const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
       expect(snapshot.currentEntry?.skillsSnapshot?.prompt).toBe(prompt);
       const committed = await commitReplySessionInitialization({
         activeSessionKey: sessionKey,
