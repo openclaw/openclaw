@@ -20,11 +20,12 @@ describe("chunkQQBotMarkdownText", () => {
       "| 3 | gamma |",
     ].join("\n");
 
-    expect(chunkQQBotMarkdownText(text, 45, baseChunker)).toEqual([
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
-      ["| Id | Value |", "|---:|---|", "| 2 | beta |"].join("\n"),
-      ["| Id | Value |", "|---:|---|", "| 3 | gamma |"].join("\n"),
-    ]);
+    const chunks = chunkQQBotMarkdownText(text, 45, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("| Id | Value |")).toBe(true);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(45);
+    }
   });
 
   it("keeps table state across streaming block flushes", () => {
@@ -32,9 +33,13 @@ describe("chunkQQBotMarkdownText", () => {
 
     expect(
       chunker.chunkText(["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"), 120),
-    ).toEqual([["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n")]);
-    expect(chunker.chunkText(["| 2 | beta |", "| 3 | gamma |"].join("\n"), 120)).toEqual([
-      ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+    ).toEqual([]);
+    expect(chunker.chunkText(["| 2 | beta |", "| 3 | gamma |"].join("\n"), 120)).toEqual([]);
+    expect(chunker.flushPendingText(120)).toEqual([
+      [
+        ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+        ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+      ].join("\n\n"),
     ]);
   });
 
@@ -44,7 +49,10 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunker.chunkText("| Id | Value |", 120)).toEqual([]);
     expect(
       chunker.chunkText(["|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"), 120),
-    ).toEqual([["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n")]);
+    ).toEqual([]);
+    expect(chunker.flushPendingText(120)).toEqual([
+      ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
+    ]);
   });
 
   it("confirms a table when the separator uses one or two dashes, not only three", () => {
@@ -60,7 +68,8 @@ describe("chunkQQBotMarkdownText", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     expect(chunker.chunkText("| maybe | header |", 120)).toEqual([]);
-    expect(chunker.chunkText("plain continuation", 120)).toEqual([
+    expect(chunker.chunkText("plain continuation", 120)).toEqual([]);
+    expect(chunker.flushPendingText(120)).toEqual([
       ["| maybe | header |", "plain continuation"].join("\n"),
     ]);
   });
@@ -69,6 +78,7 @@ describe("chunkQQBotMarkdownText", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     chunker.chunkText(["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n") + "\n\n", 120);
+    chunker.flushPendingText(120);
 
     expect(chunker.chunkText("| not | a continuation |", 120)).toEqual([]);
     expect(chunker.flushPendingText(120)).toEqual(["| not | a continuation |"]);
@@ -100,15 +110,19 @@ describe("chunkQQBotMarkdownText", () => {
         ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
         160,
       ),
-    ).toEqual([["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n")]);
+    ).toEqual([]);
 
     expect(chunker.chunkText("| 5 | generatemonthly_sales", 160)).toEqual([]);
-    expect(chunker.chunkText("_by_region | ok |", 160)).toEqual([
+    expect(chunker.chunkText("_by_region | ok |", 160)).toEqual([]);
+    expect(chunker.flushPendingText(160)).toEqual([
       [
-        "| Id | Function | Status |",
-        "|---:|---|---|",
-        "| 5 | generatemonthly_sales_by_region | ok |",
-      ].join("\n"),
+        ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+        [
+          "| Id | Function | Status |",
+          "|---:|---|---|",
+          "| 5 | generatemonthly_sales_by_region | ok |",
+        ].join("\n"),
+      ].join("\n\n"),
     ]);
   });
 
@@ -122,17 +136,21 @@ describe("chunkQQBotMarkdownText", () => {
         ),
         200,
       ),
-    ).toEqual([
-      ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join("\n"),
-    ]);
+    ).toEqual([]);
 
     expect(chunker.chunkText("| 17 | 100ms |", 200)).toEqual([]);
-    expect(chunker.chunkText("Lin | daily cap |", 200)).toEqual([
+    expect(chunker.chunkText("Lin | daily cap |", 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([
       [
-        "| Id | Time | Owner | Note |",
-        "|---:|---|---|---|",
-        "| 17 | 100ms | Lin | daily cap |",
-      ].join("\n"),
+        ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join(
+          "\n",
+        ),
+        [
+          "| Id | Time | Owner | Note |",
+          "|---:|---|---|---|",
+          "| 17 | 100ms | Lin | daily cap |",
+        ].join("\n"),
+      ].join("\n\n"),
     ]);
   });
 
@@ -143,6 +161,7 @@ describe("chunkQQBotMarkdownText", () => {
       ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
       160,
     );
+    chunker.flushPendingText(160);
     expect(chunker.chunkText("| 10 | analyzeerror_patterns | 无需重试", 160)).toEqual([]);
 
     expect(chunker.flushPendingText(160)).toEqual([
@@ -161,7 +180,8 @@ describe("chunkQQBotMarkdownText", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     expect(chunker.chunkText(["```ts", "const a = 1;"].join("\n"), 200)).toEqual([]);
-    expect(chunker.chunkText(["const b = 2;", "```"].join("\n"), 200)).toEqual([
+    expect(chunker.chunkText(["const b = 2;", "```"].join("\n"), 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([
       ["```ts", "const a = 1;", "const b = 2;", "```"].join("\n"),
     ]);
   });
@@ -174,7 +194,8 @@ describe("chunkQQBotMarkdownText", () => {
     ).toEqual([]);
     expect(
       chunker.chunkText(["0", "    def get_dsn(self) -> str:", "```"].join("\n"), 200),
-    ).toEqual([
+    ).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([
       ["```python", "    pool_timeout: float = 30.0", "    def get_dsn(self) -> str:", "```"].join(
         "\n",
       ),
@@ -218,7 +239,8 @@ describe("chunkQQBotMarkdownText", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     expect(chunker.chunkText(["```math", "E = mc^2"].join("\n"), 200)).toEqual([]);
-    expect(chunker.chunkText(["a^2 + b^2 = c^2", "```"].join("\n"), 200)).toEqual([
+    expect(chunker.chunkText(["a^2 + b^2 = c^2", "```"].join("\n"), 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([
       ["```math", "E = mc^2", "a^2 + b^2 = c^2", "```"].join("\n"),
     ]);
   });
@@ -243,7 +265,7 @@ describe("chunkQQBotMarkdownText", () => {
     }
   });
 
-  it("handles prose before and after a table split at row boundaries", () => {
+  it("merges prose before and after a small table into one chunk when under limit", () => {
     const text = [
       "前置说明第一段，长度足够触发普通文本先发送。",
       "前置说明第二段继续解释。",
@@ -255,11 +277,32 @@ describe("chunkQQBotMarkdownText", () => {
       "后置说明第二段。",
     ].join("\n");
 
-    expect(chunkQQBotMarkdownText(text, 180, baseChunker)).toEqual([
-      "前置说明第一段，长度足够触发普通文本先发送。\n前置说明第二段继续解释。",
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
-      "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([
+      [
+        "前置说明第一段，长度足够触发普通文本先发送。\n前置说明第二段继续解释。",
+        ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
+        "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
+      ].join("\n\n"),
     ]);
+  });
+
+  it("still splits prose before and after a table when content exceeds limit", () => {
+    const text = [
+      "前置说明第一段，长度足够触发普通文本先发送。",
+      "前置说明第二段继续解释。",
+      "| Id | Value |",
+      "|---:|---|",
+      "| 1 | alpha |",
+      "| 2 | beta |",
+      "后置说明第一段，表格结束后继续普通文字。",
+      "后置说明第二段。",
+    ].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(80);
+    }
   });
 });
 
