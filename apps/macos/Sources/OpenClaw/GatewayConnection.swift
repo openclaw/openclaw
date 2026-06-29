@@ -6,7 +6,7 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
 private let defaultChatSendAgentTimeoutMs = 300_000
-private let defaultChatSendRequestTimeoutMs = 30_000
+private let defaultChatSendRequestTimeoutMs = 30000
 
 enum GatewayAgentChannel: String, Codable, CaseIterable {
     case last
