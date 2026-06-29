@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildCapturedTurns, captureConversationTurns } from "./turns-capture.js";
-import { getTurns } from "./turns-store.js";
+import { getTurns, listBoxes, listSpans } from "./turns-store.js";
 
 function tempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-turns-capture-"));
@@ -74,6 +74,8 @@ describe("turns-capture", () => {
     const stored = getTurns({ agentId: "main", sessionKey: "agent:main:main", env });
     expect(stored.map((t) => t.content)).toEqual(["set up voice", "On it."]);
     expect(stored.map((t) => t.seq)).toEqual([1, 2]); // gapless
+    expect(listSpans({ agentId: "main", sessionKey: "agent:main:main", env }).length).toBe(2);
+    expect(listBoxes({ agentId: "main", sessionKey: "agent:main:main", env }).length).toBe(1);
   });
 
   it("appends a genuinely new later turn on top of prior capture", () => {

@@ -34,3 +34,15 @@ export const COLLAPSE_DWELL_TURNS = 6;
  * burst cannot collapse everything around it.
  */
 export const ACTIVE_SET_CARDINALITY_FLOOR = 2;
+
+/**
+ * TUNABLE (Phase 4 — §16). Cheap online segmentation keeps a span open while
+ * lexical topic overlap stays at or above this cutoff.
+ */
+export const SEGMENT_TOPIC_SIMILARITY_CUTOFF = 0.25;
+
+/**
+ * TUNABLE (Phase 4 — §16). Number of salient tokens used in the provisional
+ * normalized topic label before the tag-DAG slice maps labels to durable tags.
+ */
+export const SEGMENT_TOPIC_TOKEN_LIMIT = 1;

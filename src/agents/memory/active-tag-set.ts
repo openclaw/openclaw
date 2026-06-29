@@ -19,11 +19,9 @@ import {
   COLLAPSE_DWELL_TURNS,
   JACCARD_LIVE_CUTOFF,
 } from "./accordion-constants.js";
+import { isSuppressedMemoryNoise } from "./noise.js";
 import { listBoxes, listSpans, getTurns, setBoxState } from "./turns-store.js";
 import type { BoxState } from "./turns-store.js";
-
-// A leading [SILENT] envelope marks an automation turn (mirrors turns-capture).
-const SILENT_PREFIX = /^\s*\[SILENT\]/;
 
 /** Minimal turn shape the rule needs — a superset is fine (TurnRow satisfies it). */
 export type TurnLike = {
@@ -61,13 +59,7 @@ function spanForSeq(spans: readonly SpanLike[], seq: number): SpanLike | undefin
 }
 
 function isNoiseTurn(turn: TurnLike, span: SpanLike | undefined): boolean {
-  if (turn.noise_class === "suppressed" || span?.noise_class === "suppressed") {
-    return true;
-  }
-  if (turn.channel === "heartbeat") {
-    return true;
-  }
-  return SILENT_PREFIX.test(turn.content);
+  return isSuppressedMemoryNoise(turn) || span?.noise_class === "suppressed";
 }
 
 function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
@@ -94,7 +86,7 @@ export function decideAutoCollapse(input: CollapseInput): string[] {
   // Non-noise turns in seq order; the active window is the most recent N of these.
   const nonNoise = input.turns
     .filter((turn) => !isNoiseTurn(turn, spanForSeq(input.spans, turn.seq)))
-    .sort((a, b) => a.seq - b.seq);
+    .toSorted((a, b) => a.seq - b.seq);
   if (nonNoise.length === 0) {
     return [];
   }

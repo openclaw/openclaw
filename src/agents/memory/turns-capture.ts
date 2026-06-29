@@ -14,11 +14,9 @@ import { createHash } from "node:crypto";
 import type { AgentMessage } from "../runtime/index.js";
 import type { AgentEndEvent, ExtensionAPI, ExtensionFactory } from "../sessions/index.js";
 import { messageAnchorId } from "./accordion-blocks.js";
+import { isSuppressedMemoryNoise } from "./noise.js";
+import { segmentConversationTurns } from "./segment-spans.js";
 import { appendTurns, type NewTurn } from "./turns-store.js";
-
-// Conservative hot-path noise marker; the dreaming light pass (Phase 3) owns durable
-// noise classification. Matches a leading [SILENT] envelope on automation turns.
-const SILENT_PREFIX = /^\s*\[SILENT\]/;
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -43,7 +41,7 @@ function textOf(content: unknown): string {
     return content
       .filter(
         (block): block is { type: "text"; text: string } =>
-          !!block &&
+          Boolean(block) &&
           (block as { type?: unknown }).type === "text" &&
           typeof (block as { text?: unknown }).text === "string",
       )
@@ -82,7 +80,7 @@ export function buildCapturedTurns(
       contentHash: sha256(text),
       idempotencyKey,
       ts: typeof m.timestamp === "number" ? m.timestamp : 0,
-      noiseClass: SILENT_PREFIX.test(text) ? "suppressed" : null,
+      noiseClass: isSuppressedMemoryNoise({ content: text }) ? "suppressed" : null,
     });
   }
   return turns;
@@ -99,12 +97,24 @@ export function captureConversationTurns(opts: {
   if (turns.length === 0) {
     return 0;
   }
-  return appendTurns({
+  const inserted = appendTurns({
     agentId: opts.agentId,
     sessionKey: opts.sessionKey,
     turns,
     ...(opts.env ? { env: opts.env } : {}),
   });
+  try {
+    segmentConversationTurns({
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      ...(opts.env ? { env: opts.env } : {}),
+    });
+  } catch (err) {
+    console.warn(
+      `[conversational-memory] turn segmentation failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return inserted;
 }
 
 /**
