@@ -2,12 +2,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 type SilmarilFirewallPackageManifest = {
-  dependencies?: Record<string, string>;
-  openclaw?: {
-    bundle?: {
-      stageRuntimeDependencies?: boolean;
-    };
-  };
+  id?: string;
 };
 
 type SilmarilFirewallPluginManifest = {
@@ -16,14 +11,15 @@ type SilmarilFirewallPluginManifest = {
   };
 };
 
-describe("silmaril-firewall package manifest", () => {
-  it("stages the Silmaril SDK as a bundled runtime dependency", () => {
-    const packageJson = JSON.parse(
-      fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+describe("silmaril-firewall manifest", () => {
+  it("does not require a package manifest or runtime dependency graph changes", () => {
+    expect(fs.existsSync(new URL("./package.json", import.meta.url))).toBe(false);
+
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as SilmarilFirewallPackageManifest;
 
-    expect(packageJson.dependencies?.["@silmaril-security/sdk"]).toBe("0.4.2");
-    expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
+    expect(manifest.id).toBe("silmaril-firewall");
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {

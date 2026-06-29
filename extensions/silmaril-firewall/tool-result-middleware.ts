@@ -1,6 +1,5 @@
+import { randomUUID } from "node:crypto";
 import process from "node:process";
-import { Firewall, HookLabel } from "@silmaril-security/sdk";
-import type { BlockResult } from "@silmaril-security/sdk";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareEvent,
@@ -10,6 +9,9 @@ import type {
 const DEFAULT_CLASSIFY_TIMEOUT_MS = 2500;
 const MIN_CLASSIFY_TIMEOUT_MS = 250;
 const MAX_CLASSIFY_TIMEOUT_MS = 10000;
+const HookLabel = {
+  TOOL_RESPONSE: "tool_response",
+} as const;
 
 type RuntimeConfig = {
   apiKey: string;
@@ -21,7 +23,7 @@ type RuntimeConfig = {
 
 type RuntimeClient = {
   config: RuntimeConfig;
-  firewall: Firewall;
+  classifier: SilmarilClassifier;
 };
 
 type Logger = {
@@ -34,6 +36,56 @@ type SafeClassification = {
   threshold?: unknown;
   primaryOutcome?: unknown;
 };
+
+type BlockResult = SafeClassification & {
+  outcomeScores?: unknown;
+  detectorScores?: unknown;
+  detectorCounts?: unknown;
+  blocked?: unknown;
+};
+
+type ClassifyOptions = {
+  hook?: string;
+  toolName?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type SilmarilClassifier = {
+  classify(text: string, options?: ClassifyOptions): Promise<BlockResult | undefined>;
+};
+
+class DirectSilmarilClassifier implements SilmarilClassifier {
+  constructor(private readonly config: RuntimeConfig) {}
+
+  async classify(text: string, options: ClassifyOptions = {}): Promise<BlockResult | undefined> {
+    const payload: Record<string, unknown> = {
+      text: sanitizeText(text),
+      metadata: withClientMetadata(options.metadata),
+    };
+    if (options.hook !== undefined) {
+      payload.hook = options.hook;
+    }
+    if (options.toolName !== undefined) {
+      payload.tool_name = options.toolName;
+    }
+
+    const response = await fetch(this.config.apiUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": this.config.apiKey,
+      },
+      body: JSON.stringify(payload),
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(`Silmaril classify request failed with status ${response.status}`);
+    }
+
+    return blockResultFromResponse(await response.json());
+  }
+}
 
 export function createSilmarilFirewallAgentToolResultMiddleware(
   rawConfig: unknown,
@@ -58,12 +110,7 @@ export function createSilmarilFirewallAgentToolResultMiddleware(
     if (!runtimeClient || !sameRuntimeConfig(runtimeClient.config, config)) {
       runtimeClient = {
         config,
-        firewall: new Firewall({
-          apiKey: config.apiKey,
-          apiUrl: config.apiUrl,
-          timeoutMs: config.timeoutMs,
-          shadowMode: config.shadowMode,
-        }),
+        classifier: new DirectSilmarilClassifier(config),
       };
     }
     return runtimeClient;
@@ -81,7 +128,7 @@ export function createSilmarilFirewallAgentToolResultMiddleware(
     }
 
     try {
-      const result = await runtime.firewall.classify(text, {
+      const result = await runtime.classifier.classify(text, {
         hook: HookLabel.TOOL_RESPONSE,
         toolName: event.toolName,
         metadata: {
@@ -179,6 +226,73 @@ function readBoolean(value: unknown): boolean | undefined {
     return false;
   }
   return undefined;
+}
+
+function sanitizeText(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (isHighSurrogate(code)) {
+      if (i + 1 < text.length && isLowSurrogate(text.charCodeAt(i + 1))) {
+        out += text[i];
+        out += text[i + 1];
+        i += 1;
+      }
+      continue;
+    }
+    if (isLowSurrogate(code)) {
+      continue;
+    }
+    out += text[i];
+  }
+  return out;
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function withClientMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const payload = { ...(metadata ?? {}) };
+  const existing = readRecord(payload.silmaril);
+  payload.silmaril = {
+    ...(existing ?? {}),
+    client_language: "typescript",
+    client_name: "openclaw-bundled-silmaril-firewall",
+    request_id: randomUUID(),
+    input_index: 0,
+    chunk_index: 0,
+    chunk_count: 1,
+  };
+  return payload;
+}
+
+function readNumber(value: unknown): number | undefined {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function blockResultFromResponse(data: unknown): BlockResult | undefined {
+  const response = readRecord(data);
+  if (!response) {
+    return undefined;
+  }
+  return {
+    prediction: response.prediction,
+    score: readNumber(response.score),
+    threshold: readNumber(response.threshold),
+    primaryOutcome: response.primary_outcome ?? response.primaryOutcome,
+    outcomeScores: response.outcome_scores ?? response.outcomeScores,
+    detectorScores: response.detector_scores ?? response.detectorScores,
+    detectorCounts: response.detector_counts ?? response.detectorCounts,
+    blocked: response.blocked,
+  };
 }
 
 function extractToolResultText(result: OpenClawAgentToolResult | undefined): string {
@@ -320,6 +434,9 @@ export const __testInternals = {
   readString,
   readIntegerInRange,
   readBoolean,
+  sanitizeText,
+  withClientMetadata,
+  blockResultFromResponse,
   extractToolResultText,
   shouldBlockClassification,
   buildBlockedToolResult,
