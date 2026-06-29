@@ -14,6 +14,7 @@ import {
   readRecentSessionMessagesWithStats as readRecentSessionMessagesWithStatsFile,
   readRecentSessionMessagesWithStatsAsync as readRecentSessionMessagesWithStatsAsyncFile,
   readRecentSessionTranscriptLines as readRecentSessionTranscriptLinesFile,
+  readSessionMessagesPageWithStatsAsync as readSessionMessagesPageWithStatsAsyncFile,
   readRecentSessionUsageFromTranscript as readRecentSessionUsageFromTranscriptFile,
   readRecentSessionUsageFromTranscriptAsync as readRecentSessionUsageFromTranscriptAsyncFile,
   readSessionMessageByIdAsync as readSessionMessageByIdAsyncFile,
@@ -260,6 +261,21 @@ export async function readRecentSessionMessagesWithStatsAsync(
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveFileBackedReadScope(scope);
   return await readRecentSessionMessagesWithStatsAsyncFile(
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    opts,
+    target.agentId,
+  );
+}
+
+/** Reads one offset page with total-count metadata through the reader seam. */
+export async function readSessionMessagesPageWithStatsAsync(
+  scope: SessionTranscriptReadScope,
+  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+): Promise<ReadRecentSessionMessagesResult> {
+  const target = resolveFileBackedReadScope(scope);
+  return await readSessionMessagesPageWithStatsAsyncFile(
     target.sessionId,
     target.storePath,
     target.sessionFile,

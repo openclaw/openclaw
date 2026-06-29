@@ -3557,7 +3557,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onClawHubDetailOpen: (slug) => void loadClawHubDetail(state, slug),
                 onClawHubDetailClose: () => closeClawHubDetail(state),
-                onClawHubInstall: (slug) => void installFromClawHub(state, slug),
+                onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
+                  void installFromClawHub(state, slug, acknowledgeClawHubRisk, version),
               }),
             )
           : nothing}
@@ -3810,7 +3811,7 @@ export function renderApp(state: AppViewState) {
                     onSearch: searchChatWorkspaceFiles,
                     onOpenArtifact: openChatWorkspaceArtifact,
                   },
-                  autoExpandToolCalls: false,
+                  autoExpandToolCalls: state.chatVerboseLevel === "full",
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
@@ -3901,6 +3902,7 @@ export function renderApp(state: AppViewState) {
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
+                  onAssistantAttachmentLoaded: () => state.scheduleChatScroll(),
                   // Sidebar props for tool output viewing
                   sidebarOpen: state.sidebarOpen,
                   sidebarContent: state.sidebarContent,

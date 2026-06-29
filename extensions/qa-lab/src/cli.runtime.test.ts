@@ -431,8 +431,8 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         outputDir: ".artifacts/qa-e2e/smoke-ci",
         profile: "smoke-ci",
-        surface: "agent-runtime-and-provider-execution",
-        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        surface: "channel-framework",
+        category: "channel-framework.conversation-routing-and-delivery",
         scenarioIds: ["dm-chat-baseline"],
         transportId: "qa-channel",
         fastMode: true,
@@ -462,10 +462,10 @@ describe("qa cli runtime", () => {
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
-          features?: { fulfilled?: unknown };
+          coverageIds?: { fulfilled?: unknown };
           categoryReports?: Array<{
             id?: unknown;
-            features?: { fulfilled?: unknown };
+            coverageIds?: { fulfilled?: unknown };
             missingCoverageIds?: unknown;
           }>;
         };
@@ -480,11 +480,11 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
+      expect(evidence.scorecard?.coverageIds?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
-        id: "agent-runtime-and-provider-execution.agent-turn-execution",
-        features: {
-          fulfilled: 0,
+        id: "channel-framework.conversation-routing-and-delivery",
+        coverageIds: {
+          fulfilled: 1,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
@@ -558,6 +558,8 @@ describe("qa cli runtime", () => {
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
         "thread-follow-up",
+        "claude-cli-provider-capabilities",
+        "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
         "image-understanding-attachment",
         "native-image-generation",
@@ -595,11 +597,11 @@ describe("qa cli runtime", () => {
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
         profile: "smoke-ci",
-        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        category: "channel-framework.conversation-routing-and-delivery",
         scenarioIds: ["not-a-real-scenario"],
       }),
     ).rejects.toThrow(
-      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --category agent-runtime-and-provider-execution.agent-turn-execution --scenario not-a-real-scenario.",
+      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --category channel-framework.conversation-routing-and-delivery --scenario not-a-real-scenario.",
     );
     expect(runQaSuite).not.toHaveBeenCalled();
   });

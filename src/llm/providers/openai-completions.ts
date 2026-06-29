@@ -90,6 +90,14 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
 }
 
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
   toolChoice?: OpenAICompletionsToolChoice;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -1135,11 +1143,14 @@ export function convertMessages(
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
-        const hasText = textResult.length > 0;
+        const content = sanitizeToolResultText(
+          textResult,
+          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
+        );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
-          content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+          content,
           tool_call_id: toolMsg.toolCallId,
         };
         if (compat.requiresToolResultName && toolMsg.toolName) {

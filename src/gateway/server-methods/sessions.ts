@@ -184,9 +184,6 @@ function inheritSessionRuntimeSelection(
       : {}),
     ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
     ...(parentEntry.model ? { model: parentEntry.model } : {}),
-    ...(typeof parentEntry.contextTokens === "number"
-      ? { contextTokens: parentEntry.contextTokens }
-      : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
@@ -1091,7 +1088,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
-          scanLegacyKeys: false,
         });
         const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
         storeCache.set(cachedStoreTarget.storePath, store);

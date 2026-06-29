@@ -231,6 +231,12 @@ export async function runSetupWizard(
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
+  await prompter.note(
+    t("wizard.setup.durationNote", {
+      command: formatCliCommand("openclaw configure"),
+    }),
+    t("wizard.setup.durationTitle"),
+  );
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readSetupConfigFileSnapshot();

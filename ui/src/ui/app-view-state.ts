@@ -4,8 +4,8 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
-import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
@@ -125,6 +125,7 @@ export type AppViewState = {
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
+  chatVerboseLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
@@ -181,6 +182,7 @@ export type AppViewState = {
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
+  scheduleChatScroll: () => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
@@ -427,7 +429,13 @@ export type AppViewState = {
     clawhubDetailLoading: boolean;
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
-    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    clawhubInstallMessage: {
+      kind: "success" | "error";
+      text: string;
+      acknowledgeSlug?: string;
+      acknowledgeVersion?: string;
+      acknowledgeLabel?: string;
+    } | null;
     clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
     clawhubVerdictsLoading: boolean;
     clawhubVerdictsError: string | null;

@@ -413,6 +413,20 @@ export function createProcessTool(
                   status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
+                  ...(scopedFinished.exitSignal != null
+                    ? { exitSignal: scopedFinished.exitSignal }
+                    : {}),
+                  ...(scopedFinished.exitReason
+                    ? {
+                        exitReason: scopedFinished.exitReason,
+                        timedOut:
+                          scopedFinished.exitReason === "overall-timeout" ||
+                          scopedFinished.exitReason === "no-output-timeout",
+                      }
+                    : {}),
+                  ...(scopedFinished.noOutputTimedOut !== undefined
+                    ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
+                    : {}),
                   aggregated: scopedFinished.aggregated,
                   name: deriveSessionName(scopedFinished.command),
                 },
@@ -442,6 +456,8 @@ export function createProcessTool(
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
               status,
+              scopedSession.exitReason,
+              scopedSession.noOutputTimedOut,
             );
           }
           const status = exited
@@ -475,6 +491,20 @@ export function createProcessTool(
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
+              ...(exited && scopedSession.exitSignal != null
+                ? { exitSignal: scopedSession.exitSignal }
+                : {}),
+              ...(exited && scopedSession.exitReason
+                ? {
+                    exitReason: scopedSession.exitReason,
+                    timedOut:
+                      scopedSession.exitReason === "overall-timeout" ||
+                      scopedSession.exitReason === "no-output-timeout",
+                  }
+                : {}),
+              ...(exited && scopedSession.noOutputTimedOut !== undefined
+                ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
+                : {}),
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
               ...(runtime ? runningSessionInputDetails(runtime) : {}),

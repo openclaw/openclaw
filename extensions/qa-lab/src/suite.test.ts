@@ -167,6 +167,32 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
 
+  it("includes effective channel driver in run start progress logs", () => {
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 8,
+        transportId: "qa-channel",
+      }),
+    ).toBe("run start: scenarios=80 concurrency=8 transport=qa-channel");
+
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 1,
+        transportId: "qa-channel",
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        },
+      }),
+    ).toBe(
+      "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
+    );
+  });
+
   it("records gateway RSS peak and trace samples", () => {
     expect(
       qaSuiteProgressTesting.buildQaSuiteRuntimeMetrics({

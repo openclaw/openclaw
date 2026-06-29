@@ -15,6 +15,8 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isReservedTargetLiteralError } from "./target-errors.js";
+import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
@@ -29,6 +31,7 @@ export type AgentDeliveryPlan = {
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
+  targetResolutionError?: Error;
 };
 
 export function resolveAgentDeliveryPlan(params: {
@@ -143,27 +146,46 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
-  if (
-    !params.wantsDelivery ||
-    !plan.resolvedTo ||
-    !isDeliverableMessageChannel(plan.resolvedChannel) ||
-    !resolveOutboundChannelPlugin({
-      channel: plan.resolvedChannel,
-      cfg: params.cfg,
-      allowBootstrap: true,
-    })?.messaging?.resolveOutboundSessionRoute
-  ) {
+  const { resolvedChannel, resolvedTo } = plan;
+  if (!params.wantsDelivery || !resolvedTo || !isDeliverableMessageChannel(resolvedChannel)) {
+    return plan;
+  }
+  const plugin = resolveOutboundChannelPlugin({
+    channel: resolvedChannel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
+  if (!plugin?.messaging?.resolveOutboundSessionRoute) {
     return plan;
   }
   const normalizedTarget = resolveOutboundTarget({
-    channel: plan.resolvedChannel,
-    to: plan.resolvedTo,
+    channel: resolvedChannel,
+    to: resolvedTo,
     cfg: params.cfg,
     accountId: plan.resolvedAccountId,
     mode: plan.deliveryTargetMode ?? "explicit",
   });
-  if (!normalizedTarget.ok) {
-    return plan;
+  let sessionRouteTarget: string;
+  let resolvedSessionRouteTarget: ResolvedMessagingTarget | undefined;
+  if (normalizedTarget.ok) {
+    sessionRouteTarget = normalizedTarget.to;
+  } else {
+    if (!isReservedTargetLiteralError(normalizedTarget.error)) {
+      return { ...plan, targetResolutionError: normalizedTarget.error };
+    }
+    const resolvedTarget = await resolveChannelTarget({
+      cfg: params.cfg,
+      channel: resolvedChannel as ChannelId,
+      input: resolvedTo,
+      accountId: plan.resolvedAccountId,
+      unknownTargetMode: "normalized",
+      plugin,
+    });
+    if (!resolvedTarget.ok) {
+      return { ...plan, targetResolutionError: resolvedTarget.error };
+    }
+    sessionRouteTarget = resolvedTarget.target.to;
+    resolvedSessionRouteTarget = resolvedTarget.target;
   }
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
@@ -173,10 +195,11 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     try {
       return await resolveOutboundSessionRoute({
         cfg: params.cfg,
-        channel: plan.resolvedChannel as ChannelId,
+        channel: resolvedChannel as ChannelId,
         agentId: params.agentId,
         accountId: plan.resolvedAccountId,
-        target: normalizedTarget.to,
+        target: sessionRouteTarget,
+        ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
         currentSessionKey: params.currentSessionKey,
         threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
       });
@@ -185,6 +208,14 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     }
   })();
   if (!route) {
+    if (resolvedSessionRouteTarget) {
+      return {
+        ...plan,
+        resolvedTo: resolvedSessionRouteTarget.to,
+        resolvedThreadId:
+          plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+      };
+    }
     return plan;
   }
   return {
@@ -210,6 +241,13 @@ export function resolveAgentOutboundTarget(params: {
     params.targetMode ??
     params.plan.deliveryTargetMode ??
     (params.plan.resolvedTo ? "explicit" : "implicit");
+  if (params.plan.targetResolutionError) {
+    return {
+      resolvedTarget: { ok: false, error: params.plan.targetResolutionError },
+      resolvedTo: undefined,
+      targetMode,
+    };
+  }
   if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
     return {
       resolvedTarget: null,

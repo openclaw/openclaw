@@ -200,6 +200,29 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
   process.stderr.write(`[qa-suite] ${message}\n`);
 }
 
+function formatQaSuiteRunStartProgress(params: {
+  selectedScenarioCount: number;
+  concurrency: number;
+  transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+}) {
+  const channelDriver = params.channelDriver ?? params.channelDriverSelection?.channelDriver;
+  const channel = params.channelDriverSelection?.channel;
+  const parts = [
+    `run start: scenarios=${params.selectedScenarioCount}`,
+    `concurrency=${params.concurrency}`,
+    `transport=${sanitizeQaSuiteProgressValue(params.transportId)}`,
+  ];
+  if (channelDriver) {
+    parts.push(`channelDriver=${sanitizeQaSuiteProgressValue(channelDriver)}`);
+  }
+  if (channel) {
+    parts.push(`channel=${sanitizeQaSuiteProgressValue(channel)}`);
+  }
+  return parts.join(" ");
+}
+
 async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -825,6 +848,7 @@ async function runQaRuntimeParitySuite(params: {
     const finishedAt = new Date();
     const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
       {
+        repoRoot: params.repoRoot,
         outputDir: params.outputDir,
         startedAt: params.startedAt,
         finishedAt,
@@ -877,6 +901,7 @@ async function runQaRuntimeParitySuite(params: {
 }
 
 async function writeQaSuiteArtifacts(params: {
+  repoRoot?: string;
   outputDir: string;
   startedAt: Date;
   finishedAt: Date;
@@ -951,6 +976,7 @@ async function writeQaSuiteArtifacts(params: {
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
           providerMode: params.providerMode,
+          repoRoot: params.repoRoot,
           scenarioDefinitions: params.scenarioDefinitions,
           scenarioResults: params.scenarios,
         })
@@ -1185,7 +1211,13 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const gatewayHeapCheckpointsEnabled = shouldCaptureGatewayHeapCheckpoints();
   writeQaSuiteProgress(
     progressEnabled,
-    `run start: scenarios=${selectedScenarios.length} concurrency=${concurrency} transport=${transportId}`,
+    formatQaSuiteRunStartProgress({
+      selectedScenarioCount: selectedScenarios.length,
+      concurrency,
+      transportId,
+      channelDriver: params?.channelDriver,
+      channelDriverSelection: params?.channelDriverSelection,
+    }),
   );
   const useIsolatedScenarioWorkers = shouldRunQaSuiteWithIsolatedScenarioWorkers({
     scenarios: selectedScenarios,
@@ -1267,6 +1299,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         .then(async () => {
           const partialFinishedAt = new Date();
           const { report, reportPath } = await writeQaSuiteArtifacts({
+            repoRoot,
             outputDir,
             startedAt,
             finishedAt: partialFinishedAt,
@@ -1419,6 +1452,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       });
       const { evidence, evidencePath, report, reportPath, summaryPath } =
         await writeQaSuiteArtifacts({
+          repoRoot,
           outputDir,
           startedAt,
           finishedAt,
@@ -1691,6 +1725,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     });
     const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
       {
+        repoRoot,
         outputDir,
         startedAt,
         finishedAt,
@@ -1767,6 +1802,7 @@ export const qaSuiteProgressTesting = {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
+  formatQaSuiteRunStartProgress,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
