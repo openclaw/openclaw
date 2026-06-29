@@ -1906,7 +1906,7 @@ describe("sendChatMessage", () => {
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
-    expect(sendParams.__controlUiReconnectResume).toBe(true);
+    expect(sendParams["__controlUiReconnectResume"]).toBe(true);
     expect(sendParams.message).toBe("continue");
     // One-shot: cleared after the first send.
     expect(state.reconnectResumeSessionId).toBeNull();
