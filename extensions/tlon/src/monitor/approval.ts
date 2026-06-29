@@ -8,6 +8,7 @@
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -62,7 +63,7 @@ function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return text.slice(0, maxLength - 3) + "...";
+  return sliceUtf16Safe(text, 0, maxLength - 3) + "...";
 }
 
 /**
