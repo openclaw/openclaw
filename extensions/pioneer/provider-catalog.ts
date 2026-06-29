@@ -1,11 +1,17 @@
+import {
+  isProviderApiKeyConfigured,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 // Pioneer provider module implements model/runtime integration.
 import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type {
-  ProviderCatalogContext,
-  ProviderCatalogResult,
+import {
+  readConfiguredProviderCatalogEntries,
+  type ConfiguredProviderCatalogEntry,
+  type ProviderCatalogContext,
+  type ProviderCatalogResult,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -345,6 +351,68 @@ export async function buildLivePioneerProvider(params: {
     }
   }
   return buildPioneerProvider({ apiKey: params.apiKey });
+}
+
+/** Builds catalog entries for the augmentModelCatalog hook, doing live discovery when authed. */
+export async function buildPioneerAugmentedCatalogEntries(params: {
+  config: unknown;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+}): Promise<ConfiguredProviderCatalogEntry[]> {
+  const configured = readConfiguredProviderCatalogEntries({
+    config: params.config,
+    providerId: PROVIDER_ID,
+  });
+  // Gate live discovery on having a Pioneer API key (env var or auth profile store).
+  const env = params.env ?? process.env;
+  const envApiKey = normalizeOptionalString(env.PIONEER_API_KEY) ?? undefined;
+  if (
+    !envApiKey &&
+    !isProviderApiKeyConfigured({ provider: PROVIDER_ID, agentDir: params.agentDir })
+  ) {
+    return configured;
+  }
+  // Resolve API key: env var first, then auth profile store.
+  const apiKey =
+    envApiKey ??
+    (await resolveProviderAuthProfileApiKey({ provider: PROVIDER_ID, agentDir: params.agentDir }));
+  if (!apiKey) {
+    return configured;
+  }
+  try {
+    const rows = await getCachedLiveProviderModelRows({
+      providerId: PROVIDER_ID,
+      endpoint: PIONEER_MODELS_ENDPOINT,
+      apiKey,
+      ttlMs: PIONEER_MODELS_CACHE_TTL_MS,
+      auditContext: "pioneer-model-discovery-augment",
+    });
+    const models = buildPioneerModelsFromLiveRows(rows);
+    if (models.length === 0) {
+      return configured;
+    }
+    const seen = new Set(configured.map((e) => e.id));
+    const merged: ConfiguredProviderCatalogEntry[] = [...configured];
+    for (const model of models) {
+      if (seen.has(model.id)) {
+        continue;
+      }
+      seen.add(model.id);
+      merged.push({
+        provider: PROVIDER_ID,
+        id: model.id,
+        name: model.name ?? model.id,
+        ...(typeof model.contextWindow === "number" && model.contextWindow > 0
+          ? { contextWindow: model.contextWindow }
+          : {}),
+        ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
+        ...(model.input && model.input.length > 0 ? { input: model.input } : {}),
+      });
+    }
+    return merged;
+  } catch {
+    return configured;
+  }
 }
 
 export async function buildPioneerCatalogResult(

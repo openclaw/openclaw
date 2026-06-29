@@ -1,11 +1,14 @@
 // Pioneer plugin entrypoint registers its OpenClaw integration.
-import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { PIONEER_DEFAULT_MODEL_REF } from "./models.js";
 import { applyPioneerConfig } from "./onboard.js";
-import { buildPioneerCatalogResult, buildPioneerProvider } from "./provider-catalog.js";
+import {
+  buildPioneerAugmentedCatalogEntries,
+  buildPioneerCatalogResult,
+  buildPioneerProvider,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "pioneer";
 
@@ -53,11 +56,8 @@ export default defineSingleProviderPluginEntry({
       }
       return undefined;
     },
-    augmentModelCatalog: ({ config }) =>
-      readConfiguredProviderCatalogEntries({
-        config,
-        providerId: PROVIDER_ID,
-      }),
+    augmentModelCatalog: ({ config, env, agentDir }) =>
+      buildPioneerAugmentedCatalogEntries({ config, env, agentDir }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bpioneer\b.*(?:input.*too long|context.*exceed|context.*length)/i.test(errorMessage),
     ...buildProviderReplayFamilyHooks({
