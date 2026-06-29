@@ -35,7 +35,6 @@ function resolveSlackProxyAgent(targetUrl: string): Agent | undefined {
     return createNodeProxyAgent({
       mode: "env",
       targetUrl,
-      protocol: "https",
     });
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
@@ -47,36 +46,28 @@ function resolveSlackApiUrlFromEnv(): string | undefined {
   return process.env.SLACK_API_URL?.trim() || undefined;
 }
 
-function resolveSlackClientOptions(
-  options: WebClientOptions,
-  defaults: {
-    retryConfig: RetryOptions;
-    maxRequestConcurrency?: number;
-  },
-): WebClientOptions {
+function applySlackApiUrlAndProxyOptions(options: WebClientOptions): void {
   const slackApiUrl = resolveSlackApiUrlFromEnv();
   const proxyTargetUrl = slackApiUrl ?? "https://slack.com/";
-  const resolved: WebClientOptions = Object.assign({}, options);
-  resolved.agent ??= resolveSlackProxyAgent(proxyTargetUrl);
-  resolved.retryConfig ??= defaults.retryConfig;
-  if (defaults.maxRequestConcurrency !== undefined) {
-    resolved.maxRequestConcurrency ??= defaults.maxRequestConcurrency;
-  }
+  options.agent ??= resolveSlackProxyAgent(proxyTargetUrl);
   if (slackApiUrl) {
-    resolved.slackApiUrl = slackApiUrl;
+    options.slackApiUrl = slackApiUrl;
   } else {
-    delete resolved.slackApiUrl;
+    delete options.slackApiUrl;
   }
-  return resolved;
 }
 
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return resolveSlackClientOptions(options, { retryConfig: SLACK_DEFAULT_RETRY_OPTIONS });
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
+  return resolved;
 }
 
 export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return resolveSlackClientOptions(options, {
-    retryConfig: SLACK_WRITE_RETRY_OPTIONS,
-    maxRequestConcurrency: 1,
-  });
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  resolved.maxRequestConcurrency ??= 1;
+  return resolved;
 }
