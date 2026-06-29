@@ -81,7 +81,10 @@ export async function readResponseTextLimited(
     }
     try {
       reader.releaseLock();
-    } catch {}
+    } catch {
+      // Error-body reads are diagnostic best effort; release failures must not
+      // hide the bounded provider error text already captured.
+    }
   }
 
   return text;

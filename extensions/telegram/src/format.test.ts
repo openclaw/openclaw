@@ -559,6 +559,27 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Name | Age\nAlice | 30");
   });
 
+  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
+    const cases = [
+      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
+      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
+      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
+    ] as const;
+
+    for (const [name, input, expected] of cases) {
+      const output = telegramHtmlToPlainTextFallback(input);
+      expect(output, name).toBe(expected);
+      expect(containsLoneSurrogate(output), name).toBe(false);
+    }
+  });
+
+  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
+    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
+
+    expect(output).toBe("x 😀 😀 y");
+    expect(containsLoneSurrogate(output)).toBe(false);
+  });
+
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });

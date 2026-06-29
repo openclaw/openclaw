@@ -63,6 +63,7 @@ You will need to create a new application with a bot, add the bot to your server
 
     **General Permissions**
       - View Channels
+
     **Text Permissions**
       - Send Messages
       - Read Message History

@@ -2638,6 +2638,13 @@ export class QmdMemoryManager implements MemorySearchManager {
           // its own reranking pipeline and does not accept a minScore parameter.
           searches: this.buildV2Searches(params.query, params.searchCommand),
           limit: params.limit,
+          // "search"/"vsearch" are lexical/vector-only modes (see buildV2Searches):
+          // they must not trigger the LLM reranker. QMD's "query" tool defaults
+          // rerank:true, so disable it explicitly for those modes; full "query"
+          // mode keeps reranking.
+          ...(params.searchCommand === "search" || params.searchCommand === "vsearch"
+            ? { rerank: false }
+            : {}),
         }
       : {
           // QMD 1.x tools accept a flat query string.

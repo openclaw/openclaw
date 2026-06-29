@@ -471,6 +471,25 @@
   word-break: inherit;
 }
 
+.chat-tool-card__block-content:has(> code.markdown-block-art) {
+  background: var(--bg);
+}
+
+.chat-tool-card__block-content code.markdown-block-art {
+  display: block;
+  min-width: 100%;
+  width: max-content;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: 0.86;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
 .chat-tool-card__inline {
   margin-top: 10px;
   white-space: pre-wrap;
