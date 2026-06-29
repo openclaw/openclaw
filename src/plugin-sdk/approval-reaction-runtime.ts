@@ -211,9 +211,7 @@ function buildManualInstructionSection(params: {
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    lines.push("Allow Always is unavailable for this command.");
   }
   if (params.allowedDecisions.length > 0) {
     lines.push(

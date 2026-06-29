@@ -154,7 +154,7 @@ describe("approval and confirmation modals", () => {
       ),
     ).toEqual(["Allow once", "Deny"]);
     expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "Allow Always is unavailable for this command.",
     );
   });
 
