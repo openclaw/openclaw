@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isExplicitOpenClawHomeStateDir } from "./config/state-dir-names.js";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
@@ -99,7 +100,15 @@ export function resolveConfigDir(
   if (configPath) {
     return path.dirname(resolveUserPath(configPath, env, homedir));
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  const home = resolveRequiredHomeDir(env, homedir);
+  // Treat an explicit `OPENCLAW_HOME` that already names a state dir as the
+  // config dir itself. Without this guard `~/.openclaw` is rewritten to
+  // `~/.openclaw/.openclaw` and onboarding writes the config file into a
+  // shadow nested directory (#45765).
+  if (isExplicitOpenClawHomeStateDir(env, home)) {
+    return home;
+  }
+  const newDir = path.join(home, ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);
     if (hasNew) {

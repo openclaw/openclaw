@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { isExplicitOpenClawHomeStateDir } from "./config/state-dir-names.js";
 import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTempDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
@@ -101,6 +102,38 @@ describe("resolveConfigDir", () => {
         OPENCLAW_TEST_FAST: "1",
       });
     }
+  });
+
+  describe("OPENCLAW_HOME nesting guard (#45765)", () => {
+    it("uses OPENCLAW_HOME directly when it already names .openclaw", () => {
+      // Reporter's observed shape on Linux Kylin: `~/.openclaw` mapped to
+      // `~/.openclaw/.openclaw/openclaw.json` on current main. The guard
+      // must short-circuit the `.openclaw` append so onboarding writes the
+      // canonical path.
+      const explicitHome = path.resolve("/home/user/.openclaw");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(explicitHome);
+    });
+
+    it("uses OPENCLAW_HOME directly when it names a legacy .clawdbot dir", () => {
+      const explicitHome = path.resolve("/home/user/.clawdbot");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(explicitHome);
+    });
+
+    it("still appends .openclaw when OPENCLAW_HOME is a non-state-dir path", () => {
+      const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(path.resolve("/srv/openclaw-home", ".openclaw"));
+    });
+
+    it("keeps the helper wired to the leaf state-dir module", () => {
+      expect(
+        isExplicitOpenClawHomeStateDir(
+          { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv,
+          "/home/user/.openclaw",
+        ),
+      ).toBe(true);
+    });
   });
 });
 

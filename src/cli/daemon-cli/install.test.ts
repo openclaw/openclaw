@@ -97,6 +97,7 @@ vi.mock("../../config/mutate.js", () => ({
 }));
 
 vi.mock("../../config/paths.js", () => ({
+  isExplicitOpenClawHomeStateDir: () => false,
   resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));

@@ -37,6 +37,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  isExplicitOpenClawHomeStateDir: () => false,
   resolveStateDir: () => "/tmp/openclaw-migrate-command-test",
 }));
 
