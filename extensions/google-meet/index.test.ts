@@ -5142,4 +5142,26 @@ describe("google-meet plugin", () => {
       handleGoogleMeetNodeHostCommand(JSON.stringify({ action: "stopByUrl" })),
     ).rejects.toThrow("url required");
   });
+
+  it("rejects oversized Calendar event list responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => makeOversizedCalendarResponse()));
+
+    await expect(
+      listGoogleMeetCalendarEvents({ accessToken: "tok", calendarId: "primary" }),
+    ).rejects.toThrow("Google Calendar events.list: JSON response exceeds");
+  });
 });
+
+function makeOversizedCalendarResponse(): Response {
+  const ONE_MIB = 1024 * 1024;
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= 18) { controller.close(); return; }
+      controller.enqueue(chunk); pulled += 1;
+    },
+  });
+  return new Response(body, { status: 200,
+    headers: { "Content-Type": "application/json" } });
+}
