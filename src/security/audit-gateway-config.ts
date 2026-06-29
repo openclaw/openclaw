@@ -170,13 +170,18 @@ export function collectGatewayConfigFindings(
   const writeToolsInAllow = WRITE_CLASS_TOOLS.filter((name) => gatewayToolsAllow.has(name));
   if (hostFsWriteOptIn && writeToolsInAllow.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    // Name only the allowlisted write-class tools — a subset config such as
+    // `allow: ["edit"]` must not be told the sibling `write` primitive is also
+    // exposed (clawsweeper #63919 [P1]/[P2] audit-detail mismatch).
+    const exposedWriteTools = writeToolsInAllow.map((name) => `\`${name}\``).join(" and ");
+    const exposedWriteNoun = writeToolsInAllow.length > 1 ? "coding tools" : "coding tool";
     findings.push({
       checkId: "gateway.tools_invoke_http.host_write_allow",
       severity: extraRisk ? "critical" : "warn",
       title: "Gateway HTTP /tools/invoke exposes host filesystem writes",
       detail:
         `gateway.tools.directInvoke.hostFsWrite is true and gateway.tools.allow includes ${writeToolsInAllow.join(", ")}, ` +
-        "which exposes the `write` and `edit` coding tools over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        `which exposes the ${exposedWriteTools} ${exposedWriteNoun} over both HTTP \`POST /tools/invoke\` and SDK RPC \`tools.invoke\`. ` +
         "Without `tools.fs.workspaceOnly: true`, this grants writes/edits on any file the gateway process can open " +
         "(outside the configured workspace) — destructive blast radius if the gateway token leaks.",
       remediation:
