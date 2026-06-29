@@ -637,11 +637,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    // #93917: In the old code, varying exec output prevented the global circuit
-    // breaker from firing. After stripping output from the exec hash, repeated
-    // exec calls with the same status+exitCode+timedOut now correctly escalate
-    // to the breaker even when output text varies.
-    it("escalates repeated exec calls to the global breaker when status and exitCode are stable", () => {
+    it("keeps changing exec output below the global no-progress breaker", () => {
       const state = createState();
       const params = { command: "date" };
 
@@ -666,8 +662,8 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
       }
     });
 

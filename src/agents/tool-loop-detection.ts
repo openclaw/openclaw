@@ -210,11 +210,22 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
     });
   }
 
-  if (status === "completed" || status === "failed") {
-    // #93917: Do not include output text in the hash — exec output often
-    // carries volatile noise (timestamps, PIDs, connection-refused-at-${time})
-    // that defeats no-progress detection. Identical (command, exitCode, timedOut)
-    // across consecutive calls is sufficient to signal a stuck exec loop.
+  if (status === "completed") {
+    return digestStable({
+      status,
+      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      timedOut: details.timedOut === true,
+      output: nonEmptyStringField(details.aggregated) ?? text,
+    });
+  }
+
+  // #93917: Do not include output text for failed exec — error output often
+  // carries volatile noise (timestamps, PIDs, connection-refused-at-${time})
+  // that defeats no-progress detection. Stable {status, exitCode, timedOut}
+  // across consecutive failed calls is sufficient to signal a stuck exec loop.
+  // Completed exec output is intentionally kept in the hash because varying
+  // completed output is a real progress signal.
+  if (status === "failed") {
     return digestStable({
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
