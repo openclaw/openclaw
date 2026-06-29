@@ -3,6 +3,7 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
@@ -25,6 +26,34 @@ export type DiscordVoiceAgentTurnResult = {
   context: DiscordVoiceIngressContext;
   text: string;
 };
+
+/**
+ * Reads the supervisor session entry that belongs to this voice route and returns
+ * its persisted sessionId so consecutive voice turns reuse the same agent session
+ * (and downstream codex thread/sessionFile) instead of minting a fresh one per
+ * turn. Mirrors the precedent in `voice-call/response-generator.ts` and the
+ * gateway `voice.transcript` dispatcher in `server-node-events.ts`.
+ */
+function resolveStoredVoiceSessionId(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): string | undefined {
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const entry = getSessionEntry({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath,
+    });
+    return entry?.sessionId?.trim() || undefined;
+  } catch (err) {
+    logger.warn(
+      `discord voice: failed to read session entry for sessionKey=${params.sessionKey} agent=${params.agentId}: ${String(err)}`,
+    );
+    return undefined;
+  }
+}
 
 function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
   let textPayloads = 0;
@@ -132,10 +161,17 @@ export async function runDiscordVoiceAgentTurn(params: {
     return null;
   }
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
+  const sessionKey = params.entry.route.sessionKey;
+  const storedSessionId = resolveStoredVoiceSessionId({
+    cfg: params.cfg,
+    agentId: params.entry.route.agentId,
+    sessionKey,
+  });
   const result = await agentCommandFromIngress(
     {
       message: params.message,
-      sessionKey: params.entry.route.sessionKey,
+      sessionKey,
+      ...(storedSessionId ? { sessionId: storedSessionId } : {}),
       agentId: params.entry.route.agentId,
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
