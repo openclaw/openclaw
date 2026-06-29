@@ -2173,6 +2173,34 @@ export const dispatchTelegramMessage = async ({
                       }
 
                       if (segment.lane === "answer" && info.kind === "block") {
+                        // In progress mode an intermediate assistant text block is
+                        // preamble/commentary the model emits before calling tools
+                        // (claude-cli: thinking -> "I'll run the commands" ->
+                        // tool_use). It is transient, not a durable message. Route
+                        // it into the live progress draft exactly like the tool-text
+                        // path above, so the reasoning/tool preview stays alive
+                        // instead of being wiped by resetProgressDraftState() before
+                        // the tools even run. The final answer still clears the draft
+                        // at info.kind === "final".
+                        // (NOTE: claude-cli emits no content during tool execution,
+                        // only system/task_* notifications — those could later drive
+                        // a keepalive but are intentionally left untouched here.)
+                        if (streamMode === "progress" && !verboseProgressActive()) {
+                          const canRepresentBlockAsTransientProgress =
+                            !reply.hasMedia &&
+                            telegramButtons === undefined &&
+                            !hasExecApprovalPayload(effectivePayload);
+                          if (
+                            canRepresentBlockAsTransientProgress &&
+                            answerLane.stream &&
+                            (await pushStreamToolProgress(segment.update.text, {
+                              startImmediately: true,
+                            }))
+                          ) {
+                            blockDelivered = true;
+                            continue;
+                          }
+                        }
                         const preparedAnswerLane = await prepareAnswerLaneForText();
                         const shouldRotateQueuedBlock = takeQueuedAnswerBlockRotation(
                           lanePayload,

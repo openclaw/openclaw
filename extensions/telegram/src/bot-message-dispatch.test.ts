@@ -2823,6 +2823,62 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps the live progress preview through tools when an intermediate text block precedes tool calls", async () => {
+    // Reproduces the claude-cli stream-json trace: thinking -> intermediate
+    // text-block preamble ("I'll run...") -> exec x3 -> final. The preamble is
+    // commentary, not a durable message, and must NOT wipe the live progress
+    // draft (reasoning + tool preview) before the tools even run.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        // Intermediate assistant text block emitted as a preamble before tools.
+        await dispatcherOptions.deliver(
+          { text: "I'll run the three commands sequentially" },
+          { kind: "block" },
+        );
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          name: "exec",
+          progressText: "git status",
+        });
+        await dispatcherOptions.deliver({ text: "DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    // 1. The preamble text block must NOT be delivered as a durable message.
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      "I'll run the three commands sequentially",
+    );
+    // 2. The live tool preview persists through the tool phase: the last
+    //    rendered preview still shows the running command (preview was not
+    //    wiped/restarted by the preamble), and the preamble itself streamed
+    //    into the live draft as commentary rather than vanishing.
+    const lastPreview = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("<b>🛠️ Exec</b> <code>git status</code>"),
+      }),
+    );
+    expect(lastPreview).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("I'll run the three commands sequentially"),
+      }),
+    );
+    // 3. The final answer is delivered as a real reply (progress mode finalizes
+    //    via the deliver path, not answerDraftStream.update), and it is the
+    //    FIRST delivered reply — the preamble produced no durable message of its
+    //    own, it only lived in the progress preview.
+    expectDeliveredReply(0, { text: "DONE" });
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
