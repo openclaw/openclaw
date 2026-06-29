@@ -506,7 +506,6 @@ export type GatewaySessionRow = {
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
-  /** Resolved effective usage-footer mode (session override → per-channel config → default → off), carried from gateway session rows/events. */
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
