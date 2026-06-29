@@ -201,7 +201,7 @@ import {
   resolveModelPrimary,
   sortLocaleStrings,
 } from "./views/agents-utils.ts";
-import { renderChat } from "./views/chat.ts";
+import { renderChat, type ChatProps } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById } from "./views/config-presets.ts";
 import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
@@ -733,6 +733,215 @@ function getChatWorkspaceFilesState(
   };
   chatWorkspaceFilesStates.set(state, next);
   return next;
+}
+
+type ControlChatSurfaceOptions = {
+  state: AppViewState;
+  requestHostUpdate?: () => void;
+  showThinking: boolean;
+  showToolCalls: boolean;
+  chatAvatarUrl: string | null;
+  chatDisabledReason: string | null;
+  chatViewError: string | null;
+  chatWorkspaceFiles: ChatWorkspaceFilesState;
+  onToggleWorkspaceFilesCollapsed: () => void;
+  onRefreshWorkspaceFiles: () => void;
+  onBrowseWorkspacePath: (path: string) => void;
+  onCopyWorkspacePath: (path: string) => void;
+  onOpenWorkspaceFile: (path: string) => void;
+  onSearchWorkspaceFiles: (search: string) => void;
+  onOpenWorkspaceArtifact: (artifactId: string) => void;
+  chatAgentId: string;
+  resolvedAgentId: string | null;
+  effectiveAssistantAvatar: string | null;
+  overrides?: Partial<ChatProps>;
+};
+
+function renderControlChatSurface(options: ControlChatSurfaceOptions) {
+  const {
+    state,
+    requestHostUpdate,
+    showThinking,
+    showToolCalls,
+    chatAvatarUrl,
+    chatDisabledReason,
+    chatViewError,
+    chatWorkspaceFiles,
+    onToggleWorkspaceFilesCollapsed,
+    onRefreshWorkspaceFiles,
+    onBrowseWorkspacePath,
+    onCopyWorkspacePath,
+    onOpenWorkspaceFile,
+    onSearchWorkspaceFiles,
+    onOpenWorkspaceArtifact,
+    chatAgentId,
+    resolvedAgentId,
+    effectiveAssistantAvatar,
+  } = options;
+  return renderChat({
+    sessionKey: state.sessionKey,
+    onSessionKeyChange: (next) => {
+      switchChatSession(state, next);
+    },
+    thinkingLevel: state.chatThinkingLevel,
+    showThinking,
+    showToolCalls,
+    loading: state.chatLoading,
+    sending: state.chatSending,
+    compactionStatus: state.compactionStatus,
+    fallbackStatus: state.fallbackStatus,
+    assistantAvatarUrl: chatAvatarUrl,
+    messages: state.chatMessages,
+    sideResult: state.chatSideResult,
+    toolMessages: state.chatToolMessages,
+    streamSegments: state.chatStreamSegments,
+    stream: state.chatStream,
+    streamStartedAt: state.chatStreamStartedAt,
+    draft: state.chatMessage,
+    queue: state.chatQueue,
+    realtimeTalkActive: state.realtimeTalkActive,
+    realtimeTalkStatus: state.realtimeTalkStatus,
+    realtimeTalkDetail: state.realtimeTalkDetail,
+    realtimeTalkTranscript: state.realtimeTalkTranscript,
+    realtimeTalkConversation: state.realtimeTalkConversation,
+    realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
+    realtimeTalkOptions: state.realtimeTalkOptions,
+    realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
+    connected: state.connected,
+    canSend: state.connected,
+    disabledReason: chatDisabledReason,
+    error: chatViewError,
+    runStatus: state.chatRunStatus,
+    onDismissError: () => dismissChatError(state),
+    onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
+    sessions: state.sessionsResult,
+    composerControls: renderGuardedChatControls(state),
+    sessionWorkspace: {
+      collapsed: chatWorkspaceFiles.collapsed,
+      sessionKey: state.sessionKey,
+      list:
+        chatWorkspaceFiles.list?.sessionKey === state.sessionKey ? chatWorkspaceFiles.list : null,
+      loading: chatWorkspaceFiles.loading,
+      error: chatWorkspaceFiles.error,
+      activeId: chatWorkspaceFiles.activeId,
+      onToggleCollapsed: onToggleWorkspaceFilesCollapsed,
+      onRefresh: onRefreshWorkspaceFiles,
+      onBrowsePath: onBrowseWorkspacePath,
+      onCopyPath: onCopyWorkspacePath,
+      onOpenFile: onOpenWorkspaceFile,
+      onSearch: onSearchWorkspaceFiles,
+      onOpenArtifact: onOpenWorkspaceArtifact,
+    },
+    autoExpandToolCalls: false,
+    onRefresh: () => {
+      state.chatSideResult = null;
+      state.resetToolStream();
+      void refreshChat(state, { awaitHistory: true, scheduleScroll: false });
+    },
+    onChatScroll: (event) => state.handleChatScroll(event),
+    getDraft: () => state.chatMessage,
+    onDraftChange: (next) => state.handleChatDraftChange(next),
+    onRequestUpdate: requestHostUpdate,
+    onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
+    onSlashIntent: () => refreshChatCommands(state).finally(requestHostUpdate),
+    attachments: state.chatAttachments,
+    onAttachmentsChange: (next) => (state.chatAttachments = next),
+    onSend: () => void state.handleSendChat(),
+    onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
+    onOpenSessionCheckpoints: () => {
+      state.sessionsExpandedCheckpointKey = state.sessionKey;
+      state.setTab("sessions" as import("./navigation.ts").Tab);
+      void loadSessions(state, {
+        ...createChatSessionsLoadOverrides(state),
+        ...scopedAgentListParamsForSession(state, state.sessionKey),
+      });
+    },
+    onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+    onToggleRealtimeTalkOptions: () => {
+      state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
+      if (state.realtimeTalkOptionsOpen) {
+        void state.fetchRealtimeTalkCatalog();
+      }
+    },
+    onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
+    canAbort: hasAbortableSessionRun(state),
+    onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
+    onQueueRemove: (id) => state.removeQueuedMessage(id),
+    onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
+    onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+    onDismissSideResult: () => {
+      state.chatSideResult = null;
+    },
+    onNewSession: () => void createChatSession(state, { source: "user" }),
+    onClearHistory: runUiTask(async () => {
+      if (!state.client || !state.connected) {
+        return;
+      }
+      const hadActiveRun = hasAbortableSessionRun(state);
+      try {
+        await state.client.request("sessions.reset", {
+          key: state.sessionKey,
+          ...scopedAgentParamsForSession(state, state.sessionKey),
+        });
+        state.chatMessages = [];
+        clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+          sessionKey: state.sessionKey,
+        });
+        state.chatSideResult = null;
+        reconcileChatRunLifecycle(
+          state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: hadActiveRun ? "interrupted" : undefined,
+            sessionStatus: "killed",
+            runId: state.chatRunId,
+            sessionKey: state.sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            clearRunStatus: !hadActiveRun,
+          },
+        );
+        await loadChatHistory(state);
+      } catch (err) {
+        state.lastError = String(err);
+        state.chatError = state.lastError;
+      }
+    }),
+    agentsList: state.agentsList,
+    currentAgentId: chatAgentId,
+    fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+    onAgentChange: (agentId: string) => {
+      switchChatSession(state, buildAgentMainSessionKey({ agentId }));
+    },
+    onNavigateToAgent: () => {
+      state.agentsSelectedId = resolvedAgentId;
+      state.setTab("agents" as import("./navigation.ts").Tab);
+    },
+    onSessionSelect: (key: string) => {
+      switchChatSession(state, key);
+    },
+    showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+    onScrollToBottom: () => state.scrollToBottom(),
+    sidebarOpen: state.sidebarOpen,
+    sidebarContent: state.sidebarContent,
+    sidebarError: state.sidebarError,
+    splitRatio: state.splitRatio,
+    canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
+    onOpenSidebar: (content) => state.handleOpenSidebar(content),
+    onCloseSidebar: () => state.handleCloseSidebar(),
+    onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+    assistantName: state.assistantName,
+    assistantAvatar: effectiveAssistantAvatar,
+    userName: state.userName ?? null,
+    userAvatar: state.userAvatar ?? null,
+    localMediaPreviewRoots: state.localMediaPreviewRoots,
+    embedSandboxMode: state.embedSandboxMode,
+    allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+    assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+    basePath: state.basePath ?? "",
+    ...options.overrides,
+  });
 }
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
@@ -3755,171 +3964,25 @@ export function renderApp(state: AppViewState) {
                 queueCount: state.chatQueue.length,
               },
               () =>
-                renderChat({
-                  sessionKey: state.sessionKey,
-                  onSessionKeyChange: (next) => {
-                    switchChatSession(state, next);
-                  },
-                  thinkingLevel: state.chatThinkingLevel,
+                renderControlChatSurface({
+                  state,
+                  requestHostUpdate,
                   showThinking,
                   showToolCalls,
-                  loading: state.chatLoading,
-                  sending: state.chatSending,
-                  compactionStatus: state.compactionStatus,
-                  fallbackStatus: state.fallbackStatus,
-                  assistantAvatarUrl: chatAvatarUrl,
-                  messages: state.chatMessages,
-                  sideResult: state.chatSideResult,
-                  toolMessages: state.chatToolMessages,
-                  streamSegments: state.chatStreamSegments,
-                  stream: state.chatStream,
-                  streamStartedAt: state.chatStreamStartedAt,
-                  draft: state.chatMessage,
-                  queue: state.chatQueue,
-                  realtimeTalkActive: state.realtimeTalkActive,
-                  realtimeTalkStatus: state.realtimeTalkStatus,
-                  realtimeTalkDetail: state.realtimeTalkDetail,
-                  realtimeTalkTranscript: state.realtimeTalkTranscript,
-                  realtimeTalkConversation: state.realtimeTalkConversation,
-                  realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-                  realtimeTalkOptions: state.realtimeTalkOptions,
-                  realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
-                  connected: state.connected,
-                  canSend: state.connected,
-                  disabledReason: chatDisabledReason,
-                  error: chatViewError,
-                  runStatus: state.chatRunStatus,
-                  onDismissError: () => dismissChatError(state),
-                  onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
-                  sessions: state.sessionsResult,
-                  composerControls: renderGuardedChatControls(state),
-                  sessionWorkspace: {
-                    collapsed: chatWorkspaceFiles.collapsed,
-                    sessionKey: state.sessionKey,
-                    list:
-                      chatWorkspaceFiles.list?.sessionKey === state.sessionKey
-                        ? chatWorkspaceFiles.list
-                        : null,
-                    loading: chatWorkspaceFiles.loading,
-                    error: chatWorkspaceFiles.error,
-                    activeId: chatWorkspaceFiles.activeId,
-                    onToggleCollapsed: toggleChatWorkspaceFilesCollapsed,
-                    onRefresh: refreshChatWorkspaceFiles,
-                    onBrowsePath: browseChatWorkspacePath,
-                    onCopyPath: copyChatWorkspacePath,
-                    onOpenFile: openChatWorkspaceFile,
-                    onSearch: searchChatWorkspaceFiles,
-                    onOpenArtifact: openChatWorkspaceArtifact,
-                  },
-                  autoExpandToolCalls: false,
-                  onRefresh: () => {
-                    state.chatSideResult = null;
-                    state.resetToolStream();
-                    void refreshChat(state, { awaitHistory: true, scheduleScroll: false });
-                  },
-                  onChatScroll: (event) => state.handleChatScroll(event),
-                  getDraft: () => state.chatMessage,
-                  onDraftChange: (next) => state.handleChatDraftChange(next),
-                  onRequestUpdate: requestHostUpdate,
-                  onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
-                  onSlashIntent: () => refreshChatCommands(state).finally(requestHostUpdate),
-                  attachments: state.chatAttachments,
-                  onAttachmentsChange: (next) => (state.chatAttachments = next),
-                  onSend: () => void state.handleSendChat(),
-                  onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
-                  onOpenSessionCheckpoints: () => {
-                    state.sessionsExpandedCheckpointKey = state.sessionKey;
-                    state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, {
-                      ...createChatSessionsLoadOverrides(state),
-                      ...scopedAgentListParamsForSession(state, state.sessionKey),
-                    });
-                  },
-                  onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-                  onToggleRealtimeTalkOptions: () => {
-                    state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
-                    if (state.realtimeTalkOptionsOpen) {
-                      void state.fetchRealtimeTalkCatalog();
-                    }
-                  },
-                  onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
-                  canAbort: hasAbortableSessionRun(state),
-                  onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
-                  onQueueRemove: (id) => state.removeQueuedMessage(id),
-                  onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-                  onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
-                  onDismissSideResult: () => {
-                    state.chatSideResult = null;
-                  },
-                  onNewSession: () => void createChatSession(state, { source: "user" }),
-                  onClearHistory: runUiTask(async () => {
-                    if (!state.client || !state.connected) {
-                      return;
-                    }
-                    const hadActiveRun = hasAbortableSessionRun(state);
-                    try {
-                      await state.client.request("sessions.reset", {
-                        key: state.sessionKey,
-                        ...scopedAgentParamsForSession(state, state.sessionKey),
-                      });
-                      state.chatMessages = [];
-                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
-                        sessionKey: state.sessionKey,
-                      });
-                      state.chatSideResult = null;
-                      reconcileChatRunLifecycle(
-                        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-                        {
-                          outcome: hadActiveRun ? "interrupted" : undefined,
-                          sessionStatus: "killed",
-                          runId: state.chatRunId,
-                          sessionKey: state.sessionKey,
-                          clearLocalRun: true,
-                          clearChatStream: true,
-                          clearToolStream: true,
-                          clearSideResultTerminalRuns: true,
-                          clearRunStatus: !hadActiveRun,
-                        },
-                      );
-                      await loadChatHistory(state);
-                    } catch (err) {
-                      state.lastError = String(err);
-                      state.chatError = state.lastError;
-                    }
-                  }),
-                  agentsList: state.agentsList,
-                  currentAgentId: chatAgentId,
-                  fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
-                  onAgentChange: (agentId: string) => {
-                    switchChatSession(state, buildAgentMainSessionKey({ agentId }));
-                  },
-                  onNavigateToAgent: () => {
-                    state.agentsSelectedId = resolvedAgentId;
-                    state.setTab("agents" as import("./navigation.ts").Tab);
-                  },
-                  onSessionSelect: (key: string) => {
-                    switchChatSession(state, key);
-                  },
-                  showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
-                  onScrollToBottom: () => state.scrollToBottom(),
-                  // Sidebar props for tool output viewing
-                  sidebarOpen: state.sidebarOpen,
-                  sidebarContent: state.sidebarContent,
-                  sidebarError: state.sidebarError,
-                  splitRatio: state.splitRatio,
-                  canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
-                  onOpenSidebar: (content) => state.handleOpenSidebar(content),
-                  onCloseSidebar: () => state.handleCloseSidebar(),
-                  onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
-                  assistantName: state.assistantName,
-                  assistantAvatar: effectiveAssistantAvatar,
-                  userName: state.userName ?? null,
-                  userAvatar: state.userAvatar ?? null,
-                  localMediaPreviewRoots: state.localMediaPreviewRoots,
-                  embedSandboxMode: state.embedSandboxMode,
-                  allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-                  assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
-                  basePath: state.basePath ?? "",
+                  chatAvatarUrl,
+                  chatDisabledReason,
+                  chatViewError,
+                  chatWorkspaceFiles,
+                  onToggleWorkspaceFilesCollapsed: toggleChatWorkspaceFilesCollapsed,
+                  onRefreshWorkspaceFiles: refreshChatWorkspaceFiles,
+                  onBrowseWorkspacePath: browseChatWorkspacePath,
+                  onCopyWorkspacePath: copyChatWorkspacePath,
+                  onOpenWorkspaceFile: openChatWorkspaceFile,
+                  onSearchWorkspaceFiles: searchChatWorkspaceFiles,
+                  onOpenWorkspaceArtifact: openChatWorkspaceArtifact,
+                  chatAgentId,
+                  resolvedAgentId,
+                  effectiveAssistantAvatar,
                 }),
             )
           : nothing}
