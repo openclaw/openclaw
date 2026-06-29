@@ -1078,12 +1078,6 @@ function resolveAssistantAvatarOverride(config: unknown): string | null {
   return normalizeOptionalString((assistant as { avatar?: unknown }).avatar) ?? null;
 }
 
-function buildAssistantAvatarRoute(basePathValue: string | null | undefined, agentId: string) {
-  const basePath = normalizeBasePath(basePathValue ?? "");
-  const encoded = encodeURIComponent(agentId);
-  return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
-}
-
 // ── Quick Settings data extraction helpers ──
 
 const KNOWN_CHANNEL_IDS = [
