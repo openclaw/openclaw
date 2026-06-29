@@ -637,7 +637,9 @@ When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for e
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `agents.defaults.memorySearch`.
+For the built-in `memory-core` slot owner, dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `agents.defaults.memorySearch`.
+
+If `plugins.slots.memory` points to another memory plugin, OpenClaw reads dreaming settings from that plugin entry instead, for example `plugins.entries.<memory-slot-owner>.config.dreaming` when the slot owner exposes that config. Slot-owned settings are separate from any plugin-specific vector-native dreaming pipeline.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 
