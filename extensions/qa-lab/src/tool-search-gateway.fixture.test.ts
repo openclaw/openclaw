@@ -30,11 +30,11 @@ describe("tool search gateway e2e fetch helper", () => {
     expect(
       readToolSearchGatewayFetchLimits({
         OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES: "4096",
-        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS: "120000",
+        OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS: "5000",
       }),
     ).toEqual({
       bodyMaxBytes: 4096,
-      timeoutMs: 120_000,
+      timeoutMs: 5_000,
     });
   });
 

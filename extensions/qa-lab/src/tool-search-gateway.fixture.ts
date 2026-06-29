@@ -13,6 +13,7 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type Lane = "normal" | "code";
@@ -71,11 +72,7 @@ export function readToolSearchGatewayFetchLimits(
       1024 * 1024,
       env,
     ),
-    timeoutMs: readPositiveIntEnv(
-      "OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS",
-      180_000,
-      env,
-    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS", 5_000, env),
   };
 }
 
@@ -374,33 +371,37 @@ export async function runToolSearchGatewayLane(params: {
     targetTool: params.fixture.targetTool,
   });
   const beforeRequests = (await fetchJson(`${providerBaseUrl}/debug/requests`)) as unknown[];
-  const response = await fetchJson(`${params.env.gateway.baseUrl}/v1/responses`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${gatewayToken}`,
-      "content-type": "application/json",
-      "x-openclaw-scopes": "operator.write",
-      "x-openclaw-agent": "qa",
-      "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+  const response = await fetchJson(
+    `${params.env.gateway.baseUrl}/v1/responses`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${gatewayToken}`,
+        "content-type": "application/json",
+        "x-openclaw-scopes": "operator.write",
+        "x-openclaw-agent": "qa",
+        "x-openclaw-session-key": `tool-search-gateway-${params.lane}`,
+      },
+      body: JSON.stringify({
+        model: "openclaw/qa",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `tool search qa check target=${params.fixture.targetTool}`,
+              },
+            ],
+          },
+        ],
+        max_output_tokens: 256,
+        stream: false,
+      }),
     },
-    body: JSON.stringify({
-      model: "openclaw/qa",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: `tool search qa check target=${params.fixture.targetTool}`,
-            },
-          ],
-        },
-      ],
-      max_output_tokens: 256,
-      stream: false,
-    }),
-  });
+    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
+  );
   const requests = (await fetchJson(`${providerBaseUrl}/debug/requests`)) as Array<{
     raw?: string;
     body?: { tools?: unknown[] };

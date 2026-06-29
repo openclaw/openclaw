@@ -9,10 +9,8 @@ export type QaFixtureFetchJsonOptions = {
   timeoutMs?: number;
 };
 
-export type SessionLogNeedles = Record<string, string>;
-
 const DEFAULT_FETCH_BODY_MAX_BYTES = 1024 * 1024;
-const DEFAULT_FETCH_TIMEOUT_MS = 180_000;
+const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
 
 export function readPositiveIntEnv(name: string, fallback: number, env: NodeJS.ProcessEnv) {
   const raw = env[name] ?? fallback;
@@ -247,7 +245,7 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
-function createCounts(needles: SessionLogNeedles): Record<string, number> {
+function createCounts(needles: Record<string, string>): Record<string, number> {
   return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
 }
 
@@ -278,7 +276,7 @@ function shouldScanSessionLogLine(line: string): boolean {
   }
 }
 
-async function countNeedlesInFile(filePath: string, needles: SessionLogNeedles) {
+async function countNeedlesInFile(filePath: string, needles: Record<string, string>) {
   const text = await fs.readFile(filePath, "utf8").catch(() => "");
   const counts = createCounts(needles);
   for (const line of text.split(/\r?\n/u)) {
@@ -294,7 +292,7 @@ async function countNeedlesInFile(filePath: string, needles: SessionLogNeedles) 
 
 export async function countSessionLogMentions(params: {
   sessionsDir: string;
-  needles: SessionLogNeedles;
+  needles: Record<string, string>;
 }): Promise<Record<string, number>> {
   const counts = createCounts(params.needles);
   const files = await fs.readdir(params.sessionsDir, { recursive: true }).catch(() => []);
