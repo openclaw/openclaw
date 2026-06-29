@@ -135,6 +135,80 @@ describe("buildFeishuPostMessagePayload", () => {
     const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
     expect(mdEl.text).toBe("Before\n\n```\ncode\nblock\n```\n\nAfter");
   });
+
+  it("handles mixed single and double newlines (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Line A\nLine B\n\nLine C\nLine D",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    // Each standalone \n becomes \n\n; existing \n\n stays as-is.
+    expect(mdEl.text).toBe("Line A\n\nLine B\n\nLine C\n\nLine D");
+  });
+
+  it("preserves single newlines inside unordered lists (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "- Item 1\n- Item 2\n- Item 3",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("- Item 1\n- Item 2\n- Item 3");
+  });
+
+  it("preserves single newlines inside ordered lists (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "1. First\n2. Second\n3. Third",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("1. First\n2. Second\n3. Third");
+  });
+
+  it("preserves list structure inside code-fenced blocks (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Text\n```\n- list\n- items\n```\nMore",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Text\n\n```\n- list\n- items\n```\n\nMore");
+  });
+
+  it("passes through text without newlines unchanged (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Single line of text",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Single line of text");
+  });
+
+  it("handles empty string (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("");
+  });
+
+  it("normalizes triple newlines to double (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "A\n\n\nB",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    // Triple \n is split on \n\n+, then blocks are rejoined with \n\n → A\n\nB
+    expect(mdEl.text).toBe("A\n\nB");
+  });
+
+  it("handles leading and trailing newlines (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "\nHello\nWorld\n",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("\n\nHello\n\nWorld\n\n");
+  });
 });
 
 describe("getMessageFeishu", () => {

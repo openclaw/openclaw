@@ -583,14 +583,33 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
 
 /**
  * Normalize single newlines to double newlines for Feishu post+md rendering.
- * Feishu's post+md treats \n\n as a paragraph break but \n alone as a space.
- * Preserves existing \n\n sequences and fenced code blocks (#97074).
+ * Feishu's post+md treats \n\n as a paragraph break but \n alone as a space,
+ * which causes multi-line text to appear cramped. Upgrades single \n to \n\n
+ * while preserving:
+ * - Fenced code blocks (```...```)
+ * - Block-level markdown structures (lists, blockquotes)
+ * - Existing \n\n sequences
+ *
+ * #97074: Single \n rendered as space in Feishu post+md messages.
  */
 function normalizeFeishuNewlines(text: string): string {
-  // Split on fenced code blocks to preserve their internal line breaks
+  // 1. Preserve fenced code blocks
   const parts = text.split(/(```[\s\S]*?```)/g);
   for (let i = 0; i < parts.length; i += 2) {
-    parts[i] = parts[i].replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+    const segment = parts[i];
+    if (!segment) continue;
+
+    // 2. Split into blocks at \n\n boundaries
+    const blocks = segment.split(/\n\n+/);
+    for (let j = 0; j < blocks.length; j++) {
+      // 3. Check for block-level markers: list items (-, *, +, \d+.), blockquotes (>)
+      //    If any line starts with a marker, preserve single \n for structure
+      if (!/^\s*(?:[-*+]\s|\d+\.\s|>\s)/m.test(blocks[j])) {
+        blocks[j] = blocks[j].replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+      }
+    }
+    // 4. Rejoin blocks
+    parts[i] = blocks.join("\n\n");
   }
   return parts.join("");
 }
