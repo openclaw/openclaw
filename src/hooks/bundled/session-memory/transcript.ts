@@ -59,7 +59,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
 type RenderedSessionMemoryMessage = {
   isDeliveryMirror: boolean;
   role: "assistant" | "user";
-  text: string;
+  text?: string;
 };
 
 function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessage | undefined {
@@ -86,13 +86,17 @@ function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessag
   }
   const text = extractTextMessageContent(record.message.content);
   const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
-  return sanitized && !sanitized.startsWith("/")
-    ? {
-        isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
-        role,
-        text: sanitized,
-      }
-    : undefined;
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.startsWith("/")) {
+    return role === "user" ? { isDeliveryMirror: false, role } : undefined;
+  }
+  return {
+    isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
+    role,
+    text: sanitized,
+  };
 }
 
 /** Renders recent user/assistant transcript events into session memory text. */
@@ -111,6 +115,9 @@ export function getRecentSessionContentFromEvents(
       // New turn: reset even when slash commands are omitted from memory, so
       // later standalone delivery mirrors are preserved.
       lastAssistantText = undefined;
+    }
+    if (!rendered.text) {
+      continue;
     }
     // Skip delivery-mirror rows only when they duplicate the preceding
     // assistant text. Delivery-mirror rows with unique visible content
