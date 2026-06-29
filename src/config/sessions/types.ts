@@ -307,6 +307,13 @@ export type SessionEntry = SessionRestartRecoveryState &
     inheritedToolAllow?: string[];
     systemSent?: boolean;
     abortedLastRun?: boolean;
+    /**
+     * True when the currently interrupted run is a subagent completion announce delivery
+     * (`announce:v1:...`), not a human turn. Persisted on run start so restart
+     * recovery can reconcile the parent topic to non-running instead of reviving
+     * a "[System] previous turn interrupted" task after the announce run is lost.
+     */
+    announceLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
     restartRecoveryRuns?: RestartRecoveryRun[];
     /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */

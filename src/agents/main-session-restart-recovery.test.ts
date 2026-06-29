@@ -5616,5 +5616,99 @@ describe("main-session-restart-recovery", () => {
     expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("reconciles an announce-run interrupted human topic to non-running without resuming", async () => {
+    // A subagent-completion announce turn runs on the PARENT topic session and
+    // reuses its `announce:v1:...` idempotency key as the gateway run id. When a
+    // restart interrupts it, the parent topic must NOT be revived as a
+    // "[System] previous turn interrupted" recovery task; it must be reconciled
+    // back to a responsive non-running state. (incident A/B/C: announce:v1 lane)
+    const sessionsDir = await makeSessionsDir("openclaw");
+    await writeStore(sessionsDir, {
+      "agent:openclaw:telegram:group:-100:topic:2": {
+        sessionId: "topic-2-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "announce:v1:agent:openclaw:subagent:abc:run-1",
+            lifecycleGeneration: "gen-old",
+          },
+        ],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-2-session", [
+      { role: "user", content: "earlier human request" },
+      { role: "assistant", content: "earlier human reply" },
+      { role: "toolResult", content: "child announce completion" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:openclaw:telegram:group:-100:topic:2"];
+    expect(entry?.status).not.toBe("running");
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("reconciles a persisted announceLastRun human session even without recovery runs", async () => {
+    // After a full process restart the in-memory run context is gone and the
+    // orphan sweep marks the stale running row abortedLastRun. The persisted
+    // announceLastRun marker is then the only signal that the interrupted run
+    // was a delivery-only announce turn, so recovery must still reconcile it
+    // rather than enqueue a human recovery turn.
+    const sessionsDir = await makeSessionsDir("openclaw");
+    await writeStore(sessionsDir, {
+      "agent:openclaw:telegram:group:-100:topic:8893": {
+        sessionId: "topic-8893-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        announceLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-8893-session", [
+      { role: "user", content: "resumable looking tail" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:openclaw:telegram:group:-100:topic:8893"];
+    expect(entry?.status).not.toBe("running");
+    expect(entry?.announceLastRun).toBeUndefined();
+  });
+
+  it("still resumes a genuine human turn that shares the session with a finished announce run", async () => {
+    // A non-announce interrupted run must still recover normally: the announce
+    // guard keys on the run id / persisted marker, not on the topic being a group.
+    const sessionsDir = await makeSessionsDir("openclaw");
+    await writeStore(sessionsDir, {
+      "agent:openclaw:telegram:group:-100:topic:41817": {
+        sessionId: "topic-41817-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "human-run-1", lifecycleGeneration: "gen-old" }],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41817-session", [
+      { role: "user", content: "real human request" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams().sessionKey).toBe("agent:openclaw:telegram:group:-100:topic:41817");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

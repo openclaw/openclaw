@@ -2,6 +2,7 @@
 // Converts agent run lifecycle events into session row/store status updates.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
+import { isAnnounceRunId } from "../agents/announce-idempotency.js";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -52,6 +53,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "endedAt"
   | "runtimeMs"
   | "abortedLastRun"
+  | "announceLastRun"
   | "restartRecoveryRuns"
   | "mainRestartRecovery"
 >;
@@ -224,6 +226,13 @@ function derivePersistedSessionLifecyclePatch(params: {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
+  const runId = params.event.runId?.trim();
+  const phaseForAnnounce = resolveLifecyclePhase(params.event);
+  if (phaseForAnnounce === "start") {
+    snapshotPatch.announceLastRun = isAnnounceRunId(runId) ? true : undefined;
+  } else if (phaseForAnnounce === "end" || phaseForAnnounce === "error") {
+    snapshotPatch.announceLastRun = undefined;
+  }
   const projection = projectMainSessionRecoveryLifecycle({
     currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
     entry: params.entry,

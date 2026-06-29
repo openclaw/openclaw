@@ -74,6 +74,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
+import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -474,6 +475,8 @@ export function runAgentAttempt(params: {
   runTimeoutOverrideMs?: number;
   runId: string;
   lifecycleGeneration: string;
+  /** Run this attempt LLM-only (no built-in tools), e.g. an announce relay turn. */
+  disableTools?: boolean;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -964,7 +967,13 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools:
+      params.opts.modelRun === true ||
+      params.disableTools === true ||
+      isSubagentAnnounceCompletionHandoff({
+        inputProvenance: params.opts.inputProvenance,
+        internalEvents: params.opts.internalEvents,
+      }),
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
