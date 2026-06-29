@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -115,6 +116,21 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("classifies provider upstream_error payloads as server errors for fallback", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "Upstream request failed",
+      errorType: "upstream_error",
+    });
+
+    expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantError(
+          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+        ),
+      ),
+    ).toBe("server_error");
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
