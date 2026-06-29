@@ -31,7 +31,7 @@
             "reasoning": true,
             "input": ["text", "image", "video"],
             "contextWindow": 262144,
-            "maxTokens": 65536,
+            "maxTokens": 262144,
             "cost": {
               "input": 0.2,
               "output": 1.15,
@@ -65,7 +65,7 @@
             "reasoning": true,
             "input": ["text", "image", "video"],
             "contextWindow": 262144,
-            "maxTokens": 65536,
+            "maxTokens": 262144,
             "cost": {
               "input": 0.2,
               "output": 1.15,

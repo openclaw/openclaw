@@ -39,14 +39,14 @@ Standard (`stepfun`):
 
 | Model ref                | Context | Max output | Notes                              |
 | ------------------------ | ------- | ---------- | ---------------------------------- |
-| `stepfun/step-3.7-flash` | 262,144 | 65,536     | Default standard model; multimodal |
+| `stepfun/step-3.7-flash` | 262,144 | 262,144    | Default standard model; multimodal |
 | `stepfun/step-3.5-flash` | 262,144 | 65,536     | Text-only                          |
 
 Step Plan (`stepfun-plan`):
 
 | Model ref                          | Context | Max output | Notes                               |
 | ---------------------------------- | ------- | ---------- | ----------------------------------- |
-| `stepfun-plan/step-3.7-flash`      | 262,144 | 65,536     | Default Step Plan model; multimodal |
+| `stepfun-plan/step-3.7-flash`      | 262,144 | 262,144    | Default Step Plan model; multimodal |
 | `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Text-only                           |
 | `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model          |
 
@@ -161,7 +161,7 @@ Choose your provider surface and follow the setup steps.
                 input: ["text", "image", "video"],
                 cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
                 contextWindow: 262144,
-                maxTokens: 65536,
+                maxTokens: 262144,
               },
               {
                 id: "step-3.5-flash",
@@ -200,7 +200,7 @@ Choose your provider surface and follow the setup steps.
                 input: ["text", "image", "video"],
                 cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
                 contextWindow: 262144,
-                maxTokens: 65536,
+                maxTokens: 262144,
               },
               {
                 id: "step-3.5-flash",
