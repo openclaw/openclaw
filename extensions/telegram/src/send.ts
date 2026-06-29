@@ -3,12 +3,17 @@ import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -84,6 +89,8 @@ type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCapti
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
+  reply_parameters?: { message_id?: number };
+  reply_to_message_id?: number;
 };
 const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
@@ -111,6 +118,10 @@ type TelegramSendOpts = {
   silent?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
+  /** Whether replyToMessageId came from ambient context or explicit payload/action input. */
+  replyToIdSource?: "explicit" | "implicit";
+  /** Controls whether replyToMessageId is applied to every internal text chunk. */
+  replyToMode?: ReplyToMode;
   /** Quote text for Telegram reply_parameters. */
   quoteText?: string;
   /** Forum topic thread ID (for forum supergroups) */
@@ -124,6 +135,7 @@ type TelegramSendOpts = {
 type TelegramSendResult = {
   messageId: string;
   chatId: string;
+  receipt?: MessageReceipt;
 };
 
 type TelegramMessageLike = {
@@ -272,6 +284,42 @@ function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): vo
     parts.push(`chunkCount=${params.chunkCount}`);
   }
   sendLogger.info(parts.join(" "));
+}
+
+function buildTelegramTextSendReceipt(params: {
+  messageIds: readonly string[];
+  chatId: string;
+  messageThreadId?: number;
+  replyToMessageId?: number;
+}): MessageReceipt | undefined {
+  if (params.messageIds.length <= 1) {
+    return undefined;
+  }
+  return createMessageReceiptFromOutboundResults({
+    results: params.messageIds.map((messageId) => ({
+      messageId,
+      chatId: params.chatId,
+    })),
+    kind: "text",
+    ...(typeof params.messageThreadId === "number"
+      ? { threadId: String(params.messageThreadId) }
+      : {}),
+    ...(typeof params.replyToMessageId === "number"
+      ? { replyToId: String(params.replyToMessageId) }
+      : {}),
+  });
+}
+
+function resolveAcceptedReplyToMessageId(
+  params: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined,
+): number | undefined {
+  if (!params) {
+    return undefined;
+  }
+  if ("reply_to_message_id" in params) {
+    return params.reply_to_message_id;
+  }
+  return params.reply_parameters?.message_id;
 }
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
@@ -661,19 +709,26 @@ export async function sendMessageTelegram(
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
-  const threadParams = buildTelegramThreadReplyParams({
-    thread: resolveTelegramSendThreadSpec({
-      targetMessageThreadId: target.messageThreadId,
-      messageThreadId: opts.messageThreadId,
-      chatType: target.chatType,
-    }),
-    replyToMessageId: opts.replyToMessageId,
-    replyQuoteText: opts.quoteText,
-    useReplyIdAsQuoteSource: true,
+  const threadSpec = resolveTelegramSendThreadSpec({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
   });
-  const richThreadParams = toTelegramRichMessageContextParams(threadParams);
-  const hasThreadParams = Object.keys(threadParams).length > 0;
-  const hasRichThreadParams = Object.keys(richThreadParams).length > 0;
+  const singleUseReplyTo =
+    opts.replyToIdSource === "implicit" &&
+    opts.replyToMode !== undefined &&
+    isSingleUseReplyToMode(opts.replyToMode);
+  const buildThreadParams = (includeReplyTo: boolean) =>
+    buildTelegramThreadReplyParams({
+      thread: threadSpec,
+      ...(includeReplyTo
+        ? {
+            replyToMessageId: opts.replyToMessageId,
+            replyQuoteText: opts.quoteText,
+            useReplyIdAsQuoteSource: true,
+          }
+        : {}),
+    });
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
@@ -746,29 +801,59 @@ export async function sendMessageTelegram(
     return { result, acceptedParams: params };
   };
 
-  const buildTextParams = (isLastChunk: boolean) =>
-    hasThreadParams || (isLastChunk && replyMarkup)
-      ? {
-          ...threadParams,
-          ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
-      : undefined;
+  const shouldIncludeReplyForChunk = (
+    index: number,
+    chunkCount: number,
+    replyToAlreadyUsed: boolean,
+  ) =>
+    // Telegram Desktop can render long formatted reply chunks as unsupported messages.
+    // Multi-part `first` replies keep chat/topic routing but avoid hiding chunk text.
+    !replyToAlreadyUsed && (!singleUseReplyTo || (chunkCount === 1 && index === 0));
 
-  const buildRichTextParams = (isLastChunk: boolean) =>
-    hasRichThreadParams || (isLastChunk && replyMarkup)
+  const buildTextParams = (
+    index: number,
+    chunkCount: number,
+    isLastChunk: boolean,
+    replyToAlreadyUsed: boolean,
+  ) => {
+    const params = buildThreadParams(
+      shouldIncludeReplyForChunk(index, chunkCount, replyToAlreadyUsed),
+    );
+    return Object.keys(params).length > 0 || (isLastChunk && replyMarkup)
       ? {
-          ...richThreadParams,
+          ...params,
           ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
         }
       : undefined;
+  };
+
+  const buildRichTextParams = (
+    index: number,
+    chunkCount: number,
+    isLastChunk: boolean,
+    replyToAlreadyUsed: boolean,
+  ) => {
+    const params = toTelegramRichMessageContextParams(
+      buildThreadParams(shouldIncludeReplyForChunk(index, chunkCount, replyToAlreadyUsed)),
+    );
+    return Object.keys(params).length > 0 || (isLastChunk && replyMarkup)
+      ? {
+          ...params,
+          ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }
+      : undefined;
+  };
 
   const sendTelegramTextChunks = async (
     chunks: TelegramTextChunk[],
     context: string,
-  ): Promise<{ messageId: string; chatId: string }> => {
+    options: { replyToAlreadyUsed?: boolean } = {},
+  ): Promise<TelegramSendResult> => {
     let lastMessageId = "";
     let lastChatId = chatId;
     let lastAcceptedParams: TelegramThreadScopedParams | undefined;
+    let acceptedReplyToMessageId: number | undefined;
+    const messageIds: string[] = [];
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
@@ -777,7 +862,12 @@ export async function sendMessageTelegram(
       }
       const { result: res, acceptedParams } = await sendTelegramTextChunk(
         chunk,
-        buildTextParams(index === chunks.length - 1),
+        buildTextParams(
+          index,
+          chunks.length,
+          index === chunks.length - 1,
+          options.replyToAlreadyUsed === true,
+        ),
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
@@ -795,6 +885,8 @@ export async function sendMessageTelegram(
       lastMessageId = String(messageId);
       lastChatId = String(res?.chat?.id ?? chatId);
       lastAcceptedParams = acceptedParams;
+      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(acceptedParams);
+      messageIds.push(lastMessageId);
       sentChunkCount += 1;
     }
     if (lastMessageId) {
@@ -810,7 +902,17 @@ export async function sendMessageTelegram(
         chunkCount: sentChunkCount,
       });
     }
-    return { messageId: lastMessageId, chatId: lastChatId };
+    const receipt = buildTelegramTextSendReceipt({
+      messageIds,
+      chatId: lastChatId,
+      messageThreadId: lastAcceptedParams?.message_thread_id,
+      replyToMessageId: acceptedReplyToMessageId,
+    });
+    return {
+      messageId: lastMessageId,
+      chatId: lastChatId,
+      ...(receipt ? { receipt } : {}),
+    };
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
@@ -841,10 +943,14 @@ export async function sendMessageTelegram(
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
+  const sendChunkedText = async (
+    rawText: string,
+    context: string,
+    options: { replyToAlreadyUsed?: boolean } = {},
+  ) =>
     useRichMessages
-      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
-      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context, options)
+      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context, options);
 
   const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
     const textLimit = Math.min(
@@ -866,18 +972,26 @@ export async function sendMessageTelegram(
   const sendTelegramRichTextChunks = async (
     chunks: TelegramRichTextChunk[],
     context: string,
-  ): Promise<{ messageId: string; chatId: string }> => {
+    options: { replyToAlreadyUsed?: boolean } = {},
+  ): Promise<TelegramSendResult> => {
     const richRawApi = getTelegramRichRawApi(api);
     let lastMessageId = "";
     let lastChatId = chatId;
     let lastAcceptedParams: TelegramRichMessageContextParams | undefined;
+    let acceptedReplyToMessageId: number | undefined;
+    const messageIds: string[] = [];
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
         continue;
       }
-      const acceptedParams = buildRichTextParams(index === chunks.length - 1);
+      const acceptedParams = buildRichTextParams(
+        index,
+        chunks.length,
+        index === chunks.length - 1,
+        options.replyToAlreadyUsed === true,
+      );
       const result = await requestWithChatNotFound(
         () =>
           richRawApi.sendRichMessage({
@@ -907,6 +1021,8 @@ export async function sendMessageTelegram(
       lastMessageId = String(messageId);
       lastChatId = String(result?.chat?.id ?? chatId);
       lastAcceptedParams = acceptedParams;
+      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(acceptedParams);
+      messageIds.push(lastMessageId);
       sentChunkCount += 1;
     }
     if (lastMessageId) {
@@ -922,7 +1038,17 @@ export async function sendMessageTelegram(
         chunkCount: sentChunkCount,
       });
     }
-    return { messageId: lastMessageId, chatId: lastChatId };
+    const receipt = buildTelegramTextSendReceipt({
+      messageIds,
+      chatId: lastChatId,
+      messageThreadId: lastAcceptedParams?.message_thread_id,
+      replyToMessageId: acceptedReplyToMessageId,
+    });
+    return {
+      messageId: lastMessageId,
+      chatId: lastChatId,
+      ...(receipt ? { receipt } : {}),
+    };
   };
 
   async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
@@ -1001,8 +1127,10 @@ export async function sendMessageTelegram(
     const needsSeparateText = Boolean(followUpText);
     // When splitting, put reply_markup only on the follow-up text (the "main" content),
     // not on the media message.
+    const mediaThreadParams = buildThreadParams(true);
+    const mediaUsedReplyTo = resolveAcceptedReplyToMessageId(mediaThreadParams) !== undefined;
     const baseMediaParams = {
-      ...(hasThreadParams ? threadParams : {}),
+      ...mediaThreadParams,
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const videoDimensions =
@@ -1145,8 +1273,13 @@ export async function sendMessageTelegram(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
-      const textResult = await sendChunkedText(followUpText, "text follow-up send");
-      return { messageId: textResult.messageId, chatId: resolvedChatId };
+      const textResult = await sendChunkedText(followUpText, "text follow-up send", {
+        replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
+      });
+      return {
+        ...textResult,
+        chatId: resolvedChatId,
+      };
     }
 
     return { messageId: String(mediaMessageId), chatId: resolvedChatId };

@@ -105,6 +105,56 @@ async function runAdaptiveCardInvoke(
   } as unknown as MSTeamsTurnContext);
 }
 
+async function runMessageActivity(params: {
+  value?: unknown;
+  text?: string;
+  deps?: MSTeamsMessageHandlerDeps;
+}) {
+  const deps = params.deps ?? createDeps();
+  let messageHandler: ((context: unknown, next: () => Promise<void>) => Promise<void>) | undefined;
+  const handler: MSTeamsActivityHandler = {
+    onMessage: (callback) => {
+      messageHandler = callback;
+      return handler;
+    },
+    onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
+    run: vi.fn(async () => undefined),
+  };
+  registerMSTeamsHandlers(handler, deps);
+  await messageHandler?.(
+    {
+      activity: {
+        id: "message-1",
+        type: "message",
+        text: params.text ?? "",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+        value: params.value,
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext,
+    vi.fn(async () => undefined),
+  );
+}
+
 function lastDispatchedCtxPayload(): Record<string, unknown> {
   const dispatched = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls.at(
     -1,
@@ -250,5 +300,28 @@ describe("msteams adaptive card action invoke", () => {
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(payload));
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(payload));
+  });
+
+  it("routes message activities with submitted card values as message text", async () => {
+    const data = { value: "button-submit-value", label: "Submit action" };
+
+    await runMessageActivity({ value: data });
+
+    const ctxPayload = lastDispatchedCtxPayload();
+    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
+    expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
+    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
+    expect(ctxPayload.SenderId).toBe("user-aad");
+  });
+
+  it("keeps activity text ahead of submitted card values on normal messages", async () => {
+    await runMessageActivity({
+      text: "typed text",
+      value: { value: "card-value", label: "Card value" },
+    });
+
+    const ctxPayload = lastDispatchedCtxPayload();
+    expect(ctxPayload.BodyForAgent).toBe("typed text");
+    expect(ctxPayload.CommandBody).toBe("typed text");
   });
 });

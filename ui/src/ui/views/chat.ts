@@ -163,6 +163,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -290,16 +291,10 @@ function renderNativeTalkSelect(params: {
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
-  selectedLabel?: string;
 }) {
-  const selectedLabel =
-    params.selectedLabel ?? params.options.find((entry) => entry.value === params.value)?.label;
   return html`
     <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
       <span>${params.label}</span>
-      ${selectedLabel
-        ? html`<span class="agent-chat__talk-select-label">${selectedLabel}</span>`
-        : nothing}
       <select
         .value=${params.value}
         @change=${(event: Event) =>
@@ -367,8 +362,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   const sensitivityOptions = isCustomSensitivity
     ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
     : TALK_SENSITIVITY_OPTIONS;
-  const sensitivityLabel =
-    sensitivityOptions.find((entry) => entry.value === sensitivityValue)?.label ?? "Custom";
   const updateSensitivity = (value: string) => {
     if (value !== "__custom") {
       onChange({ vadThreshold: value });
@@ -396,7 +389,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           label: "Sensitivity",
           value: sensitivityValue,
           options: sensitivityOptions,
-          selectedLabel: sensitivityLabel,
           onSelect: updateSensitivity,
         })}
       </div>
@@ -2282,6 +2274,7 @@ export function renderChat(props: ChatProps) {
                       expandedToolCards.get(toolCardId) ?? false,
                     onToggleToolExpanded: toggleToolCardExpanded,
                     onRequestUpdate: requestUpdate,
+                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
                     assistantName: props.assistantName,
                     assistantAvatar: assistantIdentity.avatar,
                     userName: props.userName ?? null,
