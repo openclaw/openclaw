@@ -67,6 +67,7 @@ async function readResponsePrefix(
   res: Response,
   maxBytes: number,
   opts?: {
+    cancelAtLimit?: boolean;
     chunkTimeoutMs?: number;
     onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
@@ -111,6 +112,13 @@ async function readResponsePrefix(
       chunks.push(value);
       total = nextTotal;
       size = total;
+      if (opts?.cancelAtLimit && total >= maxBytes) {
+        truncated = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        break;
+      }
     }
   } finally {
     try {
@@ -165,6 +173,7 @@ export async function readResponseTextSnippet(
   const maxBytes = opts?.maxBytes ?? 8 * 1024;
   const maxChars = opts?.maxChars ?? 200;
   const prefix = await readResponsePrefix(res, maxBytes, {
+    cancelAtLimit: true,
     chunkTimeoutMs: opts?.chunkTimeoutMs,
     onIdleTimeout: opts?.onIdleTimeout,
   });
