@@ -52,31 +52,14 @@ export type WhatsAppMonitorRuntimeOptions = {
   createSocket?: WhatsAppCreateSocket;
 };
 
-type WhatsAppMonitorRuntimeOptionsState = {
-  options: WhatsAppMonitorRuntimeOptions;
-};
-
-const WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY = Symbol.for("openclaw.whatsapp.monitorRuntimeOptions");
-
-function getWhatsAppMonitorRuntimeOptionsState(): WhatsAppMonitorRuntimeOptionsState {
-  const globalState = globalThis as typeof globalThis & {
-    [WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY]?: WhatsAppMonitorRuntimeOptionsState;
-  };
-  const existing = globalState[WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: WhatsAppMonitorRuntimeOptionsState = { options: {} };
-  globalState[WHATSAPP_MONITOR_RUNTIME_OPTIONS_KEY] = created;
-  return created;
-}
+let whatsappMonitorRuntimeOptions: WhatsAppMonitorRuntimeOptions = {};
 
 export function setWhatsAppMonitorRuntimeOptions(options?: WhatsAppMonitorRuntimeOptions): void {
-  getWhatsAppMonitorRuntimeOptionsState().options = { createSocket: options?.createSocket };
+  whatsappMonitorRuntimeOptions = { createSocket: options?.createSocket };
 }
 
 function getWhatsAppMonitorRuntimeOptions(): WhatsAppMonitorRuntimeOptions {
-  return { ...getWhatsAppMonitorRuntimeOptionsState().options };
+  return { ...whatsappMonitorRuntimeOptions };
 }
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
