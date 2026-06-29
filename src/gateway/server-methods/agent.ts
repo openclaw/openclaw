@@ -54,6 +54,7 @@ import {
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { normalizeToolName } from "../../agents/tool-policy-shared.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
@@ -2716,7 +2717,14 @@ export const agentHandlers: GatewayRequestHandlers = {
               lane: request.lane,
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
-              toolsAllow: request.toolsAllow,
+              toolsAllow:
+                request.toolsAllow === undefined
+                  ? undefined
+                  : Array.from(
+                      new Set(
+                        request.toolsAllow.map((entry) => normalizeToolName(entry)).filter(Boolean),
+                      ),
+                    ),
               extraSystemPrompt: request.extraSystemPrompt,
               bootstrapContextMode: request.bootstrapContextMode,
               bootstrapContextRunKind: request.bootstrapContextRunKind,

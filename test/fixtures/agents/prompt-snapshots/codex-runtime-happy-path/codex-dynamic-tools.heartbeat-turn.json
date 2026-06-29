@@ -1097,7 +1097,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limits/tool messages.",
+        "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limit, offset pagination, and tool-message inclusion.",
         "inputSchema": {
           "properties": {
             "includeTools": {
@@ -1105,6 +1105,10 @@
             },
             "limit": {
               "minimum": 1,
+              "type": "integer"
+            },
+            "offset": {
+              "minimum": 0,
               "type": "integer"
             },
             "sessionKey": {
