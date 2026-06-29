@@ -726,7 +726,7 @@ function buildParams(
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
     const supportsZaiReasoningEffort =
-      compat.supportsReasoningEffort === true || model.id.toLowerCase().startsWith("glm-5.2");
+      compat.supportsReasoningEffort || model.id.toLowerCase().startsWith("glm-5.2");
     if (options?.reasoningEffort && supportsZaiReasoningEffort) {
       params.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
