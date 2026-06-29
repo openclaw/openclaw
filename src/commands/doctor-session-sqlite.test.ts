@@ -24,6 +24,20 @@ type TestStore = {
   transcriptPath: string;
 };
 
+type TestMigrationManifest = {
+  failedAt?: string;
+  runId: string;
+  targets: Array<{
+    agentId: string;
+    completedMoves: Array<{ sourcePath: string }>;
+    issues: Array<{ code: string; message: string }>;
+    plannedMoves: Array<{ sourcePath: string }>;
+    sqlitePath: string;
+    storePath: string;
+    validationBeforeArchive: string;
+  }>;
+};
+
 const previousEnv = {
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -373,6 +387,87 @@ describe("runDoctorSessionSqlite", () => {
       sourcePath: transcriptPath,
     });
     expect(fs.readFileSync(store.transcriptPath, "utf-8")).toBe('{"type":"event","id":"new"}\n');
+  });
+
+  it("recovers the latest failed migration run and prepares a sanitized GitHub issue", async () => {
+    const store = createLegacyStore({ agentDirName: "token=supersecret" });
+    const importReport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const manifestPath = importReport.migrationRun?.manifestPath;
+    const manifest = readMigrationManifest(manifestPath);
+    manifest.failedAt = "2030-01-01T00:00:00.000Z";
+    manifest.targets[0]!.issues = [
+      {
+        code: "startup_failure",
+        message: "token=supersecret startup migration failed after archive",
+      },
+    ];
+    fs.writeFileSync(manifestPath!, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    writeFailedManifest(store, "older-failed.json", "2000-01-01T00:00:00.000Z");
+
+    const recover = await runDoctorSessionSqlite({
+      cfg: {},
+      env: store.env,
+      mode: "recover",
+    });
+
+    expect(recover.mode).toBe("recover");
+    expect(recover.totals.issues).toBe(0);
+    expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
+    expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
+    expect(recover.targets[0]?.restore?.restoredFiles).toEqual(
+      expect.arrayContaining(canonicalTestPaths([store.transcriptPath, store.trajectoryPath])),
+    );
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    expect(recover.supportIssue?.title).toContain(manifest.runId);
+    expect(recover.supportIssue?.body).toContain("startup_failure");
+    expect(recover.supportIssue?.body).not.toContain("agent:main:main");
+    expect(recover.supportIssue?.body).not.toContain("supersecret");
+    expect(recover.supportIssue?.url).toContain("github.com/openclaw/openclaw/issues/new");
+  });
+
+  it("recovers only manifests matching an explicit store selector", async () => {
+    const store = createLegacyStore();
+    const importReport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const manifestPath = importReport.migrationRun?.manifestPath;
+    const manifest = readMigrationManifest(manifestPath);
+    manifest.failedAt = "2030-01-01T00:00:00.000Z";
+    manifest.targets[0]!.issues = [
+      { code: "startup_failure", message: "selected store failed after archive" },
+    ];
+    manifest.targets.push({
+      agentId: "other",
+      completedMoves: [],
+      issues: [{ code: "unselected_failure", message: "unselected target should stay private" }],
+      plannedMoves: [],
+      sqlitePath: path.join(store.tempDir, "other.sqlite"),
+      storePath: path.join(store.tempDir, "other", "sessions.json"),
+      validationBeforeArchive: "failed",
+    });
+    fs.writeFileSync(manifestPath!, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    writeFailedManifest(store, "newer-unselected.json", "2040-01-01T00:00:00.000Z", {
+      agentId: "other",
+      storePath: path.join(store.tempDir, "other", "sessions.json"),
+    });
+
+    const recover = await runDoctorSessionSqlite({
+      cfg: {},
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
+    expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
+    expect(recover.supportIssue?.body).not.toContain("unselected_failure");
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
   });
 
   it("imports aliases that share one legacy transcript before archiving it", async () => {
@@ -739,7 +834,7 @@ describe("runDoctorSessionSqlite", () => {
       "utf-8",
     );
     expect(failureReport).toContain("transcript_malformed");
-    expect(failureReport).toContain("openclaw doctor --session-sqlite restore");
+    expect(failureReport).toContain("openclaw doctor --session-sqlite recover --github-issue");
     expect(failureReport).not.toContain("supersecret");
   });
 
@@ -838,29 +933,47 @@ function createLegacyStore(
   };
 }
 
-function readMigrationManifest(manifestPath: string | undefined): {
-  runId: string;
-  targets: Array<{
-    agentId: string;
-    completedMoves: Array<{ sourcePath: string }>;
-    plannedMoves: Array<{ sourcePath: string }>;
-    storePath: string;
-    validationBeforeArchive: string;
-  }>;
-} {
+function readMigrationManifest(manifestPath: string | undefined): TestMigrationManifest {
   if (!manifestPath) {
     throw new Error("expected migration manifest path");
   }
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-    runId: string;
-    targets: Array<{
-      agentId: string;
-      completedMoves: Array<{ sourcePath: string }>;
-      plannedMoves: Array<{ sourcePath: string }>;
-      storePath: string;
-      validationBeforeArchive: string;
-    }>;
-  };
+  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as TestMigrationManifest;
+}
+
+function writeFailedManifest(
+  store: TestStore,
+  fileName: string,
+  failedAt: string,
+  target: { agentId?: string; storePath?: string } = {},
+): void {
+  const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
+  fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(runsDir, fileName),
+    `${JSON.stringify(
+      {
+        failedAt,
+        manifestVersion: 1,
+        openClawVersion: "test",
+        runId: path.basename(fileName, ".json"),
+        startedAt: failedAt,
+        targets: [
+          {
+            agentId: target.agentId ?? "older",
+            completedMoves: [],
+            issues: [{ code: "older_failure", message: "older failure" }],
+            plannedMoves: [],
+            sqlitePath: path.join(store.tempDir, "older.sqlite"),
+            storePath: target.storePath ?? path.join(store.tempDir, "older-sessions.json"),
+            validationBeforeArchive: "failed",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
 }
 
 function canonicalTestPaths(paths: string[]): string[] {

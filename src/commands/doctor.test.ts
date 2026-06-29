@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  createSessionSqliteGithubIssue: vi.fn(),
   runPostUpgradeProbes: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
   resolveInstalledPluginIndexStorePath: vi.fn(() => "/tmp/openclaw-installed-plugins.json"),
@@ -13,6 +14,10 @@ vi.mock("./doctor-post-upgrade.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite: mocks.runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-session-sqlite-github-issue.js", () => ({
+  createSessionSqliteGithubIssue: mocks.createSessionSqliteGithubIssue,
 }));
 
 vi.mock("../plugins/installed-plugin-index-store-path.js", () => ({
@@ -100,5 +105,108 @@ describe("doctorCommand", () => {
     });
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("creates a GitHub issue for approved session sqlite recovery reports", async () => {
+    const supportIssue = {
+      body: "sanitized body",
+      bodyPath: "/tmp/session.failure.md",
+      title: "Session SQLite migration recovery report (run-1)",
+      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+    };
+    const report = {
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    mocks.createSessionSqliteGithubIssue.mockReturnValueOnce({
+      ok: true,
+      url: "https://github.com/openclaw/openclaw/issues/123",
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.createSessionSqliteGithubIssue).toHaveBeenCalledWith(supportIssue);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "session-sqlite recover: created GitHub issue https://github.com/openclaw/openclaw/issues/123",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps session sqlite recovery GitHub status inside JSON output", async () => {
+    const report = {
+      mode: "recover",
+      supportIssue: {
+        body: "sanitized body",
+        title: "Session SQLite migration recovery report (run-1)",
+        url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+      },
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        json: true,
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.createSessionSqliteGithubIssue).not.toHaveBeenCalled();
+    expect((report.supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
   });
 });

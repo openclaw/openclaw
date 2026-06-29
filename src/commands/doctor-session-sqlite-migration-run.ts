@@ -68,6 +68,19 @@ export type ActiveSessionSqliteMigrationRun = {
   manifestPath: string;
 };
 
+export type SessionSqliteMigrationFailureIssue = {
+  body: string;
+  bodyPath?: string;
+  github?: {
+    fallbackUrl?: string;
+    message?: string;
+    status: "created" | "failed" | "skipped";
+    url?: string;
+  };
+  title: string;
+  url: string;
+};
+
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";
 
 export function createSessionSqliteMigrationRun(
@@ -186,6 +199,7 @@ export function restoreSessionSqliteMigrationRuns(params: {
 
 export function restoreSessionSqliteMigrationRun(params: {
   manifestPath: string;
+  targetKeys?: ReadonlySet<string>;
 }): DoctorSessionSqliteRestoreReport {
   const restoreReport: DoctorSessionSqliteRestoreReport = {
     ...emptyRestoreReport(),
@@ -200,9 +214,33 @@ export function restoreSessionSqliteMigrationRun(params: {
     });
     return restoreReport;
   }
-  restoreSessionSqliteMigrationManifest(manifest, manifest.targets, restoreReport);
+  restoreSessionSqliteMigrationManifest(
+    manifest,
+    filterRestoreManifestTargets(manifest, params.targetKeys),
+    restoreReport,
+  );
   writeSessionSqliteMigrationManifest({ manifest, manifestPath: params.manifestPath });
   return restoreReport;
+}
+
+export function findLatestFailedSessionSqliteMigrationManifest(
+  env: NodeJS.ProcessEnv,
+  targetKeys?: ReadonlySet<string>,
+): { manifest: SessionSqliteMigrationManifest; manifestPath: string } | undefined {
+  return listSessionSqliteMigrationManifestPaths(env)
+    .map((manifestPath) => ({
+      manifest: readSessionSqliteMigrationManifest(manifestPath),
+      manifestPath,
+    }))
+    .filter(
+      (item): item is { manifest: SessionSqliteMigrationManifest; manifestPath: string } =>
+        item.manifest !== undefined &&
+        isFailedSessionSqliteMigrationManifest(item.manifest) &&
+        filterRestoreManifestTargets(item.manifest, targetKeys).length > 0,
+    )
+    .toSorted(
+      (left, right) => manifestSortTime(right.manifest) - manifestSortTime(left.manifest),
+    )[0];
 }
 
 export function writeSessionSqliteMigrationFailureReports(
@@ -216,7 +254,7 @@ export function writeSessionSqliteMigrationFailureReports(
     generatedAt: new Date().toISOString(),
     manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
     reason: params.reason,
-    recoveryCommand: "openclaw doctor --session-sqlite restore --session-sqlite-all-agents",
+    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
     restoreStatus: manifest?.restore?.status ?? "not_attempted",
     runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
     targets:
@@ -242,6 +280,53 @@ export function writeSessionSqliteMigrationFailureReports(
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return { jsonPath, markdownPath };
+}
+
+export function createSessionSqliteMigrationFailureIssue(
+  manifestPath: string,
+  targetKeys?: ReadonlySet<string>,
+): SessionSqliteMigrationFailureIssue | undefined {
+  const manifest = readSessionSqliteMigrationManifest(manifestPath);
+  if (!manifest) {
+    return undefined;
+  }
+  const title = `Session SQLite migration recovery report (${manifest.runId})`;
+  const bodyPath = manifest.failureReports?.markdownPath;
+  const targets = filterRestoreManifestTargets(manifest, targetKeys);
+  const reportBody = renderFailureMarkdown({
+    generatedAt: new Date().toISOString(),
+    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
+    reason: "session SQLite migration failed",
+    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
+    restoreStatus: manifest.restore?.status ?? "not_attempted",
+    runId: manifest.runId,
+    targets: targets.map((target) => ({
+      agentId: sanitizeFailureReportText(target.agentId),
+      completedMoves: target.completedMoves.length,
+      issues: target.issues.map((issue) => ({
+        code: issue.code,
+        message: sanitizeFailureReportText(issue.message),
+      })),
+      plannedMoves: target.plannedMoves.length,
+      sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
+      storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
+      validationBeforeArchive: target.validationBeforeArchive,
+    })),
+    version: VERSION,
+  });
+  const body = [
+    "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
+    "",
+    reportBody,
+  ]
+    .join("\n")
+    .slice(0, 20_000);
+  return {
+    body,
+    ...(bodyPath ? { bodyPath } : {}),
+    title,
+    url: createPrefilledGithubIssueUrl(title, body),
+  };
 }
 
 export function sessionSqliteMigrationTargetKey(target: {
@@ -369,7 +454,7 @@ function filterRestoreManifestTargets(
   );
 }
 
-function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
+export function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
   const runsDir = resolveSessionSqliteMigrationRunsDir(env);
   let entries: string[];
   try {
@@ -384,7 +469,7 @@ function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string
     .toSorted((left, right) => right.localeCompare(left));
 }
 
-function readSessionSqliteMigrationManifest(
+export function readSessionSqliteMigrationManifest(
   manifestPath: string,
 ): SessionSqliteMigrationManifest | undefined {
   try {
@@ -396,6 +481,28 @@ function readSessionSqliteMigrationManifest(
   } catch {
     return undefined;
   }
+}
+
+function isFailedSessionSqliteMigrationManifest(manifest: SessionSqliteMigrationManifest): boolean {
+  return (
+    manifest.failedAt !== undefined ||
+    manifest.failureReports !== undefined ||
+    manifest.targets.some((target) => target.issues.length > 0)
+  );
+}
+
+function manifestSortTime(manifest: SessionSqliteMigrationManifest): number {
+  const timestamp = manifest.failedAt ?? manifest.completedAt ?? manifest.startedAt;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function createPrefilledGithubIssueUrl(title: string, body: string): string {
+  const params = new URLSearchParams({
+    body,
+    title,
+  });
+  return `https://github.com/openclaw/openclaw/issues/new?${params.toString()}`;
 }
 
 function renderFailureMarkdown(payload: {

@@ -62,9 +62,10 @@ automatically. Run `openclaw doctor --session-sqlite inspect
 --session-sqlite-all-agents`, then follow the [Doctor migration
 sequence](/cli/doctor#session-sqlite-migration), when you need explicit
 inspection or validation evidence. If a migration fails after legacy transcript
-artifacts were archived, use the Doctor restore mode from that sequence before
-running an older file-backed OpenClaw version; restore uses migration manifests
-and does not make active runtime read JSONL files again.
+artifacts were archived, use the Doctor recovery mode from that sequence.
+Recovery uses migration manifests, restores only the affected archived support
+artifacts, prepares a sanitized GitHub issue report when requested, and does not
+make active runtime read JSONL files again.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
