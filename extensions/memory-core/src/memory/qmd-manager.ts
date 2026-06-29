@@ -717,6 +717,40 @@ async function readRawMcporterEntryFromFile(
   return null;
 }
 
+async function canUseGeneratedMcporterFallback(
+  serverName: string,
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+): Promise<boolean> {
+  for (const candidate of resolveMcporterConfigCandidates(env, workspaceDir)) {
+    let text: string;
+    try {
+      text = await fs.readFile(candidate, "utf8");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        continue;
+      }
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch {
+      try {
+        parsed = JSON.parse(stripJsoncCommentsAndTrailingCommas(text)) as unknown;
+      } catch {
+        return false;
+      }
+    }
+    const record = asRecord(parsed);
+    const servers = record ? asRecord(record.mcpServers) : null;
+    if (servers && asRecord(servers[serverName])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function readRawMcporterEntry(
   serverName: string,
   env: NodeJS.ProcessEnv,
@@ -3289,7 +3323,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (signal?.aborted) {
         throw asAbortError(signal);
       }
-      if (canUseGeneratedFallback) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
         return null;
       }
       throw new Error(
@@ -3304,14 +3341,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     try {
       parsed = parseMcporterResponseJson(result.stdout);
     } catch (err) {
-      if (canUseGeneratedFallback) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned invalid JSON`, { cause: err });
     }
     const serialized = asRecord(parsed);
     if (!serialized) {
-      if (canUseGeneratedFallback) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
@@ -3326,7 +3369,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.externalMcporterConfigPath = extractMcporterSourcePath(serialized) ?? null;
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
-      if (canUseGeneratedFallback) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an unsupported definition`);

@@ -5352,6 +5352,58 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("rejects broken discovered mcporter config instead of generating fallback qmd config", async () => {
+    delete process.env.MCPORTER_CONFIG;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const projectConfigDir = path.join(workspaceDir, "config");
+    await fs.mkdir(projectConfigDir, { recursive: true });
+    await fs.writeFile(path.join(projectConfigDir, "mcporter.json"), "{", "utf8");
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(child, "stderr", "failed to parse config", 1);
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/mcporter server "qmd" is not configured or could not be read/);
+
+    expect(
+      spawnMock.mock.calls.some(
+        (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+      ),
+    ).toBe(false);
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
   it("generates agent-scoped config for configured stdio servers without original env", async () => {
     const userMcporterConfig = path.join(tmpRoot, "stdio-generated-user-mcporter.json");
     process.env.MCPORTER_CONFIG = userMcporterConfig;
