@@ -3,6 +3,7 @@ import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
+  createAmbientNodeProxyAgent,
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
@@ -89,6 +90,24 @@ function setRequestUserAgent(req: unknown) {
 {
   const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
   inst.interceptors?.request?.use(setRequestUserAgent);
+}
+
+// Route Feishu API requests through the ambient HTTP proxy when one is
+// configured (HTTPS_PROXY / HTTP_PROXY env vars). Disabling axios's built-in
+// proxy detection (proxy: false) prevents the forward-proxy path rewriting
+// that breaks HTTPS CONNECT tunneling; the injected proxyline agent handles
+// the tunnel instead.
+{
+  const httpsAgent = createAmbientNodeProxyAgent({ protocol: "https" });
+  if (httpsAgent) {
+    const httpAgent = createAmbientNodeProxyAgent({ protocol: "http" });
+    const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors & {
+      defaults: Record<string, unknown>;
+    };
+    inst.defaults.proxy = false;
+    if (httpAgent) inst.defaults.httpAgent = httpAgent;
+    inst.defaults.httpsAgent = httpsAgent;
+  }
 }
 
 export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
@@ -227,6 +246,10 @@ export async function createFeishuWSClient(
     ...callbacks,
     loggerLevel: feishuClientSdk.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
+    // Pass the proxy-aware httpInstance so WSClient's internal
+    // pullConnectConfig() (which refreshes the WebSocket endpoint URL)
+    // also routes through the ambient proxy.
+    httpInstance: createTimeoutHttpInstance(resolveConfiguredHttpTimeoutMs(account)),
     ...(agent ? { agent } : {}),
   } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
     wsConfig: typeof FEISHU_WS_CONFIG;
