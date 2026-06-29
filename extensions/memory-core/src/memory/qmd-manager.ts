@@ -620,13 +620,14 @@ function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: s
       candidates.push(path.join(resolved, "mcporter", "mcporter.json"));
       candidates.push(path.join(resolved, "mcporter", "mcporter.jsonc"));
     }
-  } else {
-    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
-    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
   }
   const projectConfigDir = path.resolve(workspaceDir, "config");
   candidates.push(path.join(projectConfigDir, "mcporter.json"));
   candidates.push(path.join(projectConfigDir, "mcporter.jsonc"));
+  if (!xdgConfigHome || xdgConfigHome.trim().length === 0) {
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
+  }
 
   return candidates;
 }
@@ -1107,6 +1108,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private mcporterConfigMode: McporterConfigMode | null = null;
+  private mcporterConfigModePromise: Promise<McporterConfigMode> | null = null;
   private externalMcporterUsesAgentQmdEnv = false;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
@@ -3258,9 +3260,25 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.mcporterConfigMode) {
       return this.mcporterConfigMode;
     }
-    const mode = await this.resolveMcporterConfigMode(signal);
-    this.mcporterConfigMode = mode;
-    return mode;
+    if (signal) {
+      const mode = await this.resolveMcporterConfigMode(signal);
+      this.mcporterConfigMode = mode;
+      return mode;
+    }
+    if (this.mcporterConfigModePromise) {
+      return await this.mcporterConfigModePromise;
+    }
+    const modePromise = this.resolveMcporterConfigMode();
+    this.mcporterConfigModePromise = modePromise;
+    try {
+      const mode = await modePromise;
+      this.mcporterConfigMode = mode;
+      return mode;
+    } finally {
+      if (this.mcporterConfigModePromise === modePromise) {
+        this.mcporterConfigModePromise = null;
+      }
+    }
   }
 
   private async resolveMcporterConfigMode(signal?: AbortSignal): Promise<McporterConfigMode> {
