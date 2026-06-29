@@ -162,6 +162,28 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it("bounds authorization JSON response body through the shared provider reader", async () => {
+    const tracked = cancelTrackedResponse(
+      `${'{"user_code":"CODE","verification_uri":"https://x.com/device","expired_in":3600,"state":"abc","pad":"'.repeat(512)}tail`,
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal("fetch", vi.fn(async () => tracked.response));
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
   it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
     for (const [region, expectedHosts] of [
       [
