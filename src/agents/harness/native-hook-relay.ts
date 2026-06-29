@@ -445,8 +445,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-    shouldInstallInactivePreToolUseHook: () =>
-      nativePreToolUseMayRunLoopDetection(registration) !== false,
+    shouldInstallInactivePreToolUseHook: () => nativePreToolUseMayRunLoopDetection(registration),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
