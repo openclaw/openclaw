@@ -2,7 +2,7 @@
  * Helper functions for tool card rendering.
  */
 
-import { isMarkdownBlockArtText } from "../markdown.ts";
+import { isMarkdownBlockArtText } from "../../components/markdown.ts";
 import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants.ts";
 
 /**
