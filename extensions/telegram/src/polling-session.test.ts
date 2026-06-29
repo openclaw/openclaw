@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-<<import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";`r`nimport {
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
   executeSqliteQuerySync,
@@ -11,7 +12,9 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
   openOpenClawStateDatabase,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";`r`nimport { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";`r`nimport type { TelegramRuntime } from "./runtime.types.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
 const runMock = vi.hoisted(() => vi.fn());
@@ -4003,7 +4006,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
-<<spooledUpdateHandlerTimeoutMs: 5_000,
+          spooledUpdateHandlerTimeoutMs: 5_000,
           spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
@@ -4017,8 +4020,7 @@ describe("TelegramPollingSession", () => {
         finishedAt: Date.now(),
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
-
-<<await vi.advanceTimersByTimeAsync(5_200);
+      await vi.advanceTimersByTimeAsync(5_200);
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(
