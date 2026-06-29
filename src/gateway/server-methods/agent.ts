@@ -153,6 +153,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
+  resolveIdentityAvatarUrl,
   resolveSessionStoreKey,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -2847,7 +2848,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const cfg = context.getRuntimeConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
+    // Try resolving workspace-relative avatars to data URIs (consistent with agents.list).
+    // Falls back to the gateway-served /avatar/<agentId> route for other avatar types.
+    const dataUriAvatar = resolveIdentityAvatarUrl(cfg, agentId, identity.avatar);
     const avatarValue =
+      dataUriAvatar ??
       resolveAssistantAvatarUrl({
         avatar: identity.avatar,
         agentId: identity.agentId,
