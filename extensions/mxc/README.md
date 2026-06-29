@@ -46,9 +46,10 @@ readiness behavior to change as MXC host support matures.
 - Explicit opt-in after plugin install with `sandbox.backend: "mxc"`.
 - MXC `process` containment, which resolves to Windows ProcessContainer.
 - `workspaceAccess`:
-  - `none`: isolated sandbox workspace is writable.
-  - `ro`: sandbox workdir is read-only.
-  - `rw`: agent workspace is writable.
+  - `none`: sandbox workdir is mounted read-only by default.
+  - `ro`: sandbox workdir is mounted read-only by default.
+  - `rw`: sandbox workdir is mounted read-write by default.
+  - Use MXC `readwritePaths` for additional explicit writable host paths.
 - `scope` workspace selection:
   - `session`, `agent`, and `shared` choose the OpenClaw workspace directory
     passed to MXC.

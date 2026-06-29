@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { SandboxConfig } from "openclaw/plugin-sdk/sandbox";
+import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveConfig, type MxcConfig } from "../src/config.js";
@@ -988,7 +988,7 @@ describe("createMxcSandboxBackendHandle", () => {
 
   test("factory rejects unsupported Docker bind mounts", async () => {
     const createBackend = createMxcSandboxBackendFactory(baseConfig);
-    const cfg: SandboxConfig = {
+    const cfg: CreateSandboxBackendParams["cfg"] = {
       mode: "all",
       backend: "mxc",
       scope: "session",
@@ -997,6 +997,7 @@ describe("createMxcSandboxBackendHandle", () => {
       docker: {
         binds: ["/host/path:/workspace/path:ro"],
         capDrop: [],
+        containerPrefix: "openclaw-sbx-",
         env: {},
         image: "unused",
         network: "none",
