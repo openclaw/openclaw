@@ -25,6 +25,9 @@ const lanes: Record<string, Lane> = {
   "release-upgrade-user-journey": {
     script: "scripts/e2e/release-upgrade-user-journey-docker.sh",
   },
+  "release-plugin-marketplace": {
+    script: "scripts/e2e/release-plugin-marketplace-docker.sh",
+  },
   "release-user-journey": {
     script: "scripts/e2e/release-user-journey-docker.sh",
   },

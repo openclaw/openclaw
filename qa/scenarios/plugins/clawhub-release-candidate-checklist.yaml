@@ -1,0 +1,25 @@
+title: ClawHub release candidate package install checklist
+
+scenario:
+  id: clawhub-release-candidate-checklist
+  surface: clawhub-and-external-plugin-distribution
+  category: clawhub-and-external-plugin-distribution.plugin-lifecycle-and-health
+  coverage:
+    primary:
+      - clawhub.npm-pack-local-release-candidate-installs
+  objective: Verify the release-candidate checklist gates local npm package install proof before publishing.
+  successCriteria:
+    - The checklist carries the exact prepared candidate tarball into the Parallels npm-update install proof.
+    - NPM preflight evidence must match the candidate tag, SHA, dist-tag, tarball name, and tarball SHA-256.
+    - Plugin npm and ClawHub publish plans are collected before the publish command is emitted.
+    - Release publishing remains gated on full validation and npm preflight run ids.
+  docsRefs:
+    - docs/reference/RELEASING.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/release-candidate-checklist.mjs
+    - test/scripts/release-candidate-checklist.test.ts
+  execution:
+    kind: vitest
+    path: test/scripts/release-candidate-checklist.test.ts
+    summary: Vitest coverage for the release-candidate checklist tarball install proof, npm preflight validation, and publish gating.
