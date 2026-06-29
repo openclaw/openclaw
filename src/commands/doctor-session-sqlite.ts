@@ -91,6 +91,12 @@ type ReadOnlySqliteSessionEntriesResult =
   | { exists: false; ok: true; summaries: [] }
   | { exists: true; ok: true; summaries: ReadOnlySqliteSessionSummary[] }
   | { error: unknown; exists: true; ok: false };
+type ReadOnlySqliteExactSessionEntryResult =
+  | { entry?: ReadOnlySqliteSessionSummary; ok: true }
+  | { error: unknown; ok: false };
+type ReadOnlySqliteTranscriptEventCountResult =
+  | { events: number; exists: boolean; ok: true }
+  | { error: unknown; exists: true; ok: false };
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -385,7 +391,7 @@ function markAlreadyMigratedTranscript(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): boolean {
-  const migratedEvents = countAlreadyMigratedTranscriptEvents(target, record);
+  const migratedEvents = countAlreadyMigratedTranscriptEventsForImport(target, record);
   if (migratedEvents === undefined) {
     return false;
   }
@@ -455,12 +461,16 @@ function validateLegacySessionRecord(
   report: DoctorSessionSqliteTargetReport,
 ): void {
   const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = loadExactSqliteSessionEntry({
-    agentId: target.agentId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (!sqliteEntry) {
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok) {
+    report.issues.push({
+      code: "sqlite_read_failed",
+      message: `SQLite session entry read failed: ${String(sqliteEntry.error)}`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (!sqliteEntry.entry) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -468,10 +478,10 @@ function validateLegacySessionRecord(
     });
     return;
   }
-  if (sqliteEntry.entry.sessionId !== record.entry.sessionId) {
+  if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -487,7 +497,7 @@ function validateTranscriptEventCount(
 ): void {
   const result = countTranscriptEvents(record);
   if (result.status === "missing") {
-    const migratedEvents = countAlreadyMigratedTranscriptEvents(target, record);
+    const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(target, record);
     if (migratedEvents !== undefined) {
       report.validatedTranscriptEvents += migratedEvents;
     }
@@ -501,24 +511,27 @@ function validateTranscriptEventCount(
     });
     return;
   }
-  const sqliteEvents = loadSqliteTranscriptEventsSync({
-    agentId: target.agentId,
-    sessionId: record.entry.sessionId,
-    sessionKey: normalizeStoreSessionKey(record.sessionKey),
-    storePath: target.storePath,
-  });
-  if (sqliteEvents.length !== result.events) {
+  const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
+  if (!sqliteEvents.ok) {
     report.issues.push({
-      code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents.length} events; source has ${result.events}.`,
+      code: "sqlite_read_failed",
+      message: `SQLite transcript count read failed: ${String(sqliteEvents.error)}`,
       sessionKey: record.sessionKey,
     });
     return;
   }
-  report.validatedTranscriptEvents += sqliteEvents.length;
+  if (sqliteEvents.events !== result.events) {
+    report.issues.push({
+      code: "sqlite_transcript_count_mismatch",
+      message: `SQLite transcript has ${sqliteEvents.events} events; source has ${result.events}.`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  report.validatedTranscriptEvents += sqliteEvents.events;
 }
 
-function countAlreadyMigratedTranscriptEvents(
+function countAlreadyMigratedTranscriptEventsForImport(
   target: SessionStoreTarget,
   record: LegacySessionRecord,
 ): number | undefined {
@@ -537,6 +550,19 @@ function countAlreadyMigratedTranscriptEvents(
     sessionKey: normalizedKey,
     storePath: target.storePath,
   }).length;
+}
+
+function countAlreadyMigratedTranscriptEventsForValidate(
+  target: SessionStoreTarget,
+  record: LegacySessionRecord,
+): number | undefined {
+  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok || sqliteEntry.entry?.entry.sessionId !== record.entry.sessionId) {
+    return undefined;
+  }
+  const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
+  return eventCount.ok ? eventCount.events : undefined;
 }
 
 function countTranscriptEvents(
@@ -767,6 +793,20 @@ function readSqliteEntryCount(target: SessionStoreTarget): number {
   return result.ok ? result.summaries.length : 0;
 }
 
+function readOnlySqliteExactSessionEntry(
+  target: SessionStoreTarget,
+  sessionKey: string,
+): ReadOnlySqliteExactSessionEntryResult {
+  const result = readOnlySqliteSessionEntries(target);
+  if (!result.ok) {
+    return { error: result.error, ok: false };
+  }
+  return {
+    entry: result.summaries.find((summary) => summary.sessionKey === sessionKey),
+    ok: true,
+  };
+}
+
 function readOnlySqliteSessionEntries(
   target: SessionStoreTarget,
 ): ReadOnlySqliteSessionEntriesResult {
@@ -800,6 +840,40 @@ function readOnlySqliteSessionEntries(
         const entry = parseSqliteSessionEntry(row.entry_json);
         return entry ? [{ entry, sessionKey: row.session_key }] : [];
       }),
+    };
+  } catch (error) {
+    return { error, exists: true, ok: false };
+  } finally {
+    database?.close();
+  }
+}
+
+function readOnlySqliteTranscriptEventCount(
+  target: SessionStoreTarget,
+  sessionId: string,
+): ReadOnlySqliteTranscriptEventCountResult {
+  const sqlitePath = resolveTargetSqlitePath(target);
+  if (!fs.existsSync(sqlitePath)) {
+    return { events: 0, exists: false, ok: true };
+  }
+  const sqlite = requireNodeSqlite();
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("transcript_events");
+    if (!table) {
+      return { events: 0, exists: true, ok: true };
+    }
+    const row = database
+      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+      .get(sessionId) as { count?: unknown } | undefined;
+    const count = row?.count;
+    return {
+      events: typeof count === "number" && Number.isFinite(count) ? count : 0,
+      exists: true,
+      ok: true,
     };
   } catch (error) {
     return { error, exists: true, ok: false };
