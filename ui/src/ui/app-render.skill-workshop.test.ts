@@ -6,7 +6,7 @@ import { i18n, t } from "../i18n/index.ts";
 import { renderApp } from "./app-render.ts";
 import type { AppViewState } from "./app-view-state.ts";
 
-const localStorageValues = new Map<string, string>();
+const localStorageValues = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
