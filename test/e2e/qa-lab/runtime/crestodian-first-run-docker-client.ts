@@ -7,12 +7,12 @@ import {
   runCli,
   shouldStartCrestodianForModernOnboard,
   shouldStartOnboardingForFreshInstall,
-} from "../../dist/cli/run-main.js";
-import { clearConfigCache } from "../../dist/config/config.js";
-import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
-import { runCrestodian } from "../../dist/crestodian/crestodian.js";
-import type { RuntimeEnv } from "../../dist/runtime.js";
-import { createE2eStateDir } from "./lib/temp-state-dir.ts";
+} from "../../../../dist/cli/run-main.js";
+import { clearConfigCache } from "../../../../dist/config/config.js";
+import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
+import { runCrestodian } from "../../../../dist/crestodian/crestodian.js";
+import type { RuntimeEnv } from "../../../../dist/runtime.js";
+import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
 type CrestodianFirstRunCommand = {
   id: string;
