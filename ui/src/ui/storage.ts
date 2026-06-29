@@ -1,6 +1,5 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
-const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -259,10 +258,7 @@ export function loadSettings(): UiSettings {
   try {
     // First check for legacy key (no scope), then check for scoped key
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
+    const raw = storage?.getItem(scopedKey) ?? storage?.getItem(SETTINGS_KEY_PREFIX + "default");
     if (!raw) {
       return defaults;
     }
@@ -505,7 +501,6 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
