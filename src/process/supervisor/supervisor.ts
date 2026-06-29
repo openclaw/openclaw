@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getShellConfig } from "../../agents/shell-utils.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { reapZombies } from "../zombie-reaper.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -234,6 +235,11 @@ export function createProcessSupervisor(): ProcessSupervisor {
           if (!settled) {
             adapter.kill("SIGKILL");
           }
+          // Reap zombie grandchildren that exited before their parent
+          // was reaped — the process-tree SIGKILL races with grandchild
+          // exit. Grandchildren that become zombies before reparenting
+          // never trigger a new SIGCHLD and stay unreaped forever (#97616).
+          setTimeout(() => reapZombies(), 500);
         }, GRACEFUL_CANCEL_TIMEOUT_MS);
         forceKillTimer.unref?.();
       };

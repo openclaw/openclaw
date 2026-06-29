@@ -55,6 +55,7 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
+import { startZombieReaper } from "../process/zombie-reaper.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -545,6 +546,10 @@ export async function startGatewayServer(
   }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
+
+  // Start the periodic zombie reaper to prevent zombie process
+  // accumulation in long-running gateway processes (#97616).
+  startZombieReaper();
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
