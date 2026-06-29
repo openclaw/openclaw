@@ -872,13 +872,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
-  // Per-session tracking: each thread historyKey backfilled at most once per
-  // monitor lifecycle.  After a successful turn the shared kernel clears
-  // pending group history (kernel.ts:577), which would otherwise re-trigger
-  // the server fetch on every follow-up message.  This set ensures we only
-  // backfill on true first-sighting — the initial message after gateway
-  // restart or session clear when the in-memory window is genuinely cold.
-  const threadsBackfilledThisSession = new Set<string>();
+  // Per-(historyKey, agent-session) backfill tracking.
+  // Compound key binds the thread key to the current agent session id
+  // (baseSessionKey), which rotates on /new or session reset.  This way
+  // session reset gets its own first-sighting backfill, and marking
+  // non-empty first sightings prevents normal post-turn empty windows
+  // from re-triggering an unnecessary server fetch (kernel.ts:577 clears
+  // pending group history after a successful dispatch).
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1549,58 +1549,70 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // ── Thread history backfill: seed in-memory history from server ──
         // After all admission gates pass (onchar / mention / empty-body drop),
         // backfill thread history from the Mattermost server when the local
-        // in-memory window is genuinely cold — i.e. first message seen for this
-        // thread key in the current monitor lifecycle.  One backfill per
-        // thread per session prevents normal post-turn empty windows from
-        // re-triggering the server fetch (kernel.ts:577 clears pending group
-        // history after a successful dispatch).
+        // in-memory window is genuinely cold for the current agent session.
+        //
+        // Compound key (historyKey + baseSessionKey): historyKey alone is
+        // stable across /new for the same thread channel, but baseSessionKey
+        // (route.sessionKey) rotates on agent session reset.  Binding both
+        // ensures session reset gets its own first-sighting backfill instead
+        // of being blocked by a stale monitor-lifetime marker.
+        //
+        // Active-thread guard: if the window is already populated (normal
+        // active session), we mark the compound key anyway so the kernel
+        // clearing pending history after a successful turn does not make the
+        // next follow-up falsely see a cold window and trigger an unnecessary
+        // server fetch.
+        //
         // Best-effort — never blocks inbound dispatch.
-        if (
-          threadRootId &&
-          historyKey &&
-          historyLimit > 0 &&
-          !threadsBackfilledThisSession.has(historyKey)
-        ) {
-          const existing = channelHistories.get(historyKey);
-          if (!existing || existing.length === 0) {
-            try {
-              const abort = new AbortController();
-              const timeoutId = setTimeout(() => abort.abort(), 10_000);
+        if (threadRootId && historyKey && historyLimit > 0) {
+          const backfillKey = `${historyKey}:${baseSessionKey}`;
+          if (!threadsBackfilledThisSession.has(backfillKey)) {
+            const existing = channelHistories.get(historyKey);
+            if (!existing || existing.length === 0) {
               try {
-                const threadPosts = await fetchMattermostThreadPosts(
-                  client,
-                  threadRootId,
-                  abort.signal,
-                );
-                threadsBackfilledThisSession.add(historyKey);
-                if (threadPosts.length > 0) {
-                  // Trim to the effective history window before resolving
-                  // sender info so long cold threads don't fan out into
-                  // unnecessary resolveUserInfo lookups.
-                  const windowed = threadPosts.slice(-historyLimit);
-                  const entries: HistoryEntry[] = [];
-                  for (const p of windowed) {
-                    if (p.id === post.id) {
-                      continue;
+                const abort = new AbortController();
+                const timeoutId = setTimeout(() => abort.abort(), 10_000);
+                try {
+                  const threadPosts = await fetchMattermostThreadPosts(
+                    client,
+                    threadRootId,
+                    abort.signal,
+                  );
+                  threadsBackfilledThisSession.add(backfillKey);
+                  if (threadPosts.length > 0) {
+                    // Filter current post before trimming so the history
+                    // window is fully utilized even when the triggering
+                    // post is among the newest entries.
+                    const others = threadPosts.filter((p) => p.id !== post.id);
+                    const windowed = others.slice(-historyLimit);
+                    const entries: HistoryEntry[] = [];
+                    for (const p of windowed) {
+                      const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+                      const sender = user?.username
+                        ? `@${user.username}`
+                        : (p.user_id ?? "unknown");
+                      entries.push({
+                        sender,
+                        body: p.message || "[attachment]",
+                        timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+                        messageId: p.id ?? undefined,
+                      });
                     }
-                    const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
-                    const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
-                    entries.push({
-                      sender,
-                      body: p.message || "[attachment]",
-                      timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
-                      messageId: p.id ?? undefined,
-                    });
+                    if (entries.length > 0) {
+                      channelHistories.set(historyKey, entries);
+                    }
                   }
-                  if (entries.length > 0) {
-                    channelHistories.set(historyKey, entries);
-                  }
+                } finally {
+                  clearTimeout(timeoutId);
                 }
-              } finally {
-                clearTimeout(timeoutId);
+              } catch {
+                // best-effort: server fetch failure or timeout should not block
               }
-            } catch {
-              // best-effort: server fetch failure or timeout should not block
+            } else {
+              // Window already populated — mark serviced for this session
+              // so the kernel clearing pending history after this turn
+              // does not falsely trigger a cold-window fetch.
+              threadsBackfilledThisSession.add(backfillKey);
             }
           }
         }
