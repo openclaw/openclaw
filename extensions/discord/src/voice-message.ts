@@ -22,7 +22,10 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -351,7 +354,10 @@ async function requestVoiceUploadUrl(params: {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
     }
-    return (await res.json()) as UploadUrlResponse;
+    return await readProviderJsonResponse<UploadUrlResponse>(
+      res,
+      "Discord voice upload URL response",
+    );
   } finally {
     await release();
   }

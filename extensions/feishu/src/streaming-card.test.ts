@@ -65,19 +65,18 @@ describe("FeishuStreamingSession", () => {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         const release = vi.fn(async () => {});
-        let ok = true;
         let status = 200;
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
             release,
           };
         }
@@ -89,7 +88,6 @@ describe("FeishuStreamingSession", () => {
           }
           const failedStatus = failedContentUpdateStatuses.get(updateIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         } else if (url.includes("/elements/content")) {
@@ -97,16 +95,14 @@ describe("FeishuStreamingSession", () => {
           replaceBodies.push(init?.body ?? "");
           const failedStatus = failedReplaceStatuses.get(replaceIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         }
         return {
-          response: {
-            ok,
+          response: new Response(JSON.stringify({ code: 0, msg: "ok" }), {
             status,
-            json: async () => ({ code: 0, msg: "ok" }),
-          },
+            headers: { "content-type": "application/json" },
+          }),
           release,
         };
       },
@@ -125,19 +121,22 @@ describe("FeishuStreamingSession", () => {
           const token = `token-${authTokens.length + 1}`;
           authTokens.push(token);
           return {
-            response: { ok: true, json: async () => resolveAuthJson(token) },
+            response: new Response(JSON.stringify(resolveAuthJson(token)), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
             release,
           };
         }
         return {
-          response: {
-            ok: true,
-            json: async () => ({
+          response: new Response(
+            JSON.stringify({
               code: 0,
               msg: "ok",
               data: { card_id: `card-${authTokens.length}` },
             }),
-          },
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
           release,
         };
       },
@@ -354,15 +353,15 @@ describe("FeishuStreamingSession", () => {
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
             release,
           };
         }
@@ -370,7 +369,10 @@ describe("FeishuStreamingSession", () => {
           settingsBodies.push(init?.body ?? "");
         }
         return {
-          response: { ok: true, status: 200, json: async () => ({ code: 0, msg: "ok" }) },
+          response: new Response(JSON.stringify({ code: 0, msg: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
           release,
         };
       },
@@ -559,6 +561,26 @@ describe("FeishuStreamingSession", () => {
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
     dateNow.mockRestore();
+  });
+
+  it("rejects oversized token response and still releases the guard", async () => {
+    const release = vi.fn(async () => {});
+    const oversizedBody = "{" + '"x":'.padEnd(20 * 1024 * 1024, "a") + "}";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(oversizedBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_oversized",
+      appSecret: "secret",
+    });
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(/exceeds/);
+    expect(release).toHaveBeenCalled();
   });
 });
 
