@@ -63,6 +63,8 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   // I/O callbacks (e.g. Feishu message-tool HTTP responses) can write
   // real tool results and clear the pending map before synthetics are
   // injected (#84134).
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   opts.sessionManager?.flushPendingToolResults?.();
 }
