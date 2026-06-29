@@ -319,6 +319,12 @@ export async function readProviderJsonResponse<T>(
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
   });
+  if (bytes.length === 0 && typeof response.json === "function") {
+    const body = response.body;
+    if (!body || typeof body.getReader !== "function") {
+      return (await response.json()) as T;
+    }
+  }
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch (cause) {
