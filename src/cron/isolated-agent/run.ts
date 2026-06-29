@@ -41,6 +41,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -754,6 +755,22 @@ async function prepareCronRunContext(params: {
   // `timeoutSeconds` happens to numerically equal `agents.defaults.timeoutSeconds`.
   const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+  // Preflight: warn when web_search is in toolsAllow but no search provider plugin is enabled.
+  // Without this check the cron completes with "ok" while the model delivers an apology
+  // because the tool has no registered handler.
+  if (agentPayload?.toolsAllow) {
+    const expandedTools = expandToolGroups(agentPayload.toolsAllow);
+    const normalizedTools = expandedTools.map(normalizeToolName);
+    if (normalizedTools.includes("web_search")) {
+      const webSearchProviders = listWebSearchProviders({ config: cfgWithAgentDefaults });
+      if (webSearchProviders.length === 0) {
+        logWarn(
+          `[cron:${input.job.id}] web_search is in toolsAllow but no search provider plugin is enabled. ` +
+            `Enable one with: openclaw plugins enable duckduckgo`,
+        );
+      }
+    }
+  }
   const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
     await resolveCronDeliveryContext({
       cfg: cfgWithAgentDefaults,
