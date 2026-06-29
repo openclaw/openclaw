@@ -1391,6 +1391,10 @@ describe("subscribeEmbeddedAgentSession", () => {
       replayInvalid: true,
       hadPotentialSideEffects: true,
     });
+    expect(subscription.getCurrentAttemptReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expectLifecyclePayload(payloads, {
       phase: "end",

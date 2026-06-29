@@ -133,6 +133,16 @@ export function makeEmbeddedRunnerAttempt(
         messagingToolSentTargets,
         successfulCronAdds,
       }),
+    currentAttemptReplayMetadata:
+      overrides.currentAttemptReplayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+        successfulCronAdds,
+      }),
     didSendViaMessagingTool,
     messagingToolSentTexts,
     messagingToolSentMediaUrls,

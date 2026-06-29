@@ -1222,10 +1222,18 @@ export async function handleToolExecutionEnd(
     ctx.state.hadDeterministicSideEffect = true;
   }
   if (attemptedPotentialSideEffect || acceptedSessionSpawn || asyncStarted) {
-    ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
+    const sideEffectReplayState = {
       replayInvalid: true,
       hadPotentialSideEffects: true,
-    });
+    };
+    ctx.state.replayState = mergeEmbeddedRunReplayState(
+      ctx.state.replayState,
+      sideEffectReplayState,
+    );
+    ctx.state.currentAttemptReplayState = mergeEmbeddedRunReplayState(
+      ctx.state.currentAttemptReplayState,
+      sideEffectReplayState,
+    );
   }
 
   // Commit messaging tool evidence on success, discard on error.

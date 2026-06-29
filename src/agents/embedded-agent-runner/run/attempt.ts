@@ -3648,6 +3648,7 @@ export async function runEmbeddedAttempt(
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
+        getCurrentAttemptReplayState,
         didSendViaMessagingTool,
         didSendDeterministicApprovalPrompt,
         getLastToolError,
@@ -5454,6 +5455,11 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      // Silent provider-error retries only use currentAttemptReplayMetadata; replayMetadata stays
+      // cumulative so liveness and compaction keep prior retry/session safety evidence.
+      const currentAttemptReplayMetadata = replayMetadataFromState(
+        observeReplayMetadata(getCurrentAttemptReplayState(), observedReplayMetadata),
+      );
       const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
         slot.completed && slot.params
           ? [
@@ -5627,6 +5633,7 @@ export async function runEmbeddedAttempt(
 
       return {
         replayMetadata,
+        currentAttemptReplayMetadata,
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,

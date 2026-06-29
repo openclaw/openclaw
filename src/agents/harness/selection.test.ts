@@ -143,6 +143,7 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
   };
 }

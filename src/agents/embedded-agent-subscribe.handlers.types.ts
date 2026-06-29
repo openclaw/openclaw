@@ -149,6 +149,8 @@ export type EmbeddedAgentSubscribeState = {
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
+  /** Current-attempt replay evidence excludes initial replayState from earlier runner retries. */
+  currentAttemptReplayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
@@ -316,6 +318,7 @@ type ToolHandlerState = Pick<
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
   | "replayState"
+  | "currentAttemptReplayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"

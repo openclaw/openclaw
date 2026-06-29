@@ -26,6 +26,7 @@ function createMockContext(overrides?: {
     },
     state: {
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
+      currentAttemptReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),

@@ -401,6 +401,9 @@ function normalizeEmbeddedRunAttemptResult(
       | null;
     didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+    currentAttemptReplayMetadata?:
+      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
+      | null;
   };
   return {
     ...attempt,
@@ -419,6 +422,9 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    currentAttemptReplayMetadata: resolveAttemptReplayMetadata({
+      replayMetadata: raw.currentAttemptReplayMetadata ?? raw.replayMetadata,
+    }),
   };
 }
 
