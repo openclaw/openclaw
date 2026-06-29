@@ -40,6 +40,7 @@ import {
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { consumeTelegramSilentNotificationMarker } from "../silent-marker.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -819,7 +820,7 @@ export async function deliverReplies(params: {
     const hasMedia = mediaList.length > 0;
     const presentation = normalizeMessagePresentation(reply?.presentation);
     const interactive = reply?.interactive;
-    const resolvedReplyText =
+    const rawResolvedReplyText =
       resolveTelegramInteractiveTextFallback({
         text: reply?.text,
         interactive,
@@ -827,6 +828,12 @@ export async function deliverReplies(params: {
       }) ??
       reply?.text ??
       "";
+    const markerDelivery = consumeTelegramSilentNotificationMarker(
+      rawResolvedReplyText,
+      params.silent,
+    );
+    let resolvedReplyText = markerDelivery.text;
+    let replySilent = markerDelivery.silent;
     if (reply && resolvedReplyText !== (reply.text ?? "")) {
       reply = { ...reply, text: resolvedReplyText };
     }
@@ -842,6 +849,9 @@ export async function deliverReplies(params: {
     if (!resolvedReplyText && !hasMedia && !reactionEmoji) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
+        continue;
+      }
+      if (rawResolvedReplyText !== resolvedReplyText) {
         continue;
       }
       params.runtime.error?.(danger("reply missing text/media"));
@@ -885,9 +895,15 @@ export async function deliverReplies(params: {
         continue;
       }
       if (typeof hookResult?.content === "string" && hookResult.content !== hookContent) {
+        const hookMarkerDelivery = consumeTelegramSilentNotificationMarker(
+          hookResult.content,
+          replySilent,
+        );
+        resolvedReplyText = spokenHookContent ? resolvedReplyText : hookMarkerDelivery.text;
+        replySilent = hookMarkerDelivery.silent;
         reply = spokenHookContent
-          ? { ...reply, spokenText: hookResult.content }
-          : { ...reply, text: hookResult.content };
+          ? { ...reply, spokenText: hookMarkerDelivery.text }
+          : { ...reply, text: hookMarkerDelivery.text };
       }
     }
 
@@ -936,7 +952,7 @@ export async function deliverReplies(params: {
           richMessages: params.richMessages,
           tableMode: params.tableMode,
           linkPreview: params.linkPreview,
-          silent: params.silent,
+          silent: replySilent,
           replyToId,
           replyToMode: params.replyToMode,
           progress,
@@ -957,7 +973,7 @@ export async function deliverReplies(params: {
           mediaLoader,
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
-          silent: params.silent,
+          silent: replySilent,
           replyQuoteMessageId: replyQuote.messageId,
           replyQuoteText: replyQuote.text,
           replyQuotePosition: replyQuote.position,

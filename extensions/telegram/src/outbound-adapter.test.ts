@@ -514,6 +514,116 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
   });
 
+  it("converts trailing notify=false markers to silent durable payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-marker", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: { text: "No interruption needed.\n\nnotify=false" },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "No interruption needed.");
+    expect(options.silent).toBe(true);
+  });
+
+  it("applies trailing notify=false markers before durable text chunking", async () => {
+    const longText = `${"A".repeat(4000)}\nB\nnotify=false`;
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-long", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: { text: longText },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", `${"A".repeat(4000)}\nB`);
+    expect(options.silent).toBe(true);
+  });
+
+  it("treats marker-only durable payloads as no-op sends", async () => {
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: { text: "notify=false" },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "" });
+  });
+
+  it("treats marker-only durable button payloads as no-op sends", async () => {
+    expect(
+      telegramOutbound.normalizePayload?.({
+        payload: {
+          text: "notify=false",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Details", callback_data: "/details" }]],
+            },
+          },
+        },
+        cfg: {} as never,
+      }),
+    ).toBeNull();
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "notify=false",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Details", callback_data: "/details" }]],
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "" });
+  });
+
+  it("treats marker-only direct text as a no-op send", async () => {
+    const result = await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "12345",
+      text: "notify=false",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "" });
+  });
+
+  it("leaves inline notify=false text visible in durable payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-inline", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: { text: "The config line is notify=false when notifications are disabled." },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      "The config line is notify=false when notifications are disabled.",
+    );
+    expect(options.silent).toBeUndefined();
+  });
+
   it("does not plain-text sanitize Telegram HTML before durable delivery", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-html", chatId: "12345" });
 

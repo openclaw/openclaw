@@ -572,6 +572,45 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
+  it("converts trailing notify=false markers to silent native replies", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "No interruption needed.\n\nnotify=false" }],
+      runtime,
+      bot,
+    });
+
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstSendText(sendMessage)).toBe("No interruption needed.");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
+  });
+
+  it("leaves inline notify=false text visible in native replies", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "The config line is notify=false when notifications are disabled." }],
+      runtime,
+      bot,
+    });
+
+    expect(firstSendText(sendMessage)).toBe(
+      "The config line is notify=false when notifications are disabled.",
+    );
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("disable_notification");
+  });
+
   it("emits internal message:sent when session hook context is available", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
