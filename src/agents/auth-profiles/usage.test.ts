@@ -3,7 +3,9 @@
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
  * persistence hooks without contacting real providers.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import http from "node:http";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -1311,5 +1313,104 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     // Even same-model auth failure should clear model scope (auth is profile-wide)
     expect(stats?.cooldownReason).toBe("auth");
     expect(stats?.cooldownModel).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAM probe response body size limit — real loopback HTTP server
+// ---------------------------------------------------------------------------
+
+const MAX_WHAM_USAGE_BYTES_FOR_TEST = 1 * 1024 * 1024; // mirrors the production constant
+
+function waitForServerPort(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        reject(new Error("Expected loopback server to return a TCP port"));
+        return;
+      }
+      resolve(addr.port);
+    });
+  });
+}
+
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!server.listening) {
+      resolve();
+      return;
+    }
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+describe("WHAM usage response body limit (real loopback HTTP server)", () => {
+  let server: http.Server;
+  let port: number;
+
+  beforeAll(async () => {
+    server = http.createServer((_req, res) => {
+      const url = _req.url ?? "";
+      if (url.includes("big")) {
+        // Stream >1 MiB without Content-Length — simulates adversarial endpoint
+        res.writeHead(200, { "content-type": "application/json" });
+        const chunk = Buffer.alloc(64 * 1024, 0x41); // 64 KiB 'A'
+        let written = 0;
+        const send = () => {
+          if (written >= 20 * chunk.length) {
+            res.end();
+            return;
+          }
+          res.write(chunk, () => {
+            written += chunk.length;
+            send();
+          });
+        };
+        send();
+      } else {
+        // Normal small JSON body
+        const body = JSON.stringify({
+          rate_limit: {
+            limit_reached: true,
+            primary_window: { used_percent: 100, reset_after_seconds: 3600 },
+          },
+        });
+        res.writeHead(200, { "content-type": "application/json", "content-length": body.length });
+        res.end(body);
+      }
+    });
+    port = await waitForServerPort(server);
+  });
+
+  afterAll(async () => {
+    await closeServer(server);
+  });
+
+  beforeEach(() => {
+    // The top-level beforeEach stubs global fetch with a mock.
+    // Unstub here so these tests use the real fetch implementation.
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects a response body exceeding 1 MiB (over-cap)", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/big`);
+    await expect(
+      readResponseWithLimit(res, MAX_WHAM_USAGE_BYTES_FOR_TEST, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`WHAM usage response too large: ${size} bytes (limit: ${maxBytes})`),
+      }),
+    ).rejects.toThrow("WHAM usage response too large");
+  });
+
+  it("returns a parseable buffer for a normal JSON body (under-cap)", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/small`);
+    const buf = await readResponseWithLimit(res, MAX_WHAM_USAGE_BYTES_FOR_TEST);
+    const data = JSON.parse(new TextDecoder().decode(buf)) as {
+      rate_limit: { limit_reached: boolean };
+    };
+    expect(data.rate_limit.limit_reached).toBe(true);
   });
 });

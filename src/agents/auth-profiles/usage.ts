@@ -3,6 +3,7 @@
  * Records failures under the store lock, applies WHAM usage probes for OpenAI
  * OAuth profiles, and exposes display helpers for unavailable profiles.
  */
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -86,6 +87,7 @@ const WHAM_PROBE_FAILURE_COOLDOWN_MS = 30_000;
 const WHAM_HTTP_ERROR_COOLDOWN_MS = 5 * 60 * 1000;
 const WHAM_TOKEN_EXPIRED_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const WHAM_DEAD_ACCOUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const MAX_WHAM_USAGE_BYTES = 1 * 1024 * 1024; // 1 MiB — rate-limit JSON 不会接近此上限
 
 type WhamUsageWindow = {
   limit_window_seconds?: number;
@@ -258,7 +260,11 @@ async function probeWhamForCooldown(
       return { cooldownMs: WHAM_HTTP_ERROR_COOLDOWN_MS, reason: "wham_http_error" };
     }
 
-    const data = (await res.json()) as WhamUsageResponse;
+    const rawBody = await readResponseWithLimit(res, MAX_WHAM_USAGE_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`WHAM usage response too large: ${size} bytes (limit: ${maxBytes})`),
+    });
+    const data = JSON.parse(new TextDecoder().decode(rawBody)) as WhamUsageResponse;
     if (!data.rate_limit) {
       return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
     }
