@@ -482,7 +482,7 @@ function getSessionNoProgressStreak(
       bestCount = stableEntries.reduce((total, [, value]) => total + value.count, 0);
       bestEvidenceKey = stableEntries
         .map(([stableSignature, value]) => `${stableSignature}:${value.resultHash}`)
-        .sort()
+        .toSorted()
         .join("|");
     }
   }
