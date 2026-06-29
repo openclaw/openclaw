@@ -79,6 +79,20 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
   return next;
 }
 
+function transformToolCallText(
+  toolCall: Record<string, unknown>,
+  replacements?: PluginTextReplacement[],
+): Record<string, unknown> {
+  if (!replacements || replacements.length === 0) {
+    return toolCall;
+  }
+  const next = { ...toolCall };
+  if (typeof next.name === "string") {
+    next.name = applyPluginTextReplacements(next.name, replacements);
+  }
+  return next;
+}
+
 /** Apply input text replacements to a stream context. */
 function transformStreamContextText(
   context: Parameters<StreamFn>[1],
@@ -108,11 +122,17 @@ function transformAssistantEventText(
     return event as AssistantMessageEvent;
   }
   const next = { ...event };
-  if (next.type === "text_delta" && typeof next.delta === "string") {
+  if (
+    (next.type === "text_delta" || next.type === "toolcall_delta") &&
+    typeof next.delta === "string"
+  ) {
     next.delta = applyPluginTextReplacements(next.delta, replacements);
   }
   if (next.type === "text_end" && typeof next.content === "string") {
     next.content = applyPluginTextReplacements(next.content, replacements);
+  }
+  if (next.type === "toolcall_end" && isRecord(next.toolCall)) {
+    next.toolCall = transformToolCallText(next.toolCall, replacements);
   }
   if (Object.hasOwn(next, "partial")) {
     next.partial = transformMessageText(next.partial, replacements);

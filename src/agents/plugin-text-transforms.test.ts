@@ -180,4 +180,46 @@ describe("plugin text transforms", () => {
     expect(firstEvent?.delta).toBe("red basket on the left shelf");
     expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   });
+
+  it("applies output replacements to toolcall_delta and toolcall_end events", async () => {
+    const baseStreamFn: StreamFn = (_model, _context) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"name":"[MASKED]","id":"123"}',
+          partial: { name: "[MASKED]", id: "123" },
+        } as never);
+        stream.push({
+          type: "toolcall_end",
+          contentIndex: 0,
+          toolCall: { type: "toolCall", id: "call-1", name: "[MASKED]_greet" },
+        } as never);
+        stream.push({ type: "done", reason: "stop" } as never);
+        stream.end();
+      });
+      return stream;
+    };
+
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: baseStreamFn,
+      output: [{ from: /\[MASKED\]/g, to: "John" }],
+    });
+    const stream = await Promise.resolve(wrapped(model, {} as Context, undefined));
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const deltaEvent = events.find((e) => e?.type === "toolcall_delta") as
+      | { delta?: string }
+      | undefined;
+    expect(deltaEvent?.delta).toBe('{"name":"John","id":"123"}');
+
+    const endEvent = events.find((e) => e?.type === "toolcall_end") as
+      | { toolCall?: { name?: string } }
+      | undefined;
+    expect(endEvent?.toolCall?.name).toBe("John_greet");
+  });
 });
