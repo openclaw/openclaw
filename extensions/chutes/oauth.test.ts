@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
 
-function boundedErrorResponse(body: string, status = 500): {
+function boundedErrorResponse(
+  body: string,
+  status = 500,
+): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;
@@ -111,5 +114,65 @@ describe("chutes plugin OAuth", () => {
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels oversized token exchange JSON body via the 16 MiB provider cap", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32;
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const oversizedTokenJson = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+            controller.close();
+            return;
+          }
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://api.chutes.ai/idp/userinfo") {
+        return new Response(JSON.stringify({ login: "test", name: "Test" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "https://api.chutes.ai/idp/token") {
+        return oversizedTokenJson;
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      loginChutes({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://127.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        manual: true,
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(
+          async () => "http://127.0.0.1:1456/oauth-callback?code=code_test&state=state_test",
+        ),
+        fetchFn,
+      }),
+    ).rejects.toThrow(/Chutes token exchange: JSON response exceeds 16777216 bytes/);
+
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });

@@ -8,7 +8,10 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
@@ -122,7 +125,7 @@ async function fetchChutesUserInfo(params: {
   if (!response.ok) {
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
   return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
 }
 
@@ -161,11 +164,11 @@ async function exchangeChutesCodeForTokens(params: {
     throw new Error(`Chutes token exchange failed: ${detail}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response, "Chutes token exchange");
   const access = normalizeOptionalString(data.access_token);
   const refresh = normalizeOptionalString(data.refresh_token);
   const expires = resolveChutesExpiresAt(data.expires_in, now);
