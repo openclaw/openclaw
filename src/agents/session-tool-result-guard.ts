@@ -819,6 +819,7 @@ export function installSessionToolResultGuard(
       isTranscriptOnlyOpenClawAssistantMessage(nextMessage);
     if (
       !transcriptOnlyAssistant &&
+      nextRole !== "toolResult" &&
       pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)
     ) {
       flushPendingToolResults();
