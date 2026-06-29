@@ -25,6 +25,27 @@ function makeUser(text: string): AgentMessage {
   });
 }
 
+function makeBashExecution(output: string): AgentMessage {
+  return castAgentMessage({
+    role: "bashExecution",
+    command: "npm run build",
+    output,
+    exitCode: 0,
+    cancelled: false,
+    truncated: false,
+    timestamp: Date.now(),
+  });
+}
+
+function makeCompactionSummary(summary: string): AgentMessage {
+  return castAgentMessage({
+    role: "compactionSummary",
+    summary,
+    tokensBefore: 12_345,
+    timestamp: Date.now(),
+  });
+}
+
 function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessage {
   return castAgentMessage({
     role: "toolResult",
@@ -280,6 +301,18 @@ describe("installToolResultContextGuard", () => {
       PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
     );
     expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(5_000));
+  });
+
+  it("throws a preemptive overflow for large provider-rendered harness messages", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeCompactionSummary("summary ".repeat(40_000)),
+      makeBashExecution("build log line\n".repeat(40_000)),
+    ];
+
+    await expect(applyGuardToContext(agent, contextForNextCall, 100_000)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
   });
 
   it("throws instead of rewriting older tool results under aggregate pressure", async () => {
