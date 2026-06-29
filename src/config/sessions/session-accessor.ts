@@ -1968,7 +1968,10 @@ export async function commitReplySessionInitialization(params: {
           sessionKey: params.sessionKey,
         });
         const commitEntry = commitResolved.existing;
-        const commitRevision = createReplySessionInitializationRevision(commitEntry);
+        const commitRevision = createReplySessionInitializationRevision({
+          entry: commitEntry,
+          storePath: params.storePath,
+        });
         if (commitRevision !== params.expectedRevision) {
           staleCommit = {
             ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
