@@ -3,10 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession } from "../../agents/cli-session.js";
+import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
 import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
   formatFastModeAutoProgressText,
@@ -26,10 +27,15 @@ import {
   onAgentEvent,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { readErrorName } from "../../infra/errors.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
+
+function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
 
 function createAgentEventBridge<T>(params: {
   runId: string;
@@ -258,10 +264,17 @@ export async function clearDroppedCliSessionBinding(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   activeSessionEntry?: SessionEntry;
+  expectedSessionId?: string;
 }): Promise<void> {
   const updatedAt = Date.now();
   const clearEntry = (entry: SessionEntry | undefined) => {
     if (!entry) {
+      return;
+    }
+    if (
+      params.expectedSessionId &&
+      getCliSessionBinding(entry, params.provider)?.sessionId !== params.expectedSessionId
+    ) {
       return;
     }
     clearCliSession(entry, params.provider);
@@ -279,6 +292,32 @@ export async function clearDroppedCliSessionBinding(params: {
       return entry;
     },
   );
+}
+
+export async function clearFailedReusedCliSessionBinding(params: {
+  provider: string;
+  error: unknown;
+  cliSessionBinding?: { sessionId?: string };
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  activeSessionEntry?: SessionEntry;
+}): Promise<void> {
+  const sessionId = normalizeOptionalString(params.cliSessionBinding?.sessionId);
+  if (!sessionId || !isClaudeCliProvider(params.provider)) {
+    return;
+  }
+  if (!(params.error instanceof FailoverError) && readErrorName(params.error) !== "AbortError") {
+    return;
+  }
+  await clearDroppedCliSessionBinding({
+    provider: params.provider,
+    sessionKey: params.sessionKey,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    activeSessionEntry: params.activeSessionEntry,
+    expectedSessionId: sessionId,
+  });
 }
 
 function createToolEventBridge(params: {

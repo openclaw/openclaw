@@ -65,6 +65,7 @@ import {
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
 import {
+  clearFailedReusedCliSessionBinding,
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
@@ -1153,6 +1154,23 @@ export function createFollowupRunner(params: {
                         { kind: "tool", mirror: false, runId },
                       );
                     });
+                  },
+                  onErrorBeforeLifecycle: async (error) => {
+                    try {
+                      await clearFailedReusedCliSessionBinding({
+                        provider: cliExecutionProvider,
+                        error,
+                        cliSessionBinding,
+                        sessionKey: replySessionKey,
+                        sessionStore,
+                        storePath,
+                        activeSessionEntry,
+                      });
+                    } catch (clearError) {
+                      logVerbose(
+                        `failed to clear failed followup CLI session binding (non-fatal): ${String(clearError)}`,
+                      );
+                    }
                   },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
