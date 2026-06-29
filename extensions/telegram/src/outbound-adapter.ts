@@ -14,6 +14,7 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
@@ -128,7 +129,7 @@ export async function sendTelegramPayloadMessages(params: {
   to: string;
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
-}): Promise<Awaited<ReturnType<TelegramSendFn>>> {
+}): Promise<Omit<OutboundDeliveryResult, "channel">> {
   const telegramData = params.payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;
