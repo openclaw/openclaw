@@ -1,4 +1,4 @@
-// Mcp Channels Docker Client script supports OpenClaw repository automation.
+// MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import {
   assert,
@@ -11,11 +11,11 @@ import {
   type GatewayRpcClient,
   maybeApprovePendingBridgePairing,
   waitFor,
-} from "./mcp-channels-harness.ts";
+} from "./mcp-channels.fixture.ts";
 import {
   connectMcpClientWithPairingReconnect,
   createMcpClientTempState,
-} from "./mcp-client-temp-state.ts";
+} from "./mcp-client-temp-state.fixture.ts";
 
 function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
   return (rows ?? []).map((entry) => ({
