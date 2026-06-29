@@ -197,6 +197,12 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function normalizeExitSignal(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return null;
+}
+
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
@@ -231,7 +237,7 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
-      exitSignal: stringField(details.exitSignal),
+      exitSignal: normalizeExitSignal(details.exitSignal),
       failureKind: stringField(details.failureKind),
     });
   }

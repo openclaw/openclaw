@@ -746,6 +746,60 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    // #93917: exitSignal can be a string ("SIGTERM") or a number (9 for
+    // SIGKILL). normalizeExitSignal preserves both forms so numeric
+    // signals don't collapse to null and falsely merge with exitSignal-less
+    // failures.
+    it("does not merge distinct exitSignal values into one failed no-progress streak", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2); i++) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by SIGTERM (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "terminated",
+              exitSignal: "SIGTERM",
+            },
+          },
+          i,
+        );
+      }
+      for (
+        let i = Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2);
+        i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD;
+        i++
+      ) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by signal 9 (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "terminated",
+              exitSignal: 9,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
     it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {
       const state = createState();
       const toolName = "exec";
