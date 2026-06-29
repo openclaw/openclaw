@@ -2013,4 +2013,70 @@ describe("CodexNativeSubagentMonitor", () => {
       vi.useRealTimers();
     }
   });
+
+  // FIX #97593: The task-row reconciler must not re-deliver while a retry timer is armed,
+  // otherwise the retry cap and deadline are bypassed.
+  it("does not reconcile a child while a completion delivery retry timer is armed", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "permanently non-durable",
+      });
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        codexHome: "/tmp/codex-home",
+        completionDeliveryRetryDelaysMs: [10000],
+        taskRowReconcileIntervalMs: 0,
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      // Trigger a failed delivery → schedules retry timer (completionDeliveryTimer is set).
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child result",
+        }),
+      );
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // listTaskRecords returns the child with pending deliveryStatus,
+      // which would normally make the reconciler try to deliver it again.
+      runtime.listTaskRecords.mockReturnValue([
+        {
+          taskId: "task-1",
+          runtime: "subagent",
+          taskKind: "codex-native",
+          requesterSessionKey: "agent:main:discord:channel:C123",
+          ownerKey: "agent:main:discord:channel:C123",
+          scopeKind: "session",
+          runId: "codex-thread:child-thread",
+          task: "check the weather",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+          createdAt: 1,
+        },
+      ]);
+
+      // Reconcile while the retry timer is armed — should skip this child.
+      await monitor.reconcileKnownTaskRows();
+
+      // The reconciler must NOT have triggered another delivery call.
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
