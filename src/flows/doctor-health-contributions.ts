@@ -1698,7 +1698,10 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             await import("../commands/doctor-workspace-status.js");
           const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
             cfg: ctx.cfg,
-            options: { nonInteractive: true },
+            options: {
+              nonInteractive: true,
+              allowExec: ctx.allowExecSecretRefs === true,
+            },
           });
           return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
         },

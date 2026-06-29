@@ -703,6 +703,7 @@ describe("doctor health contributions", () => {
     const ctx = {
       cfg: { plugins: { entries: { codex: { enabled: true } } } },
       mode: "lint",
+      allowExecSecretRefs: true,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
 
@@ -721,6 +722,16 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
       pluginVersionDrift,
+    });
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: true,
     });
   });
 
