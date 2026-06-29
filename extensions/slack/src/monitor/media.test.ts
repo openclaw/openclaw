@@ -1189,6 +1189,73 @@ describe("resolveSlackThreadHistory", () => {
     expect(result[1]?.text).toBe("hello");
   });
 
+  it("includes bot messages whose text is only in Slack attachments", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
+              fallback: "Alert: filesystem space is low",
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toEqual([
+      {
+        text: "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low",
+        userId: undefined,
+        botId: "BMONITOR",
+        ts: "1.000",
+        files: undefined,
+      },
+    ]);
+  });
+
+  it("includes bot messages whose text is only in Slack blocks", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Pod restart rate is high" } }],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("Pod restart rate is high");
+    expect(result[0]?.botId).toBe("BMONITOR");
+  });
+
   it("returns empty when limit is zero without calling Slack API", async () => {
     const replies = vi.fn();
     const client = {
@@ -1270,6 +1337,43 @@ describe("resolveSlackThreadStarter", () => {
     });
 
     expect(result).toBeNull();
+    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
+  });
+
+  it("returns the starter text from Slack attachments when bot message text is empty", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "   ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              pretext: "[FIRING:1] HostFilesystemSpaceLow",
+              title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
+              fallback: "dc2.ipa.mgt /dev/sda1 low free space",
+            },
+          ],
+        },
+      ],
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+
+    const result = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+    });
+
+    expect(result).toEqual({
+      text: "[FIRING:1] HostFilesystemSpaceLow\nFilesystem on /dev/sda1 has only 14.93% available space left.\ndc2.ipa.mgt /dev/sda1 low free space",
+      userId: undefined,
+      botId: "BMONITOR",
+      ts: "1.000",
+      files: undefined,
+    });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
