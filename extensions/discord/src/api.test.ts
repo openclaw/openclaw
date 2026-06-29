@@ -1,9 +1,13 @@
 // Discord tests cover api plugin behavior.
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
+
+const DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function cancelTrackedResponse(
   text: string,
@@ -27,9 +31,54 @@ function cancelTrackedResponse(
   };
 }
 
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve((address as AddressInfo).port);
+    });
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+function stubDiscordFetchToLoopback(
+  baseUrl: string,
+  onResponse?: (response: Response) => void,
+): void {
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal(
+    "fetch",
+    withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const originalUrl = new URL(input instanceof Request ? input.url : String(input));
+      expect(originalUrl.origin).toBe("https://discord.com");
+      expect(originalUrl.pathname).toMatch(/^\/api\/v10\//);
+      const loopbackUrl = new URL(`${originalUrl.pathname}${originalUrl.search}`, baseUrl);
+      const response = await realFetch(loopbackUrl, init);
+      onResponse?.(response);
+      return response;
+    }),
+  );
+}
+
 describe("fetchDiscord", () => {
   beforeEach(() => {
     vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("formats rate limit payloads without raw JSON", async () => {
@@ -273,57 +322,95 @@ describe("fetchDiscord", () => {
     expect(request?.signal).toBe(timeoutController.signal);
   });
 
-  it("reads happy-path response body without calling response.text()", async () => {
-    // mutation control: if code falls back to res.text(), the spy would intercept
-    // the catch(() => "") branch returns "" which makes requestDiscord return undefined,
-    // so the assertion on result also catches the regression.
-    const payload = { id: "channel-42", type: 0 };
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
-        controller.close();
-      },
+  it("returns under-cap requestDiscord responses from a real loopback HTTP server", async () => {
+    const payload = { id: "channel-42", name: "loopback", type: 0 };
+    let contentLength: string | null | undefined;
+    let requestUrl: string | undefined;
+    let authorization: string | undefined;
+    const server = createServer((req, res) => {
+      requestUrl = req.url;
+      authorization = req.headers.authorization;
+      const body = JSON.stringify(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write(body.slice(0, 12));
+      res.end(body.slice(12));
     });
-    const response = new Response(stream, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-    const textSpy = vi
-      .spyOn(response, "text")
-      .mockRejectedValue(new Error("response.text() must not be called on happy-path"));
-    const fetcher = withFetchPreconnect(async () => response);
+    const port = await listenLoopbackServer(server);
 
-    const result = await requestDiscord<typeof payload>("/channels/channel-42", "test", {
-      fetcher,
-      retry: { attempts: 1 },
-    });
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (response) => {
+        contentLength = response.headers.get("content-length");
+      });
 
-    expect(result).toEqual(payload);
-    expect(textSpy).not.toHaveBeenCalled();
+      const result = await requestDiscord<typeof payload>("/channels/channel-42", "test-token", {
+        retry: { attempts: 1 },
+      });
+
+      expect(result).toEqual(payload);
+      expect(requestUrl).toBe("/api/v10/channels/channel-42");
+      expect(authorization).toBe("Bot test-token");
+      expect(contentLength).toBeNull();
+      console.log(
+        `[discord requestDiscord loopback proof] normal path: returned=${JSON.stringify(result)} content_length=${contentLength ?? "none"}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
   });
 
-  it("truncates oversized Discord API success responses to prevent unbounded memory growth", async () => {
-    // over-cap: a response larger than DISCORD_API_RESPONSE_BODY_LIMIT_BYTES (4 MiB)
-    // readResponseTextLimited cancels the reader after the cap and returns a truncated string.
-    // JSON.parse on a truncated JSON document throws SyntaxError, which surfaces to the caller.
-    let canceled = false;
-    const chunk = new Uint8Array(4 * 1024 * 1024 + 64).fill(0x78); // 'x' * (4MiB + 64)
-    const prefix = new TextEncoder().encode('{"items":[');
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(prefix);
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
+  it("rejects oversized valid JSON requestDiscord responses from a real loopback HTTP server", async () => {
+    const oversizedPayloadBytes = DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES + 256 * 1024;
+    let contentLength: string | null | undefined;
+    let requestUrl: string | undefined;
+    let streamedBytes = 0;
+    const server = createServer((req, res) => {
+      requestUrl = req.url;
+      const chunk = Buffer.alloc(64 * 1024, 0x78);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"id":"');
+
+      const writeMore = () => {
+        while (streamedBytes < oversizedPayloadBytes) {
+          if (res.destroyed) {
+            return;
+          }
+          streamedBytes += chunk.byteLength;
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        res.end('"}');
+      };
+
+      writeMore();
     });
-    const fetcher = withFetchPreconnect(async () => new Response(stream, { status: 200 }));
+    const port = await listenLoopbackServer(server);
 
-    await expect(
-      requestDiscord("/channels/123/messages", "test", { fetcher, retry: { attempts: 1 } }),
-    ).rejects.toThrow(SyntaxError);
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (response) => {
+        contentLength = response.headers.get("content-length");
+      });
 
-    expect(canceled).toBe(true);
+      let error: unknown;
+      try {
+        await requestDiscord("/channels/123/messages", "test-token", {
+          retry: { attempts: 1 },
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("Discord API /channels/123/messages response body too large");
+      expect(String(error)).toContain(`limit: ${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} bytes`);
+      expect(requestUrl).toBe("/api/v10/channels/123/messages");
+      expect(contentLength).toBeNull();
+      console.log(
+        `[discord requestDiscord loopback proof] oversized path: cap=${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} streamed>=${streamedBytes} content_length=${contentLength ?? "none"} rejected=${String(error)}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
   });
 });
