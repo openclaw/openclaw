@@ -1,4 +1,4 @@
-// Qa Lab tests cover Crabline fake-provider transport integration behavior.
+// Qa Lab tests cover Crabline local-provider transport integration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { OPENCLAW_CRABLINE_MANIFEST_PATH } from "@openclaw/crabline";
@@ -18,7 +18,7 @@ function createSelection(channel: "slack" | "telegram" | "whatsapp" = "telegram"
 }
 
 describe("crabline transport", () => {
-  it("configures OpenClaw's Telegram plugin against a Crabline fake provider server", async () => {
+  it("configures OpenClaw's Telegram plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
@@ -59,7 +59,7 @@ describe("crabline transport", () => {
     });
   });
 
-  it("configures OpenClaw's Slack plugin against a Crabline fake provider server", async () => {
+  it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
