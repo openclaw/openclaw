@@ -1,7 +1,7 @@
 // Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
-import type { QaTransportState } from "./qa-transport.js";
+import type { QaTransportCapabilities, QaTransportState } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
@@ -13,14 +13,7 @@ export type QaScenarioRuntimeEnv<
   lab: TLab;
   transport: {
     state: TTransportState;
-    capabilities: {
-      waitForCondition: QaScenarioRuntimeFunction;
-      getNormalizedMessageState: () => ReturnType<TTransportState["getSnapshot"]>;
-      resetNormalizedMessageState: () => Promise<void>;
-      sendInboundMessage: TTransportState["addInboundMessage"];
-      injectOutboundMessage: TTransportState["addOutboundMessage"];
-      readNormalizedMessage: TTransportState["readMessage"];
-    };
+    capabilities: QaTransportCapabilities;
   };
 };
 
