@@ -195,7 +195,7 @@ describe("installSessionToolResultGuard", () => {
         ],
       }),
     );
-    expect(guard.getPendingIds().sort()).toStrictEqual(["call_message", "call_read"]);
+    expect(guard.getPendingIds().toSorted()).toStrictEqual(["call_message", "call_read"]);
 
     // read result arrives — must NOT flush-synthesize for call_message
     sm.appendMessage(
