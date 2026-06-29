@@ -32,11 +32,27 @@ import {
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
-type DoctorMode = "import" | "inspect" | "validate";
+type DoctorMode = "import" | "inspect" | "validate" | "restore";
+
+type DoctorMigrationRunEvidence = {
+  failureReportJsonPath?: string;
+  failureReportMarkdownPath?: string;
+  manifestPath: string;
+  runId: string;
+};
+
+type DoctorRestoreEvidence = {
+  conflicts: number;
+  manifestPaths: string[];
+  restoredFiles: string[];
+  skippedFiles: string[];
+};
 
 type DoctorCommandEvidence = {
   code: number | null;
   mode: DoctorMode;
+  migrationRun?: DoctorMigrationRunEvidence;
+  restore?: DoctorRestoreEvidence;
   stderrTail: string;
   stdoutTail: string;
   totals?: Record<string, unknown>;
@@ -105,6 +121,18 @@ type ManualCompactionEvidence = {
   sessionKey: string;
 };
 
+type RollbackRestoreEvidence = {
+  archivePath: string;
+  archivedBeforeRestore: boolean;
+  failedManifestIssueCode: string;
+  idempotentRestoreSkippedFiles: string[];
+  manifestPath: string;
+  restoredFiles: string[];
+  sourcePath: string;
+  sourceRestored: boolean;
+  sqliteStillExists: boolean;
+};
+
 export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
@@ -126,6 +154,7 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   pluginSdkConsumer?: PluginSdkConsumerEvidence;
   pluginSdkSessionKey: string;
   resetSessionKey: string;
+  rollbackRestore?: RollbackRestoreEvidence;
   sharedSessionKeys: string[];
   stateDir: string;
 };
@@ -211,6 +240,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   let manualCompaction: ManualCompactionEvidence | undefined;
   let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
   let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
+  let rollbackRestore: RollbackRestoreEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -248,6 +278,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
 
     const validateDoctor = await runDoctor(inst, "validate", context.storePath);
     await record("after-doctor-validate", validateDoctor);
+
+    rollbackRestore = await runRollbackRestoreProof(inst, context);
+    await record("after-rollback-restore");
 
     const client = await connectGatewayClient({
       url: inst.url,
@@ -413,6 +446,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     ...(pluginSdkConsumer ? { pluginSdkConsumer } : {}),
     pluginSdkSessionKey: context.pluginSdkSessionKey,
     resetSessionKey: context.resetSessionKey,
+    ...(rollbackRestore ? { rollbackRestore } : {}),
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
   };
@@ -748,12 +782,206 @@ async function runDoctor(
   return {
     code: result.code,
     mode,
+    ...(parsed ? parseDoctorMigrationRun(parsed) : {}),
+    ...(parsed ? parseDoctorRestore(parsed) : {}),
     stderrTail: tail(result.stderr),
     stdoutTail: tail(result.stdout),
     ...(parsed && typeof parsed.totals === "object"
       ? { totals: parsed.totals as Record<string, unknown> }
       : {}),
   };
+}
+
+function parseDoctorMigrationRun(parsed: Record<string, unknown>): {
+  migrationRun?: DoctorMigrationRunEvidence;
+} {
+  const migrationRun = asRecord(parsed.migrationRun);
+  if (
+    !migrationRun ||
+    typeof migrationRun.manifestPath !== "string" ||
+    typeof migrationRun.runId !== "string"
+  ) {
+    return {};
+  }
+  return {
+    migrationRun: {
+      ...(typeof migrationRun.failureReportJsonPath === "string"
+        ? { failureReportJsonPath: migrationRun.failureReportJsonPath }
+        : {}),
+      ...(typeof migrationRun.failureReportMarkdownPath === "string"
+        ? { failureReportMarkdownPath: migrationRun.failureReportMarkdownPath }
+        : {}),
+      manifestPath: migrationRun.manifestPath,
+      runId: migrationRun.runId,
+    },
+  };
+}
+
+function parseDoctorRestore(parsed: Record<string, unknown>): { restore?: DoctorRestoreEvidence } {
+  const targets = Array.isArray(parsed.targets) ? parsed.targets : [];
+  const restore = asRecord(asRecord(targets[0])?.restore);
+  if (!restore) {
+    return {};
+  }
+  return {
+    restore: {
+      conflicts: Array.isArray(restore.conflicts) ? restore.conflicts.length : 0,
+      manifestPaths: stringArray(restore.manifestPaths),
+      restoredFiles: stringArray(restore.restoredFiles),
+      skippedFiles: stringArray(restore.skippedFiles),
+    },
+  };
+}
+
+async function runRollbackRestoreProof(
+  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  context: ProofContext,
+): Promise<RollbackRestoreEvidence> {
+  const drillDir = path.join(context.stateDir, "rollback-drill");
+  const storePath = path.join(drillDir, "sessions.json");
+  const sessionId = "sqlite-rollback-restore";
+  const sessionKey = "agent:main:rollback-restore";
+  const sourcePath = path.join(drillDir, `${sessionId}.jsonl`);
+  const sqlitePath = path.join(drillDir, "openclaw-agent.sqlite");
+  await fs.mkdir(drillDir, { recursive: true });
+  await fs.writeFile(
+    storePath,
+    `${JSON.stringify({ [sessionKey]: legacyEntry(sessionId, Date.now()) }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await writeTranscript(drillDir, sessionId, [
+    legacySessionEvent(sessionId),
+    {
+      type: "message",
+      id: "sqlite-rollback-restore-1",
+      message: { role: "user", content: "rollback restore me" },
+    },
+  ]);
+
+  const importDoctor = await runDoctor(inst, "import", storePath);
+  if (importDoctor.code !== 0) {
+    throw new Error(`rollback drill import exited non-zero: ${importDoctor.stderrTail}`);
+  }
+  const manifestPath = importDoctor.migrationRun?.manifestPath;
+  if (!manifestPath) {
+    throw new Error(`rollback drill import did not report a migration manifest`);
+  }
+  const manifest = await readJsonObjectFile(manifestPath);
+  const move = findManifestMoveForSource(manifest, sourcePath);
+  if (!move) {
+    throw new Error(`rollback drill manifest did not record ${sourcePath}`);
+  }
+  const archivedBeforeRestore = fsSync.existsSync(move.archivePath);
+  if (fsSync.existsSync(sourcePath) || !archivedBeforeRestore) {
+    throw new Error(
+      `rollback drill import did not archive source=${sourcePath} archive=${move.archivePath}`,
+    );
+  }
+
+  const failedManifestIssueCode = "e2e_forced_post_archive_failure";
+  await markMigrationManifestFailed(manifestPath, failedManifestIssueCode);
+  const restoreDoctor = await runDoctor(inst, "restore", storePath);
+  if (restoreDoctor.code !== 0 || (restoreDoctor.restore?.conflicts ?? 0) > 0) {
+    throw new Error(`rollback drill restore failed: ${restoreDoctor.stderrTail}`);
+  }
+  const restoredFiles = restoreDoctor.restore?.restoredFiles ?? [];
+  if (!restoredFiles.some((filePath) => sameFilePathString(filePath, sourcePath))) {
+    throw new Error(`rollback drill restore did not report restored source ${sourcePath}`);
+  }
+  if (!fsSync.existsSync(sourcePath) || fsSync.existsSync(move.archivePath)) {
+    throw new Error(
+      `rollback drill restore did not move archive back to source=${sourcePath} archive=${move.archivePath}`,
+    );
+  }
+
+  const idempotentRestore = await runDoctor(inst, "restore", storePath);
+  if (idempotentRestore.code !== 0 || (idempotentRestore.restore?.conflicts ?? 0) > 0) {
+    throw new Error(`rollback drill idempotent restore failed: ${idempotentRestore.stderrTail}`);
+  }
+  const idempotentRestoreSkippedFiles = idempotentRestore.restore?.skippedFiles ?? [];
+  if (!idempotentRestoreSkippedFiles.some((filePath) => sameFilePathString(filePath, sourcePath))) {
+    throw new Error(`rollback drill idempotent restore did not skip ${sourcePath}`);
+  }
+  if (!fsSync.existsSync(sqlitePath)) {
+    throw new Error(`rollback drill restore unexpectedly removed SQLite database ${sqlitePath}`);
+  }
+
+  return {
+    archivePath: move.archivePath,
+    archivedBeforeRestore,
+    failedManifestIssueCode,
+    idempotentRestoreSkippedFiles,
+    manifestPath,
+    restoredFiles,
+    sourcePath,
+    sourceRestored: fsSync.existsSync(sourcePath),
+    sqliteStillExists: fsSync.existsSync(sqlitePath),
+  };
+}
+
+async function readJsonObjectFile(filePath: string): Promise<Record<string, unknown>> {
+  const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  const record = asRecord(parsed);
+  if (!record) {
+    throw new Error(`${filePath} did not contain a JSON object`);
+  }
+  return record;
+}
+
+function findManifestMoveForSource(
+  manifest: Record<string, unknown>,
+  sourcePath: string,
+): { archivePath: string; sourcePath: string } | undefined {
+  for (const target of Array.isArray(manifest.targets) ? manifest.targets : []) {
+    const targetRecord = asRecord(target);
+    const moves = [
+      ...(Array.isArray(targetRecord?.completedMoves) ? targetRecord.completedMoves : []),
+      ...(Array.isArray(targetRecord?.plannedMoves) ? targetRecord.plannedMoves : []),
+    ];
+    for (const move of moves) {
+      const moveRecord = asRecord(move);
+      if (
+        typeof moveRecord?.sourcePath === "string" &&
+        typeof moveRecord.archivePath === "string" &&
+        sameFilePathString(moveRecord.sourcePath, sourcePath)
+      ) {
+        return {
+          archivePath: moveRecord.archivePath,
+          sourcePath: moveRecord.sourcePath,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function sameFilePathString(left: string, right: string): boolean {
+  return normalizeMacPrivatePath(left) === normalizeMacPrivatePath(right);
+}
+
+function normalizeMacPrivatePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return resolved.startsWith("/private/") ? resolved.slice("/private".length) : resolved;
+}
+
+async function markMigrationManifestFailed(manifestPath: string, issueCode: string): Promise<void> {
+  const manifest = await readJsonObjectFile(manifestPath);
+  const failedAt = new Date().toISOString();
+  manifest.failedAt = failedAt;
+  manifest.completedAt = typeof manifest.completedAt === "string" ? manifest.completedAt : failedAt;
+  const firstTarget = asRecord(Array.isArray(manifest.targets) ? manifest.targets[0] : undefined);
+  if (firstTarget) {
+    const issues = Array.isArray(firstTarget.issues) ? firstTarget.issues : [];
+    firstTarget.issues = [
+      ...issues,
+      {
+        code: issueCode,
+        message: "E2E simulated post-archive migration failure.",
+        sessionKey: "agent:main:rollback-restore",
+      },
+    ];
+  }
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 }
 
 async function appendProofMessage(
@@ -1894,6 +2122,18 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function tail(value: string, maxChars = 8_000): string {
