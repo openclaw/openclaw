@@ -77,13 +77,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     const channel = directMatch[1];
     const identifier = directMatch[2];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    // Truncate long machine-generated identifiers (e.g. ou_xxx open_ids)
-    // to keep the fallback display compact. The full key is still available
-    // via the raw session key for debugging.
-    const MAX_ID_DISPLAY = 20;
-    const displayId =
-      identifier.length > MAX_ID_DISPLAY ? identifier.slice(0, 12) + "…" : identifier;
-    return { prefix: "", fallbackName: `${channelLabel} · ${displayId}` };
+    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
   }
 
   // Group chat: agent:<x>:<channel>:group:<id>.
@@ -147,4 +141,25 @@ export function isCronSessionKey(key: string): boolean {
   }
   const rest = parts.slice(2).join(":");
   return rest.startsWith("cron:");
+}
+
+/**
+ * Format a session key for compact display in views where space is limited
+ * (activity log, exec approval). Long machine-generated identifiers are
+ * truncated to keep the UI readable; the full key is preserved via the
+ * `title` attribute at each display site.
+ *
+ * Callers that need the full identifier for disambiguation (chat picker,
+ * sidebar, overview cards) should use {@link parseSessionKey} directly.
+ */
+export function formatSessionKeyForDisplay(key: string): string {
+  const { fallbackName } = parseSessionKey(key);
+  // Truncate only the identifier portion within "Channel · identifier" patterns.
+  const MAX_ID_DISPLAY = 20;
+  return fallbackName.replace(/ · (.+)$/, (_match, identifier) => {
+    if (identifier.length > MAX_ID_DISPLAY) {
+      return ` · ${identifier.slice(0, 12)}…`;
+    }
+    return ` · ${identifier}`;
+  });
 }

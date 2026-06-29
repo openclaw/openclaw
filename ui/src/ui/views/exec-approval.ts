@@ -9,7 +9,7 @@ import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../controllers/exec-approval.ts";
-import { parseSessionKey } from "../session-display.ts";
+import { formatSessionKeyForDisplay } from "../session-display.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -35,7 +35,7 @@ function formatSessionKey(key?: string | null): string {
   if (!key) {
     return "";
   }
-  return parseSessionKey(key).fallbackName;
+  return formatSessionKeyForDisplay(key);
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {

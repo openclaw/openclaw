@@ -1,6 +1,11 @@
 // Control UI tests cover session display behavior.
 import { describe, expect, it } from "vitest";
-import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import {
+  formatSessionKeyForDisplay,
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+} from "./session-display.ts";
 
 describe("parseSessionKey", () => {
   // ── Main session ──
@@ -54,10 +59,10 @@ describe("parseSessionKey", () => {
   });
 
   // ── Direct chat — Chinese platforms ──
-  it("formats Feishu direct chat and truncates long open_id", () => {
+  it("formats Feishu direct chat with full open_id", () => {
     const result = parseSessionKey("agent:main:feishu:direct:ou_67075ec667cac0a7feae2c5094fd27b2");
     expect(result.prefix).toBe("");
-    expect(result.fallbackName).toBe("Feishu · ou_67075ec66…");
+    expect(result.fallbackName).toBe("Feishu · ou_67075ec667cac0a7feae2c5094fd27b2");
   });
 
   it("formats Feishu direct chat with short id", () => {
@@ -129,24 +134,11 @@ describe("parseSessionKey", () => {
     });
   });
 
-  // ── Truncation behavior ──
-  it("truncates identifiers longer than 20 characters", () => {
-    const longId = "a".repeat(25);
+  // ── parseSessionKey returns full identifiers (no truncation) ──
+  it("returns full identifiers for long machine-generated ids", () => {
+    const longId = "a".repeat(30);
     const result = parseSessionKey(`agent:main:feishu:direct:${longId}`);
-    expect(result.fallbackName).toBe("Feishu · aaaaaaaaaaaa…");
-  });
-
-  it("does not truncate identifiers at exactly 20 characters", () => {
-    const id = "a".repeat(20);
-    const result = parseSessionKey(`agent:main:telegram:direct:${id}`);
-    expect(result.fallbackName).toBe(`Telegram · ${id}`);
-  });
-
-  it("does not truncate short identifiers", () => {
-    const id = "+15551234567";
-    expect(id.length).toBeLessThanOrEqual(20);
-    const result = parseSessionKey(`agent:main:telegram:direct:${id}`);
-    expect(result.fallbackName).toBe(`Telegram · ${id}`);
+    expect(result.fallbackName).toBe(`Feishu · ${longId}`);
   });
 
   // ── Group chat ──
@@ -188,6 +180,35 @@ describe("parseSessionKey", () => {
   });
 });
 
+describe("formatSessionKeyForDisplay", () => {
+  it("truncates long identifiers for compact display", () => {
+    const result = formatSessionKeyForDisplay(
+      "agent:main:feishu:direct:ou_67075ec667cac0a7feae2c5094fd27b2",
+    );
+    expect(result).toBe("Feishu · ou_67075ec66…");
+  });
+
+  it("does not truncate short identifiers", () => {
+    const result = formatSessionKeyForDisplay("agent:main:telegram:direct:+15551234567");
+    expect(result).toBe("Telegram · +15551234567");
+  });
+
+  it("does not truncate identifiers at exactly 20 characters", () => {
+    const id = "a".repeat(20);
+    const result = formatSessionKeyForDisplay(`agent:main:telegram:direct:${id}`);
+    expect(result).toBe(`Telegram · ${id}`);
+  });
+
+  it("passes through non-direct-chat keys unchanged", () => {
+    const result = formatSessionKeyForDisplay("agent:main:feishu:group:oc_chat_123");
+    expect(result).toBe("Feishu Group");
+  });
+
+  it("passes through main session key", () => {
+    expect(formatSessionKeyForDisplay("main")).toBe("Main Session");
+  });
+});
+
 describe("resolveSessionDisplayName", () => {
   it("uses label when available and different from key", () => {
     const row = { key: "agent:main:feishu:direct:ou_xxx", label: "税务师" } as any;
@@ -203,10 +224,10 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("agent:main:feishu:direct:ou_xxx", row)).toBe("税务师");
   });
 
-  it("falls back to parseSessionKey when no row data", () => {
+  it("falls back to parseSessionKey (full identifier) when no row data", () => {
     expect(
       resolveSessionDisplayName("agent:main:feishu:direct:ou_67075ec667cac0a7feae2c5094fd27b2"),
-    ).toBe("Feishu · ou_67075ec66…");
+    ).toBe("Feishu · ou_67075ec667cac0a7feae2c5094fd27b2");
   });
 });
 
