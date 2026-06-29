@@ -8,6 +8,7 @@ import * as fsSafe from "../infra/fs-safe.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 
@@ -182,6 +183,37 @@ describe("media understanding attachments SSRF", () => {
       expect(result.buffer.toString()).toBe("state-media");
       expect(result.fileName).toBe("telegram.jpg");
     });
+  });
+
+  it("resolves managed inbound media URI attachments", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const saved = await saveMediaBuffer(
+        Buffer.from("managed-media"),
+        "text/plain",
+        "inbound",
+      );
+
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, path: `media://inbound/${encodeURIComponent(saved.id)}` }],
+        {
+          localPathRoots: [path.join(stateDir, "media")],
+        },
+      );
+
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(result.buffer.toString()).toBe("managed-media");
+      expect(result.fileName).toBe(saved.id);
+    });
+  });
+
+  it("blocks nested managed inbound media URI attachments", async () => {
+    const cache = new MediaAttachmentCache([{ index: 0, path: "media://inbound/nested%2Ffile.pdf" }]);
+
+    await expect(
+      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toThrow(/outside allowed roots/i);
   });
 
   it("keeps cwd-relative fallback when a state-relative candidate does not exist", async () => {

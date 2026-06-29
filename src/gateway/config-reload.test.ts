@@ -175,6 +175,12 @@ describe("buildGatewayReloadPlan", () => {
       registration: { restartPrefixes: ["browser"] },
       source: "test",
     },
+    {
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      registration: { restartPrefixes: ["plugins.entries.canvas"] },
+      source: "test",
+    },
   ];
 
   beforeEach(() => {
@@ -378,6 +384,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
+  });
+
+  it("keeps restart-owned plugin entry config changes restart-backed", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.canvas.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.entries.canvas.enabled"]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {

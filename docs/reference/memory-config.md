@@ -445,6 +445,66 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
+Session transcript hits also obey
+[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+`tree` visibility only exposes the current session and sessions it spawned. To
+recall an unrelated same-agent gateway-dispatched session from a different
+session, such as a DM, intentionally widen visibility to `agent` (or `all` only
+when cross-agent recall is also required and agent-to-agent policy allows it).
+
+The examples below place these settings under `agents.defaults`. You can also
+apply equivalent `memorySearch` settings in a per-agent override when only one
+agent should index and search session transcripts.
+
+For same-agent gateway-to-DM recall:
+
+<Tabs>
+  <Tab title="Builtin backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+  <Tab title="QMD backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: { enabled: true },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+</Tabs>
+
+When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
+`sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
+`memory.qmd.sessions.enabled: true` as well.
+
 ---
 
 ## SQLite vector acceleration (sqlite-vec)
@@ -480,7 +540,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
 | `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
 | `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.enabled`       | `boolean` | `false`  | Export session transcripts into QMD                                                   |
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 

@@ -252,6 +252,7 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   SenderGroup?: string;
+  SenderIsBot?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;

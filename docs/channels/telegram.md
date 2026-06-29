@@ -988,12 +988,12 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
 ## Error reply controls
 
-When the agent encounters a delivery or provider error, Telegram can either reply with the error text or suppress it. Two config keys control this behavior:
+When the agent encounters a delivery or provider error, the error policy controls whether error messages are sent to the Telegram chat:
 
-| Key                                 | Values            | Default | Description                                                                                     |
-| ----------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `channels.telegram.errorPolicy`     | `reply`, `silent` | `reply` | `reply` sends a friendly error message to the chat. `silent` suppresses error replies entirely. |
-| `channels.telegram.errorCooldownMs` | number (ms)       | `60000` | Minimum time between error replies to the same chat. Prevents error spam during outages.        |
+| Key                                 | Values                     | Default         | Description                                                                                                                                                                                               |
+| ----------------------------------- | -------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels.telegram.errorPolicy`     | `always`, `once`, `silent` | `always`        | `always` — send every error message to the chat. `once` — send each unique error message once per cooldown window (suppress repeated identical errors). `silent` — never send error messages to the chat. |
+| `channels.telegram.errorCooldownMs` | number (ms)                | `14400000` (4h) | Cooldown window for the `once` policy. After an error is sent, the same error message is suppressed until this interval elapses. Prevents error spam during outages.                                      |
 
 Per-account, per-group, and per-topic overrides are supported (same inheritance as other Telegram config keys).
 
@@ -1001,7 +1001,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
 {
   channels: {
     telegram: {
-      errorPolicy: "reply",
+      errorPolicy: "always",
       errorCooldownMs: 120000,
       groups: {
         "-1001234567890": {

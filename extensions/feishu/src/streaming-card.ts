@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -138,7 +139,10 @@ function truncateSummary(text: string, max = 50): string {
     return "";
   }
   const clean = text.replace(/\n/g, " ").trim();
-  return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
+  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
+  // straddling the limit is dropped whole, instead of leaving a lone surrogate
+  // half that Feishu renders as the replacement char.
+  return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
 }
 
 function hasNaturalStreamingBoundary(text: string): boolean {

@@ -118,6 +118,50 @@ describe("limitHistoryTurns", () => {
     expect(limited[1].role).toBe("assistant");
   });
 
+  it("preserves leading compactionSummary when limiting", () => {
+    const compactionSummary: AgentMessage = {
+      role: "compactionSummary",
+      summary: "Previous conversation about topic X",
+      tokensBefore: 5000,
+      tokensAfter: 2000,
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const messages = [
+      compactionSummary,
+      ...makeMessages(["user", "assistant", "user", "assistant"]),
+    ];
+    const limited = limitHistoryTurns(messages, 1);
+    // compactionSummary is preserved, last 1 user turn + assistant kept
+    expect(limited.length).toBe(3);
+    expect(limited[0].role).toBe("compactionSummary");
+    expect(firstText(limited[1])).toBe("message 2");
+  });
+
+  it("preserves leading branchSummary when limiting", () => {
+    const branchSummary: AgentMessage = {
+      role: "branchSummary",
+      summary: "Branch context",
+      fromId: "abc",
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const messages = [branchSummary, ...makeMessages(["user", "assistant", "user", "assistant"])];
+    const limited = limitHistoryTurns(messages, 1);
+    expect(limited.length).toBe(3);
+    expect(limited[0].role).toBe("branchSummary");
+  });
+
+  it("returns all when only non-conversation messages exist", () => {
+    const compactionSummary: AgentMessage = {
+      role: "compactionSummary",
+      summary: "Summary only",
+      tokensBefore: 1000,
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const limited = limitHistoryTurns([compactionSummary], 2);
+    expect(limited).toHaveLength(1);
+    expect(limited[0].role).toBe("compactionSummary");
+  });
+
   it("preserves message content integrity", () => {
     // Limiting should slice whole turns, not mutate tool calls or message bodies.
     const messages: AgentMessage[] = [

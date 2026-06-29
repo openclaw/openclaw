@@ -83,6 +83,7 @@ function shouldIncludeRecoveryHint(reason: FailoverReason): boolean {
     case "timeout":
     case "server_error":
     case "model_not_found":
+    case "format":
       return false;
     default:
       return true;

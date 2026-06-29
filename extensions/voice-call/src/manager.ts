@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
@@ -82,6 +82,7 @@ export class CallManager {
   private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
+  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
@@ -103,8 +104,13 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    coreSession?: VoiceCallCoreSessionConfig,
+  ) {
     this.config = config;
+    this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
@@ -353,6 +359,7 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
+      coreSession: this.coreSession,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,

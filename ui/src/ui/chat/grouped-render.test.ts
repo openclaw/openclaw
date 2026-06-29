@@ -32,6 +32,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  isMarkdownBlockArtText: () => false,
   toSanitizedMarkdownHtml: markdownRenderMock,
   toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
@@ -1459,6 +1460,32 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
       "Voice note",
     );
+  });
+
+  it("notifies when assistant audio and video attachment metadata loads", () => {
+    const container = document.createElement("div");
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-media-layout",
+        role: "assistant",
+        content:
+          "Audio and video\nMEDIA:https://example.com/voice.ogg\nMEDIA:https://example.com/clip.mp4",
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false, onAssistantAttachmentLoaded },
+    );
+
+    expectElement(container, "audio", HTMLAudioElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+    expectElement(container, "video", HTMLVideoElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+
+    expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
   });
 
   it("renders allowed transcript and content image variants", async () => {

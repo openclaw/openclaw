@@ -6,7 +6,6 @@ scenario:
   coverage:
     primary:
       - gateway.openai-compatible-apis
-    secondary:
       - runtime.hosted-tool-use
   objective: Verify the OpenAI-compatible chat-completions client and Docker lane preserve strict tool-call API behavior.
   successCriteria:

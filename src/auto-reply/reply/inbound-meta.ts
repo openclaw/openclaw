@@ -649,6 +649,7 @@ export function buildInboundUserContextPrefix(
     username: normalizePromptMetadataString(ctx.SenderUsername),
     tag: normalizePromptMetadataString(ctx.SenderTag),
     e164: normalizePromptMetadataString(ctx.SenderE164),
+    is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
   };
   if (senderInfo?.label) {
     blocks.push(formatUntrustedJsonBlock("Sender (untrusted metadata):", senderInfo));
