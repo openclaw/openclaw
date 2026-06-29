@@ -2120,7 +2120,7 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "anthropic",
-      model: "claude-sonnet-4.6",
+      model: "anthropic/claude-sonnet-4.6",
       usage: {
         input: 100,
         output: 40,
@@ -2136,7 +2136,9 @@ describe("diagnostics-otel service", () => {
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelUsageOptions?.attributes?.["gen_ai.system"]).toBe("anthropic");
-    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-sonnet-4.6");
+    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);
@@ -2163,8 +2165,8 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       callId: "call-1",
       sessionKey: "session-key",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4.6",
       api: "openai-completions",
       durationMs: 250,
     });
@@ -2193,8 +2195,8 @@ describe("diagnostics-otel service", () => {
     expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
-      "gen_ai.provider.name": "openai",
-      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "unknown",
     });
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
       "gen_ai.operation.name": "generate_content",
@@ -2282,6 +2284,23 @@ describe("diagnostics-otel service", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 45,
+      promptStats: {
+        inputMessagesCount: 2,
+        inputMessagesChars: 3456,
+        systemPromptChars: 789,
+        toolDefinitionsCount: 4,
+        toolDefinitionsChars: 2345,
+        totalChars: 6590,
+      },
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 5,
+        reasoningTokens: 8,
+        promptTokens: 135,
+        total: 155,
+      },
       trace: {
         traceId: TRACE_ID,
         spanId: CHILD_SPAN_ID,
@@ -2416,6 +2435,21 @@ describe("diagnostics-otel service", () => {
     expect(modelSpanAttributes["openclaw.model_call.request_bytes"]).toBe(1234);
     expect(modelSpanAttributes["openclaw.model_call.response_bytes"]).toBe(567);
     expect(modelSpanAttributes["openclaw.model_call.time_to_first_byte_ms"]).toBe(45);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_count"]).toBe(2);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_chars"]).toBe(3456);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.system_prompt_chars"]).toBe(789);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_count"]).toBe(4);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_chars"]).toBe(2345);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.total_chars"]).toBe(6590);
+    expect(modelSpanAttributes["openclaw.model_call.usage.input_tokens"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(20);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_read_input_tokens"]).toBe(30);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_creation_input_tokens"]).toBe(5);
+    expect(modelSpanAttributes["openclaw.model_call.usage.reasoning_output_tokens"]).toBe(8);
+    expect(modelSpanAttributes["openclaw.model_call.usage.prompt_tokens"]).toBe(135);
+    expect(modelSpanAttributes["openclaw.model_call.usage.total_tokens"]).toBe(155);
+    expect(modelSpanAttributes["gen_ai.usage.input_tokens"]).toBe(135);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(20);
     const runDuration = lastHistogramRecord("openclaw.run.duration_ms");
     expect(runDuration?.[0]).toBe(100);
     expect(Object.hasOwn(runDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);

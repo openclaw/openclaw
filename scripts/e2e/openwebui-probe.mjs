@@ -7,14 +7,15 @@ const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
 const password = process.env.OPENWEBUI_ADMIN_PASSWORD ?? "";
 const expectedNonce = process.env.OPENWEBUI_EXPECTED_NONCE ?? "";
 const prompt = process.env.OPENWEBUI_PROMPT ?? "";
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const modelAttempts = readPositiveInt("OPENWEBUI_MODEL_ATTEMPTS", 72);
-const modelRetryMs = readNonNegativeInt("OPENWEBUI_MODEL_RETRY_MS", 5000);
-const fetchTimeoutMs = readPositiveInt("OPENWEBUI_FETCH_TIMEOUT_MS", 720000);
-const controlTimeoutMs = readPositiveInt(
+const modelRetryMs = readNonNegativeTimerMs("OPENWEBUI_MODEL_RETRY_MS", 5000);
+const fetchTimeoutMs = readPositiveTimerMs("OPENWEBUI_FETCH_TIMEOUT_MS", 720000);
+const controlTimeoutMs = readPositiveTimerMs(
   "OPENWEBUI_CONTROL_TIMEOUT_MS",
   Math.min(fetchTimeoutMs, 30000),
 );
-const chatTimeoutMs = readPositiveInt("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
+const chatTimeoutMs = readPositiveTimerMs("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
 const responseBodyMaxBytes = readPositiveInt("OPENWEBUI_RESPONSE_BODY_MAX_BYTES", 1024 * 1024);
 const smokeMode =
   process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
@@ -65,6 +66,20 @@ function readNonNegativeInt(name, fallback) {
   return parsed;
 }
 
+function clampTimerTimeoutMs(valueMs, minMs = 1) {
+  const min = Math.max(0, Math.floor(minMs));
+  const value = Number.isFinite(valueMs) ? valueMs : min;
+  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
+}
+
+function readPositiveTimerMs(name, fallback) {
+  return clampTimerTimeoutMs(readPositiveInt(name, fallback));
+}
+
+function readNonNegativeTimerMs(name, fallback) {
+  return clampTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
+}
+
 function createTimeoutError(label, timeoutMs) {
   const error = new Error(`${label} timed out after ${timeoutMs}ms`);
   error.code = "ETIMEDOUT";
@@ -72,14 +87,15 @@ function createTimeoutError(label, timeoutMs) {
 }
 
 async function withRequestTimeout(label, timeoutMs, run) {
+  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
   const controller = new AbortController();
-  const timeoutError = createTimeoutError(label, timeoutMs);
+  const timeoutError = createTimeoutError(label, resolvedTimeoutMs);
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => {
       controller.abort(timeoutError);
       reject(timeoutError);
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     timer.unref?.();
   });
   try {
@@ -138,7 +154,7 @@ function buildAuthHeaders(token, cookie) {
 
 function sleep(ms) {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
   });
 }
 
@@ -147,7 +163,9 @@ function escapeRegExp(value) {
 }
 
 function redactDiagnosticText(text, extraSecrets = []) {
-  let redacted = text;
+  let redacted = text
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
+    .replace(/openwebui-session=[^;"\s]+/giu, "openwebui-session=<redacted>");
   for (const secret of [email, password, ...extraSecrets]) {
     if (!secret) {
       continue;
@@ -173,6 +191,13 @@ function cookieSecretValues(cookieHeader) {
       return separatorIndex === -1 ? "" : text.slice(separatorIndex + 1).trim();
     })
     .filter(Boolean);
+}
+
+function authDiagnosticSecretValues(authHeaders) {
+  const authorization = typeof authHeaders.authorization === "string" ? authHeaders.authorization : "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+  const cookie = typeof authHeaders.cookie === "string" ? authHeaders.cookie : "";
+  return [bearerToken, authorization, cookie, ...cookieSecretValues(cookie)].filter(Boolean);
 }
 
 async function fetchSignin() {
@@ -325,7 +350,11 @@ const chatJson = await fetchChatCompletion(authHeaders, targetModel, diagnosticS
 const reply =
   chatJson?.choices?.[0]?.message?.content ?? chatJson?.message?.content ?? chatJson?.content ?? "";
 if (typeof reply !== "string" || !reply.includes(expectedNonce)) {
-  throw new Error(`chat reply missing nonce: ${JSON.stringify(reply)}`);
+  const diagnosticReply = redactDiagnosticText(JSON.stringify(reply), [
+    ...diagnosticSecrets,
+    ...authDiagnosticSecretValues(authHeaders),
+  ]);
+  throw new Error(`chat reply missing nonce: ${diagnosticReply}`);
 }
 
 console.log(JSON.stringify({ ok: true, model: targetModel, reply }, null, 2));

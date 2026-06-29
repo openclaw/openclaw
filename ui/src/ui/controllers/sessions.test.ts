@@ -1296,6 +1296,45 @@ describe("loadSessions", () => {
 });
 
 describe("applySessionsChangedEvent", () => {
+  it("replaces stale effective fast metadata from session change events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            effectiveFastMode: "auto",
+            effectiveFastModeSource: "config",
+            fastAutoOnSeconds: 30,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      ts: 2,
+      fastMode: false,
+      effectiveFastMode: false,
+      effectiveFastModeSource: "session",
+      fastAutoOnSeconds: 30,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      fastMode: false,
+      effectiveFastMode: false,
+      effectiveFastModeSource: "session",
+      fastAutoOnSeconds: 30,
+    });
+  });
+
   it("removes deleted sessions instead of keeping archived rows visible", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {

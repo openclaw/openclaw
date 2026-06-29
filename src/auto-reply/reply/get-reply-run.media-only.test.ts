@@ -1622,6 +1622,33 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it("rebinds a queued pre-dispatch reply operation after session rollover", async () => {
+    const operation = createReplyOperation({
+      sessionId: "session-before-rollover",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: true,
+            sessionId: "session-after-rollover",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(operation.sessionId).toBe("session-after-rollover");
+      expect(call.replyOperation).toBe(operation);
+      expect(call.followupRun.run.sessionId).toBe("session-after-rollover");
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
@@ -2852,6 +2879,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.commandBody).not.toMatch(/^low\b/);
     // System events are still present in the body.
     expect(call.commandBody).toContain("System: [t] Node connected.");
+  });
+
+  it("forwards resolved fast-mode override into the followup run", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedFastMode: "auto",
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.fastMode).toBe("auto");
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {

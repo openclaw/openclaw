@@ -35,9 +35,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker Crestodian planner fallback smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 echo "OK"

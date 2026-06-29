@@ -126,37 +126,41 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
 }
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
-  "exec.approvals.get": ({ params, respond }) => {
+  "exec.approvals.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
       return;
     }
-    ensureExecApprovals();
-    const snapshot = readExecApprovalsSnapshot();
-    respond(true, toExecApprovalsPayload(snapshot), undefined);
+    await respondUnavailableOnThrow(respond, async () => {
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      respond(true, toExecApprovalsPayload(snapshot), undefined);
+    });
   },
-  "exec.approvals.set": ({ params, respond }) => {
+  "exec.approvals.set": async ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
       return;
     }
-    ensureExecApprovals();
-    const snapshot = readExecApprovalsSnapshot();
-    if (!requireApprovalsBaseHash(params, snapshot, respond)) {
-      return;
-    }
-    const incoming = (params as { file?: unknown }).file;
-    if (!incoming || typeof incoming !== "object") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
-      );
-      return;
-    }
-    const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-    const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-    saveExecApprovals(next);
-    const nextSnapshot = readExecApprovalsSnapshot();
-    respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
+    await respondUnavailableOnThrow(respond, async () => {
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      if (!requireApprovalsBaseHash(params, snapshot, respond)) {
+        return;
+      }
+      const incoming = (params as { file?: unknown }).file;
+      if (!incoming || typeof incoming !== "object") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
+        );
+        return;
+      }
+      const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
+      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
+      saveExecApprovals(next);
+      const nextSnapshot = readExecApprovalsSnapshot();
+      respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
+    });
   },
   "exec.approvals.node.get": async ({ params, respond, context }) => {
     await respondWithExecApprovalsNodePayload({

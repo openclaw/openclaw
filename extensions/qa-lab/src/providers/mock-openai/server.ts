@@ -5,9 +5,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
+
+let mockFunctionCallSequence = 0;
 
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
@@ -219,12 +222,32 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
+  });
+}
+
+function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
+  writeJson(res, 400, {
+    error: {
+      type: "invalid_request_error",
+      message: `Malformed JSON body for ${label} request.`,
+    },
   });
 }
 
@@ -720,6 +743,13 @@ function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
+  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
+    .exec(prompt)?.[0]
+    ?.trim();
+  if (loosePath) {
+    return loosePath;
+  }
+
   if (/\bdocs?\b/i.test(prompt)) {
     return "repo/docs/help/testing.md";
   }
@@ -745,8 +775,10 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
-  const callId = `call_mock_${name}_${callSuffix}`;
-  const itemId = `fc_mock_${name}_${callSuffix}`;
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const callId = `call_mock_${name}_${uniqueSuffix}`;
+  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
   const item = {
     type: "function_call",
     id: itemId,
@@ -758,7 +790,7 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
-    responseId: `resp_mock_${name}_${callSuffix}`,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
     serialized,
   };
 }
@@ -833,6 +865,9 @@ function extractToolSearchTarget(text: string): string | null {
 }
 
 function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode && targetTool === "web_search") {
+    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -886,7 +921,6 @@ function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
-      runTimeoutSeconds: 30,
     };
   }
   if (targetTool === "memory_recall") {
@@ -939,7 +973,10 @@ function extractExactReplyDirective(text: string) {
   if (backtickedMatch) {
     return backtickedMatch;
   }
-  return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  return (
+    extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
+    extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
+  );
 }
 
 function extractFinishExactlyDirective(text: string) {
@@ -1087,18 +1124,12 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
   const context = extractBareToolArg(text, "context")?.toLowerCase();
-  const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
-  const runTimeoutSeconds =
-    runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
-      ? Number(runTimeoutSecondsRaw)
-      : undefined;
   return {
     task,
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
     ...(context === "fork" || context === "isolated" ? { context } : {}),
-    ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
 
@@ -1231,9 +1262,10 @@ function buildAssistantText(
       ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -1293,11 +1325,20 @@ function buildAssistantText(
   if (whatsAppStickerMarker) {
     return whatsAppStickerMarker;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return promptExactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -1317,8 +1358,17 @@ function buildAssistantText(
   if (/silent snack recall check/i.test(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
+  if (/qa private final reply warning check/i.test(prompt)) {
+    return [
+      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
+      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
+    ].join(" ");
+  }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
+  }
+  if (toolOutput && promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
@@ -1448,6 +1498,16 @@ function buildAssistantText(
   }
   if (
     toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
+  }
+  if (
+    toolOutput &&
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
   ) {
     return [
@@ -1483,49 +1543,57 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
 function buildReleaseAuditJson() {
   return `${JSON.stringify(
     {
-      verified: true,
+      verified: false,
       findings: [
         {
           id: "REL-GATEWAY-417",
           source: "src/gateway/reconnect.ts",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
+          verified: true,
         },
         {
           id: "REL-CHANNEL-238",
           source: "src/channels/delivery.ts",
           status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+          verified: true,
         },
         {
           id: "REL-CRON-904",
           source: "src/scheduling/cron.ts",
           status: "single-run lock verified for restart wakeups",
+          verified: true,
         },
         {
           id: "REL-MEMORY-552",
           source: "src/memory/recall.ts",
           status:
             "fallback summary survives empty memory search; ranking sample needs second reviewer",
+          verified: true,
         },
         {
           id: "REL-PLUGIN-319",
           source: "src/plugins/runtime.ts",
           status: "bundled runtime manifest loads cleanly after restart",
+          verified: true,
         },
         {
           id: "REL-INSTALL-846",
           source: "install/update.ts",
           status: "update smoke passed from previous stable tag",
+          verified: true,
         },
         {
           id: "REL-DOCS-611",
           source: "docs/operator-notes.md",
           status:
             "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+          verified: true,
         },
         {
           id: "REL-UI-BLOCKED",
           source: "ui/control-panel.ts",
           status: "blocked: source file was referenced by checklist but missing from the fixture",
+          verified: false,
         },
       ],
     },
@@ -1898,10 +1966,11 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const exactReplyDirective =
-    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
-    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -2045,7 +2114,6 @@ async function buildResponsesPayload(
         label: "qa-direct-fallback-worker",
         thread: false,
         mode: "run",
-        runTimeoutSeconds: 30,
       });
     }
     if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
@@ -2266,11 +2334,11 @@ async function buildResponsesPayload(
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
+    return buildAssistantEvents(promptExactMarkerDirective);
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
-    return buildAssistantEvents(exactMarkerDirective);
+  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
@@ -2286,11 +2354,14 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
+    return buildAssistantEvents(promptExactReplyDirective);
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return buildAssistantEvents(exactMarkerDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -2541,8 +2612,8 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/memory tools check/i.test(allInputText)) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
         maxResults: 3,
@@ -2552,10 +2623,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
@@ -3418,7 +3486,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/images/generations") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Images");
+          return;
+        }
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -3442,7 +3514,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/embeddings") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
+          return;
+        }
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -3464,7 +3540,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Responses");
+          return;
+        }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
         const events = await buildResponsesPayload(body, scenarioState);
         const resolvedModel = typeof body.model === "string" ? body.model : "";
@@ -3502,10 +3582,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         const raw = await readBody(req);
-        let body: AnthropicMessagesRequest;
-        try {
-          body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
-        } catch {
+        const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
+        if (!body) {
           writeJson(res, 400, {
             type: "error",
             error: {

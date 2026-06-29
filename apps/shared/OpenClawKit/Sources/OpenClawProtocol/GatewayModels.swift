@@ -6592,6 +6592,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let turnsourceto: AnyCodable?
     public let turnsourceaccountid: AnyCodable?
     public let turnsourcethreadid: AnyCodable?
+    public let approvalreviewerdeviceids: [String]?
     public let requiredeliveryroute: Bool?
     public let suppressdelivery: Bool?
     public let timeoutms: Int?
@@ -6618,6 +6619,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         turnsourceto: AnyCodable?,
         turnsourceaccountid: AnyCodable?,
         turnsourcethreadid: AnyCodable?,
+        approvalreviewerdeviceids: [String]?,
         requiredeliveryroute: Bool? = nil,
         suppressdelivery: Bool? = nil,
         timeoutms: Int?,
@@ -6643,6 +6645,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
         self.turnsourcethreadid = turnsourcethreadid
+        self.approvalreviewerdeviceids = approvalreviewerdeviceids
         self.requiredeliveryroute = requiredeliveryroute
         self.suppressdelivery = suppressdelivery
         self.timeoutms = timeoutms
@@ -6670,6 +6673,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
         case turnsourcethreadid = "turnSourceThreadId"
+        case approvalreviewerdeviceids = "approvalReviewerDeviceIds"
         case requiredeliveryroute = "requireDeliveryRoute"
         case suppressdelivery = "suppressDelivery"
         case timeoutms = "timeoutMs"
@@ -7183,17 +7187,20 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let limit: Int?
+    public let offset: Int?
     public let maxchars: Int?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         limit: Int?,
+        offset: Int? = nil,
         maxchars: Int?)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
+        self.offset = offset
         self.maxchars = maxchars
     }
 
@@ -7201,6 +7208,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case limit
+        case offset
         case maxchars = "maxChars"
     }
 }
@@ -7273,7 +7281,9 @@ public struct ChatSendParams: Codable, Sendable {
     public let sessionid: String?
     public let message: String
     public let thinking: String?
-    public let fastmode: Bool?
+    public let fastmodevalue: AnyCodable?
+    public var fastmode: Bool? { fastmodevalue?.value as? Bool }
+    public let fastautoonseconds: Int?
     public let deliver: Bool?
     public let originatingchannel: String?
     public let originatingto: String?
@@ -7285,6 +7295,46 @@ public struct ChatSendParams: Codable, Sendable {
     public let systemprovenancereceipt: String?
     public let suppresscommandinterpretation: Bool?
     public let idempotencykey: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        sessionid: String?,
+        message: String,
+        thinking: String?,
+        fastmodevalue: AnyCodable?,
+        fastautoonseconds: Int?,
+        deliver: Bool?,
+        originatingchannel: String?,
+        originatingto: String?,
+        originatingaccountid: String?,
+        originatingthreadid: String?,
+        attachments: [AnyCodable]?,
+        timeoutms: Int?,
+        systeminputprovenance: [String: AnyCodable]?,
+        systemprovenancereceipt: String?,
+        suppresscommandinterpretation: Bool?,
+        idempotencykey: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.message = message
+        self.thinking = thinking
+        self.fastmodevalue = fastmodevalue
+        self.fastautoonseconds = fastautoonseconds
+        self.deliver = deliver
+        self.originatingchannel = originatingchannel
+        self.originatingto = originatingto
+        self.originatingaccountid = originatingaccountid
+        self.originatingthreadid = originatingthreadid
+        self.attachments = attachments
+        self.timeoutms = timeoutms
+        self.systeminputprovenance = systeminputprovenance
+        self.systemprovenancereceipt = systemprovenancereceipt
+        self.suppresscommandinterpretation = suppresscommandinterpretation
+        self.idempotencykey = idempotencykey
+    }
 
     public init(
         sessionkey: String,
@@ -7305,23 +7355,25 @@ public struct ChatSendParams: Codable, Sendable {
         suppresscommandinterpretation: Bool?,
         idempotencykey: String)
     {
-        self.sessionkey = sessionkey
-        self.agentid = agentid
-        self.sessionid = sessionid
-        self.message = message
-        self.thinking = thinking
-        self.fastmode = fastmode
-        self.deliver = deliver
-        self.originatingchannel = originatingchannel
-        self.originatingto = originatingto
-        self.originatingaccountid = originatingaccountid
-        self.originatingthreadid = originatingthreadid
-        self.attachments = attachments
-        self.timeoutms = timeoutms
-        self.systeminputprovenance = systeminputprovenance
-        self.systemprovenancereceipt = systemprovenancereceipt
-        self.suppresscommandinterpretation = suppresscommandinterpretation
-        self.idempotencykey = idempotencykey
+        self.init(
+            sessionkey: sessionkey,
+            agentid: agentid,
+            sessionid: sessionid,
+            message: message,
+            thinking: thinking,
+            fastmodevalue: fastmode.map { AnyCodable($0) },
+            fastautoonseconds: nil,
+            deliver: deliver,
+            originatingchannel: originatingchannel,
+            originatingto: originatingto,
+            originatingaccountid: originatingaccountid,
+            originatingthreadid: originatingthreadid,
+            attachments: attachments,
+            timeoutms: timeoutms,
+            systeminputprovenance: systeminputprovenance,
+            systemprovenancereceipt: systemprovenancereceipt,
+            suppresscommandinterpretation: suppresscommandinterpretation,
+            idempotencykey: idempotencykey)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7330,7 +7382,8 @@ public struct ChatSendParams: Codable, Sendable {
         case sessionid = "sessionId"
         case message
         case thinking
-        case fastmode = "fastMode"
+        case fastmodevalue = "fastMode"
+        case fastautoonseconds = "fastAutoOnSeconds"
         case deliver
         case originatingchannel = "originatingChannel"
         case originatingto = "originatingTo"

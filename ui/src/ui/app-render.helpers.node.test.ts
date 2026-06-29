@@ -1188,6 +1188,7 @@ describe("switchChatSession", () => {
       chatToolMessages: [{ id: "tool-1" }],
       chatStreamSegments: [{ text: "segment", ts: 1 }],
       chatThinkingLevel: "high",
+      chatVerboseLevel: "full",
       chatStream: "stream",
       chatSideResult: {
         kind: "btw",
@@ -1278,6 +1279,7 @@ describe("switchChatSession", () => {
       chatToolMessages: [],
       chatStreamSegments: [],
       chatThinkingLevel: null,
+      chatVerboseLevel: null,
       chatStream: "stream",
       chatSideResult: null,
       lastError: null,
@@ -1384,6 +1386,7 @@ describe("switchChatSession", () => {
       chatToolMessages: [],
       chatStreamSegments: [],
       chatThinkingLevel: null,
+      chatVerboseLevel: null,
       chatStream: null,
       chatSideResult: null,
       lastError: null,

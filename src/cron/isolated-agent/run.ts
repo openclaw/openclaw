@@ -29,7 +29,6 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import {
-  createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
   type SourceDeliveryOutcome,
   type SourceDeliveryPlan,
@@ -39,6 +38,7 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
@@ -106,8 +106,10 @@ import {
   setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
+import { resolveCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
@@ -172,10 +174,6 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
     Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
     Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
   );
-}
-
-function resolveNonNegativeNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
@@ -309,50 +307,6 @@ function buildCronDeliveryTrace(params: {
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
-}
-
-function resolveCronSourceDeliveryPlan(params: {
-  deliveryPlan: CronDeliveryPlan;
-  resolvedDelivery: ResolvedCronDeliveryTarget;
-}): SourceDeliveryPlan {
-  const target = {
-    channel: params.resolvedDelivery.channel,
-    to: params.resolvedDelivery.to,
-    accountId: params.resolvedDelivery.accountId,
-    threadId: params.resolvedDelivery.threadId,
-  };
-  if (params.deliveryPlan.mode === "webhook") {
-    // Webhook jobs do not expose chat delivery or message-tool fallback.
-    return createSourceDeliveryPlan({
-      owner: "none",
-      reason: "cron_webhook",
-      messageToolEnabled: false,
-      directFallback: false,
-    });
-  }
-  if (params.deliveryPlan.mode === "none") {
-    // delivery=none still allows explicit message-tool sends from the agent,
-    // but cron itself must not auto-announce a final reply.
-    return createSourceDeliveryPlan({
-      owner: "none",
-      reason: "cron_none",
-      target,
-      messageToolEnabled: true,
-      messageToolForced: false,
-      directFallback: false,
-    });
-  }
-  return createSourceDeliveryPlan({
-    owner: "direct_fallback",
-    reason: "cron_announce",
-    target,
-    messageToolEnabled: true,
-    messageToolForced: false,
-    requireExplicitMessageTarget: true,
-    requireExplicitMessageTargetEvidence: true,
-    directFallback: true,
-    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
-  });
 }
 
 function canPromptForMessageTool(params: {
@@ -963,6 +917,7 @@ async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+  markCronRunSessionCleanupAttempted: () => void;
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
@@ -1161,6 +1116,7 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-aborted",
     });
+    params.markCronRunSessionCleanupAttempted();
     return prepared.withRunSession({
       status: "error",
       error,
@@ -1223,6 +1179,18 @@ async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
+  if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
+    const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: prepared.cfgWithAgentDefaults,
+      job: prepared.input.job,
+      agentId: prepared.agentId,
+      agentSessionKey: prepared.agentSessionKey,
+      runStartedAt: execution.runStartedAt,
+      resolvedDelivery: prepared.resolvedDelivery,
+      sourceDeliveryOutcome,
+    });
+  }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
@@ -1233,6 +1201,7 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-fatal-error",
     });
+    params.markCronRunSessionCleanupAttempted();
     const deliveryTrace = buildCronDeliveryTrace({
       deliveryPlan: prepared.deliveryPlan,
       resolvedDelivery: prepared.resolvedDelivery,
@@ -1276,6 +1245,9 @@ async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
+  if (deliveryResult.cronRunSessionCleanupAttempted) {
+    params.markCronRunSessionCleanupAttempted();
+  }
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,
@@ -1428,6 +1400,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
+  let cronRunSessionCleanupAttempted = false;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -1494,6 +1467,9 @@ export async function runCronIsolatedAgentTurn(params: {
       execution,
       abortReason,
       isAborted,
+      markCronRunSessionCleanupAttempted: () => {
+        cronRunSessionCleanupAttempted = true;
+      },
     });
     if (finalized.status === "error") {
       outcome = "error";
@@ -1524,14 +1500,25 @@ export async function runCronIsolatedAgentTurn(params: {
       ...finalSessionRef,
       error: outcomeError,
     });
-    // Release runtime references after the run completes (success or failure).
-    // The session entry has already been persisted to disk by this point,
-    // so the in-memory store and run context can be safely dropped.
-    await disposeCronRunContext({
-      sessionId: initialSessionId,
-      cronSession: prepared.context.cronSession,
-      ownsRunContext,
-      runContextOwnerToken,
-    });
+    try {
+      if (!cronRunSessionCleanupAttempted) {
+        cronRunSessionCleanupAttempted = await cleanupCronRunSessionAfterRun({
+          job: params.job,
+          agentSessionKey: prepared.context.agentSessionKey,
+          sessionId: prepared.context.currentRunSessionId(),
+          reason: "cron-delete-after-run-finally",
+        });
+      }
+    } finally {
+      // Release runtime references after the run completes (success or failure).
+      // The session entry has already been persisted to disk by this point,
+      // so the in-memory store and run context can be safely dropped.
+      await disposeCronRunContext({
+        sessionId: initialSessionId,
+        cronSession: prepared.context.cronSession,
+        ownsRunContext,
+        runContextOwnerToken,
+      });
+    }
   }
 }

@@ -101,6 +101,7 @@ export type AppViewState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   activityEntries: ActivityEntry[];
@@ -125,6 +126,7 @@ export type AppViewState = {
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
+  chatVerboseLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
@@ -182,6 +184,7 @@ export type AppViewState = {
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
+  scheduleChatScroll: () => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
@@ -428,7 +431,13 @@ export type AppViewState = {
     clawhubDetailLoading: boolean;
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
-    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    clawhubInstallMessage: {
+      kind: "success" | "error";
+      text: string;
+      acknowledgeSlug?: string;
+      acknowledgeVersion?: string;
+      acknowledgeLabel?: string;
+    } | null;
     clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
     clawhubVerdictsLoading: boolean;
     clawhubVerdictsError: string | null;

@@ -10,7 +10,10 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -28,6 +31,8 @@ const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
+  testState.sessionConfig = undefined;
+  testState.agentsConfig = undefined;
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -515,6 +520,8 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
+    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     const dir = path.dirname(storePath);
     const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
@@ -540,12 +547,12 @@ describe("session history HTTP endpoints", () => {
       "utf-8",
     );
     await writeSessionStoreForTestAsync(storePath, {
-      "agent:main:main": {
+      "agent:main:work": {
         sessionId: "sess-stale-main",
         sessionFile: staleTranscriptPath,
         updatedAt: 1,
       },
-      "agent:main:MAIN": {
+      "agent:main:main": {
         sessionId: "sess-fresh-main",
         sessionFile: freshTranscriptPath,
         updatedAt: 2,
@@ -553,7 +560,7 @@ describe("session history HTTP endpoints", () => {
     });
 
     await expectSessionHistoryText({
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:main:work",
       expectedText: "fresh history",
     });
   });
@@ -733,6 +740,34 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appendedId,
       });
+    });
+  });
+
+  test("streams identity-only transcript updates over SSE", async () => {
+    await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      await expectHistoryEventTexts(stream, ["first message"]);
+
+      emitInternalSessionTranscriptUpdate({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+        },
+        message: makeTranscriptAssistantMessage({ text: "identity second message" }),
+        messageId: "msg-identity-second",
+        messageSeq: 2,
+      });
+
+      await expectMessageEventMatch(stream, {
+        text: "identity second message",
+        seq: 2,
+        id: "msg-identity-second",
+      });
+
+      await stream.reader.cancel();
     });
   });
 

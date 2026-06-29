@@ -27,31 +27,11 @@ internal fun ClawPanel(
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surfaceRaised,
+    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.82f),
     contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
-      content()
-    }
-  }
-}
-
-/**
- * Bottom-sheet container with the app surface treatment and top-only rounding.
- */
-@Composable
-internal fun ClawSheetSurface(
-  modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(18.dp),
-  content: @Composable () -> Unit,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-    color = ClawTheme.colors.surface,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    border = null,
+    tonalElevation = 2.dp,
+    shadowElevation = 4.dp,
   ) {
     Column(modifier = Modifier.padding(contentPadding)) {
       content()

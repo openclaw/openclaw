@@ -6,7 +6,10 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
@@ -52,6 +55,7 @@ export type OllamaEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  outputDimensionality?: number;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -76,8 +80,10 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
-function sanitizeAndNormalizeEmbedding(vec: unknown[]): number[] {
-  const sanitized = vec.map((value) => {
+function sanitizeAndNormalizeEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
+  const selected =
+    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const sanitized = selected.map((value) => {
     if (typeof value !== "number") {
       throw new Error("Ollama embed response contains a non-number embedding value");
     }
@@ -114,14 +120,9 @@ async function withRemoteHttpResponse<T>(params: {
 }
 
 async function readOllamaEmbeddingJsonResponse(
-  response: Pick<Response, "json">,
+  response: Response,
 ): Promise<{ embeddings?: unknown }> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error("Ollama embed response returned malformed JSON", { cause });
-  }
+  const payload = await readProviderJsonResponse<unknown>(response, "Ollama embed response");
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new Error("Ollama embed response returned a non-object JSON payload");
   }
@@ -320,6 +321,7 @@ function resolveOllamaEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
+    outputDimensionality: options.outputDimensionality,
   };
 }
 
@@ -364,7 +366,7 @@ export async function createOllamaEmbeddingProvider(
       if (!Array.isArray(embedding)) {
         throw new Error("Ollama embed response contains a non-array embedding");
       }
-      return sanitizeAndNormalizeEmbedding(embedding);
+      return sanitizeAndNormalizeEmbedding(embedding, client.outputDimensionality);
     });
   };
 

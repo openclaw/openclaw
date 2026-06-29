@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -12,6 +12,7 @@ const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+const runFfprobeMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
@@ -21,7 +22,6 @@ const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
-const tempDirs = createTempDirTracker();
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -50,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return {
     ...actual,
     runFfmpeg: runFfmpegMock,
+    runFfprobe: runFfprobeMock,
   };
 });
 
@@ -101,23 +102,19 @@ function callData<T>(
 
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
-  const tempHome = tempDirs.make("openclaw-feishu-media-");
-  try {
-    process.env.HOME = tempHome;
-    return await run();
-  } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
+  return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
+    try {
+      process.env.HOME = tempHome;
+      return await run();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
     }
-    tempDirs.cleanup();
-  }
+  });
 }
-
-afterEach(() => {
-  tempDirs.cleanup();
-});
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
@@ -194,6 +191,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+    runFfprobeMock.mockResolvedValue("1.234\n");
   });
 
   it("suppresses reply text only for voice-intent or native voice media", () => {
@@ -237,6 +235,53 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("opus");
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
+  });
+
+  it("includes audio duration in the Feishu file upload", async () => {
+    const audio = Buffer.from("opus");
+    runFfprobeMock.mockResolvedValueOnce("2.345\n");
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: audio,
+      fileName: "reply.ogg",
+    });
+
+    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.slice(0, -1)).toEqual([
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "csv=p=0",
+    ]);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.ogg$/);
+    expect(mockCallArg(runFfprobeMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(2345);
+    const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
+    expect(messageData.msg_type).toBe("audio");
+    expect(JSON.parse(messageData.content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
+  });
+
+  it("omits audio duration when probing fails", async () => {
+    runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("opus"),
+      fileName: "reply.ogg",
+    });
+
+    expect(callData<{ duration?: number }>(fileCreateMock)).not.toHaveProperty("duration");
+    expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
   });
 
   it("uses msg_type=file for documents", async () => {

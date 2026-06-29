@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -690,6 +691,32 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("surfaces persisted user idempotency keys in __openclaw metadata (#79844)", async () => {
+    const sessionId = "test-session-idempotency-key";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        id: "entry-user-1",
+        message: {
+          role: "user",
+          content: "pending optimistic turn",
+          idempotencyKey: "client-turn-1",
+        },
+      },
+    ]);
+
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+
+    expect(result).toHaveLength(1);
+    expectMessageFields(result[0], {
+      content: "pending optimistic turn",
+      openclaw: { id: "entry-user-1", idempotencyKey: "client-turn-1" },
+    });
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1111,8 +1138,7 @@ describe("readSessionMessages", () => {
       { message: { role: "assistant", content: "newer legacy archive" } },
     ]);
     clearSessionTranscriptIndexCache();
-    vi.stubEnv("OPENCLAW_HOME", tmpDir);
-    try {
+    await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
       const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
         reason: "test cross-root reset archive fallback",
@@ -1122,9 +1148,7 @@ describe("readSessionMessages", () => {
       expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
         "newer legacy archive",
       ]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   test("does not use stale generated session archives for reset archive fallback", async () => {
@@ -2242,19 +2266,14 @@ describe("readLatestSessionUsageFromTranscript", () => {
 });
 
 describe("resolveSessionTranscriptCandidates", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   test("fallback candidate uses OPENCLAW_HOME instead of os.homedir()", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-
-    const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
-    const fallback = candidates[candidates.length - 1];
-    expect(fallback).toBe(
-      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
-    );
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
+      const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
+      const fallback = candidates[candidates.length - 1];
+      expect(fallback).toBe(
+        path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+      );
+    });
   });
 });
 
@@ -2381,13 +2400,9 @@ describe("archiveSessionTranscripts", () => {
     storePath = nextStorePath;
   });
 
-  beforeAll(() => {
-    vi.stubEnv("OPENCLAW_HOME", tmpDir);
-  });
-
-  afterAll(() => {
-    vi.unstubAllEnvs();
-  });
+  function withArchiveHome<T>(fn: () => T): T {
+    return withEnv({ OPENCLAW_HOME: tmpDir }, fn);
+  }
 
   test.each([
     {
@@ -2408,42 +2423,48 @@ describe("archiveSessionTranscripts", () => {
   ] as const)(
     "archives transcript from default and explicit sessionFile path for $sessionId",
     ({ transcriptFileName, buildArgs }) => {
-      const transcriptPath = path.join(tmpDir, transcriptFileName);
-      const args = buildArgs();
-      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
-      const archived = archiveSessionTranscripts(args);
-      expect(archived).toHaveLength(1);
-      expect(archived[0]).toContain(".reset.");
-      expect(fs.existsSync(transcriptPath)).toBe(false);
-      expect(fs.existsSync(archived[0])).toBe(true);
+      withArchiveHome(() => {
+        const transcriptPath = path.join(tmpDir, transcriptFileName);
+        const args = buildArgs();
+        fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+        const archived = archiveSessionTranscripts(args);
+        expect(archived).toHaveLength(1);
+        expect(archived[0]).toContain(".reset.");
+        expect(fs.existsSync(transcriptPath)).toBe(false);
+        expect(fs.existsSync(archived[0])).toBe(true);
+      });
     },
   );
 
   test("returns empty array when no transcript files exist", () => {
-    const archived = archiveSessionTranscripts({
-      sessionId: "nonexistent-session",
-      storePath,
-      reason: "reset",
-    });
+    withArchiveHome(() => {
+      const archived = archiveSessionTranscripts({
+        sessionId: "nonexistent-session",
+        storePath,
+        reason: "reset",
+      });
 
-    expect(archived).toStrictEqual([]);
+      expect(archived).toStrictEqual([]);
+    });
   });
 
   test("skips files that do not exist and archives only existing ones", () => {
-    const sessionId = "sess-archive-3";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+    withArchiveHome(() => {
+      const sessionId = "sess-archive-3";
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
 
-    const archived = archiveSessionTranscripts({
-      sessionId,
-      storePath,
-      sessionFile: "/nonexistent/path/file.jsonl",
-      reason: "deleted",
+      const archived = archiveSessionTranscripts({
+        sessionId,
+        storePath,
+        sessionFile: "/nonexistent/path/file.jsonl",
+        reason: "deleted",
+      });
+
+      expect(archived).toHaveLength(1);
+      expect(archived[0]).toContain(".deleted.");
+      expect(fs.existsSync(transcriptPath)).toBe(false);
     });
-
-    expect(archived).toHaveLength(1);
-    expect(archived[0]).toContain(".deleted.");
-    expect(fs.existsSync(transcriptPath)).toBe(false);
   });
 });
 
@@ -2656,7 +2677,11 @@ describe("oversized transcript line guards", () => {
         timestamp,
         id: "oversized-child",
         parentId: "root-msg",
-        message: { role: "assistant", content: oversizedContent },
+        message: {
+          role: "assistant",
+          content: oversizedContent,
+          idempotencyKey: "oversized-key",
+        },
       }),
     ];
     fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
@@ -2675,6 +2700,7 @@ describe("oversized transcript line guards", () => {
     // id is preserved in __openclaw transcript metadata
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
+    expect(meta?.idempotencyKey).toBe("oversized-key");
     expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.

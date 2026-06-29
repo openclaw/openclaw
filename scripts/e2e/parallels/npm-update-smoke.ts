@@ -7,13 +7,20 @@ import { copyFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  addTimerTimeoutGraceMs,
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+} from "@openclaw/normalization-core/number-coercion";
+import {
   die,
   ensureValue,
   extractLastOpenClawVersionFromLog,
+  isLikelyMacosDesktopHome,
   makeTempDir,
   packOpenClaw,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
+  parseMacosDsclUserHomeLine,
   parsePlatformList,
   parseProvider,
   readPositiveIntEnv,
@@ -119,8 +126,24 @@ interface NpmUpdateSummary {
 const macosVmDefault = "macOS Tahoe";
 const windowsVm = "Windows 11";
 const linuxVmDefault = "Ubuntu 26.04";
+
+function resolveRequiredTimerMs(timeoutMs: number): number {
+  return clampTimerTimeoutMs(timeoutMs) ?? 1;
+}
+
+function resolveOptionalTimerMs(timeoutMs: number | undefined): number | undefined {
+  return timeoutMs === undefined || timeoutMs <= 0 ? undefined : resolveRequiredTimerMs(timeoutMs);
+}
+
+function resolveSecondsTimerMs(timeoutSeconds: number): number {
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
+}
+
 const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200);
 const updateCleanupBackstopMs = 60_000;
+const updateTimeoutMs = resolveSecondsTimerMs(updateTimeoutSeconds);
+const updateWithCleanupTimeoutMs =
+  addTimerTimeoutGraceMs(updateTimeoutMs, updateCleanupBackstopMs) ?? 1;
 const freshLaneTimeoutKillGraceMs = readPositiveIntEnv(
   "OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS",
   2_000,
@@ -131,7 +154,9 @@ let loggedExitCleanupInstalled = false;
 
 export function freshLaneTimeoutMs(platform: Platform): number {
   const defaultSeconds = platform === "windows" ? 90 * 60 : 75 * 60;
-  return readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S", defaultSeconds) * 1000;
+  return resolveSecondsTimerMs(
+    readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S", defaultSeconds),
+  );
 }
 
 export function spawnLoggedCommand(
@@ -159,19 +184,23 @@ export function spawnLoggedCommand(
       appendFileSync(logPath, text, "utf8");
       onOutput(text);
     };
-    const timeoutMs = options.timeoutMs ?? 0;
+    const timeoutMs = resolveOptionalTimerMs(options.timeoutMs);
+    const timeoutKillGraceMs =
+      options.timeoutKillGraceMs === undefined
+        ? resolveRequiredTimerMs(freshLaneTimeoutKillGraceMs)
+        : resolveRequiredTimerMs(options.timeoutKillGraceMs);
     const timeoutTimer =
-      timeoutMs > 0
+      timeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true;
             append(
               `\n[${options.timeoutLabel ?? `${command} ${args.join(" ")}`} timed out after ${timeoutMs}ms]\n`,
             );
             signalLoggedChild(child, "SIGTERM");
-            forceKillAt = Date.now() + (options.timeoutKillGraceMs ?? freshLaneTimeoutKillGraceMs);
+            forceKillAt = Date.now() + timeoutKillGraceMs;
             forceKillTimer = setTimeout(
               () => signalLoggedChild(child, "SIGKILL"),
-              options.timeoutKillGraceMs ?? freshLaneTimeoutKillGraceMs,
+              timeoutKillGraceMs,
             );
           }, timeoutMs)
         : undefined;
@@ -206,7 +235,7 @@ export function spawnLoggedCommand(
       if (timedOut) {
         void finishTimedOutLoggedProcessTree(child, {
           forceKillAt,
-          timeoutKillGraceMs: options.timeoutKillGraceMs ?? freshLaneTimeoutKillGraceMs,
+          timeoutKillGraceMs,
         }).then(finish, finish);
         return;
       }
@@ -823,10 +852,16 @@ export class NpmUpdateSmoke {
     }
     const output = run(
       "bash",
-      ["-lc", `curl -fsSL ${shellQuote(tarball)} | tar -xzOf - package/dist/build-info.json`],
+      [
+        "-lc",
+        `curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+          tarball,
+        )} | tar -xzOf - package/dist/build-info.json`,
+      ],
       {
         check: false,
         quiet: true,
+        timeoutMs: 150_000,
       },
     ).stdout.trim();
     if (!output) {
@@ -918,7 +953,7 @@ export class NpmUpdateSmoke {
         label,
         run: ({ signal }) => fn({ append, logPath, signal }),
         timeoutDescription: `${updateTimeoutSeconds}s plus cleanup backstop`,
-        timeoutMs: updateTimeoutSeconds * 1000 + updateCleanupBackstopMs,
+        timeoutMs: updateWithCleanupTimeoutMs,
         writeLog: async () => undefined,
       });
     })().finally(() => {
@@ -929,15 +964,15 @@ export class NpmUpdateSmoke {
   }
 
   private async runMacosUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestMacos(this.updateScript("macos"), updateTimeoutSeconds * 1000, ctx);
+    await this.guestMacos(this.updateScript("macos"), updateTimeoutMs, ctx);
   }
 
   private runWindowsUpdate(ctx: UpdateJobContext): Promise<void> {
-    return this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000, ctx);
+    return this.guestWindows(this.updateScript("windows"), updateTimeoutMs, ctx);
   }
 
   private async runLinuxUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestLinux(this.updateScript("linux"), updateTimeoutSeconds * 1000, ctx);
+    await this.guestLinux(this.updateScript("linux"), updateTimeoutMs, ctx);
   }
 
   private updateScript(platform: Platform): string {
@@ -1096,10 +1131,11 @@ export class NpmUpdateSmoke {
       { check: false, quiet: true, timeoutMs: 30_000 },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
-      const [user, home] = line.trim().split(/\s+/);
+      const parsed = parseMacosDsclUserHomeLine(line);
+      const user = parsed?.user;
       if (
         user &&
-        home?.startsWith("/Users/") &&
+        isLikelyMacosDesktopHome(parsed?.home) &&
         !user.startsWith("_") &&
         user !== "Shared" &&
         user !== ".localized"
@@ -1116,8 +1152,8 @@ export class NpmUpdateSmoke {
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
     ).stdout.replaceAll("\r", "");
-    const match = /NFSHomeDirectory:\s*(\S+)/.exec(output);
-    return match?.[1] ?? `/Users/${user}`;
+    const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
+    return match?.[1]?.trim() || `/Users/${user}`;
   }
 
   private async guestWindows(

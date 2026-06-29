@@ -697,6 +697,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 14px 16px;
+  font-family: var(--mono);
   overflow-x: auto;
   margin-top: 0.75em;
 }
@@ -705,12 +706,31 @@
   background: rgba(0, 0, 0, 0.04);
 }
 
+.sidebar-markdown pre:has(> code.markdown-block-art) {
+  background: var(--bg);
+}
+
 .sidebar-markdown :where(pre code) {
   background: none;
   border: none;
   padding: 0;
+  font-family: inherit;
   font-size: 12.5px;
   line-height: 1.55;
+}
+
+.sidebar-markdown :where(pre code.markdown-block-art) {
+  display: block;
+  min-width: 100%;
+  width: max-content;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: 0.86;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
 }
 
 /* ── Blockquotes ── */

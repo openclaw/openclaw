@@ -4,7 +4,7 @@ import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { testing as providerTesting } from "../providers.js";
 import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
-import { providerContractCompatPluginIds } from "./registry.js";
+import { providerContractPluginIds } from "./registry.js";
 
 function resolveBundledManifestProviderPluginIds() {
   return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
@@ -31,7 +31,7 @@ describe("plugin loader contract", () => {
   let bundledWebSearchPluginIds: string[] = [];
 
   beforeAll(() => {
-    providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
+    providerPluginIds = uniqueSortedStrings(providerContractPluginIds);
     manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
     vitestCompatConfig = providerTesting.withBundledProviderVitestCompat({
       config: undefined,

@@ -1,4 +1,5 @@
 // Control UI module implements app chat behavior.
+import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -137,6 +138,8 @@ export type ChatHost = ChatInputHistoryState & {
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
+  /** Selected message to reply to (right-click / keyboard shortcut). */
+  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -151,6 +154,36 @@ type ChatMetadataApplyResult = {
 function setChatError(host: ChatHost, error: string | null) {
   host.lastError = error;
   host.chatError = error;
+}
+
+type AcceptedChatSendAck = ChatSendAck & { status: "started" | "in_flight" | "ok" };
+type TerminalFailureChatSendAck = ChatSendAck & { status: "timeout" | "error" };
+
+function isAcceptedChatSendAck(ack: ChatSendAck | null): ack is AcceptedChatSendAck {
+  return ack != null && (ack.status === "ok" || isNonTerminalAgentRunStatus(ack.status));
+}
+
+function isTerminalFailureChatSendAck(ack: ChatSendAck | null): ack is TerminalFailureChatSendAck {
+  return ack?.status === "timeout" || ack?.status === "error";
+}
+
+function formatTerminalChatSendAckError(
+  ack: TerminalFailureChatSendAck,
+  context: "chat" | "detached" | "steer",
+): string {
+  if (ack.status === "error") {
+    if (context === "steer") {
+      return "Steer failed before it reached the run; try again.";
+    }
+    return "Chat failed before the run started; try again.";
+  }
+  if (context === "detached") {
+    return "The active run ended before the detached message was accepted.";
+  }
+  if (context === "steer") {
+    return "The active run ended before the steer message was accepted.";
+  }
+  return "The run ended before the message was accepted.";
 }
 
 export type ChatSendOptions = {
@@ -1102,6 +1135,38 @@ async function sendQueuedChatMessage(
       requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
       ...chatSendAckServerTimingEventFields(ack),
     });
+    if (isTerminalFailureChatSendAck(ack)) {
+      const error = formatTerminalChatSendAckError(ack, "chat");
+      updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+        ...item,
+        sendError: error,
+        sendState: "failed",
+      }));
+      if (isVisibleSession()) {
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: "interrupted",
+            sessionStatus: ack.status === "error" ? "failed" : "killed",
+            runId: ack.runId,
+            sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: ack.runId === runId,
+          },
+        );
+        setChatError(host, error);
+        restoreComposerAfterFailedSend(host, opts ?? {});
+      }
+      recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
+        error,
+        ackStatus: ack.status,
+      });
+      return "failed";
+    }
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
       appendUserChatMessage(
@@ -1127,7 +1192,7 @@ async function sendQueuedChatMessage(
           },
         );
         void loadChatHistory(host as unknown as ChatState);
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         const hasAlreadyAdoptedRunStream =
           host.chatRunId === ack.runId && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
@@ -1139,6 +1204,22 @@ async function sendQueuedChatMessage(
           (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
             startedAt;
         }
+      } else {
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: "interrupted",
+            sessionStatus: ack.status === "error" ? "failed" : "killed",
+            runId: ack.runId,
+            sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: ack.runId === runId,
+          },
+        );
       }
     }
     if (prepared.refreshSessions) {
@@ -1151,7 +1232,7 @@ async function sendQueuedChatMessage(
           ...createChatSessionsLoadOverrides(host),
           ...sidebarRecentSessionsListParamsForRefreshTarget(host, refreshTarget),
         });
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
     }
@@ -1384,17 +1465,20 @@ async function sendDetachedBtwMessage(
     previousAttachments?: ChatAttachment[];
   },
 ) {
-  const runId = await sendDetachedChatMessage(
+  const ack = await sendDetachedChatMessage(
     host as unknown as ChatState,
     message,
     opts?.attachments,
   );
-  const ok = Boolean(runId);
+  const ok = isAcceptedChatSendAck(ack);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
   if (!ok && opts?.previousAttachments) {
     host.chatAttachments = opts.previousAttachments;
+  }
+  if (isTerminalFailureChatSendAck(ack)) {
+    setChatError(host, formatTerminalChatSendAckError(ack, "detached"));
   }
   if (ok) {
     setLastActiveSessionKey(
@@ -1427,14 +1511,20 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.map((entry) =>
     entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
   );
-  const runId = await sendSteerChatMessage(
+  const ack = await sendSteerChatMessage(
     host as unknown as ChatState,
     message,
     hasAttachments ? attachments : undefined,
   );
-  if (!runId) {
+  if (!ack || isTerminalFailureChatSendAck(ack)) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    if (isTerminalFailureChatSendAck(ack)) {
+      setChatError(host, formatTerminalChatSendAckError(ack, "steer"));
+    }
     return;
+  }
+  if (ack.status === "ok") {
+    removeQueuedMessageWithoutReleasing(host, id, host.sessionKey);
   }
   releaseChatAttachmentPayloads(attachments);
   setLastActiveSessionKey(
@@ -1809,11 +1899,14 @@ export async function handleSendChat(
     }
   }
 
+  const replyTarget = host.chatReplyTarget;
+  const effectiveMessage = replyTarget ? prependReplyQuote(message, replyTarget) : message;
+
   const refreshSessions = shouldInterpretChatCommands && isChatResetCommand(message);
   const submitKey = chatSubmitKey(
     host,
     "message",
-    message,
+    effectiveMessage,
     attachmentsToSend,
     skillWorkshopRevision,
   );
@@ -1833,7 +1926,7 @@ export async function handleSendChat(
     const waitingForModel = modelSwitchReady !== true;
     const queued = enqueuePendingSendMessage(
       host,
-      message,
+      effectiveMessage,
       hasAttachments ? attachmentsToSend : undefined,
       refreshSessions,
       submittedAtMs,
@@ -1843,7 +1936,6 @@ export async function handleSendChat(
     if (!queued) {
       return;
     }
-
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {
       if (host.sessionKey === submittedSessionKey) {
         cancelPendingSendBeforeRequest(host, queued, {
@@ -1880,7 +1972,7 @@ export async function handleSendChat(
       return;
     }
 
-    await sendChatMessageNow(host, message, {
+    const accepted = await sendChatMessageNow(host, effectiveMessage, {
       queueItemId: queued.id,
       previousDraft: cleared.previousDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
@@ -1890,11 +1982,39 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
     });
+    if (
+      accepted &&
+      replyTarget &&
+      host.chatReplyTarget?.messageId === replyTarget.messageId &&
+      host.sessionKey === submittedSessionKey
+    ) {
+      host.chatReplyTarget = null;
+    }
   });
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+}
+
+function prependReplyQuote(
+  message: string,
+  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
+): string {
+  const label = escapeMarkdownInline(replyTarget.senderLabel ?? "User");
+  const text = replyTarget.text.trim();
+  if (!text.includes("\n")) {
+    return `> **${label}:** ${text}\n\n${message}`;
+  }
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `> **${label}:**\n${quoted}\n\n${message}`;
+}
+
+function escapeMarkdownInline(value: string): string {
+  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
 }
 
 // ── Slash Command Dispatch ──
@@ -2005,6 +2125,7 @@ async function clearChatHistory(host: ChatHost) {
     host.chatMessages = [];
     clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
+    host.chatReplyTarget = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,
       sessionStatus: "killed",

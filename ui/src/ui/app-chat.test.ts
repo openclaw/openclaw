@@ -1452,6 +1452,71 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("keep this draft");
   });
 
+  it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "timeout" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    const runId = String(payload.idempotencyKey);
+    const runState = host as ChatHost & {
+      chatStreamStartedAt?: number | null;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(runState.chatStreamStartedAt).toBeNull();
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId,
+      sessionKey: "agent:main",
+      sessionStatus: "killed",
+    });
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("marks terminal error ACK sends failed instead of accepting the queued message", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "chat send payload");
+        return { runId: payload.idempotencyKey, status: "error" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send before failing",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessage).toBe("send before failing");
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "send before failing",
+      sendState: "failed",
+      sendError: "Chat failed before the run started; try again.",
+    });
+    expect(host.lastError).toBe("Chat failed before the run started; try again.");
+    expect(host.chatRunId).toBeNull();
+  });
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -2380,6 +2445,59 @@ describe("handleSendChat", () => {
     expect(userMessage.role).toBe("user");
   });
 
+  it("escapes reply sender labels and clears reply state after chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-1");
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps reply state when chat.send fails before acceptance", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return Promise.resolve({ runId: "run-failed", status: "error" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-2");
+    expect(host.chatMessage).toBe("retry this");
+  });
+
   it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {
@@ -2763,6 +2881,30 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("network down");
   });
 
+  it("restores the BTW draft when detached send returns a terminal timeout ACK", async () => {
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.send") {
+            return { runId: "btw-terminal", status: "timeout" };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/btw what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatMessage).toBe("/btw what changed?");
+    expect(host.lastError).toBe("The active run ended before the detached message was accepted.");
+  });
+
   it("clears BTW side results when /clear resets chat history", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.reset") {
@@ -2901,6 +3043,54 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("removes queued steer indicators when chat.send returns terminal ok", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "ok", runId: "steer-ok" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatQueue: [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
+      sessionKey: "agent:main:main",
+    });
+
+    await steerQueuedChatMessage(host, "queued-1");
+
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(setLastActiveSessionKeyMock).toHaveBeenCalledWith(expect.anything(), "agent:main:main");
+  });
+
+  it("restores queued steer items when chat.send returns terminal error", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "error", runId: "steer-error" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatQueue: [original],
+      sessionKey: "agent:main:main",
+    });
+
+    await steerQueuedChatMessage(host, "queued-1");
+
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatQueue).toStrictEqual([original]);
+    expect(host.lastError).toBe("Steer failed before it reached the run; try again.");
+    expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
   });
 
   it("removes pending steer indicators when the run finishes", () => {

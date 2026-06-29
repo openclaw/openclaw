@@ -17,6 +17,7 @@ const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -65,16 +66,33 @@ function resolveTimeoutMs(envName, defaultValue) {
   return parsed;
 }
 
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  if (valueMs === undefined) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(valueMs, 1);
+}
+
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
 }
 
 function readEqualsOptionValue(value, optionName) {
-  if (value === "" || value.startsWith("--")) {
+  if (value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -115,28 +133,45 @@ export function parseArgs(argv) {
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      options.outputDir = readOptionValue(argv, index, arg);
+      setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
-      options.outputDir = readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir");
+      setOnce(
+        "--output-dir",
+        "outputDir",
+        readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir"),
+      );
     } else if (arg === "--output-name") {
-      options.outputName = readOptionValue(argv, index, arg);
+      setOnce("--output-name", "outputName", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-name=")) {
-      options.outputName = readEqualsOptionValue(
-        arg.slice("--output-name=".length),
+      setOnce(
         "--output-name",
+        "outputName",
+        readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
       );
     } else if (arg === "--skip-build") {
-      options.skipBuild = true;
+      setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
-      options.sourceDir = readOptionValue(argv, index, arg);
+      setOnce("--source-dir", "sourceDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
-      options.sourceDir = readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir");
+      setOnce(
+        "--source-dir",
+        "sourceDir",
+        readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir"),
+      );
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -149,6 +184,11 @@ export function parseArgs(argv) {
 
 function run(command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      options.killAfterMs,
+      DEFAULT_TIMEOUT_KILL_AFTER_MS,
+    );
     const useProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
@@ -230,21 +270,21 @@ function run(command, args, cwd, options = {}) {
           return;
         }
         killChild("SIGKILL");
-      }, options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
+      }, resolvedKillAfterMs);
       forceKillTimeout.unref?.();
     };
     ACTIVE_CHILD_KILLERS.add(killChild);
     const timeout =
-      options.timeoutMs === undefined
+      resolvedTimeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
             terminateChild();
-          }, options.timeoutMs);
+          }, resolvedTimeoutMs);
     timeout?.unref?.();
     const finishAfterTeardown = async (error, value = "") => {
       if (processGroupAlive()) {
-        await waitForProcessGroupExit(options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
+        await waitForProcessGroupExit(resolvedKillAfterMs);
       }
       if (processGroupAlive()) {
         killChild("SIGKILL");
@@ -275,7 +315,7 @@ function run(command, args, cwd, options = {}) {
     child.on("close", (status, signal) => {
       if (timedOut) {
         void finishAfterTeardown(
-          new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`),
+          new Error(`${command} ${args.join(" ")} timed out after ${resolvedTimeoutMs}ms`),
         );
         return;
       }

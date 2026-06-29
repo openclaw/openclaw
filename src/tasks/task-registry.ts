@@ -17,8 +17,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -43,7 +43,6 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
-import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
@@ -51,8 +50,6 @@ import type {
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
-  TaskRegistrySummary,
-  TaskRegistrySnapshot,
   TaskRuntime,
   TaskScopeKind,
   TaskStatus,
@@ -815,17 +812,27 @@ function findExistingTaskForCreate(params: {
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
   const runScopeMatches = runId
-    ? getTasksByRunId(runId).filter(
-        (task) =>
-          task.runtime === params.runtime &&
-          task.scopeKind === params.scopeKind &&
-          (normalizeOptionalString(task.ownerKey) ?? "") ===
-            (normalizeOptionalString(params.ownerKey) ?? "") &&
-          (normalizeOptionalString(task.childSessionKey) ?? "") ===
-            (normalizeOptionalString(params.childSessionKey) ?? "") &&
+    ? getTasksByRunId(runId).filter((task) => {
+        if (
+          task.runtime !== params.runtime ||
+          task.scopeKind !== params.scopeKind ||
+          (normalizeOptionalString(task.ownerKey) ?? "") !==
+            (normalizeOptionalString(params.ownerKey) ?? "") ||
+          (normalizeOptionalString(task.childSessionKey) ?? "") !==
+            (normalizeOptionalString(params.childSessionKey) ?? "")
+        ) {
+          return false;
+        }
+        if (params.runtime === "acp") {
+          // ACP one-task flow ids can be derived after creation; they must not
+          // split one logical ACP run into duplicate task rows.
+          return true;
+        }
+        return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===
-            (normalizeOptionalString(params.parentFlowId) ?? ""),
-      )
+          (normalizeOptionalString(params.parentFlowId) ?? "")
+        );
+      })
     : [];
   const exact = runId
     ? runScopeMatches.find(
@@ -1173,6 +1180,9 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
+  if (Object.hasOwn(patch, "error") && patch.error === undefined) {
+    delete next.error;
+  }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     next.cleanupAfter = resolveTaskCleanupAfter({
       ...next,
@@ -1526,42 +1536,6 @@ export async function maybeDeliverTaskStateChangeUpdate(
   }
 }
 
-export function setTaskProgressById(params: {
-  taskId: string;
-  progressSummary?: string | null;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.progressSummary !== undefined) {
-    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
-}
-
-export function setTaskTimingById(params: {
-  taskId: string;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.startedAt != null) {
-    patch.startedAt = params.startedAt;
-  }
-  if (params.endedAt != null) {
-    patch.endedAt = params.endedAt;
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
-}
-
 export function setTaskCleanupAfterById(params: {
   taskId: string;
   cleanupAfter: number;
@@ -1582,11 +1556,10 @@ export function markTaskTerminalById(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
+  const patch: Partial<TaskRecord> = {
     status: params.status,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt ?? params.endedAt,
-    ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.terminalSummary !== undefined
       ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
       : {}),
@@ -1598,7 +1571,11 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
-  });
+  };
+  if (Object.hasOwn(params, "error")) {
+    patch.error = params.error;
+  }
+  return updateTask(params.taskId, patch);
 }
 
 export function markTaskLostById(params: {
@@ -2017,22 +1994,6 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
-export function markTaskTerminalByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  startedAt?: number;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
-}) {
-  return finalizeTaskRunByRunId(params);
-}
-
 export function finalizeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -2147,7 +2108,7 @@ export async function cancelTaskById(params: {
           };
         }
       } else if (!childSessionKey) {
-        if (!isChildlessCodexNativeSubagentTask(task)) {
+        if (!isChildlessNativeSubagentTask(task)) {
           return {
             found: true,
             cancelled: false,
@@ -2193,12 +2154,25 @@ export async function cancelTaskById(params: {
         };
       }
     }
-    const updated = updateTask(task.taskId, {
-      status: "cancelled",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      error: params.reason?.trim() || "Cancelled by operator.",
-    });
+    const endedAt = Date.now();
+    const error = params.reason?.trim() || "Cancelled by operator.";
+    const updated =
+      task.runtime === "acp" && task.runId?.trim()
+        ? (updateTaskStateByRunId({
+            runId: task.runId,
+            runtime: "acp",
+            sessionKey: childSessionKey,
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          }).find((record) => record.taskId === task.taskId) ?? null)
+        : updateTask(task.taskId, {
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          });
     if (!updated) {
       return {
         found: true,
@@ -2262,18 +2236,6 @@ export function hasActiveTaskForChildSessionKey(params: {
   return false;
 }
 
-export function getTaskRegistrySummary(): TaskRegistrySummary {
-  ensureTaskRegistryReady();
-  return summarizeTaskRecords(tasks.values());
-}
-
-export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
-  return {
-    tasks: listTaskRecords(),
-    deliveryStates: [...taskDeliveryStates.values()].map((state) => cloneTaskDeliveryState(state)),
-  };
-}
-
 export function getTaskById(taskId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = tasks.get(taskId.trim());
@@ -2325,11 +2287,6 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
   return snapshotTaskRecords(tasks)
     .filter((task) => task.agentId?.trim() === lookup)
     .toSorted(compareTasksNewestFirst);
-}
-
-export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
-  const task = listTasksForOwnerKey(ownerKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
 }
 
 export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
