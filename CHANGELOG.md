@@ -3187,6 +3187,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Update: carry plugin-validation bypasses into config mutation pre-write reads, so package update doctor repairs can finish while externalized plugin schemas are converging.
 - Update/doctor: keep plugin-validation bypasses on the top-level `$include` config write path, so package repair can update included plugin config files without flattening them into the root config.
 - Agents/subagents: warn and continue completion announce cleanup when lifecycle cleanup fails, preventing ended subagent runs from becoming silent ghosts. Fixes #82306. Thanks @SebTardif.
+- Agents/subagents: add `sessions_spawn.toolsAllow` for native subagent runs so orchestrators can narrow a child's embedded-runner tool set, including explicit `[]` to run without tools, while rejecting the option for ACP harness spawns.
 - Telegram: let authorized text `/stop` commands use the fast-abort path before queued agent work, so active turns stop immediately instead of processing the abort after the turn finishes; foreign-bot `/stop@otherbot` mentions now stay on the regular topic lane instead of being routed into our control lane. Fixes #82162. Thanks @civiltox.
 - Sessions: drop persisted entries with invalid session ids and strip malformed transcript file metadata before hydrating session runtime state.
 - Auth/device: normalize malformed persisted device-auth token metadata before returning or preserving token entries.

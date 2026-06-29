@@ -173,6 +173,7 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  toolsAllow?: string[];
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
@@ -315,6 +316,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
     entry.subagentControlScope = patch.subagentControlScope;
+  }
+  if (Array.isArray(patch.runtimeToolsAllow)) {
+    entry.runtimeToolsAllow = patch.runtimeToolsAllow.filter(
+      (value): value is string => typeof value === "string",
+    );
   }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
@@ -1331,6 +1337,7 @@ export async function spawnSubagentDirect(
     subagentControlScope: childCapabilities.controlScope,
     ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+    ...(params.toolsAllow !== undefined ? { runtimeToolsAllow: params.toolsAllow } : {}),
     ...plan.initialSessionPatch,
   };
 
@@ -1576,6 +1583,7 @@ export async function spawnSubagentDirect(
               bootstrapContextRunKind: "default" as const,
             }
           : {}),
+        ...(params.toolsAllow !== undefined ? { toolsAllow: params.toolsAllow } : {}),
         ...publicSpawnedMetadata,
       },
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),

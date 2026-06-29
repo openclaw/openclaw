@@ -1203,6 +1203,14 @@
             "thread": {
               "description": "Bind spawn to new chat thread when supported. `thread=true` defaults mode=\"session\".",
               "type": "boolean"
+            },
+            "toolsAllow": {
+              "description": "Allowed tool ids for embedded runtime=\"subagent\" runs. Omit to use the default tool set; pass [] to disable all tools. Persistent native thread/session spawns store the allowlist on the child session and reuse it on follow-up turns. ACP and CLI-backed native runs reject this field.",
+              "items": {
+                "description": "Allowed tool id for the spawned native subagent run.",
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": ["task"],
