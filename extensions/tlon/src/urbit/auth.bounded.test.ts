@@ -43,7 +43,9 @@ describe("authenticate bounded-read real wire proof", () => {
   afterEach(async () => {
     while (createdServers.length > 0) {
       const srv = createdServers.pop();
-      if (srv) await srv.close();
+      if (srv) {
+        await srv.close();
+      }
     }
   });
 
