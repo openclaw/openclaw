@@ -41,7 +41,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
 
     const sessionManager = {
       flushPendingToolResults: vi.fn(() => {
-        if (pending.size > 0) syntheticInjected = true;
+        if (pending.size > 0) {
+          syntheticInjected = true;
+        }
       }),
     } as const;
 
