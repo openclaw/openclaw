@@ -108,7 +108,7 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
   if (!shouldLogMcpLoopbackTraffic()) {
     return;
   }
-  console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
+  logWarn(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
 // Abort tool calls when the request disconnects before completion, but keep
