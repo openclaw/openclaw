@@ -7,7 +7,11 @@
 // but it would NOT surface the "msteams.sso" label in the error message.
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
+import {
+  makeMSTeamsSsoTokenStoreKey,
+  type MSTeamsSsoStoredToken,
+  type MSTeamsSsoTokenStore,
+} from "./sso-token-store.js";
 import { type MSTeamsSsoFetch, handleSigninTokenExchangeInvoke } from "./sso.js";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +22,21 @@ type FakeServer = {
   url: string;
   close: () => Promise<void>;
 };
+
+function createMemorySsoTokenStore(): MSTeamsSsoTokenStore {
+  const tokens = new Map<string, MSTeamsSsoStoredToken>();
+  return {
+    async get({ connectionName, userId }) {
+      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
+    },
+    async save(token) {
+      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
+    },
+    async remove({ connectionName, userId }) {
+      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+    },
+  };
+}
 
 /**
  * Starts a loopback HTTP server on a random port and returns its base URL.
@@ -43,7 +62,7 @@ function startFakeServer(
 }
 
 function createSsoDepsForServer(baseUrl: string) {
-  const tokenStore = createMSTeamsSsoTokenStoreMemory();
+  const tokenStore = createMemorySsoTokenStore();
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "fake-bearer-token"),
   };
