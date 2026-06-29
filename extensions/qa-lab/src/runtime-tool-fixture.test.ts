@@ -46,7 +46,6 @@ async function writeQaSessionTranscript(
   await upsertSessionEntry({
     agentId: "qa",
     env: sessionEnv,
-    sessionId,
     sessionKey,
     entry: { sessionId, updatedAt: Date.now() },
   });
