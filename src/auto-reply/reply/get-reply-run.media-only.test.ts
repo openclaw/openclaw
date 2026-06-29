@@ -166,7 +166,6 @@ async function loadFreshGetReplyRunModuleForTest() {
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
-
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
