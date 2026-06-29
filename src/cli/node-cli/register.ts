@@ -50,6 +50,7 @@ export function registerNodeCli(program: Command) {
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
@@ -67,6 +68,7 @@ export function registerNodeCli(program: Command) {
         return;
       }
       const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
+      const explicitContextPath = opts.contextPath !== undefined;
       const tlsFingerprint =
         opts.tlsFingerprint ?? (retargetedGateway ? undefined : existing?.gateway?.tlsFingerprint);
       const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
@@ -76,6 +78,9 @@ export function registerNodeCli(program: Command) {
         gatewayTls:
           typeof opts.tls === "boolean" ? opts.tls : Boolean(tlsFingerprint) || inheritedTls,
         gatewayTlsFingerprint: tlsFingerprint,
+        gatewayContextPath:
+          normalizeOptionalString(opts.contextPath as string | undefined) ??
+          (explicitContextPath || retargetedGateway ? undefined : existing?.gateway?.contextPath),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });
@@ -94,6 +99,7 @@ export function registerNodeCli(program: Command) {
     .description("Install the node host service (launchd/systemd/schtasks)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
