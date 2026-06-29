@@ -1852,6 +1852,15 @@ export class ChatPage extends LitElement {
         state.chatSideResult = null;
         state.requestUpdate?.();
       },
+      replyTarget: state.chatReplyTarget ?? null,
+      onClearReply: () => {
+        state.chatReplyTarget = null;
+        state.requestUpdate?.();
+      },
+      onSetReply: (target) => {
+        state.chatReplyTarget = target;
+        state.requestUpdate?.();
+      },
       onNewSession: () => void this.createSession(),
       onClearHistory: () => void clearChatHistory(state),
       agentsList: state.agentsList,
