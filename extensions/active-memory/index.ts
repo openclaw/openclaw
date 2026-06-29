@@ -827,12 +827,18 @@ function updateActiveMemoryGlobalEnabledInConfig(
   };
 }
 
-function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
-  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+function lacksAdminToMutateActiveMemoryGlobal(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
 }
 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
-  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
+  "⚠️ /active-memory global enable/disable changes require owner or operator.admin.";
 
 function normalizePluginConfig(
   pluginConfig: unknown,
@@ -3487,6 +3493,7 @@ export default definePluginEntry({
       name: "active-memory",
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const tokens = ctx.args?.trim().split(/\s+/).filter(Boolean) ?? [];
         const isGlobal = tokens.includes("--global");
@@ -3501,7 +3508,12 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
-          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutateActiveMemoryGlobal({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
             };
