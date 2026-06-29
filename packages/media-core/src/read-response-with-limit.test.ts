@@ -180,7 +180,7 @@ describe("readResponseWithLimit", () => {
     }
   });
 
-  it("does not read non-streamed text/json fallback bodies", async () => {
+  it("rejects non-streamed text/json fallback bodies", async () => {
     const text = vi.fn(async () => "unbounded");
     const response = {
       body: undefined,
@@ -188,10 +188,10 @@ describe("readResponseWithLimit", () => {
       text,
     } as unknown as Response;
 
-    await expectReadResponseWithLimitSuccessCase({
+    await expectReadResponseWithLimitFailureCase({
       response,
       maxBytes: 16,
-      expected: Buffer.alloc(0),
+      expectedError: "Response body is not readable under the byte limit",
     });
     expect(text).not.toHaveBeenCalled();
   });
