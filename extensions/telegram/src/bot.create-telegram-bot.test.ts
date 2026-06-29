@@ -2205,6 +2205,7 @@ describe("createTelegramBot", () => {
           dmPolicy: "open",
           allowFrom: ["*"],
           groupPolicy: "open",
+          botToBot: { enabled: true, allowUsernames: ["wake_bot"] },
           groups: {
             "-100777111222": {
               enabled: true,
