@@ -628,8 +628,14 @@ export function createWorkboardTools(params: {
         await requireScopedCard(store, id, ownerId, token);
         const scope = { ownerId, token };
 
-        // Calculate review round
+        // Only allow review on cards in an active working state
+        const reviewableStatuses = new Set(["running", "review", "ready_to_merge"]);
         const card = await store.get(id);
+        if (card && !reviewableStatuses.has(card.status)) {
+          throw new Error(
+            `Review not valid for card in status "${card.status}". Card must be in running, review, or ready_to_merge.`,
+          );
+        }
         const existingRounds = (card?.metadata?.proof ?? []).filter(
           (p) => p.label && /^review-round-/i.test(p.label),
         ).length;
@@ -648,9 +654,9 @@ export function createWorkboardTools(params: {
             },
             { ownerId, token },
           );
-          await store.block(id, { reason: escalationMsg }, { ownerId, token });
-          const blockedCard = await store.get(id);
-          return redactedRawCardResult(blockedCard!);
+          return redactedRawCardResult(
+            await store.block(id, { reason: escalationMsg }, { ownerId, token }),
+          );
         }
 
         // Record review as proof
