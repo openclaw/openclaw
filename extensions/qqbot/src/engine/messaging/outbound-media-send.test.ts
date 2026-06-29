@@ -54,7 +54,8 @@ vi.mock("./sender.js", () => ({
 }));
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { sendPhoto, sendVoice } from "./outbound-media-send.js";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { resolveOutboundMediaPath, sendPhoto, sendVoice } from "./outbound-media-send.js";
 import { OUTBOUND_ERROR_CODES } from "./outbound-types.js";
 import { sendMedia as senderSendMedia } from "./sender.js";
 
@@ -107,6 +108,59 @@ afterEach(async () => {
   }
 });
 
+describe("resolveOutboundMediaPath", () => {
+  it("preserves authorized host /workspace paths before virtual workspace mapping", () => {
+    const resolveLocalPathSpy = vi
+      .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+      .mockImplementation(({ filePath }) =>
+        filePath === "/workspace/attachments/report.docx"
+          ? { path: "/workspace/attachments/report.docx", root: "/workspace/attachments" }
+          : null,
+      );
+    try {
+      const result = resolveOutboundMediaPath("/workspace/attachments/report.docx", "media", {
+        extraLocalRoots: ["/workspace/attachments", "/tmp/agent-workspace"],
+        workspaceDir: "/tmp/agent-workspace",
+        allowMissingLocalPath: true,
+      });
+
+      expect(result).toEqual({ ok: true, mediaPath: "/workspace/attachments/report.docx" });
+      expect(resolveLocalPathSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: "/workspace/attachments/report.docx" }),
+      );
+      expect(resolveLocalPathSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: "/tmp/agent-workspace/attachments/report.docx" }),
+      );
+    } finally {
+      resolveLocalPathSpy.mockRestore();
+    }
+  });
+
+  it("resolves relative paths only against the virtual workspace", () => {
+    const resolveLocalPathSpy = vi
+      .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+      .mockImplementation(({ filePath }) =>
+        filePath === "/tmp/agent-workspace/report.docx"
+          ? { path: "/tmp/agent-workspace/report.docx", root: "/tmp/agent-workspace" }
+          : null,
+      );
+    try {
+      const result = resolveOutboundMediaPath("report.docx", "media", {
+        extraLocalRoots: ["/tmp/agent-workspace"],
+        workspaceDir: "/tmp/agent-workspace",
+        allowMissingLocalPath: true,
+      });
+
+      expect(result).toEqual({ ok: true, mediaPath: "/tmp/agent-workspace/report.docx" });
+      expect(resolveLocalPathSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: "report.docx" }),
+      );
+    } finally {
+      resolveLocalPathSpy.mockRestore();
+    }
+  });
+});
+
 describe("trySendViaHostRead error handling", () => {
   it("returns OutboundResult.error when loadOutboundMediaFromUrl rejects", async () => {
     mockedLoadOutboundMediaFromUrl.mockRejectedValue(new Error("sandbox host read failed"));
@@ -155,6 +209,63 @@ describe("trySendViaHostRead error handling", () => {
     expect(result.error).not.toContain("<buffer>");
   });
 
+  it("maps sandbox /workspace paths before host-read media loading", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("report"),
+      kind: "document",
+      fileName: "report.docx",
+      contentType: "application/octet-stream",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendPhoto(makeCtx(), "/workspace/report.docx");
+
+    expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
+    expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/tmp/workspace/report.docx",
+      expect.objectContaining({
+        mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("preserves authorized host /workspace paths before virtual workspace mapping", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("report"),
+      kind: "document",
+      fileName: "report.docx",
+      contentType: "application/octet-stream",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendPhoto(
+      {
+        ...makeCtx(),
+        mediaAccess: {
+          localRoots: ["/workspace/attachments"],
+          workspaceDir: "/tmp/agent-workspace",
+          readFile: async () => Buffer.from("report"),
+        },
+        mediaLocalRoots: ["/workspace/attachments"],
+      },
+      "/workspace/attachments/report.docx",
+    );
+
+    expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
+    expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/workspace/attachments/report.docx",
+      expect.objectContaining({
+        mediaAccess: expect.objectContaining({
+          localRoots: ["/workspace/attachments"],
+          workspaceDir: "/tmp/agent-workspace",
+        }),
+        mediaLocalRoots: ["/workspace/attachments"],
+        workspaceDir: "/tmp/agent-workspace",
+      }),
+    );
+  });
+
   it("stages host-read audio before using the voice upload path", async () => {
     mockedLoadOutboundMediaFromUrl.mockResolvedValue({
       buffer: Buffer.from("audio bytes"),
@@ -168,7 +279,7 @@ describe("trySendViaHostRead error handling", () => {
 
     expect(result).toMatchObject({ channel: "qqbot", messageId: "voice-1" });
     expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "clip.mp3",
+      "/tmp/workspace/clip.mp3",
       expect.objectContaining({ maxBytes: expect.any(Number) }),
     );
     expect(audioPortMock.waitForFile).toHaveBeenCalledWith(expect.stringMatching(/clip-.*\.mp3$/));
