@@ -152,12 +152,94 @@ function terminalMessageReplacesStreamFallback(message: unknown, fallback: unkno
   );
 }
 
-export function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
+function isHiddenAssistantContentBlockType(type: string): boolean {
+  return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
+}
+
+function assistantMessageContentSignature(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const record = message as { content?: unknown; role?: unknown };
+  const role = normalizeLowercaseStringOrEmpty(record.role);
+  if (role !== "assistant") {
+    return null;
+  }
+  if (Array.isArray(record.content)) {
+    const displayBlocks = record.content.filter((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = normalizeLowercaseStringOrEmpty((block as { type?: unknown }).type);
+      return (
+        type !== "text" &&
+        type !== "input_text" &&
+        type !== "output_text" &&
+        !isHiddenAssistantContentBlockType(type)
+      );
+    });
+    if (displayBlocks.length > 0) {
+      return JSON.stringify(record.content);
+    }
+  }
+  const text = extractText(message)?.trim();
+  return text ? `text:${text}` : null;
+}
+
+function terminalMessageDuplicatesExisting(message: unknown, existing: unknown): boolean {
+  const terminalSignature = assistantMessageContentSignature(message);
+  return Boolean(
+    terminalSignature && terminalSignature === assistantMessageContentSignature(existing),
+  );
+}
+
+function hasTranscriptMeta(message: unknown): boolean {
+  return Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { __openclaw?: unknown })["__openclaw"] &&
+    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
+  );
+}
+
+function existingMessageMatchesReplacementText(
+  existing: unknown,
+  replacementTexts: readonly string[],
+): boolean {
+  if (replacementTexts.length === 0) {
+    return false;
+  }
+  if (!existing || typeof existing !== "object") {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty((existing as { role?: unknown }).role);
+  if (role !== "assistant") {
+    return false;
+  }
+  if (!hasTranscriptMeta(existing)) {
+    return false;
+  }
+  const text = extractText(existing)?.trim();
+  return Boolean(text && replacementTexts.some((candidate) => text === candidate));
+}
+
+export function appendTerminalAssistantMessage(
+  messages: unknown[],
+  message: unknown,
+  opts?: { replacementTexts?: readonly string[] },
+): unknown[] {
+  const replacementTexts = (opts?.replacementTexts ?? [])
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0);
   const retainedMessages = messages.filter((existing, index) => {
     if (index <= lastUserMessageIndex(messages)) {
       return true;
     }
-    return !terminalMessageReplacesStreamFallback(message, existing);
+    return (
+      !terminalMessageReplacesStreamFallback(message, existing) &&
+      !terminalMessageDuplicatesExisting(message, existing) &&
+      !existingMessageMatchesReplacementText(existing, replacementTexts)
+    );
   });
   return [...retainedMessages, message];
 }
