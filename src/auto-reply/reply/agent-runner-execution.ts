@@ -980,12 +980,12 @@ function buildExternalRunFailureReply(
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     if (oauthRefreshFailure.reason) {
       return {
-        text: `⚠️ Model login expired on the gateway${providerText}. Send \`/login codex\` in Telegram to pair a new Codex login, or re-auth with \`${loginCommand}\` in a terminal, then try again.`,
+        text: `⚠️ Model login expired on the gateway${providerText}. Send \`/login codex\` in this chat or channel to pair a new Codex login, or re-auth with \`${loginCommand}\` in a terminal, then try again.`,
         isGenericRunnerFailure: false,
       };
     }
     return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send \`/login codex\` in Telegram or re-auth with \`${loginCommand}\` in a terminal.`,
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send \`/login codex\` in this chat or channel, or re-auth with \`${loginCommand}\` in a terminal.`,
       isGenericRunnerFailure: false,
     };
   }
