@@ -346,11 +346,22 @@ describe("resolveInitialTuiAgentId", () => {
 });
 
 describe("resolveGatewayDisconnectState", () => {
-  it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
+  it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
     expect(state.connectionStatus).toContain("pairing required");
-    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
-    expect(state.pairingHint).toContain("openclaw devices list");
+    expect(state.activityStatus).toBe("scope upgrade needed: run openclaw devices approve");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
+    expect(state.pairingHint).toContain("--token");
+    // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
+    expect(state.pairingHint).not.toContain("openclaw pairing");
+  });
+
+  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
+    const state = resolveGatewayDisconnectState(
+      "gateway closed (1008): scope upgrade pending approval",
+    );
+    expect(state.activityStatus).toBe("scope upgrade needed: run openclaw devices approve");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
