@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { DEFAULT_AGENT_TIMEOUT_SECONDS } from "../agents/timeout.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -240,7 +241,7 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
       ? parseStrictNonNegativeInteger(opts.timeout)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS);
   if (raw === undefined) {
     throw new Error(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,

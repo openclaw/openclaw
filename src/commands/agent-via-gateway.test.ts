@@ -55,7 +55,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
   const config = {
     agents: {
       defaults: {
-        timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
@@ -124,6 +123,11 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} object`);
   }
   return value as Record<string, unknown>;
+}
+
+function getGatewayRequestParams(): Record<string, unknown> {
+  const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+  return requireRecord(request.params, "gateway request params");
 }
 
 function createSignalProcess() {
@@ -288,6 +292,29 @@ describe("agentCliCommand", () => {
       ).rejects.toThrow("Invalid --timeout");
       expect(callGateway).not.toHaveBeenCalled();
     });
+  });
+
+  it("uses the shared 48h agent timeout when config and CLI omit a timeout", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(getGatewayRequestParams().timeout).toBe(172_800);
+    });
+  });
+
+  it("uses an explicitly configured agent timeout for gateway dispatch", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+        expect(getGatewayRequestParams().timeout).toBe(900);
+      },
+      { agents: { defaults: { timeoutSeconds: 900 } } },
+    );
   });
 
   it("uses gateway by default", async () => {

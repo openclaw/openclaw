@@ -408,7 +408,8 @@ Time format in system prompt. Default: `auto` (OS preference).
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
+      // Omit timeoutSeconds to inherit the 48h runtime default. Set a
+      // shorter value only for intentionally bounded agents.
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 3,
