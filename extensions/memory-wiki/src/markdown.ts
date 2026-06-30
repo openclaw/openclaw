@@ -118,7 +118,10 @@ const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
 // conservative: they require backtick or tilde fences and do not strip raw
 // indented-code-block regions, which virtually never contain realistic
 // accidental wikilink syntax.
-const FENCED_CODE_BLOCK_PATTERN = /(?:^|\n) {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n {0,3}\1(?=\n|$)/g;
+// Uses a replacement function (not a regex backreference) so a closing fence
+// that is longer than the opening fence still closes the block correctly
+// (CommonMark allows the closing fence to be the same or longer).
+const FENCED_CODE_BLOCK_RE = /(?:^|\n) {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n {0,3}(`{3,}|~{3,})(?=\n|$)/g;
 const INLINE_CODE_PATTERN = /`[^`\n]+`/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
@@ -396,7 +399,10 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 
 export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const codeMasked = markdown
-    .replace(FENCED_CODE_BLOCK_PATTERN, "\n")
+    .replace(FENCED_CODE_BLOCK_RE, (match, open, close) => {
+      if (open[0] === close[0] && close.length >= open.length) return "\n";
+      return match;
+    })
     .replace(INLINE_CODE_PATTERN, "``");
   const searchable = codeMasked.replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];

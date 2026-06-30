@@ -484,4 +484,21 @@ describe("extractWikiLinks", () => {
     const links = extractWikiLinks(markdown, "entities/test.md");
     expect(links).toEqual(["ValidTarget"]);
   });
+
+  it("accepts a closing fence longer than the opening fence (#97945)", () => {
+    // CommonMark allows the closing fence to be the same or longer than the
+    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
+    // strip the block so the Scala generic inside is not extracted.
+    const markdown = [
+      "# Longer Close",
+      "",
+      "```scala",
+      "def handle(req: Request[A]): Future[Option[User]] = ???",
+      "````",
+      "",
+      "Prose: [[RealTarget]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["RealTarget"]);
+  });
 });
