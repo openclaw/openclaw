@@ -11,7 +11,10 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
+
+const log = createSubsystemLogger("gateway/chat-abort");
 import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
@@ -173,7 +176,14 @@ export function registerChatAbortController(params: {
               params.chatAbortControllers.delete(params.runId);
             }
           })
-          .catch(() => {
+          .catch((err) => {
+            // Persistence failures here are typically DB or filesystem health
+            // issues. Logging gives operators visibility; the controller entry
+            // is still removed so memory does not leak.
+            log.error("Failed to persist chat abort terminal state", {
+              runId: params.runId,
+              error: err instanceof Error ? err.message : String(err),
+            });
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
               params.chatAbortControllers.delete(params.runId);
             }

@@ -16,6 +16,17 @@ import {
   updateChatRunProvider,
 } from "./chat-abort.js";
 
+const subsystemLoggerMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => subsystemLoggerMock),
+}));
+
 type ChatAbortPayload = {
   runId: string;
   sessionKey: string;
@@ -45,6 +56,10 @@ type CreatedChatAbortOps = ChatAbortOps & {
 
 afterEach(() => {
   vi.useRealTimers();
+  subsystemLoggerMock.error.mockClear();
+  subsystemLoggerMock.warn.mockClear();
+  subsystemLoggerMock.info.mockClear();
+  subsystemLoggerMock.debug.mockClear();
 });
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
@@ -263,6 +278,39 @@ describe("registerChatAbortController", () => {
     await persistence;
     await Promise.resolve();
     expect(chatAbortControllers.has("run-persisting")).toBe(false);
+  });
+
+  it("logs and still removes the controller when terminal persistence rejects", async () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-persist-failed",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+    });
+
+    if (!registration.entry) {
+      throw new Error("expected registered entry");
+    }
+    registration.entry.projectSessionActive = false;
+    registration.entry.projectSessionTerminalPersistence = Promise.reject(
+      new Error("db write failed"),
+    );
+
+    registration.cleanup();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatAbortControllers.has("run-persist-failed")).toBe(false);
+    expect(subsystemLoggerMock.error).toHaveBeenCalledOnce();
+    const [message, meta] = subsystemLoggerMock.error.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(message).toContain("persist chat abort terminal state");
+    expect(meta).toMatchObject({ runId: "run-persist-failed", error: "db write failed" });
   });
 
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
