@@ -1,10 +1,21 @@
-// Test Live Media script supports OpenClaw repository automation.
-
+// Hosted media provider live runner and QA Lab evidence producer.
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "../src/infra/errors.ts";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+} from "../../../../extensions/qa-lab/src/evidence-summary.js";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+
+const SOURCE_PATH = "test/e2e/qa-lab/media/hosted-media-provider-live.ts";
+const DEFAULT_PROVIDERS_ENV = "OPENCLAW_QA_HOSTED_MEDIA_PROVIDERS";
 
 export type MediaSuiteId = "image" | "music" | "video";
+type EvidenceSuiteId = "image" | "video";
 
 export type MediaSuiteConfig = {
   id: MediaSuiteId;
@@ -67,13 +78,13 @@ const DEFAULT_SUITES: MediaSuiteId[] = ["image", "music", "video"];
 
 export type CliOptions = {
   allowEmpty: boolean;
-  suites: MediaSuiteId[];
   globalProviders: Set<string> | null;
-  suiteProviders: Partial<Record<MediaSuiteId, Set<string>>>;
-  requireAuth: boolean;
-  quietArgs: string[];
-  passthroughArgs: string[];
   help: boolean;
+  passthroughArgs: string[];
+  quietArgs: string[];
+  requireAuth: boolean;
+  suiteProviders: Partial<Record<MediaSuiteId, Set<string>>>;
+  suites: MediaSuiteId[];
 };
 
 export type SuiteRunPlan = {
@@ -98,8 +109,75 @@ export type RunCliDeps = {
   runSuiteImpl?: typeof runSuite;
 };
 
+type HostedMediaOptions = {
+  artifactBase: string;
+  providersEnv: string;
+  repoRoot: string;
+  suiteId: EvidenceSuiteId;
+};
+
+type HostedMediaSuiteDefinition = {
+  codeRefs: string[];
+  docsRefs: string[];
+  primaryCoverageIds: string[];
+  secondaryCoverageIds?: string[];
+  scenarioId: string;
+  title: string;
+  videoFullModes?: boolean;
+};
+
+type HostedMediaProofResult = {
+  artifacts: Array<{ kind: string; path: string }>;
+  details?: string;
+  durationMs: number;
+  status: QaEvidenceStatus;
+};
+
+const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
+  image: {
+    scenarioId: "hosted-image-generation-providers-live",
+    title: "Hosted image generation providers live",
+    primaryCoverageIds: ["hosted-providers.image-generation-providers"],
+    docsRefs: [
+      "docs/help/testing.md",
+      "docs/tools/image-generation.md",
+      "docs/tools/media-overview.md",
+    ],
+    codeRefs: [
+      SOURCE_PATH,
+      "test/image-generation.runtime.live.test.ts",
+      "src/image-generation/live-test-helpers.ts",
+    ],
+  },
+  video: {
+    scenarioId: "hosted-video-generation-providers-live",
+    title: "Hosted video generation providers live",
+    primaryCoverageIds: [
+      "hosted-providers.video-generation-providers",
+      "media.reference-image-video-and-audio-inputs",
+    ],
+    secondaryCoverageIds: ["media.video-generation-tool-invocation"],
+    docsRefs: [
+      "docs/help/testing.md",
+      "docs/tools/video-generation.md",
+      "docs/tools/media-overview.md",
+    ],
+    codeRefs: [
+      SOURCE_PATH,
+      "extensions/video-generation-providers.live.test.ts",
+      "src/video-generation/runtime.ts",
+      "src/agents/tools/video-generate-tool.ts",
+    ],
+    videoFullModes: true,
+  },
+};
+
 function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
+}
+
+function formatErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
@@ -111,12 +189,12 @@ function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
 }
 
 async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unknown[]> {
-  const { collectProviderApiKeys } = await import("../src/agents/live-auth-keys.js");
+  const { collectProviderApiKeys } = await import("../../../../src/agents/live-auth-keys.js");
   return collectProviderApiKeys(provider);
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../src/secrets/provider-env-vars.js");
+  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
   return getProviderEnvVars(provider);
 }
 
@@ -126,7 +204,7 @@ async function loadShellEnvFallbackForLiveMedia(params: {
   expectedKeys: string[];
   logger: { warn: (message: string) => void };
 }): Promise<void> {
-  const { loadShellEnvFallback } = await import("../src/infra/shell-env.js");
+  const { loadShellEnvFallback } = await import("../../../../src/infra/shell-env.js");
   loadShellEnvFallback(params);
 }
 
@@ -150,6 +228,22 @@ function parseSuiteToken(raw: string): MediaSuiteId | null {
   return null;
 }
 
+function parseEvidenceSuiteToken(raw: string): EvidenceSuiteId {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "image" || normalized === "video") {
+    return normalized;
+  }
+  throw new Error(`unsupported hosted media evidence suite: ${raw}`);
+}
+
+function readOptionValue(argv: readonly string[], index: number, arg: string) {
+  const value = argv[index + 1] ?? "";
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${arg} requires a value`);
+  }
+  return value;
+}
+
 export function parseArgs(argv: string[]): CliOptions {
   const separatorIndex = argv.indexOf("--");
   const optionArgs = separatorIndex >= 0 ? argv.slice(0, separatorIndex) : argv;
@@ -158,18 +252,10 @@ export function parseArgs(argv: string[]): CliOptions {
   const suiteProviders: Partial<Record<MediaSuiteId, Set<string>>> = {};
   const passthroughArgs: string[] = [];
   const quietArgs: string[] = [];
-  let globalProviders: Set<string> | null = null;
-  let requireAuth = true;
-  let help = false;
   let allowEmpty = false;
-
-  const readValue = (index: number): string => {
-    const value = optionArgs[index + 1]?.trim();
-    if (!value) {
-      throw new Error(`Missing value for ${optionArgs[index]}`);
-    }
-    return value;
-  };
+  let globalProviders: Set<string> | null = null;
+  let help = false;
+  let requireAuth = true;
 
   for (let index = 0; index < optionArgs.length; index += 1) {
     const arg = optionArgs[index] ?? "";
@@ -190,7 +276,7 @@ export function parseArgs(argv: string[]): CliOptions {
       continue;
     }
     if (arg === "--providers") {
-      globalProviders = parseCsv(readValue(index));
+      globalProviders = parseCsv(readOptionValue(optionArgs, index, arg));
       index += 1;
       continue;
     }
@@ -199,7 +285,8 @@ export function parseArgs(argv: string[]): CliOptions {
       if (!suite) {
         throw new Error(`Unknown suite flag: ${arg}`);
       }
-      suiteProviders[suite] = parseCsv(readValue(index)) ?? new Set<string>();
+      suiteProviders[suite] =
+        parseCsv(readOptionValue(optionArgs, index, arg)) ?? new Set<string>();
       index += 1;
       continue;
     }
@@ -217,7 +304,7 @@ export function parseArgs(argv: string[]): CliOptions {
     }
     if (arg.startsWith("--")) {
       passthroughArgs.push(arg);
-      const next = argv[index + 1];
+      const next = optionArgs[index + 1];
       if (next && !next.startsWith("--")) {
         passthroughArgs.push(next);
         index += 1;
@@ -240,13 +327,13 @@ export function parseArgs(argv: string[]): CliOptions {
 
   const options = {
     allowEmpty,
-    suites: (suites.size ? [...suites] : DEFAULT_SUITES).toSorted(),
     globalProviders,
-    suiteProviders,
-    requireAuth,
-    quietArgs,
-    passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
     help,
+    passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
+    quietArgs,
+    requireAuth,
+    suiteProviders,
+    suites: (suites.size ? [...suites] : DEFAULT_SUITES).toSorted(),
   };
   validateProviderFilters(options);
   return options;
@@ -316,10 +403,10 @@ export function findSkippedExplicitProviderSelections(
 
 async function selectProviders(params: {
   collectProviderApiKeysImpl?: BuildRunPlanDeps["collectProviderApiKeysImpl"];
-  suite: MediaSuiteConfig;
   globalProviders: Set<string> | null;
-  suiteProviders: Set<string> | undefined;
   requireAuth: boolean;
+  suite: MediaSuiteConfig;
+  suiteProviders: Set<string> | undefined;
 }): Promise<string[]> {
   const explicit = params.suiteProviders ?? params.globalProviders;
   const candidates = explicit
@@ -337,8 +424,7 @@ async function selectProviders(params: {
           .length > 0,
     })),
   );
-  providers = providerAuth.filter((entry) => entry.hasAuth).map((entry) => entry.provider);
-  return providers;
+  return providerAuth.filter((entry) => entry.hasAuth).map((entry) => entry.provider);
 }
 
 export async function buildRunPlan(
@@ -373,10 +459,10 @@ export async function buildRunPlan(
       const suite = MEDIA_SUITES[suiteId];
       const providers = await selectProviders({
         collectProviderApiKeysImpl: deps.collectProviderApiKeysImpl,
-        suite,
         globalProviders: options.globalProviders,
-        suiteProviders: options.suiteProviders[suiteId],
         requireAuth: options.requireAuth,
+        suite,
+        suiteProviders: options.suiteProviders[suiteId],
       });
       return {
         suite,
@@ -402,6 +488,10 @@ Usage:
   pnpm test:live:media image video --providers openai,google,minimax
   pnpm test:live:media video --video-providers openai,runway --all-providers
 
+QA evidence mode:
+  node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>
+  node --import tsx ${SOURCE_PATH} --qa-evidence --suite video --artifact-base <dir>
+
 Defaults:
   - runs image + music + video
   - auto-loads missing provider env vars from ~/.profile
@@ -420,10 +510,10 @@ Flags:
 `);
 }
 
-async function runSuite(params: {
+export async function runSuite(params: {
+  passthroughArgs: string[];
   plan: SuiteRunPlan;
   quietArgs: string[];
-  passthroughArgs: string[];
 }): Promise<number> {
   const { plan } = params;
   if (!plan.providers.length) {
@@ -499,9 +589,9 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<num
 
   for (const entry of runnable) {
     const exitCode = await (deps.runSuiteImpl ?? runSuite)({
+      passthroughArgs: options.passthroughArgs,
       plan: entry,
       quietArgs: options.quietArgs,
-      passthroughArgs: options.passthroughArgs,
     });
     if (exitCode !== 0) {
       return exitCode;
@@ -510,8 +600,250 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<num
   return 0;
 }
 
+export function parseHostedMediaOptions(argv: readonly string[]): HostedMediaOptions {
+  let artifactBase = "";
+  let providersEnv = DEFAULT_PROVIDERS_ENV;
+  let repoRoot = process.cwd();
+  let suiteId: EvidenceSuiteId | undefined;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      printHelp();
+      process.exit(0);
+    }
+    if (arg === "--qa-evidence") {
+      continue;
+    }
+    if (arg === "--artifact-base") {
+      recordOnce(arg);
+      artifactBase = readOptionValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--repo-root") {
+      recordOnce(arg);
+      repoRoot = readOptionValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--providers-env") {
+      recordOnce(arg);
+      providersEnv = readOptionValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--suite") {
+      recordOnce(arg);
+      suiteId = parseEvidenceSuiteToken(readOptionValue(argv, index, arg));
+      index += 1;
+      continue;
+    }
+    throw new Error(`unsupported hosted media evidence arg: ${arg}`);
+  }
+
+  if (!artifactBase.trim()) {
+    throw new Error("--artifact-base is required");
+  }
+  if (!suiteId) {
+    throw new Error("--suite is required");
+  }
+  if (!providersEnv.trim()) {
+    throw new Error("--providers-env requires a non-empty env var name");
+  }
+
+  return {
+    artifactBase: path.resolve(repoRoot, artifactBase),
+    providersEnv,
+    repoRoot: path.resolve(repoRoot),
+    suiteId,
+  };
+}
+
+async function writeJson(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function appendText(filePath: string, text: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, text, "utf8");
+}
+
+function relativeArtifactPath(options: HostedMediaOptions, filePath: string) {
+  return path.relative(options.artifactBase, filePath) || path.basename(filePath);
+}
+
+function suiteProviderFilter(options: HostedMediaOptions, env: NodeJS.ProcessEnv) {
+  const suiteEnv = `OPENCLAW_QA_HOSTED_${options.suiteId.toUpperCase()}_PROVIDERS`;
+  return env[suiteEnv]?.trim() || env[options.providersEnv]?.trim() || "";
+}
+
+export function buildHostedMediaCommand(params: {
+  env?: NodeJS.ProcessEnv;
+  options: HostedMediaOptions;
+}) {
+  const definition = EVIDENCE_SUITES[params.options.suiteId];
+  const env = { ...(params.env ?? process.env) };
+  const args = ["--import", "tsx", SOURCE_PATH, params.options.suiteId];
+  const providerFilter = suiteProviderFilter(params.options, env);
+  if (providerFilter) {
+    args.push(`--${params.options.suiteId}-providers`, providerFilter);
+  }
+  if (definition.videoFullModes) {
+    env.OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES = "1";
+  }
+  return {
+    args,
+    command: process.execPath,
+    env,
+  };
+}
+
+export function classifyHostedMediaFailureStatus(message: string): QaEvidenceStatus {
+  const blockedPatterns = [
+    /no runnable providers matched available auth/i,
+    /no runnable providers matched the explicit provider selection/i,
+    /no runnable providers matched explicit provider selection/i,
+    /no providers with usable auth/i,
+  ];
+  return blockedPatterns.some((pattern) => pattern.test(message)) ? "blocked" : "fail";
+}
+
+function formatCommand(command: string, args: readonly string[]) {
+  return [command, ...args].map((arg) => JSON.stringify(arg)).join(" ");
+}
+
+async function runHostedMediaProof(options: HostedMediaOptions): Promise<HostedMediaProofResult> {
+  const startedAt = Date.now();
+  await fs.mkdir(options.artifactBase, { recursive: true });
+  const logPath = path.join(options.artifactBase, "hosted-media-live.log");
+  const artifacts = [{ kind: "log", path: relativeArtifactPath(options, logPath) }];
+  const command = buildHostedMediaCommand({ options });
+
+  await appendText(logPath, `$ ${formatCommand(command.command, command.args)}\n`);
+  await appendText(
+    logPath,
+    `suite: ${options.suiteId}\nprovidersEnv: ${options.providersEnv}\nvideoFullModes: ${String(EVIDENCE_SUITES[options.suiteId].videoFullModes === true)}\n`,
+  );
+
+  return await new Promise<HostedMediaProofResult>((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: options.repoRoot,
+      env: command.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      const output = [
+        stdout ? `\n--- stdout ---\n${stdout}` : "",
+        stderr ? `\n--- stderr ---\n${stderr}` : "",
+      ].join("");
+      appendText(logPath, output)
+        .then(() => {
+          const durationMs = Math.max(1, Date.now() - startedAt);
+          if (status === 0 && !signal) {
+            resolve({
+              artifacts,
+              details: `${options.suiteId} hosted media live suite passed`,
+              durationMs,
+              status: "pass",
+            });
+            return;
+          }
+          const details = signal
+            ? `${options.suiteId} hosted media live suite terminated by ${signal}`
+            : `${options.suiteId} hosted media live suite exited with ${status ?? 1}`;
+          const combined = `${details}\n${stderr || stdout}`;
+          resolve({
+            artifacts,
+            details: combined,
+            durationMs,
+            status: classifyHostedMediaFailureStatus(combined),
+          });
+        })
+        .catch(reject);
+    });
+  });
+}
+
+export function buildHostedMediaEvidence(params: {
+  options: HostedMediaOptions;
+  result: HostedMediaProofResult;
+}): QaEvidenceSummaryJson {
+  const definition = EVIDENCE_SUITES[params.options.suiteId];
+  return buildScriptEvidenceSummary({
+    artifactPaths: params.result.artifacts,
+    evidenceMode: "full",
+    env: process.env,
+    generatedAt: new Date().toISOString(),
+    primaryModel: "live-media/hosted-media-provider",
+    providerMode: "live-frontier",
+    repoRoot: params.options.repoRoot,
+    runner: "script",
+    targets: [
+      {
+        id: definition.scenarioId,
+        title: definition.title,
+        sourcePath: SOURCE_PATH,
+        primaryCoverageIds: definition.primaryCoverageIds,
+        secondaryCoverageIds: definition.secondaryCoverageIds,
+        docsRefs: definition.docsRefs,
+        codeRefs: definition.codeRefs,
+      },
+    ],
+    results: [
+      {
+        id: definition.scenarioId,
+        status: params.result.status,
+        durationMs: params.result.durationMs,
+        failureMessage: params.result.details,
+      },
+    ],
+  });
+}
+
+export async function runHostedMediaProviderLiveProducer(
+  options: HostedMediaOptions,
+): Promise<QaEvidenceSummaryJson> {
+  const result = await runHostedMediaProof(options);
+  const evidence = buildHostedMediaEvidence({ options, result });
+  await writeJson(path.join(options.artifactBase, QA_EVIDENCE_FILENAME), evidence);
+  await writeJson(path.join(options.artifactBase, "latest-run.json"), {
+    qaEvidence: QA_EVIDENCE_FILENAME,
+  });
+  return evidence;
+}
+
+async function main(argv: string[]) {
+  if (argv.includes("--qa-evidence")) {
+    const evidence = await runHostedMediaProviderLiveProducer(parseHostedMediaOptions(argv));
+    console.log(`Hosted media provider live evidence: ${QA_EVIDENCE_FILENAME}`);
+    console.log(`Hosted media provider live status: ${evidence.entries[0]?.result.status}`);
+    return evidence.entries[0]?.result.status === "fail" ? 1 : 0;
+  }
+  return await runCli(argv);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runCli(process.argv.slice(2))
+  main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error: unknown) => {
       console.error(formatErrorMessage(error));

@@ -518,6 +518,7 @@ function createDiscordParams(commandBody: string, cfg: OpenClawConfig = baseCfg)
     AccountId: "default",
   });
   params.command.senderId = "user-1";
+  params.command.senderIsOwner = true;
   return params;
 }
 
@@ -752,6 +753,7 @@ function createConversationParams(
     ...(fixture.threadParentId ? { ThreadParentId: fixture.threadParentId } : {}),
   });
   params.command.senderId = fixture.senderId ?? "user-1";
+  params.command.senderIsOwner = true;
   return params;
 }
 
@@ -896,7 +898,6 @@ async function runInternalAcpCommand(params: {
   });
   commandParams.command.channel = INTERNAL_MESSAGE_CHANNEL;
   commandParams.command.senderId = "user-1";
-  commandParams.command.senderIsOwner = true;
   return handleAcpCommand(commandParams, true);
 }
 
@@ -1140,6 +1141,37 @@ describe("/acp command", () => {
     const result = await runDiscordAcpCommand("/acp");
     expect(result?.reply?.text).toContain("ACP commands:");
     expect(result?.reply?.text).toContain("/acp spawn");
+  });
+
+  it.each([
+    "spawn codex",
+    "cancel",
+    "steer continue",
+    "close",
+    "status",
+    "set-mode plan",
+    "set model gpt-5.5",
+    "cwd /tmp",
+    "permissions approve-all",
+    "timeout 120",
+    "model openai/gpt-5.5",
+    "reset-options",
+  ])("blocks authorized non-owners from /acp %s", async (action) => {
+    const params = createDiscordParams(`/acp ${action}`);
+    params.command.senderIsOwner = false;
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false });
+  });
+
+  it("keeps read-only /acp actions available to authorized non-owners", async () => {
+    const params = createDiscordParams("/acp sessions");
+    params.command.senderIsOwner = false;
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("ACP sessions:");
   });
 
   it("spawns an ACP session and binds a Discord thread", async () => {

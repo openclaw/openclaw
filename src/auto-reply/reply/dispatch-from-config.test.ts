@@ -7932,6 +7932,53 @@ describe("dispatchReplyFromConfig", () => {
     expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
   });
 
+  it("delivers isReasoning final replies when the channel opts in", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async () =>
+      [
+        { text: "thinking...", isReasoning: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { reasoningPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
+      "thinking...",
+      "The answer is 42",
+    ]);
+  });
+
+  it("does not synthesize opted-in final reasoning payloads into TTS media", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const reasoningPayload = {
+      text: "thinking...",
+      isReasoning: true,
+    } satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { reasoningPayloadsEnabled: true },
+      replyResolver: async () => reasoningPayload,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reasoningPayload);
+  });
+
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -7958,6 +8005,43 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("thinking...");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("delivers opted-in block reasoning payloads without applying TTS", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { reasoningPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    expect(blockReplySentTexts).toEqual(["thinking...", "The answer is 42"]);
+    const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
+      .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
+      .filter((call) => call.kind === "block");
+    expect(blockTtsCalls.map((call) => call.payload?.text)).toEqual(["The answer is 42"]);
   });
 
   it("strips split TTS directives from streamed block text before delivery", async () => {
