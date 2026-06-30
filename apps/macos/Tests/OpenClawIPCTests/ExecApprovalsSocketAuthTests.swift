@@ -75,6 +75,43 @@ struct ExecApprovalsSocketAuthTests {
         #expect(encoded.count < 1024 * 1024)
     }
 
+    @Test
+    func `exec host command output is truncated below jsonl socket cap`() async throws {
+        let script = """
+        print "x" x 120000;
+        print STDERR "y" x 120000;
+        """
+        let result = await ShellExecutor.runDetailed(
+            command: ["/usr/bin/perl", "-e", script],
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+        let stdout = ExecHostOutputLimiter.truncate(result.stdout)
+        let stderr = ExecHostOutputLimiter.truncate(result.stderr)
+        let response = EncodedExecHostResponse(
+            type: "exec-res",
+            id: "test",
+            ok: true,
+            payload: EncodedExecHostRunResult(
+                exitCode: result.exitCode,
+                timedOut: result.timedOut,
+                success: result.success,
+                stdout: stdout,
+                stderr: stderr,
+                error: result.errorMessage),
+            error: nil)
+        let encoded = try JSONEncoder().encode(response)
+
+        #expect(result.success == true)
+        #expect(result.stdout.count == 120000)
+        #expect(result.stderr.count == 120000)
+        #expect(stdout.utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
+        #expect(stderr.utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
+        #expect(stdout.hasPrefix("... (truncated) "))
+        #expect(stderr.hasPrefix("... (truncated) "))
+        #expect(encoded.count < 1024 * 1024)
+    }
+
     private struct EncodedExecHostResponse: Codable {
         var type: String
         var id: String
