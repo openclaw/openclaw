@@ -87,11 +87,19 @@ export function redactSensitiveUrl(value: string): string {
       parsed.password = parsed.password ? "***" : "";
       mutated = true;
     }
-    for (const key of Array.from(parsed.searchParams.keys())) {
+    const queryParams: Array<[string, string]> = [];
+    let queryMutated = false;
+    for (const [key, paramValue] of parsed.searchParams) {
       if (isSensitiveUrlQueryParamName(key)) {
-        parsed.searchParams.set(key, "***");
+        queryParams.push([key, "***"]);
+        queryMutated = true;
         mutated = true;
+      } else {
+        queryParams.push([key, paramValue]);
       }
+    }
+    if (queryMutated) {
+      parsed.search = new URLSearchParams(queryParams).toString();
     }
     return mutated ? parsed.toString() : value;
   } catch {
