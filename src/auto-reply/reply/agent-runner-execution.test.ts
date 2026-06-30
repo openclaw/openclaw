@@ -7102,7 +7102,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Send `/login codex` in Telegram to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` in this chat or channel to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
       );
     }
   });
@@ -7121,7 +7121,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Send `/login codex` in Telegram to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` in this chat or channel to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
       );
     }
   });
@@ -7315,7 +7315,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway. Send `/login codex` in Telegram to pair a new Codex login, or re-auth with `openclaw models auth login` in a terminal, then try again.",
+        "⚠️ Model login expired on the gateway. Send `/login codex` in this chat or channel to pair a new Codex login, or re-auth with `openclaw models auth login` in a terminal, then try again.",
       );
     }
   });
