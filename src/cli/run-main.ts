@@ -321,32 +321,55 @@ async function resolveConfiguredTuiLaunchTarget(
 }
 
 async function resolveReachableGatewayUrl(config: OpenClawConfig): Promise<string | null> {
-  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
-  const gatewayMode = normalizeOptionalString(config.gateway?.mode);
-  const url =
-    gatewayMode === "remote" && remoteUrl
-      ? remoteUrl
-      : await resolveLocalGatewayWebSocketUrl(config);
+  const target = await resolveGatewayProbeTarget(config);
+  if (!target) {
+    return null;
+  }
   const gateway = config.gateway;
+  const remoteAuth = target.auth === "remote";
   const [token, password] = await Promise.all([
     resolveGatewayProbeSecret({
       config,
-      value: gatewayMode === "remote" ? gateway?.remote?.token : gateway?.auth?.token,
-      path: gatewayMode === "remote" ? "gateway.remote.token" : "gateway.auth.token",
+      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
+      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
     }),
     resolveGatewayProbeSecret({
       config,
-      value: gatewayMode === "remote" ? gateway?.remote?.password : gateway?.auth?.password,
-      path: gatewayMode === "remote" ? "gateway.remote.password" : "gateway.auth.password",
+      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
+      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
     }),
   ]);
   const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
   const probe = await probeGatewayReachable({
-    url,
+    url: target.url,
     ...(token ? { token } : {}),
     ...(password ? { password } : {}),
   });
-  return probe.ok ? url : null;
+  return probe.ok ? target.url : null;
+}
+
+async function resolveGatewayProbeTarget(
+  config: OpenClawConfig,
+): Promise<{ url: string; auth: "local" | "remote" } | null> {
+  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
+  if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
+    const url = await resolveValidatedRemoteGatewayUrl(config);
+    return url ? { url, auth: "remote" } : null;
+  }
+  return { url: await resolveLocalGatewayWebSocketUrl(config), auth: "local" };
+}
+
+async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise<string | null> {
+  try {
+    const { buildGatewayConnectionDetailsWithResolvers } =
+      await import("../gateway/connection-details.js");
+    return buildGatewayConnectionDetailsWithResolvers({
+      config,
+      ignoreEnvUrlOverride: true,
+    }).url;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveGatewayProbeSecret(params: {

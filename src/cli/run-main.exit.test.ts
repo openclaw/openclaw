@@ -2674,6 +2674,30 @@ describe("runCli exit behavior", () => {
     expect(runCrestodianMock).not.toHaveBeenCalled();
   });
 
+  it("does not probe unsafe remote gateway URLs with configured credentials", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://192.168.1.10:18789",
+            token: "remote-token",
+          },
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(probeGatewayReachableMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
   it("rejects configured bare root TUI startup without an interactive TTY", async () => {
     const previousExitCode = process.exitCode;
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");

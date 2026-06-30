@@ -55,6 +55,12 @@ function isBrewOnlyInstallableSkill(skill: {
   );
 }
 
+function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string }): boolean {
+  // Onboarding can auto-run bundled recipes without another prompt. Workspace
+  // skill metadata is mutable project input, so those installs stay explicit.
+  return skill.bundled === true && skill.source === "openclaw-bundled";
+}
+
 function resolveDefaultNodeManager(config: OpenClawConfig): "npm" | "pnpm" | "bun" {
   const existing = config.skills?.install?.nodeManager;
   return existing === "npm" || existing === "pnpm" || existing === "bun" ? existing : "npm";
@@ -88,7 +94,10 @@ export async function setupSkills(
   );
 
   const baseInstallable = missing.filter(
-    (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
+    (skill) =>
+      skill.install.length > 0 &&
+      skill.missing.bins.length > 0 &&
+      isTrustedAutoInstallableSkill(skill),
   );
   let brewAvailable: boolean | undefined;
   const detectBrewOnce = async () => {

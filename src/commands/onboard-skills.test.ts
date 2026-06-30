@@ -98,6 +98,16 @@ function createBundledSkill(params: {
   };
 }
 
+function createWorkspaceSkill(
+  params: Parameters<typeof createBundledSkill>[0],
+): ReturnType<typeof createBundledSkill> {
+  return {
+    ...createBundledSkill(params),
+    source: "openclaw-workspace",
+    bundled: false,
+  };
+}
+
 function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
   mocks.detectBinary.mockResolvedValue(false);
   mocks.resolveBrewExecutable.mockReturnValue(undefined);
@@ -226,6 +236,35 @@ describe("setupSkills", () => {
       expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
       expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
     });
+  });
+
+  it("auto-installs bundled skill dependencies without running workspace skill recipes", async () => {
+    mockMissingBrewStatus([
+      createWorkspaceSkill({
+        name: "repo-helper",
+        description: "Workspace helper",
+        bins: ["repo-helper"],
+        installLabel: "Install repo-helper",
+      }),
+      createBundledSkill({
+        name: "video-frames",
+        description: "ffmpeg",
+        bins: ["ffmpeg"],
+        installLabel: "Install ffmpeg (brew)",
+      }),
+    ]);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+    );
+    const installNote = notes.find((n) => n.message.includes("video-frames"));
+    expect(installNote?.message).toContain("video-frames");
+    expect(installNote?.message).not.toContain("repo-helper");
   });
 
   it("recommends Homebrew when brew-backed deps are auto-installed and brew is missing", async () => {
