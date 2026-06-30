@@ -398,6 +398,20 @@ import UIKit
             allowTailscalePlaintext: false))
     }
 
+    @Test @MainActor func tailscalePlaintextManualConnectionDoesNotSwitchToTLSWhenTailnetIsOff() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.connectManual(
+            host: "100.104.129.13",
+            port: 18789,
+            useTLS: false,
+            allowTailscalePlaintext: true,
+            hasTailnetIPv4: false)
+
+        #expect(appModel.gatewayStatusText == "Tailscale is off on this iPhone. Turn it on, then retry this gateway.")
+    }
+
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
         let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
         defer {

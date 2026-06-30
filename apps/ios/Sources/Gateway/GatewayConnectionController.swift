@@ -304,6 +304,7 @@ final class GatewayConnectionController {
         useTLS: Bool,
         authOverride: ManualAuthOverride? = nil,
         allowTailscalePlaintext: Bool = false,
+        hasTailnetIPv4: Bool = GatewayConnectionController.hasTailnetIPv4(),
         forceReconnect: Bool = false) async
     {
         self.requestLocalNetworkAccess(reason: "connect_manual")
@@ -318,10 +319,16 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password)
+        if allowTailscalePlaintext, self.isTailscaleCgnatHost(host), !hasTailnetIPv4 {
+            self.appModel?.gatewayStatusText =
+                "Tailscale is off on this iPhone. Turn it on, then retry this gateway."
+            return
+        }
         let resolvedUseTLS = self.resolveManualUseTLS(
             host: host,
             useTLS: useTLS,
-            allowTailscalePlaintext: allowTailscalePlaintext)
+            allowTailscalePlaintext: allowTailscalePlaintext,
+            hasTailnetIPv4: hasTailnetIPv4)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)

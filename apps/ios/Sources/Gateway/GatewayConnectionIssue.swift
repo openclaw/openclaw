@@ -17,7 +17,7 @@ enum GatewayConnectionIssue: Equatable {
         return nil
     }
 
-    var needsAuthToken: Bool {
+    var needsAuthCredentials: Bool {
         switch self {
         case .tokenMissing, .passwordMissing, .unauthorized:
             true

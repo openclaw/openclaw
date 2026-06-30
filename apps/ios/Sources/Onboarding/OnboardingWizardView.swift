@@ -618,7 +618,7 @@ struct OnboardingWizardView: View {
                         onShowDetails: {
                             self.showGatewayProblemDetails = true
                         })
-                } else if self.issue.needsAuthToken {
+                } else if self.issue.needsAuthCredentials {
                     Text(self.authRecoveryMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -930,7 +930,7 @@ extension OnboardingWizardView {
             self.issue = .pairingRequired(requestId: mergedRequestId)
         } else if self.issue.needsPairing, !fallback.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
@@ -941,7 +941,7 @@ extension OnboardingWizardView {
             self.pairingRequestId = requestId
         }
 
-        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+        if self.issue.needsAuthCredentials || self.issue.needsPairing || problem?.pauseReconnect == true {
             self.step = .auth
         }
 
@@ -1151,14 +1151,17 @@ extension OnboardingWizardView {
     private func connectManual(
         connectionID: String = "manual",
         routeLabel: String? = nil,
-        allowTailscalePlaintext: Bool = false) async
+        allowTailscalePlaintext: Bool = false,
+        link: GatewayConnectDeepLink? = nil) async
     {
-        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
+        let host = (link?.host ?? self.manualHost).trimmingCharacters(in: .whitespacesAndNewlines)
+        let port = link?.port ?? self.manualPort
+        let useTLS = link?.tls ?? self.manualTLS
+        guard !host.isEmpty, port > 0, port <= 65535 else { return }
         self.connectingGatewayID = connectionID
         self.issue = .none
         self.connectMessage = "Connecting to \(routeLabel ?? host)…"
-        self.statusLine = "Connecting to \(host):\(self.manualPort)…"
+        self.statusLine = "Connecting to \(host):\(port)…"
         defer { self.connectingGatewayID = nil }
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: self.gatewayToken,
@@ -1167,8 +1170,8 @@ extension OnboardingWizardView {
         self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
-            port: self.manualPort,
-            useTLS: self.manualTLS,
+            port: port,
+            useTLS: useTLS,
             authOverride: authOverride,
             allowTailscalePlaintext: allowTailscalePlaintext)
     }
@@ -1227,7 +1230,8 @@ extension OnboardingWizardView {
         await self.connectManual(
             connectionID: "tailscale",
             routeLabel: "Tailscale",
-            allowTailscalePlaintext: allowTailscalePlaintext)
+            allowTailscalePlaintext: allowTailscalePlaintext,
+            link: link)
     }
 
     private func tailscaleGatewayLink(from input: String) -> GatewayConnectDeepLink? {
