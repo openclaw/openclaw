@@ -461,6 +461,76 @@ describe("TwitchClientManager", () => {
     });
   });
 
+  describe("UTF-16 safe truncation", () => {
+    let debugMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      debugMock = vi.fn();
+      mockLogger.debug = debugMock as unknown as typeof mockLogger.debug;
+    });
+
+    it("should not emit lone surrogates in debug log when message has emoji at truncation boundary", async () => {
+      await manager.getClient(testAccount);
+      const handler = vi.fn();
+      manager.onMessage(testAccount, handler);
+
+      // Build a message where the emoji lands at position 100
+      const textBeforeEmoji = "x".repeat(99); // 99 chars
+      const emoji = "😀";
+      const messageText = `${textBeforeEmoji}${emoji}rest`;
+
+      // Invoke the onMessage callback stored by the mock
+      const msg = {
+        id: "test-msg-utf16",
+        userInfo: {
+          userName: "testuser",
+          displayName: "TestUser",
+          isMod: false,
+          isBroadcaster: false,
+          isVip: false,
+          isSubscriber: false,
+        },
+      };
+      messageHandlers[0]("#testchannel", "testuser", messageText, msg);
+
+      // The debug log preview should not contain a lone high surrogate
+      const debugCall = debugMock.mock.calls.find((call: string[]) =>
+        call[0]?.startsWith("twitch inbound:"),
+      );
+      expect(debugCall).toBeDefined();
+      const preview = debugCall![0] as string;
+      expect(preview).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    });
+
+    it("should handle plain ASCII text without truncation", async () => {
+      await manager.getClient(testAccount);
+      const handler = vi.fn();
+      manager.onMessage(testAccount, handler);
+
+      const messageText = "short message without emoji";
+
+      const msg = {
+        id: "test-msg-ascii",
+        userInfo: {
+          userName: "testuser",
+          displayName: "TestUser",
+          isMod: false,
+          isBroadcaster: false,
+          isVip: false,
+          isSubscriber: false,
+        },
+      };
+      messageHandlers[0]("#testchannel", "testuser", messageText, msg);
+
+      const debugCall = debugMock.mock.calls.find((call: string[]) =>
+        call[0]?.startsWith("twitch inbound:"),
+      );
+      expect(debugCall).toBeDefined();
+      const preview = debugCall![0] as string;
+      expect(preview).toContain(messageText);
+    });
+  });
+
   describe("disconnect", () => {
     it("should disconnect a connected client", async () => {
       await manager.getClient(testAccount);
