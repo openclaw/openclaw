@@ -1,6 +1,6 @@
 /**
- * Compatibility subpath for provider auth login helpers.
- * Prefer provider auth hooks for provider-owned login commands.
+ * @deprecated Compatibility subpath for provider-owned login helpers.
+ * Use provider auth hooks instead of importing bundled provider login commands.
  */
 
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -12,14 +12,6 @@ const loadProviderAuthLoginRuntime = createLazyRuntimeModule(
 );
 const bindProviderAuthLoginRuntime = createLazyRuntimeMethodBinder(loadProviderAuthLoginRuntime);
 
-export type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "./provider-auth-login.runtime.js";
-
-/** Runs provider auth login through the existing models-auth persistence flow. */
-export const runModelsAuthLoginFlow: ProviderAuthLoginRuntime["runModelsAuthLoginFlow"] =
-  bindProviderAuthLoginRuntime((runtime) => runtime.runModelsAuthLoginFlow);
 /** @deprecated GitHub Copilot provider-owned login helper; use provider auth hooks instead. */
 export const githubCopilotLoginCommand: ProviderAuthLoginRuntime["githubCopilotLoginCommand"] =
   bindProviderAuthLoginRuntime((runtime) => runtime.githubCopilotLoginCommand);

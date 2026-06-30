@@ -15,6 +15,11 @@ export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+export {
+  runModelsAuthLoginFlow,
+  type ModelsAuthLoginFlowOptions,
+  type ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 export {
   requireApiKey,
