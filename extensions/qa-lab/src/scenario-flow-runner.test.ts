@@ -26,7 +26,10 @@ function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
 async function runLoadedScenarioFlow(
   scenarioId: string,
   params: {
-    onWaitForOutboundMessage?: (params: { waitCount: number; state: QaTransportState }) => void;
+    onWaitForOutboundMessage?: (params: {
+      waitCount: number;
+      state: QaTransportState;
+    }) => Promise<void> | void;
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -67,7 +70,7 @@ async function runLoadedScenarioFlow(
       options?: { sinceIndex?: number },
     ) => {
       waitCount += 1;
-      params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
+      await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
       const match = stateLocal
         .getSnapshot()
         .messages.slice(options?.sinceIndex ?? 0)
@@ -93,7 +96,7 @@ async function runLoadedScenarioFlow(
             options,
           ) => {
             waitCount += 1;
-            params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
+            await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
             const match = stateLocal
               .getSnapshot()
               .messages.filter((message) => message.direction === "outbound")
@@ -126,7 +129,7 @@ async function runLoadedScenarioFlow(
             options,
           ) => {
             waitCount += 1;
-            params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
+            await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
             const match = stateLocal
               .getSnapshot()
               .messages.filter((message) => message.direction === "outbound")
@@ -419,8 +422,8 @@ describe("scenario-flow-runner", () => {
   ])("rejects unmarked outbound replies for $scenarioId", async ({ scenarioId, to, text }) => {
     await expect(
       runLoadedScenarioFlow(scenarioId, {
-        onWaitForOutboundMessage: ({ state }) => {
-          state.addOutboundMessage({
+        onWaitForOutboundMessage: async ({ state }) => {
+          await state.addOutboundMessage({
             accountId: "qa-channel",
             to,
             text,
@@ -433,16 +436,16 @@ describe("scenario-flow-runner", () => {
   it("rejects reconnect follow-up replies that replay the first marker", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
-        onWaitForOutboundMessage: ({ waitCount, state }) => {
+        onWaitForOutboundMessage: async ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
+            await state.addOutboundMessage({
               accountId: "qa-channel",
               to: "channel:qa-room",
               text: "RECONNECT-FIRST-OK",
             });
             return;
           }
-          state.addOutboundMessage({
+          await state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "RECONNECT-FIRST-OK",
@@ -455,21 +458,21 @@ describe("scenario-flow-runner", () => {
   it("rejects reconnect follow-up turns with extra unmarked outbound replies", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
-        onWaitForOutboundMessage: ({ waitCount, state }) => {
+        onWaitForOutboundMessage: async ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
+            await state.addOutboundMessage({
               accountId: "qa-channel",
               to: "channel:qa-room",
               text: "RECONNECT-FIRST-OK",
             });
             return;
           }
-          state.addOutboundMessage({
+          await state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "RECONNECT-SECOND-OK",
           });
-          state.addOutboundMessage({
+          await state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "unmarked duplicate delivery",

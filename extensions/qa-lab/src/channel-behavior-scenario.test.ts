@@ -580,7 +580,7 @@ describe("channel behavior scenarios", () => {
 
   it("adapts QA flow runtime functions into a channel scenario driver", async () => {
     const state = createQaBusState();
-    await state.addOutboundMessage({
+    state.addOutboundMessage({
       to: "dm:alice",
       text: "old reply",
     });
@@ -611,7 +611,7 @@ describe("channel behavior scenarios", () => {
       },
     });
     const cursor = driver.getOutboundCursor?.();
-    await state.addOutboundMessage({
+    state.addOutboundMessage({
       to: "dm:alice",
       text: "new reply QA-DM-BASELINE-OK",
     });

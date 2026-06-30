@@ -30,7 +30,7 @@ type ChannelBehaviorThreadCreateAction = (input: {
   env: QaScenarioRuntimeEnv;
   action: "thread-create";
   args: Record<string, unknown>;
-}) => Promise<unknown> | unknown;
+}) => unknown;
 
 export type QaScenarioRuntimeEnv<
   TLab = unknown,

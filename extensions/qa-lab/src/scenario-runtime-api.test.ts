@@ -233,7 +233,7 @@ describe("createQaScenarioRuntimeApi", () => {
         number | undefined,
         { sinceIndex?: number } | undefined,
       ];
-      await stateLocal.addOutboundMessage({
+      stateLocal.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:alice",
         text: "QA-DM-BASELINE-OK",
