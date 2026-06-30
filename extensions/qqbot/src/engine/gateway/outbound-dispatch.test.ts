@@ -325,6 +325,32 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("strips echoed inbound metadata from direct block replies", async () => {
+    const echoedMetadataReply = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"qqbot:c2c:user-openid","inbound_event_kind":"user_request"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Alice","id":"user-openid"}',
+      "```",
+      "",
+      "final answer",
+    ].join("\n");
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: echoedMetadataReply }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("delivers text-only tool progress immediately in recommended C2C streaming mode", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {

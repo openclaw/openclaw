@@ -37,6 +37,7 @@ import {
 } from "../messaging/reply-dispatcher.js";
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
+import { sanitizeQQBotVisibleText } from "../utils/visible-text.js";
 import type { InboundContext } from "./inbound-context.js";
 import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
@@ -90,7 +91,7 @@ function shouldDeliverToolProgressImmediately(
 }
 
 function immediateToolProgressText(payload: ReplyDeliverPayload): string | undefined {
-  const text = (payload.text ?? "").trim();
+  const text = sanitizeQQBotVisibleText(payload.text ?? "").trim();
   if (!text || payload.isError || payload.audioAsVoice) {
     return undefined;
   }
@@ -110,7 +111,7 @@ function isSilentBlockReplyText(text: string): boolean {
 
 function blockReplyTextForDelivery(payload: ReplyDeliverPayload): string {
   const text = payload.text ?? "";
-  return isSilentBlockReplyText(text.trim()) ? "" : text;
+  return isSilentBlockReplyText(text.trim()) ? "" : sanitizeQQBotVisibleText(text);
 }
 
 function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
@@ -454,7 +455,7 @@ export async function dispatchOutbound(
                 // ---- Tool deliver ----
                 if (info.kind === "tool") {
                   toolDeliverCount++;
-                  const toolText = (payload.text ?? "").trim();
+                  const toolText = sanitizeQQBotVisibleText(payload.text ?? "").trim();
                   const textOnlyProgress = immediateToolProgressText(payload);
                   if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
                     if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {

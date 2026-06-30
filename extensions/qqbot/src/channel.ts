@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
@@ -31,6 +30,7 @@ import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
+import { sanitizeQQBotVisibleText } from "./engine/utils/visible-text.js";
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
@@ -269,7 +269,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       chunkQQBotMarkdownText(text, limit, getQQBotRuntime().channel.text.chunkMarkdownText),
     chunkerMode: "markdown",
     textChunkLimit: 5000,
-    sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+    sanitizeText: ({ text }) => sanitizeQQBotVisibleText(text),
     shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
       shouldSuppressLocalQQBotApprovalPrompt({
         cfg,

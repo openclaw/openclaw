@@ -21,6 +21,32 @@ describe("qqbot outbound sanitizeText", () => {
     const input3 = "plain text without tags";
     expect(sanitize({ text: input3, payload: { text: input3 } })).toBe("plain text without tags");
   });
+
+  it("strips echoed inbound metadata before delivery", () => {
+    const sanitize = qqbotPlugin.outbound?.sanitizeText;
+    expect(sanitize).toBeDefined();
+    if (!sanitize) {
+      return;
+    }
+
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "{",
+      '  "chat_id": "qqbot:c2c:user-1",',
+      '  "inbound_event_kind": "user_request"',
+      "}",
+      "",
+      "Sender (untrusted metadata):",
+      "{",
+      '  "label": "Alice",',
+      '  "id": "user-1"',
+      "}",
+      "",
+      "final answer",
+    ].join("\n");
+
+    expect(sanitize({ text: input, payload: { text: input } })).toBe("final answer");
+  });
 });
 
 const sendTextMock = vi.hoisted(() => vi.fn());
