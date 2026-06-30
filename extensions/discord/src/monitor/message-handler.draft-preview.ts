@@ -93,6 +93,8 @@ export function createDiscordDraftPreviewController(params: {
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
+    // Streamed thinking stays italic; commentary reads as plain narration.
+    commentaryItalics: false,
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;

@@ -51,9 +51,22 @@ export function createChannelProgressDraftCompositor(params: {
   commentaryLinePrefix?: string;
   /** Whether the window reasoning lane may render. */
   reasoningGate?: boolean;
+  /**
+   * Wrap window commentary lines in `_…_` italic markup. Reasoning stays italic
+   * either way; commentary italics are opt-out for channels that prefer plain
+   * narration (Discord). Defaults to on.
+   */
+  commentaryItalics?: boolean;
 }) {
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
   const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
+  const commentaryItalics = params.commentaryItalics ?? true;
+  // Strip the `_…_` italic wrapper the normalize helpers add, per line.
+  const stripLaneItalics = (text: string): string =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/^_(.*)_$/su, "$1"))
+      .join("\n");
   const previewToolProgressEnabled =
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
   const commentaryProgressEnabled =
@@ -339,7 +352,7 @@ export function createChannelProgressDraftCompositor(params: {
         id: lineId,
         // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
-        text: `${commentaryLinePrefix}${normalized}`,
+        text: `${commentaryLinePrefix}${commentaryItalics ? normalized : stripLaneItalics(normalized)}`,
         kind: "item",
         label: "Commentary",
         prefix: false,
