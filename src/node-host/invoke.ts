@@ -377,6 +377,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
     process.platform === "win32"
       ? (
           env?.PATHEXT ??
+          env?.PathExt ??
           env?.Pathext ??
           process.env.PATHEXT ??
           process.env.PathExt ??
