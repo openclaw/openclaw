@@ -90,7 +90,12 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    if (isBundlePluginRecord(record)) {
+    // Preserve native-first payload classification: if a bundle-family
+    // install record also has a top-level package.json, validate it as a
+    // native package.  Dual-format directories (native package metadata
+    // plus bundle markers) use the native path per the bundle docs.
+    const nativePackageJson = await safeStat(path.join(installPath, "package.json"));
+    if (isBundlePluginRecord(record) && !nativePackageJson?.isFile()) {
       // Bundle plugins use manifest files (`.claude-plugin/plugin.json`,
       // `.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`, or
       // manifestless Claude markers) instead of `package.json`.  Use the
