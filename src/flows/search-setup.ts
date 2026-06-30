@@ -462,7 +462,7 @@ export async function runSearchSetupFlow(
       providers: [...providerOptions],
     });
     const autoDetected = providerOptions.find((entry) => entry.id === autoDetectedId);
-    if (autoDetected) {
+    if (autoDetected && providerNeedsCredential(autoDetected)) {
       return autoDetected.id;
     }
     const detected = providerOptions.find(
