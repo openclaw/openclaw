@@ -105,7 +105,8 @@ export function resolveBedrockNativeThinkingLevelMap(
   const canonicalModelId = resolveClaudeModelIdentity(modelRef);
   return {
     xhigh: [modelId, canonicalModelId].some(
-      (modelRef) => isSonnet5BedrockModelRef(modelRef) || isOpus47OrNewerBedrockModelRef(modelRef),
+      (candidateRef) =>
+        isSonnet5BedrockModelRef(candidateRef) || isOpus47OrNewerBedrockModelRef(candidateRef),
     )
       ? "xhigh"
       : null,
