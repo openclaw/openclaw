@@ -15,6 +15,10 @@ describe("mapThinkingLevelToReasoningEffort", () => {
     expect(mapThinkingLevelToReasoningEffort("max")).toBe("xhigh");
   });
 
+  it('maps profile-level "ultra" to the safe OpenAI wire value "max"', () => {
+    expect(mapThinkingLevelToReasoningEffort("ultra")).toBe("max");
+  });
+
   it.each(["minimal", "low", "medium", "high", "xhigh"] as const)(
     "passes through %s unchanged",
     (level) => {

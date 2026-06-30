@@ -13,6 +13,12 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { resolveOpenAIReasoningEffortMap } from "../../agents/openai-reasoning-compat.js";
+import {
+  normalizeOpenAIReasoningEffortMap,
+  resolveOpenAIReasoningEffortForModel,
+  type OpenAIReasoningEffort,
+} from "../../agents/openai-reasoning-effort.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -198,11 +204,18 @@ type ResponsesLifecycleStreamOptions = Pick<
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
 >;
 
-export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ResponsesReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
-  reasoningEffort?: ResponsesReasoningEffort;
+  reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
@@ -465,7 +478,14 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  return clampedReasoning === "max" ? "xhigh" : clampedReasoning;
+  return resolveOpenAIReasoningEffortForModel({
+    model,
+    effort: clampedReasoning,
+    fallbackMap: resolveOpenAIReasoningEffortMap(
+      model,
+      normalizeOpenAIReasoningEffortMap(model.thinkingLevelMap),
+    ),
+  }) as ResponsesReasoningEffort | undefined;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
@@ -495,9 +515,15 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 
   if (options?.reasoningEffort || options?.reasoningSummary) {
-    const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
+    const requestedEffort = options?.reasoningEffort ?? "medium";
+    const effort = resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: requestedEffort,
+      fallbackMap: resolveOpenAIReasoningEffortMap(
+        model,
+        normalizeOpenAIReasoningEffortMap(model.thinkingLevelMap),
+      ),
+    });
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],
       summary: options?.reasoningSummary || "auto",

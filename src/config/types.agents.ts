@@ -1,6 +1,6 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -97,7 +97,16 @@ export type AgentConfig = {
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  thinkingDefault?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | "ultra";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
   /** Optional per-agent tool progress detail mode. */

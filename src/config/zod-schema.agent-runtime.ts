@@ -1041,7 +1041,7 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),

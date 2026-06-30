@@ -369,6 +369,7 @@ const ThinkingLevelMapSchema = z
     high: ThinkingLevelMapValueSchema.optional(),
     xhigh: ThinkingLevelMapValueSchema.optional(),
     max: ThinkingLevelMapValueSchema.optional(),
+    ultra: ThinkingLevelMapValueSchema.optional(),
   })
   .strict();
 

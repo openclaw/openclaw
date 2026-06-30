@@ -18,7 +18,8 @@ export type AgentRuntimeThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 /** System prompt rendering mode selected for one attempt. */
 export type AgentRuntimePromptMode = "full" | "minimal" | "none";

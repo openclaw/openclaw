@@ -68,7 +68,7 @@ type GoogleGenerateContentClient = {
   };
 };
 
-type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
+type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max" | "ultra">;
 
 /**
  * Determines whether a streamed Gemini `Part` should be treated as "thinking".
@@ -560,9 +560,7 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
-  const effort = (
-    clampedReasoning === "off" || clampedReasoning === "max" ? "high" : clampedReasoning
-  ) as ClampedGoogleThinkingLevel;
+  const effort = clampGoogleThinkingLevelForTransport(clampedReasoning);
 
   if (
     isGemini3ProModel(model) ||
@@ -583,6 +581,23 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
       useFlashLiteBudgets: config?.useFlashLiteBudgets,
     }),
   };
+}
+
+function clampGoogleThinkingLevelForTransport(
+  effort: AgentThinkingLevel | "off",
+): ClampedGoogleThinkingLevel {
+  switch (effort) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+      return effort;
+    case "off":
+    case "xhigh":
+    case "max":
+    case "ultra":
+      return "high";
+  }
 }
 
 export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(

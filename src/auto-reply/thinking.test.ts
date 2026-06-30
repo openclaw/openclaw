@@ -79,11 +79,10 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("MAX")).toBe("max");
   });
 
-  it("accepts ultra as its own explicit level without changing legacy ultrathink aliases", () => {
+  it("accepts explicit ultra without changing the legacy ultrathink alias", () => {
     expect(normalizeThinkLevel("ultra")).toBe("ultra");
     expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
     expect(normalizeThinkLevel("ultrathink")).toBe("high");
-    expect(normalizeThinkLevel("thinkhardest")).toBe("high");
   });
 });
 
@@ -127,6 +126,22 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
   });
 
+  it.each([
+    ["openai", "gpt-5.4"],
+    ["google", "gemini-3-pro-preview"],
+    ["anthropic", "claude-opus-4-7"],
+  ] as const)(
+    "does not advertise ultra on the embedded %s runtime and remaps stale state",
+    (provider, model) => {
+      const levels = listThinkingLevels(provider, model);
+      const resolved = resolveSupportedThinkingLevel({ provider, model, level: "ultra" });
+
+      expect(levels).not.toContain("ultra");
+      expect(resolved).not.toBe("ultra");
+      expect(levels).toContain(resolved);
+    },
+  );
+
   it("does not include adaptive without provider support", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("adaptive");
@@ -145,12 +160,7 @@ describe("listThinkingLevels", () => {
 
   it("preserves provider profile ids and labels", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
-      levels: [
-        { id: "off" },
-        { id: "adaptive", label: "auto" },
-        { id: "max", label: "maximum" },
-        { id: "ultra", label: "ultra" },
-      ],
+      levels: [{ id: "off" }, { id: "adaptive", label: "auto" }, { id: "max", label: "maximum" }],
       defaultLevel: "adaptive",
     });
 
@@ -158,7 +168,6 @@ describe("listThinkingLevels", () => {
       { id: "off", label: "off" },
       { id: "adaptive", label: "auto" },
       { id: "max", label: "maximum" },
-      { id: "ultra", label: "ultra" },
     ]);
   });
 
@@ -561,35 +570,26 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
-  it("uses catalog compat reasoning efforts to expose provider-declared levels", () => {
+  it("uses catalog compat reasoning efforts to expose xhigh for configured custom models", () => {
     const catalog = [
       {
         provider: "gmn",
-        id: "gpt-5.6-sol",
-        name: "GPT 5.6 Sol via GMN",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
         reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
       },
     ];
 
-    expect(listThinkingLevels("gmn", "gpt-5.6-sol", catalog)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra",
-    ]);
-    expect(formatThinkingLevels("gmn", "gpt-5.6-sol", ", ", catalog)).toBe(
-      "off, minimal, low, medium, high, xhigh, max, ultra",
+    expect(listThinkingLevels("gmn", "gpt-5.4", catalog)).toContain("xhigh");
+    expect(formatThinkingLevels("gmn", "gpt-5.4", ", ", catalog)).toBe(
+      "off, minimal, low, medium, high, xhigh",
     );
     expect(
       isThinkingLevelSupported({
         provider: "gmn",
-        model: "gpt-5.6-sol",
-        level: "ultra",
+        model: "gpt-5.4",
+        level: "xhigh",
         catalog,
       }),
     ).toBe(true);

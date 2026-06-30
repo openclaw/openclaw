@@ -238,6 +238,50 @@ describe("convertResponsesTools", () => {
   });
 });
 
+describe("OpenAI Responses reasoning effort mapping", () => {
+  const context = {
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+  } satisfies Context;
+
+  it("downgrades ultra to xhigh when no explicit support metadata is present", () => {
+    const params = {} as never;
+
+    applyCommonResponsesParams(params, nativeOpenAIModel, context, {
+      reasoningEffort: "ultra",
+    });
+
+    expect(params).toMatchObject({ reasoning: { effort: "xhigh", summary: "auto" } });
+  });
+
+  it("prefers max over xhigh when support metadata advertises max", () => {
+    const params = {} as never;
+    const maxModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportedReasoningEfforts: ["high", "xhigh", "max"],
+      },
+    } as unknown as Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, maxModel, context, { reasoningEffort: "ultra" });
+
+    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+  });
+
+  it("passes literal ultra only when support metadata advertises it", () => {
+    const params = {} as never;
+    const ultraModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportedReasoningEfforts: ["high", "ultra"],
+      },
+    } as unknown as Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, ultraModel, context, { reasoningEffort: "ultra" });
+
+    expect(params).toMatchObject({ reasoning: { effort: "ultra", summary: "auto" } });
+  });
+});
+
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 

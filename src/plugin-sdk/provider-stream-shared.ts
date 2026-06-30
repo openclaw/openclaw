@@ -10,7 +10,10 @@ import {
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
 import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
-import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
+import {
+  normalizeOpenAIReasoningEffortMap,
+  resolveOpenAIReasoningEffortForModel,
+} from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
@@ -325,6 +328,48 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   };
 }
 
+/**
+ * Applies model-aware `ultra` normalization after the generic OpenAI thinking wrapper.
+ * Literal `ultra` is emitted only when explicit model metadata advertises it.
+ */
+export function createOpenAIUltraReasoningEffortWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "ultra") {
+    return underlying;
+  }
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      const effort =
+        model.api === "openai-codex-responses"
+          ? "max"
+          : resolveOpenAIReasoningEffortForModel({
+              model,
+              effort: "ultra",
+              fallbackMap: resolveOpenAIReasoningEffortMap(
+                {
+                  provider: typeof model.provider === "string" ? model.provider : null,
+                  id: typeof model.id === "string" ? model.id : null,
+                  compat: model.compat,
+                },
+                normalizeOpenAIReasoningEffortMap(model.thinkingLevelMap),
+              ),
+            });
+      if (!effort) {
+        return;
+      }
+      const reasoning = toRecord(payload.reasoning);
+      if (reasoning && "effort" in reasoning) {
+        reasoning.effort = effort;
+      }
+      if ("reasoning_effort" in payload) {
+        payload.reasoning_effort = effort;
+      }
+    });
+}
+
 function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
   const thinking = payload.thinking;
   if (!thinking || typeof thinking !== "object") {
@@ -481,7 +526,9 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
 function resolveDeepSeekV4ReasoningEffort(
   thinkingLevel: DeepSeekV4ThinkingLevel,
 ): DeepSeekV4ReasoningEffort {
-  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" || thinkingLevel === "ultra"
+    ? "max"
+    : "high";
 }
 
 function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
@@ -688,7 +735,8 @@ export type GoogleThinkingInputLevel =
   | "adaptive"
   | "high"
   | "max"
-  | "xhigh";
+  | "xhigh"
+  | "ultra";
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."
@@ -741,6 +789,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "high":
       case "max":
       case "xhigh":
+      case "ultra":
         return "HIGH";
       case "adaptive":
         return undefined;
@@ -769,6 +818,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "high":
     case "max":
     case "xhigh":
+    case "ultra":
       return "HIGH";
     case "adaptive":
       return undefined;
@@ -830,6 +880,7 @@ function mapThinkLevelToGemma4ThinkingLevel(
     case "high":
     case "max":
     case "xhigh":
+    case "ultra":
       return "HIGH";
     default:
       return undefined;

@@ -11,6 +11,11 @@ import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { resolveOpenAIReasoningEffortMap } from "../../agents/openai-reasoning-compat.js";
+import {
+  normalizeOpenAIReasoningEffortMap,
+  resolveOpenAIReasoningEffortForModel,
+} from "../../agents/openai-reasoning-effort.js";
 import {
   projectOpenAITools,
   reconcileOpenAICompletionsToolChoice,
@@ -101,7 +106,7 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 
 export interface OpenAICompletionsOptions extends StreamOptions {
   toolChoice?: OpenAICompletionsToolChoice;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 }
 
 interface OpenAICompatCacheControl {
@@ -555,12 +560,7 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort =
-    clampedReasoning === "off"
-      ? undefined
-      : clampedReasoning === "max"
-        ? "xhigh"
-        : clampedReasoning;
+  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
@@ -760,8 +760,14 @@ function buildParams(
     }
   } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.reasoning_effort = resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: options.reasoningEffort,
+      fallbackMap: resolveOpenAIReasoningEffortMap(
+        model,
+        normalizeOpenAIReasoningEffortMap(model.thinkingLevelMap),
+      ),
+    });
   } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     const offValue = model.thinkingLevelMap?.off;
     if (typeof offValue === "string") {

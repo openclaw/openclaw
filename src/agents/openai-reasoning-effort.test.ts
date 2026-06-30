@@ -1,11 +1,18 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  normalizeOpenAIReasoningEffortMap,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it("drops null model effort mappings before transport resolution", () => {
+    expect(normalizeOpenAIReasoningEffortMap({ high: "high", ultra: null })).toEqual({
+      high: "high",
+    });
+  });
+
   it.each([
     { provider: "openai", id: "gpt-5.5" },
     { provider: "openai", id: "gpt-5.5" },
@@ -61,6 +68,16 @@ describe("OpenAI reasoning effort support", () => {
         effort: "ultra",
       }),
     ).toBe("xhigh");
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: {
+          provider: "custom-openai",
+          id: "reasoner",
+          compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+        },
+        effort: "ultra",
+      }),
+    ).toBe("high");
   });
 
   it("allows provider-native compat values when explicitly declared", () => {

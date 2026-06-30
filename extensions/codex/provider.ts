@@ -133,16 +133,24 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       });
       return buildCodexAppServerUsageSnapshot(rateLimits);
     },
-    resolveThinkingProfile: ({ modelId }) => ({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(isKnownXHighCodexModel(modelId) ? [{ id: "xhigh" as const }] : []),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId, compat }) => {
+      const supportedEfforts = new Set(
+        (compat?.supportedReasoningEfforts ?? []).map((effort) => effort.trim().toLowerCase()),
+      );
+      return {
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          ...(supportedEfforts.has("xhigh") || isKnownXHighCodexModel(modelId)
+            ? [{ id: "xhigh" as const }]
+            : []),
+          ...(supportedEfforts.has("ultra") ? [{ id: "ultra" as const }] : []),
+        ],
+      };
+    },
     resolveSystemPromptContribution: ({ config, modelId }) =>
       resolveCodexSystemPromptContribution({ config, modelId }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),

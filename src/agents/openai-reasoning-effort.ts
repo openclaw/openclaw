@@ -40,6 +40,16 @@ const GPT_51_CODEX_MAX_REASONING_EFFORTS = ["none", "medium", "high", "xhigh"] a
 const GPT_51_CODEX_MINI_REASONING_EFFORTS = ["medium"] as const;
 const GENERIC_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
+/** Removes null/non-string entries from model/provider reasoning-effort maps. */
+export function normalizeOpenAIReasoningEffortMap(map: unknown): Record<string, string> {
+  if (!map || typeof map !== "object") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(map).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
 function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
