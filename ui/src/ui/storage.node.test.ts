@@ -39,6 +39,13 @@ function setControlUiBasePath(value: string | undefined) {
   });
 }
 
+function setViteDevPage() {
+  vi.stubGlobal("document", {
+    querySelector: (selector: string) =>
+      selector === 'script[src*="/@vite/client"]' ? ({ src: "/@vite/client" } as Element) : null,
+  } as Document);
+}
+
 function expectedGatewayUrl(basePath: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}${basePath}`;
@@ -666,8 +673,41 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
     expect(settings.theme).toBe("claw");
     expect(settings.sessionKey).toBe("main");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
+      gatewayUrl: "wss://gateway.example:8443/gateway-a",
+      sessionKey: "gw-a-session",
+    });
     console.log(
       `[gateway-proof] same-origin legacy fallback rejected: stored=wss://gateway.example:8443/gateway-a loaded=${settings.gatewayUrl}`,
+    );
+  });
+
+  it("does not adopt a legacy sibling gateway URL when the current page is root-mounted", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-a",
+        theme: "dash",
+        sessionKey: "gw-a-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl(""));
+    expect(settings.theme).toBe("claw");
+    expect(settings.sessionKey).toBe("main");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
+      gatewayUrl: "wss://gateway.example:8443/gateway-a",
+      sessionKey: "gw-a-session",
+    });
+    console.log(
+      `[gateway-proof] root same-origin legacy fallback rejected: stored=wss://gateway.example:8443/gateway-a loaded=${settings.gatewayUrl}`,
     );
   });
 
@@ -702,6 +742,254 @@ describe("loadSettings default gateway URL derivation", () => {
     console.log(
       `[gateway-proof] remote legacy fallback preserved: loaded=${settings.gatewayUrl} session=${settings.sessionKey}`,
     );
+  });
+
+  it("does not let stale unscoped remote settings override a valid current scoped record", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "control.example:8443",
+      pathname: "/",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1:wss://control.example:8443",
+      JSON.stringify({
+        gatewayUrl: "wss://control.example:8443",
+        theme: "claw",
+        sessionKey: "stale-default",
+      }),
+    );
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://remote-gateway.example.com",
+        theme: "dash",
+        themeMode: "dark",
+        chatShowThinking: false,
+        sessionKey: "remote-session",
+        lastActiveSessionKey: "remote-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://control.example:8443");
+    expect(settings.theme).toBe("claw");
+    expect(settings.sessionKey).toBe("stale-default");
+    expect(
+      localStorage.getItem("openclaw.control.currentGateway.v1:wss://control.example:8443"),
+    ).toBeNull();
+  });
+
+  it("does not let invalid legacy settings mask a valid current scoped record", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "control.example:8443",
+      pathname: "/",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1:wss://control.example:8443",
+      JSON.stringify({
+        gatewayUrl: "wss://control.example:8443",
+        theme: "dash",
+        themeMode: "dark",
+        sessionKey: "current-session",
+        lastActiveSessionKey: "current-session",
+      }),
+    );
+    localStorage.setItem("openclaw.control.settings.v1", "{}");
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://control.example:8443");
+    expect(settings.theme).toBe("dash");
+    expect(settings.sessionKey).toBe("current-session");
+  });
+
+  it("does not adopt a sibling gateway from the default fallback key", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1:default",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-a",
+        theme: "dash",
+        sessionKey: "gw-a-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(settings.theme).toBe("claw");
+    expect(settings.sessionKey).toBe("main");
+  });
+
+  it("uses the default fallback key when the unscoped legacy key belongs to a sibling", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-a",
+        theme: "dash",
+        sessionKey: "gw-a-session",
+      }),
+    );
+    localStorage.setItem(
+      "openclaw.control.settings.v1:default",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-b",
+        theme: "dash",
+        sessionKey: "gw-b-default",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(settings.theme).toBe("dash");
+    expect(settings.sessionKey).toBe("gw-b-default");
+  });
+
+  it("uses the default fallback key when the unscoped legacy key is corrupt", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    localStorage.setItem("openclaw.control.settings.v1", "{");
+    localStorage.setItem(
+      "openclaw.control.settings.v1:default",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443",
+        theme: "dash",
+        sessionKey: "default-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl(""));
+    expect(settings.theme).toBe("dash");
+    expect(settings.sessionKey).toBe("default-session");
+  });
+
+  it("preserves a legacy same-origin root WebSocket endpoint on first load after upgrade", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/openclaw/chat",
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "/ws",
+        theme: "dash",
+        themeMode: "dark",
+        sessionKey: "custom-ws-session",
+        lastActiveSessionKey: "custom-ws-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("/ws");
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.sessionKey).toBe("custom-ws-session");
+    expect(
+      JSON.parse(
+        localStorage.getItem("openclaw.control.settings.v1:https://gateway.example:8443/ws") ??
+          "{}",
+      ),
+    ).toMatchObject({
+      gatewayUrl: "/ws",
+      theme: "dash",
+      themeMode: "dark",
+    });
+    expect(
+      localStorage.getItem(
+        "openclaw.control.currentGateway.v1:wss://gateway.example:8443/openclaw",
+      ),
+    ).toBe("/ws");
+    expect(
+      localStorage.getItem("openclaw.control.settings.v1:wss://gateway.example:8443/openclaw"),
+    ).toBeNull();
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+    console.log(
+      `[gateway-proof] same-origin root websocket endpoint preserved: loaded=${settings.gatewayUrl} session=${settings.sessionKey}`,
+    );
+  });
+
+  it("does not preserve legacy sibling base-path WebSocket endpoint URLs", () => {
+    for (const legacyGatewayUrl of ["/gateway-a/ws", "wss://gateway.example:8443/gateway-a/ws"]) {
+      localStorage.clear();
+      sessionStorage.clear();
+      setTestLocation({
+        protocol: "https:",
+        host: "gateway.example:8443",
+        pathname: "/gateway-b/chat",
+      });
+      localStorage.setItem(
+        "openclaw.control.settings.v1",
+        JSON.stringify({
+          gatewayUrl: legacyGatewayUrl,
+          theme: "dash",
+          sessionKey: "gw-a-session",
+          lastActiveSessionKey: "gw-a-session",
+        }),
+      );
+
+      const settings = loadSettings();
+      expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+      expect(settings.theme).toBe("claw");
+      expect(settings.sessionKey).toBe("main");
+      expect(
+        JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}"),
+      ).toMatchObject({
+        gatewayUrl: legacyGatewayUrl,
+        sessionKey: "gw-a-session",
+      });
+      console.log(
+        `[gateway-proof] sibling websocket endpoint rejected: stored=${legacyGatewayUrl} loaded=${settings.gatewayUrl}`,
+      );
+    }
+  });
+
+  it("preserves legacy current-base WebSocket endpoint URLs", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/gateway-b/chat",
+    });
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://gateway.example:8443/gateway-b/ws",
+        theme: "dash",
+        themeMode: "dark",
+        sessionKey: "gw-b-ws-session",
+        lastActiveSessionKey: "gw-b-ws-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://gateway.example:8443/gateway-b/ws");
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.sessionKey).toBe("gw-b-ws-session");
+    expect(
+      localStorage.getItem(
+        "openclaw.control.currentGateway.v1:wss://gateway.example:8443/gateway-b",
+      ),
+    ).toBe("wss://gateway.example:8443/gateway-b/ws");
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
   });
 
   it("does not write to the legacy unscoped settings key when saving", () => {
@@ -783,15 +1071,24 @@ describe("loadSettings default gateway URL derivation", () => {
 
   it("persists a custom remote gatewayUrl so it survives a page reload", () => {
     // Regression for #97636: when the user overrides the gateway URL to a
-    // remote host, the scoped key is derived from that remote URL rather than
-    // from the page's basePath.  Without also writing a page-derived index key,
-    // a reload would fail to find the entry and silently fall back to the
-    // page-derived default, losing the user's endpoint configuration.
+    // remote host, the settings payload is scoped to that remote URL. The
+    // page-scoped selection points this Control UI basePath back to the remote
+    // payload on reload without sharing a payload key with sibling basePaths.
     setTestLocation({
       protocol: "https:",
       host: "control.example:8443",
       pathname: "/",
     });
+    localStorage.setItem(
+      "openclaw.control.settings.v1:wss://control.example:8443",
+      JSON.stringify({
+        gatewayUrl: "wss://control.example:8443",
+        theme: "claw",
+        themeMode: "system",
+        sessionKey: "default-session",
+        lastActiveSessionKey: "default-session",
+      }),
+    );
 
     const customUrl = "wss://remote-gateway.example.com";
     saveSettings({
@@ -812,7 +1109,7 @@ describe("loadSettings default gateway URL derivation", () => {
       textScale: 110,
     });
 
-    // Simulate a page reload: loadSettings reads from the page-derived key first.
+    // Simulate a page reload: loadSettings follows the page-derived selection.
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(customUrl);
     expect(settings.theme).toBe("dash");
@@ -820,6 +1117,127 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.chatShowThinking).toBe(false);
     expect(settings.chatAutoScroll).toBe("off");
     expect(settings.splitRatio).toBe(0.5);
+    expect(
+      localStorage.getItem("openclaw.control.currentGateway.v1:wss://control.example:8443"),
+    ).toBe(customUrl);
+    expect(
+      JSON.parse(
+        localStorage.getItem("openclaw.control.settings.v1:wss://control.example:8443") ?? "{}",
+      ),
+    ).toMatchObject({
+      gatewayUrl: "wss://control.example:8443",
+      theme: "claw",
+      sessionKey: "default-session",
+    });
+  });
+
+  it("prefers the page-scoped dev-server gateway override over stale default settings", () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:5173",
+      pathname: "/openclaw/chat",
+    });
+    setViteDevPage();
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+      JSON.stringify({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        theme: "claw",
+        sessionKey: "stale-default",
+      }),
+    );
+
+    const customUrl = "wss://remote-gateway.example.com";
+    saveSettings({
+      gatewayUrl: customUrl,
+      token: "",
+      sessionKey: "remote-session",
+      lastActiveSessionKey: "remote-session",
+      theme: "dash",
+      themeMode: "dark",
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+      chatAutoScroll: "off",
+      splitRatio: 0.5,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 25,
+      textScale: 110,
+    });
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(customUrl);
+    expect(settings.sessionKey).toBe("remote-session");
+    expect(settings.theme).toBe("dash");
+    expect(settings.chatAutoScroll).toBe("off");
+  });
+
+  it("keeps remote gateway payload when the page selection switches back to the default gateway", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "control.example:8443",
+      pathname: "/",
+    });
+
+    const remoteUrl = "wss://remote-gateway.example.com";
+    saveSettings({
+      gatewayUrl: remoteUrl,
+      token: "",
+      sessionKey: "remote-session",
+      lastActiveSessionKey: "remote-session",
+      theme: "dash",
+      themeMode: "dark",
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+      chatAutoScroll: "off",
+      splitRatio: 0.5,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 25,
+      textScale: 110,
+    });
+
+    const defaultUrl = "wss://control.example:8443";
+    saveSettings({
+      gatewayUrl: defaultUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    expect(
+      JSON.parse(
+        localStorage.getItem("openclaw.control.settings.v1:wss://remote-gateway.example.com") ??
+          "{}",
+      ),
+    ).toMatchObject({
+      gatewayUrl: remoteUrl,
+      theme: "dash",
+      sessionsByGateway: {
+        "wss://remote-gateway.example.com": {
+          sessionKey: "remote-session",
+          lastActiveSessionKey: "remote-session",
+        },
+      },
+    });
+    expect(
+      localStorage.getItem("openclaw.control.currentGateway.v1:wss://control.example:8443"),
+    ).toBe(defaultUrl);
+    expect(loadSettings().gatewayUrl).toBe(defaultUrl);
   });
 
   it("keeps per-basePath settings isolated when sibling gateways have distinct configurations", () => {
