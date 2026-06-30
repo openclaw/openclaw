@@ -176,7 +176,7 @@ export function registerChatAbortController(params: {
               params.chatAbortControllers.delete(params.runId);
             }
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             // Persistence failures here are typically DB or filesystem health
             // issues. Logging gives operators visibility; the controller entry
             // is still removed so memory does not leak.
