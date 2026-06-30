@@ -100,10 +100,13 @@ async function postCrablineInbound(params: {
   providerInbound: OpenClawCrablineInbound;
 }) {
   const { response, release } = await fetchWithSsrFGuard({
-    url: params.providerInbound.providerUrl,
+    url: params.adapter.manifest.endpoints.adminInboundUrl,
     init: {
       body: JSON.stringify(params.providerInbound.providerBody),
-      headers: params.providerInbound.providerHeaders,
+      headers: {
+        "content-type": "application/json",
+        "x-crabline-admin-token": params.adapter.manifest.adminToken,
+      },
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },
