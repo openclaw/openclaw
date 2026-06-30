@@ -150,11 +150,11 @@ export function shouldUseEnvHttpProxyForUrl(
  * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  // Lowercase no_proxy takes precedence: if explicitly set (even to empty),
-  // it shadows the uppercase variant without falling through.
-  const noProxyRaw = normalizeProxyEnvValue(env.no_proxy);
-  const upperKey = String.fromCharCode(78, 79, 95, 80, 82, 79, 88, 89);
-  const raw = noProxyRaw !== undefined ? noProxyRaw : normalizeProxyEnvValue(env[upperKey]);
+  // Empty lowercase no_proxy shadows uppercase without falling through.
+  if ("no_proxy" in env && typeof env.no_proxy === "string" && env.no_proxy.trim() === "") {
+    return false;
+  }
+  const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
   if (!raw) {
     return false;
   }
