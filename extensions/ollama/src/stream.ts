@@ -1463,6 +1463,9 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
+          try {
+            reader.releaseLock();
+          } catch {}
           await release();
         }
       } catch (err) {
