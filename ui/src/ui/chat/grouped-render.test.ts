@@ -1684,6 +1684,7 @@ describe("grouped chat rendering", () => {
             type: "openclaw_pairing_qr",
             image_url: "data:image/png;base64,cXJwbmc=",
             alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() + 60_000,
           },
         ],
         timestamp: Date.now(),
@@ -1694,6 +1695,29 @@ describe("grouped chat rendering", () => {
       pairingQrContainer.querySelector<HTMLImageElement>(".chat-message-image");
     expect(pairingQrImage?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
     expect(pairingQrImage?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+
+    const expiredPairingQrContainer = document.createElement("div");
+    renderAssistantMessage(
+      expiredPairingQrContainer,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,ZXhwaXJlZA==",
+            alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() - 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    expect(expiredPairingQrContainer.querySelector(".chat-message-image")).toBeNull();
+    expect(expiredPairingQrContainer.textContent).toContain("Pairing QR expired");
+    expect(expiredPairingQrContainer.textContent).toContain(
+      "Run /pair qr again to generate a fresh setup code.",
+    );
 
     container = renderUserMedia({
       id: "user-history-image-blocked",
