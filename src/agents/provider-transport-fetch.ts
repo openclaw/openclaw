@@ -51,10 +51,16 @@ const log = createSubsystemLogger("provider-transport-fetch");
  *  without Content-Length. */
 const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
+/** Max bytes read from a non-OK (error) response body before truncation. Error
+ *  payloads are small, so keep this tight to bound memory on a hostile error stream. */
+const SSE_NONOK_BODY_MAX_BYTES = 64 * 1024;
+
 /** Max bytes for the internal SSE sanitization buffer between event boundaries.
- *  A response that cannot find a \n\n boundary within this many characters is
- *  almost certainly hostile or broken — cap the buffer rather than let it grow. */
-const SSE_SANITIZE_BUFFER_MAX_BYTES = 64 * 1024;
+ *  A single legitimate event (e.g. a large reasoning summary on the chatgpt-responses
+ *  API) can far exceed 64 KiB, so bound this at the same 16 MiB ceiling as the
+ *  JSON-synthesis path: only a genuinely boundary-less (hostile/broken) stream trips
+ *  the guard, not a real large event. */
+const SSE_SANITIZE_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -132,7 +138,7 @@ function sanitizeOpenAISdkSseResponse(
     return response;
   }
   if (!response.ok) {
-    return capNonOkResponseBodyLazily(response, SSE_SANITIZE_BUFFER_MAX_BYTES);
+    return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
   if (
     options?.synthesizeJsonAsSse === true &&
