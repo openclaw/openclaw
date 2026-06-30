@@ -417,4 +417,67 @@ import Testing
             userInfo: [NSLocalizedDescriptionKey: "queue enqueue failed"])
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error) == false)
     }
+
+    // MARK: - FIX #98153: Speech provider (non-ElevenLabs) parsing
+
+    @Test func parsesGatewaySpeechProviderAsNativeExecutionMode() {
+        // A Gateway config with only a speech/TTS provider (xiaomi) and no realtime block
+        // must parse as executionMode == .native and NOT trigger realtime mode.
+        let config: [String: Any] = [
+            "talk": [
+                "provider": "xiaomi",
+                "providers": [
+                    "xiaomi": [
+                        "model": "mimo-v2.5-tts",
+                        "voiceId": "mimo_default",
+                        "apiKey": "sk-test",
+                    ],
+                ],
+                "resolved": [
+                    "provider": "xiaomi",
+                    "config": [
+                        "model": "mimo-v2.5-tts",
+                        "voiceId": "mimo_default",
+                    ],
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.activeProvider == "xiaomi")
+        #expect(parsed.executionMode == .native)
+        #expect(parsed.realtimeProvider == nil)
+        #expect(parsed.realtimeModelId == "gpt-realtime-2") // fallback, not used when .native
+    }
+
+    @Test func testRealTimeConfigStillParsesAsRealtimeRelay() {
+        // Regression test: a config with talk.realtime.mode == "realtime"
+        // must still parse as .realtimeRelay (unaffected by #98153 fix).
+        let config: [String: Any] = [
+            "talk": [
+                "provider": "openai",
+                "realtime": [
+                    "provider": "openai",
+                    "model": "gpt-realtime-2",
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .realtimeRelay)
+    }
 }

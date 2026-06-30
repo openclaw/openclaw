@@ -1615,6 +1615,25 @@ final class TalkModeManager: NSObject {
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.lastInterruptedAtSeconds = interruptedAt
                 }
+            } else if self.activeTalkProvider != Self.defaultTalkProvider {
+                // FIX #98153: use Gateway talk.speak for non-ElevenLabs providers.
+                // Native Talk uses local STT → Gateway chat → talk.speak TTS.
+                GatewayDiagnostics.log("talk tts: provider=gateway talk.speak")
+                self.applyVoiceModeDescriptor(TalkVoiceModeDescriptorBuilder.build(
+                    providerId: "gateway",
+                    providerLabel: Self.displayName(forProvider: self.activeTalkProvider),
+                    modelId: nil,
+                    voiceId: nil,
+                    transport: "native",
+                    isRealtime: false))
+                self.startSpeechInterruptionRecognitionIfNeeded()
+                self.statusText = "Speaking…"
+                try await self.playGatewayTalkSpeak(
+                    text: cleaned,
+                    directive: directive,
+                    voiceId: resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId,
+                    modelId: directive?.modelId ?? self.currentModelId ?? self.defaultModelId,
+                    language: language)
             } else {
                 self.logger.warning("tts unavailable; falling back to system voice (missing key or voiceId)")
                 GatewayDiagnostics.log("talk tts: provider=system (missing key or voiceId)")
@@ -1688,6 +1707,64 @@ final class TalkModeManager: NSObject {
             normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
             language: language,
             latencyTier: TalkTTSValidation.validatedLatencyTier(directive?.latencyTier))
+    }
+
+    // FIX #98153: Gateway talk.speak RPC for non-ElevenLabs providers.
+    /// Sends text to the Gateway talk.speak endpoint and plays the returned audio.
+    /// - Throws: If the RPC fails, audio data is empty, or playback fails.
+    private func playGatewayTalkSpeak(
+        text: String,
+        directive: TalkDirective?,
+        voiceId: String?,
+        modelId: String?,
+        language: String) async throws
+    {
+        guard let gateway else {
+            throw NSError(
+                domain: "TalkModeManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Gateway not connected"])
+        }
+
+        // Build talk.speak RPC params as JSON
+        var payload: [String: String] = ["text": text]
+        if let voiceId, !voiceId.isEmpty { payload["voiceId"] = voiceId }
+        if let modelId, !modelId.isEmpty { payload["modelId"] = modelId }
+        if let outputFormat = self.defaultOutputFormat, !outputFormat.isEmpty {
+            payload["outputFormat"] = outputFormat
+        }
+        let jsonData = try JSONSerialization.data(withJSONObject: payload)
+        let json = String(data: jsonData, encoding: .utf8)
+
+        let res = try await gateway.request(
+            method: "talk.speak",
+            paramsJSON: json,
+            timeoutSeconds: 30)
+
+        let result = try JSONDecoder().decode(TalkSpeakResult.self, from: res)
+        guard let audioData = Data(base64Encoded: result.audiobase64), !audioData.isEmpty else {
+            throw NSError(
+                domain: "TalkModeManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio"])
+        }
+
+        // Play returned audio as stream via MP3 player (most providers return MP3)
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            continuation.yield(audioData)
+            continuation.finish()
+        }
+        self.lastPlaybackWasPCM = false
+        let playback = await self.mp3Player.play(stream: stream)
+        if !playback.finished, playback.interruptedAt == nil {
+            throw NSError(
+                domain: "TalkModeManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed"])
+        }
+        self.logger.info(
+            "gateway talk.speak finished provider=\(result.provider, privacy: .public) " +
+                "format=\(result.outputformat ?? "nil", privacy: .public)")
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded() {
@@ -2677,7 +2754,10 @@ extension TalkModeManager {
             realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
         }
 
-        let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider || executionMode != .native
+        // FIX #98153: derive realtime from executionMode only, not from provider name.
+        // Previously activeProvider != Self.defaultTalkProvider caused any non-ElevenLabs
+        // speech provider (xiaomi, microsoft, etc.) to be misclassified as realtime.
+        let usesRealtimeConfig = executionMode != .native
         self.activeTalkProvider = activeProvider
         self.executionMode = executionMode
         self.realtimeWebRTCEnabled = usesRealtimeConfig
