@@ -377,6 +377,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsToRestart = new Set(plan.restartChannels);
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
+    let pluginReloadAborted = false;
     const shouldSkipChannelRestart = () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -392,6 +393,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           params.logChannels.info(
             "channel reload before plugin replace cancelled by in-process restart",
           );
+          pluginReloadAborted = true;
           return;
         }
         const stoppedChannels: ChannelKind[] = [];
@@ -439,18 +441,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           );
         }
       };
-      const pluginReloadResult = await params.reloadPlugins({
-        nextConfig,
-        changedPaths: plan.changedPaths,
-        beforeReplace: stopChannelsBeforePluginReplace,
-      });
-      for (const channel of pluginReloadResult.restartChannels) {
-        channelsToRestart.add(channel);
+      if (!pluginReloadAborted) {
+        const pluginReloadResult = await params.reloadPlugins({
+          nextConfig,
+          changedPaths: plan.changedPaths,
+          beforeReplace: stopChannelsBeforePluginReplace,
+        });
+        for (const channel of pluginReloadResult.restartChannels) {
+          channelsToRestart.add(channel);
+        }
+        activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+        resetPreparedModelRuntimeStateForHotReload();
       }
-      activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
-      resetPreparedModelRuntimeStateForHotReload();
     }
-
     if (plan.restartCron) {
       params.onCronRestart?.();
       state.cronState.cron.stop();
@@ -518,8 +521,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        let cancelledByRestart = false;
-        if (!plan.reloadPlugins) {
+        let cancelledByRestart = pluginReloadAborted;
+        if (!plan.reloadPlugins && !cancelledByRestart) {
           cancelledByRestart = await waitForActiveWorkBeforeChannelReload(
             channelsToRestart,
             nextConfig,
