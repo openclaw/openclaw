@@ -75,6 +75,7 @@ function findLatestOpenParentRun(params: {
 
 function mapOutcomeToLinkStatus(status: string | undefined): DurableWorkflowLinkStatus {
   switch (status) {
+    case "ok":
     case "success":
     case "succeeded":
       return "succeeded";

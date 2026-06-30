@@ -184,7 +184,7 @@ describe("durable subagent bridge", () => {
     recordDurableSubagentTerminal({
       runId: "run_child",
       childSessionKey,
-      status: "success",
+      status: "ok",
       summary: "done",
       env,
     });
@@ -202,6 +202,7 @@ describe("durable subagent bridge", () => {
           taskFlowId: "flow_child",
           taskHash: expect.any(String),
           childSessionKey,
+          status: "ok",
           agentId: "bo",
           requesterAgentId: "bo",
           summary: "done",
@@ -217,6 +218,7 @@ describe("durable subagent bridge", () => {
           taskFlowId: "flow_child",
           taskHash: expect.any(String),
           childSessionKey,
+          status: "ok",
           summary: "done",
         },
       });

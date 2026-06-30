@@ -1,6 +1,14 @@
 // Verifies sessions_spawn lifecycle hooks, cleanup, and completion announcements.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
+import { openDurableWorkflowSqliteStore } from "../durable/sqlite-store.js";
+import {
+  DURABLE_AGENT_TURN_WORKFLOW_ID,
+  DURABLE_SUBAGENT_RUN_WORKFLOW_ID,
+} from "../durable/workflow-ids.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   testing as bundleMcpRuntimeTesting,
@@ -315,6 +323,111 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       return call.method === "agent" && params?.lane === "subagent";
     });
     expect(childAgentCall?.timeoutMs).toBe(125_000);
+  });
+
+  it("maps successful agent.wait ok outcomes to durable succeeded child links", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-spawn-durable-"));
+    const dbPath = path.join(dir, "state", "openclaw.sqlite");
+    const previousDurableWorkflows = process.env.OPENCLAW_DURABLE_WORKFLOWS;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const parentSessionKey = "main";
+    const requesterRunId = "run_parent_ok";
+    let parentWorkflowRunId = "";
+
+    process.env.OPENCLAW_DURABLE_WORKFLOWS = "1";
+    process.env.OPENCLAW_STATE_DIR = dir;
+    try {
+      const setupStore = openDurableWorkflowSqliteStore({ path: dbPath });
+      try {
+        parentWorkflowRunId = setupStore.createRun({
+          workflowId: DURABLE_AGENT_TURN_WORKFLOW_ID,
+          status: "running",
+          recoveryState: "running",
+          idempotencyKey: requesterRunId,
+          sourceType: "agent_turn",
+          sourceRef: parentSessionKey,
+          metadata: { sessionKey: parentSessionKey },
+          now: 100,
+        }).workflowRunId;
+      } finally {
+        setupStore.close();
+      }
+
+      const ctx = setupSessionsSpawnGatewayMock({
+        includeChatHistory: true,
+        agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
+      });
+      const tool = await getSessionsSpawnTool({
+        agentSessionKey: "main",
+        agentChannel: "whatsapp",
+        requesterRunId,
+      });
+
+      await executeSpawnAndExpectAccepted({
+        tool,
+        callId: "call-durable-ok",
+        cleanup: "keep",
+        label: "durable-ok",
+      });
+
+      const child = ctx.getChild();
+      if (!child.runId) {
+        throw new Error("missing child runId");
+      }
+      if (!child.sessionKey) {
+        throw new Error("missing child sessionKey");
+      }
+      await waitForSessionsSpawnEvent(
+        "durable ok outcome",
+        () =>
+          ctx.waitCalls.some((call) => call.runId === child.runId) &&
+          getLatestSubagentRunByChildSessionKey(child.sessionKey!)?.outcome?.status === "ok",
+      );
+      await waitForRunCleanup(child.sessionKey);
+
+      const assertStore = openDurableWorkflowSqliteStore({ path: dbPath });
+      try {
+        const durableChild = assertStore
+          .listRuns({ limit: 50 })
+          .find(
+            (run) =>
+              run.workflowId === DURABLE_SUBAGENT_RUN_WORKFLOW_ID &&
+              run.idempotencyKey === child.runId,
+          );
+        expect(durableChild).toMatchObject({
+          status: "succeeded",
+          recoveryState: "terminal",
+          parentWorkflowRunId,
+          metadata: expect.objectContaining({
+            childSessionKey: child.sessionKey,
+            status: "ok",
+          }),
+        });
+        const parentLink = assertStore.listParentLinks(durableChild!.workflowRunId)[0];
+        expect(parentLink).toMatchObject({
+          parentWorkflowRunId,
+          status: "succeeded",
+          metadata: expect.objectContaining({
+            childSessionKey: child.sessionKey,
+            status: "ok",
+          }),
+        });
+      } finally {
+        assertStore.close();
+      }
+    } finally {
+      if (previousDurableWorkflows === undefined) {
+        delete process.env.OPENCLAW_DURABLE_WORKFLOWS;
+      } else {
+        process.env.OPENCLAW_DURABLE_WORKFLOWS = previousDurableWorkflows;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
