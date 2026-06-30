@@ -92,9 +92,7 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
-        void emitPreparedGatewayRestart(undefined, scheduledReason).catch((emitErr: unknown) => {
-          restartLog.warn(`scheduled restart emission failed: ${String(emitErr)}`);
-        });
+        void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }
       const cfg = getRuntimeConfig();
@@ -567,6 +565,9 @@ async function emitPreparedGatewayRestart(
 
   const emitted = emitGatewayRestart(reasonOverride, intent);
   if (!emitted) {
+    restartLog.warn(
+      "restart emission failed: another signal pending or emission rolled back",
+    );
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
 }
@@ -598,18 +599,14 @@ export function deferGatewayRestartUntilIdle(opts: {
     opts.hooks?.onCheckError?.(err);
     void emitPreparedGatewayRestart(
       opts.emitHooks, opts.reason,
-    ).catch((emitErr: unknown) => {
-      restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-    });
+    );
     return;
   }
   if (pending <= 0) {
     opts.hooks?.onReady?.();
     void emitPreparedGatewayRestart(
       opts.emitHooks, opts.reason,
-    ).catch((emitErr: unknown) => {
-      restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-    });
+    );
     return;
   }
 
@@ -626,9 +623,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       opts.hooks?.onCheckError?.(err);
       void emitPreparedGatewayRestart(
         opts.emitHooks, opts.reason,
-      ).catch((emitErr: unknown) => {
-        restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-      });
+      );
       return;
     }
     if (current <= 0) {
@@ -637,9 +632,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       opts.hooks?.onReady?.();
       void emitPreparedGatewayRestart(
         opts.emitHooks, opts.reason,
-      ).catch((emitErr: unknown) => {
-        restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-      });
+      );
       return;
     }
     const elapsedMs = Date.now() - startedAt;
@@ -653,9 +646,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       opts.hooks?.onTimeout?.(current, elapsedMs);
       void emitPreparedGatewayRestart(
         opts.emitHooks, opts.reason, opts.timeoutIntent,
-      ).catch((emitErr: unknown) => {
-        restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-      });
+      );
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
@@ -907,9 +898,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       }
       void emitPreparedGatewayRestart(
         undefined, reason,
-      ).catch((emitErr: unknown) => {
-        restartLog.warn(`restart emission failed: ${String(emitErr)}`);
-      });
+      );
       return {
         ok: true,
         pid: process.pid,
