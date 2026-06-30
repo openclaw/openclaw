@@ -186,7 +186,7 @@ export function createDiscordMessageHandler(
           hasDiscordMessageStickers(message),
       });
     },
-    onFlush: async (entries) => {
+    onFlush: async (entries, context) => {
       const last = entries.at(-1);
       if (!last) {
         return;
@@ -226,7 +226,12 @@ export function createDiscordMessageHandler(
             activeFeedback: prestartedTypingFeedback,
           });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          const job = buildDiscordInboundJob(ctx, { replayKeys });
+          if (context?.allowDuringGatewayDrain) {
+            messageRunQueue.enqueueInternal(job);
+          } else {
+            messageRunQueue.enqueue(job);
+          }
           return;
         }
         const combinedBaseText = entries
@@ -295,7 +300,12 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+        const job = buildDiscordInboundJob(ctx, { replayKeys });
+        if (context?.allowDuringGatewayDrain) {
+          messageRunQueue.enqueueInternal(job);
+        } else {
+          messageRunQueue.enqueue(job);
+        }
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
           releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
@@ -348,7 +358,10 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = messageRunQueue.deactivate;
+  handler.deactivate = () => {
+    debouncer.unregister();
+    messageRunQueue.deactivate();
+  };
 
   return handler;
 }

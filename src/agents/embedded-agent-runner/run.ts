@@ -668,6 +668,10 @@ async function runEmbeddedAgentInternal(
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
+  const withGatewayDrainOption = (
+    opts?: CommandQueueEnqueueOptions,
+  ): CommandQueueEnqueueOptions | undefined =>
+    params.allowGatewayDrain ? { ...opts, allowDuringGatewayDrain: true } : opts;
   const throwIfAborted = () => {
     if (!params.abortSignal?.aborted) {
       return;
@@ -686,7 +690,7 @@ async function runEmbeddedAgentInternal(
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
     withEmbeddedRunLaneTimeout(
       {
-        ...opts,
+        ...withGatewayDrainOption(opts),
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -721,7 +725,7 @@ async function runEmbeddedAgentInternal(
   };
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const globalOpts: CommandQueueEnqueueOptions = {
-      ...opts,
+      ...withGatewayDrainOption(opts),
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = () => {
@@ -763,7 +767,10 @@ async function runEmbeddedAgentInternal(
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const sessionOpts: CommandQueueEnqueueOptions = {
+      ...withGatewayDrainOption(opts),
+      priority: sessionQueuePriority,
+    };
     const taskWithLaneAdmission = () => {
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       return task();

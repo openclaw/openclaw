@@ -92,7 +92,10 @@ function createImmediateInboundDebounce() {
           params.onError?.(err, [item]);
         }
       },
-      flushKey: async () => {},
+      flushKey: async (_key: string) => {},
+      flushKeyWithCount: async (_key: string) => ({ flushed: 0 }),
+      flushAll: async () => 0,
+      unregister: () => {},
       cancelKey: () => false,
     }),
   };

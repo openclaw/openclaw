@@ -92,6 +92,8 @@ export type FollowupRun = {
   originatingReplyToMode?: ReplyToMode;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
+  /** Internal restart-drain marker for follow-ups that were already accepted before ingress closed. */
+  allowDuringGatewayDrain?: boolean;
   run: {
     agentId: string;
     agentDir: string;

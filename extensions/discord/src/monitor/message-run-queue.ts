@@ -25,6 +25,7 @@ type DiscordMessageRunQueueParams = {
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
+  enqueueInternal: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };
 
@@ -138,6 +139,28 @@ export function createDiscordMessageRunQueue(
       }
       skippedCleanup.add(cleanupSkipped);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        // Once the task starts, normal process/commit handling owns cleanup.
+        // Leaving it in skippedCleanup would double-release replay/typing state.
+        skippedCleanup.delete(cleanupSkipped);
+        await processDiscordQueuedMessage({
+          job,
+          lifecycleSignal,
+          replayGuard,
+          testing: params.testing,
+        });
+      });
+    },
+    enqueueInternal(job) {
+      const cleanupSkipped = () => {
+        cleanupSkippedDiscordQueuedMessage({ job, replayGuard });
+      };
+      if (!lifecycleActive) {
+        cleanupSkipped();
+        return;
+      }
+      skippedCleanup.add(cleanupSkipped);
+      const enqueue = runQueue.enqueueInternal ?? runQueue.enqueue;
+      enqueue(job.queueKey, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay/typing state.
         skippedCleanup.delete(cleanupSkipped);

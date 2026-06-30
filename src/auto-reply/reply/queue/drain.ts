@@ -9,6 +9,11 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
+import {
+  getGatewayDrainingStartedAt,
+  isGatewayDrainInternalContext,
+  runWithGatewayDrainInternalContext,
+} from "../../../process/command-queue.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -685,6 +690,32 @@ async function drainOverflowSummaryGroup(params: {
   return true;
 }
 
+function shouldRunFollowupDuringGatewayDrain(run: FollowupRun): boolean {
+  if (run.allowDuringGatewayDrain || isGatewayDrainInternalContext()) {
+    return true;
+  }
+  const drainingStartedAt = getGatewayDrainingStartedAt();
+  return drainingStartedAt !== undefined && run.enqueuedAt <= drainingStartedAt;
+}
+
+async function runFollowupWithDrainContext(
+  run: FollowupRun,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<void> {
+  if (!shouldRunFollowupDuringGatewayDrain(run)) {
+    await runFollowup(run);
+    return;
+  }
+  await runWithGatewayDrainInternalContext(async () => {
+    await runFollowup({ ...run, allowDuringGatewayDrain: true });
+  });
+}
+
+function queueWasAcceptedBeforeGatewayDrain(lastEnqueuedAt: number): boolean {
+  const drainingStartedAt = getGatewayDrainingStartedAt();
+  return drainingStartedAt !== undefined && lastEnqueuedAt <= drainingStartedAt;
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -701,6 +732,9 @@ export function scheduleFollowupDrain(
     return;
   }
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const runTrustedFollowup = async (run: FollowupRun) => {
+    await runFollowupWithDrainContext(run, effectiveRunFollowup);
+  };
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
@@ -751,9 +785,26 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: effectiveRunFollowup,
+            run: runTrustedFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryOnly = createQueueSummaryDelivery({ queue });
+            const run = queue.lastRun;
+            if (summaryOnly && run) {
+              await runQueueSummaryDelivery(queue, summaryOnly, async () => {
+                await runTrustedFollowup({
+                  prompt: summaryOnly.prompt,
+                  run,
+                  enqueuedAt: Date.now(),
+                  allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(
+                    queue.lastEnqueuedAt,
+                  ),
+                  ...collectRuntimeMetadata(summaryOnly.sources),
+                  ...collectQueuedImages(queue.items),
+                });
+              });
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {
@@ -761,11 +812,27 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
+          const summaryDelivery = createQueueSummaryDelivery({ queue });
+          const summary = summaryDelivery?.prompt;
           const contextGroups = splitCollectItemsByDeliveryContext(items);
           if (contextGroups.length === 0) {
-            break;
+            const run = queue.lastRun;
+            if (!summaryDelivery || !run) {
+              break;
+            }
+            await runQueueSummaryDelivery(queue, summaryDelivery, async () => {
+              await runTrustedFollowup({
+                prompt: summaryDelivery.prompt,
+                run,
+                enqueuedAt: Date.now(),
+                allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
+                ...collectRuntimeMetadata(summaryDelivery.sources),
+              });
+            });
+            continue;
           }
 
+          let pendingSummary = summary;
           for (const groupItems of contextGroups) {
             const groupSource = groupItems.at(-1);
             const run = groupSource?.run ?? queue.lastRun;
@@ -777,10 +844,11 @@ export function scheduleFollowupDrain(
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: groupItems,
+              summary: pendingSummary,
               renderItem: renderCollectItem,
             });
             const drainGroup = async () => {
-              await effectiveRunFollowup({
+              await runTrustedFollowup({
                 prompt,
                 run,
                 messageId:
@@ -790,15 +858,52 @@ export function scheduleFollowupDrain(
                 ...routing,
                 ...collectRuntimeMetadata(groupItems),
                 ...collectQueuedImages(groupItems),
+                allowDuringGatewayDrain: groupItems.some(shouldRunFollowupDuringGatewayDrain),
               });
             };
-            await drainGroup();
+            if (pendingSummary && summaryDelivery) {
+              await runQueueSummaryDelivery(queue, summaryDelivery, drainGroup);
+            } else {
+              await drainGroup();
+            }
             removeQueuedItemsByRef(queue.items, groupItems);
+            if (pendingSummary) {
+              pendingSummary = undefined;
+            }
           }
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
+        const summaryDelivery = createQueueSummaryDelivery({ queue });
+        if (summaryDelivery) {
+          const run = queue.lastRun;
+          if (!run) {
+            break;
+          }
+          let drained = false;
+          await runQueueSummaryDelivery(queue, summaryDelivery, async () => {
+            drained = await drainNextQueueItem(queue.items, async (item) => {
+                  await runTrustedFollowup({
+                    prompt: summaryDelivery.prompt,
+                    run,
+                    enqueuedAt: Date.now(),
+                    allowDuringGatewayDrain: shouldRunFollowupDuringGatewayDrain(item),
+                    originatingChannel: item.originatingChannel,
+                    originatingTo: item.originatingTo,
+                    originatingAccountId: item.originatingAccountId,
+                    originatingThreadId: item.originatingThreadId,
+                    ...collectRuntimeMetadata([item], summaryDelivery.sources.at(-1)),
+                    ...collectQueuedImages([item]),
+                  });
+            });
+          });
+          if (!drained) {
+            break;
+          }
+          continue;
+        }
+
+        if (!(await drainNextQueueItem(queue.items, runTrustedFollowup))) {
           break;
         }
       }

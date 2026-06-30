@@ -19,6 +19,9 @@ const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
+const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+const CHANNEL_RUN_QUEUE_DRAIN_TIMEOUT_MS = 5_000;
+const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
@@ -469,8 +472,12 @@ export async function runGatewayLoop(params: {
                 listActiveEmbeddedRunSessionIds,
                 listActiveEmbeddedRunSessionKeys,
                 markRestartAbortedMainSessions,
+                runWithGatewayDrainInternalContext,
+                flushAllInboundDebouncers,
+                waitForChannelRunQueueDrain,
                 waitForActiveEmbeddedRuns,
                 waitForActiveTasks,
+                waitForFollowupQueueDrain,
               } = await loadGatewayLifecycleRuntimeModule();
               const collectActiveRestartSessionKeys = () => {
                 return new Set<string>(listActiveEmbeddedRunSessionKeys());
@@ -537,6 +544,19 @@ export async function runGatewayLoop(params: {
               // Reject new enqueues immediately during the drain window so
               // sessions get an explicit restart error instead of silent task loss.
               await markRestartDraining();
+              // Drain in-process debounce buffers (per-channel) into followup
+              // queues so messages buffered when SIGUSR1 fires are not lost.
+              // See PR #46303.
+              const flushedBuffers = await runWithGatewayDrainInternalContext(() =>
+                flushAllInboundDebouncers({
+                  timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
+                }),
+              );
+              if (flushedBuffers > 0) {
+                gatewayLog.info(
+                  `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
+                );
+              }
               const activeTasks = getActiveTaskCount();
               const activeRuns = getActiveEmbeddedRunCount();
               activeTasksAtDrainStart = activeTasks;
@@ -605,6 +625,30 @@ export async function runGatewayLoop(params: {
                     }
                   }
                 }
+              }
+
+              // After active tasks/embedded runs have drained, give per-channel
+              // run queues and followup queues a chance to flush the items
+              // that may have just been enqueued by flushAllInboundDebouncers
+              // above (or by completed agent turns). See PR #46303.
+              const channelRunQueueResult = await waitForChannelRunQueueDrain(
+                CHANNEL_RUN_QUEUE_DRAIN_TIMEOUT_MS,
+              );
+              if (channelRunQueueResult.drained) {
+                gatewayLog.info("channel run queues drained before restart");
+              } else {
+                gatewayLog.warn(
+                  `channel run queue drain timeout; ${channelRunQueueResult.remaining} item(s) still pending`,
+                );
+              }
+
+              const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+              if (followupResult.drained) {
+                gatewayLog.info("followup queues drained before restart");
+              } else {
+                gatewayLog.warn(
+                  `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+                );
               }
             },
             () => [

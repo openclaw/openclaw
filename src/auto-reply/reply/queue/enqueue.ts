@@ -3,6 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  isGatewayDrainInternalContext,
+  isGatewayDraining,
+} from "../../../process/command-queue.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import {
   createOverflowSummaryRetrySource,
@@ -99,6 +103,12 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  if (isGatewayDraining() && !run.allowDuringGatewayDrain && !isGatewayDrainInternalContext()) {
+    return false;
+  }
+  if (isGatewayDrainInternalContext()) {
+    run.allowDuringGatewayDrain = true;
+  }
   if (isFollowupRunAborted(run)) {
     return false;
   }
