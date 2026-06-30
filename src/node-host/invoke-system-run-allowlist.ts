@@ -165,11 +165,19 @@ export async function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segments.length === 1 &&
-    params.segments[0]?.argv.length > 0
+    params.segments.length === 1
   ) {
-    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
-    execArgv = params.segments[0].argv;
+    // Bind execution to the path resolved during allowlist analysis. A bare
+    // executable would let Windows search cwd before PATH and run a shadow binary.
+    const segment = params.segments[0];
+    const resolvedExecutable =
+      segment.resolution?.execution.resolvedRealPath?.trim() ??
+      segment.resolution?.execution.resolvedPath?.trim();
+    const plannedArgv = resolvePlannedSegmentArgv(segment);
+    if (!resolvedExecutable || !plannedArgv) {
+      return null;
+    }
+    execArgv = plannedArgv;
   }
   if (
     params.security === "allowlist" &&

@@ -1,6 +1,6 @@
 /** Tests system.run allowlist planning, output truncation, and argv resolution. */
 import { describe, expect, it } from "vitest";
-import { resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
+import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { resolveSystemRunExecArgv } from "./invoke-system-run-allowlist.js";
@@ -18,7 +18,65 @@ function resolveAllowlistApprovals() {
   });
 }
 
+function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
+  return resolveSystemRunExecArgv({
+    plannedAllowlistArgv: undefined,
+    argv: ["powershell.exe", "-Command", "safe --version"],
+    security: "allowlist",
+    approvals: resolveAllowlistApprovals(),
+    safeBins: new Set(),
+    safeBinProfiles: {},
+    trustedSafeBinDirs: new Set(),
+    skillBins: [],
+    autoAllowSkills: false,
+    isWindows: true,
+    policy: {
+      approvedByAsk: false,
+      analysisOk: true,
+      allowlistSatisfied: true,
+    },
+    shellCommand: "safe --version",
+    segments: [segment],
+    segmentSatisfiedBy: ["allowlist"],
+    authorizationPlan: undefined,
+    cwd: "C:\\workspace",
+    env: undefined,
+  });
+}
+
 describe("resolveSystemRunExecArgv", () => {
+  it("pins Windows shell execution to the resolved allowlisted executable", async () => {
+    const trustedExecutable = "C:\\trusted-bin\\safe.exe";
+    const result = await resolveWindowsShellExecArgv({
+      raw: "safe --version",
+      argv: ["safe", "--version"],
+      resolution: {
+        execution: {
+          rawExecutable: "safe",
+          resolvedPath: trustedExecutable,
+          executableName: "safe.exe",
+        },
+        policy: {
+          rawExecutable: "safe",
+          resolvedPath: trustedExecutable,
+          executableName: "safe.exe",
+        },
+      },
+    });
+
+    expect(result).toEqual([trustedExecutable, "--version"]);
+  });
+
+  it("fails closed when Windows shell execution has no resolved plan", async () => {
+    const result = await resolveWindowsShellExecArgv({
+      raw: "safe --version",
+      argv: ["safe", "--version"],
+      resolution: null,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when shell rewriting has no authorization plan",
     async () => {
