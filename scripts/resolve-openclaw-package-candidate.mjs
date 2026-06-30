@@ -26,6 +26,7 @@ const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -95,39 +96,51 @@ export function parseArgs(argv) {
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = (name) => {
+    const readValue = (name, readOptions = {}) => {
       const value = argv[(index += 1)];
-      if (value === undefined) {
+      if (
+        value === undefined ||
+        (!readOptions.allowEmpty && value === "") ||
+        value.startsWith("-")
+      ) {
         throw new Error(`${name} requires a value`);
       }
       return value;
     };
     if (arg === "--artifact-dir") {
-      options.artifactDir = readValue(arg);
+      setOnce(arg, "artifactDir", readValue(arg));
     } else if (arg === "--github-output") {
-      options.githubOutput = readValue(arg);
+      setOnce(arg, "githubOutput", readValue(arg));
     } else if (arg === "--metadata") {
-      options.metadata = readValue(arg);
+      setOnce(arg, "metadata", readValue(arg));
     } else if (arg === "--output-dir") {
-      options.outputDir = readValue(arg);
+      setOnce(arg, "outputDir", readValue(arg));
     } else if (arg === "--output-name") {
-      options.outputName = readValue(arg);
+      setOnce(arg, "outputName", readValue(arg));
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg).toLowerCase();
+      setOnce(arg, "packageSha256", readValue(arg, { allowEmpty: true }).toLowerCase());
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg);
+      setOnce(arg, "packageRef", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg);
+      setOnce(arg, "packageSpec", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg);
+      setOnce(arg, "packageUrl", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--source") {
-      options.source = readValue(arg);
+      setOnce(arg, "source", readValue(arg));
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg);
+      setOnce(arg, "trustedSourceId", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--trusted-source-policy") {
-      options.trustedSourcePolicy = readValue(arg);
+      setOnce(arg, "trustedSourcePolicy", readValue(arg));
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
@@ -179,8 +192,30 @@ export function resolveNpmPackageCandidatePackRunner(packageSpec, outputDir, par
   });
 }
 
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  if (valueMs === undefined) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(valueMs, 1);
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      options.killAfterMs,
+      COMMAND_TIMEOUT_KILL_AFTER_MS,
+    );
     const useProcessGroup = process.platform !== "win32";
     const spawnOptions = {
       cwd: options.cwd ?? ROOT_DIR,
@@ -201,21 +236,20 @@ function run(command, args, options = {}) {
     const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
-      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
-      forceKillAt = Date.now() + killAfterMs;
+      forceKillAt = Date.now() + resolvedKillAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         forceKillAt = undefined;
         killChild("SIGKILL");
-      }, killAfterMs);
+      }, resolvedKillAfterMs);
     };
     const timeout =
-      options.timeoutMs === undefined
+      resolvedTimeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
             terminateChild();
-          }, options.timeoutMs);
+          }, resolvedTimeoutMs);
     timeout?.unref?.();
     ACTIVE_CHILD_KILLERS.add(killChild);
     let stdout = { text: "", truncatedChars: 0 };
@@ -253,14 +287,14 @@ function run(command, args, options = {}) {
       }
       if (timedOut) {
         const timeoutError = new Error(
-          `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
+          `${command} ${args.join(" ")} timed out after ${resolvedTimeoutMs}ms`,
         );
         if (killTimer) {
           void finishTimedOutProcessTree(child, {
             forceKillAt,
             killChild,
             killTimer,
-            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            killAfterMs: resolvedKillAfterMs,
             useProcessGroup,
           }).then(() => reject(timeoutError), reject);
           return;
@@ -1247,7 +1281,10 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(
+    options.timeoutMs,
+    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
+  );
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);

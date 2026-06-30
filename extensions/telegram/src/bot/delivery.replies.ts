@@ -39,7 +39,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
-import { buildInlineKeyboard } from "../send.js";
+import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -67,6 +67,9 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  reaction?: {
+    emoji?: unknown;
+  };
 };
 
 type TelegramReplyQuoteForSend = {
@@ -323,36 +326,39 @@ async function sendTelegramVoiceFallbackText(opts: {
   silent?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
+  replyToMode?: ReplyToMode;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
-  let appliedReplyTo = false;
-  for (const chunk of chunks) {
-    // Only apply reply reference, quote text, and buttons to the first chunk.
-    const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
-    const applyQuoteForChunk = !appliedReplyTo;
-    const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.text, opts.runtime, {
-      replyToMessageId: replyToForChunk,
-      replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
-      replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
-      replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
-      replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
-      thread: opts.thread,
-      textMode: chunk.textMode,
-      plainText: chunk.plainText,
-      richMessages: opts.richMessages,
-      linkPreview: opts.linkPreview,
-      tableMode: opts.tableMode,
-      silent: opts.silent,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
-    });
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
-    }
-  }
+  await sendChunkedTelegramReplyText({
+    chunks,
+    progress: { hasReplied: false, hasDelivered: false },
+    replyToId: opts.replyToId,
+    replyToMode: opts.replyToMode ?? "first",
+    replyMarkup: opts.replyMarkup,
+    replyQuoteText: opts.replyQuoteText,
+    quoteOnlyOnFirstChunk: true,
+    sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.text, opts.runtime, {
+        replyToMessageId,
+        replyQuoteMessageId: replyToMessageId ? opts.replyQuoteMessageId : undefined,
+        replyQuoteText,
+        replyQuotePosition: replyToMessageId ? opts.replyQuotePosition : undefined,
+        replyQuoteEntities: replyToMessageId ? opts.replyQuoteEntities : undefined,
+        thread: opts.thread,
+        textMode: chunk.textMode,
+        plainText: chunk.plainText,
+        richMessages: opts.richMessages,
+        linkPreview: opts.linkPreview,
+        tableMode: opts.tableMode,
+        silent: opts.silent,
+        replyMarkup,
+      });
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+    },
+  });
   return firstDeliveredMessageId;
 }
 
@@ -532,6 +538,7 @@ async function deliverMediaReply(params: {
               silent: params.silent,
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
+              replyToMode: params.replyToMode,
             });
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
@@ -823,7 +830,16 @@ export async function deliverReplies(params: {
     if (reply && resolvedReplyText !== (reply.text ?? "")) {
       reply = { ...reply, text: resolvedReplyText };
     }
-    if (!resolvedReplyText && !hasMedia) {
+    const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
+    const reactionEmoji =
+      typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
+    const replyToId =
+      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    if (reactionEmoji && typeof replyToId !== "number") {
+      params.runtime.error?.(danger("Telegram reaction requires a reply target"));
+      continue;
+    }
+    if (!resolvedReplyText && !hasMedia && !reactionEmoji) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -838,8 +854,6 @@ export async function deliverReplies(params: {
         ? reply.spokenText
         : undefined;
     const hookContent = spokenHookContent ?? rawContent;
-    const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
       replyToId,
       replyQuoteByMessageId: params.replyQuoteByMessageId,
@@ -882,7 +896,6 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
-      const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(
         resolveTelegramInlineButtons({
           buttons: telegramData?.buttons,
@@ -891,7 +904,23 @@ export async function deliverReplies(params: {
         }),
       );
       let firstDeliveredMessageId: number | undefined;
-      if (mediaList.length === 0) {
+      if (reactionEmoji && typeof replyToId === "number") {
+        const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
+          cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
+          token: params.token,
+          accountId: params.accountId,
+          api: params.bot.api,
+          verbose: false,
+        });
+        if (reactionResult.ok) {
+          progress.hasDelivered = true;
+          progress.deliveredCount += 1;
+        } else {
+          params.runtime.error?.(danger(reactionResult.warning));
+          continue;
+        }
+      }
+      if (mediaList.length === 0 && resolvedReplyText) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
           chatId: params.chatId,
@@ -912,7 +941,7 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
-      } else {
+      } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
           reply,
           mediaList,

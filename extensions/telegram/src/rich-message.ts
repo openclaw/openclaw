@@ -96,6 +96,16 @@ type TelegramApiWithRichRaw = Bot["api"] & {
   raw?: TelegramRichRawApi;
 };
 
+const TELEGRAM_RICH_EMAIL_TOKEN_RE =
+  /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/iu;
+
+function shouldSkipTelegramRichEntityDetection(
+  text: string,
+  options?: Pick<TelegramRichMessageOptions, "skipEntityDetection">,
+): boolean {
+  return options?.skipEntityDetection === true || TELEGRAM_RICH_EMAIL_TOKEN_RE.test(text);
+}
+
 export function getTelegramRichRawApi(api: Bot["api"]): TelegramRichRawApi {
   const raw = (api as TelegramApiWithRichRaw).raw;
   if (raw) {
@@ -164,7 +174,11 @@ export function buildTelegramRichMarkdown(
   markdown: string,
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
-  return buildTelegramRichHtml(markdownToTelegramRichHtml(markdown, options), options);
+  const richOptions = {
+    ...options,
+    skipEntityDetection: shouldSkipTelegramRichEntityDetection(markdown, options),
+  };
+  return buildTelegramRichHtml(markdownToTelegramRichHtml(markdown, richOptions), richOptions);
 }
 
 export function buildTelegramRichHtml(
@@ -172,7 +186,7 @@ export function buildTelegramRichHtml(
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
   const safeHtml = prepareTelegramRichHtml(html);
-  return options?.skipEntityDetection === true
+  return shouldSkipTelegramRichEntityDetection(safeHtml, options)
     ? { html: safeHtml, skip_entity_detection: true }
     : { html: safeHtml };
 }
@@ -418,13 +432,14 @@ export function splitTelegramRichMessageTextChunks(params: {
   tableMode?: MarkdownTableMode;
   skipEntityDetection?: boolean;
 }): TelegramRichTextChunk[] {
+  const markdownOptions = {
+    tableMode: params.tableMode,
+    skipEntityDetection: shouldSkipTelegramRichEntityDetection(params.text, {
+      skipEntityDetection: params.skipEntityDetection,
+    }),
+  };
   const renderMarkdownChunk = (chunk: string) =>
-    prepareTelegramRichHtml(
-      markdownToTelegramRichHtml(chunk, {
-        tableMode: params.tableMode,
-        skipEntityDetection: params.skipEntityDetection,
-      }),
-    );
+    prepareTelegramRichHtml(markdownToTelegramRichHtml(chunk, markdownOptions));
   const htmlChunks =
     params.textMode === "html"
       ? splitPreparedTelegramRichHtml({

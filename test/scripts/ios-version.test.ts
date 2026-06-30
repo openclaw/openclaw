@@ -29,6 +29,18 @@ describe("resolveIosVersion", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe("Missing value for --field.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-version.ts", "--field", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
   });
 
   it("prints selected fields from the CLI", () => {
@@ -70,6 +82,18 @@ describe("resolveIosVersion", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe("Missing value for --root.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/ios-sync-versioning.ts", "--root", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
   });
 
   it("parses pinned release versions and derives Apple marketing fields", () => {

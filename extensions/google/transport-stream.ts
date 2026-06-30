@@ -1266,6 +1266,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         });
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        const toolCallBlocksById = new Map<
+          string,
+          Extract<GoogleTransportContentBlock, { type: "toolCall" }>
+        >();
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1356,18 +1360,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   currentBlockIndex = -1;
                 }
                 const providedId = part.functionCall.id;
-                const isDuplicate = output.content.some(
-                  (block) => block.type === "toolCall" && block.id === providedId,
-                );
                 const existingToolCall =
-                  typeof providedId === "string"
-                    ? output.content.find(
-                        (
-                          block,
-                        ): block is Extract<GoogleTransportContentBlock, { type: "toolCall" }> =>
-                          block.type === "toolCall" && block.id === providedId,
-                      )
-                    : undefined;
+                  typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
+                const isDuplicate = existingToolCall !== undefined;
                 const toolCallId =
                   providedId && !isDuplicate
                     ? providedId
@@ -1383,6 +1378,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   ),
                 };
                 output.content.push(toolCall);
+                if (!toolCallBlocksById.has(toolCall.id)) {
+                  toolCallBlocksById.set(toolCall.id, toolCall);
+                }
                 const blockIndex = output.content.length - 1;
                 stream.push({
                   type: "toolcall_start",
@@ -1406,7 +1404,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           }
           if (typeof candidate?.finishReason === "string") {
             output.stopReason = mapStopReasonString(candidate.finishReason);
-            if (output.content.some((block) => block.type === "toolCall")) {
+            // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+            // Google stop may promote parsed calls into an executable tool-use turn.
+            if (
+              output.stopReason === "stop" &&
+              output.content.some((block) => block.type === "toolCall")
+            ) {
               output.stopReason = "toolUse";
             }
           }

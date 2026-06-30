@@ -34,6 +34,7 @@ import {
   runQaCli,
   startAgentRun,
   waitForAgentRun,
+  waitForAgentHistoryReply,
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
@@ -595,6 +596,7 @@ describe("qa suite runtime agent process helpers", () => {
       transport: {
         buildAgentDelivery: vi.fn(() => ({
           channel: "qa-channel",
+          to: "transport-target",
           replyChannel: "reply-channel",
           replyTo: "reply-target",
         })),
@@ -616,11 +618,13 @@ describe("qa suite runtime agent process helpers", () => {
           replyChannel?: string;
           replyTo?: string;
           sessionKey?: string;
+          to?: string;
         }
       | undefined;
     expect(agentPayload?.sessionKey).toBe("session-1");
     expect(agentPayload?.message).toBe("hello");
     expect(agentPayload?.channel).toBe("qa-channel");
+    expect(agentPayload?.to).toBe("transport-target");
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
@@ -676,6 +680,92 @@ describe("qa suite runtime agent process helpers", () => {
     ).rejects.toThrow("agent.wait returned error: boom");
   });
 
+  it("accepts completed agent wait status as a successful terminal run", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-completed" })
+      .mockResolvedValueOnce({ status: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-completed" },
+      waited: { status: "completed" },
+    });
+  });
+
+  it("accepts malformed completed wait errors as successful terminal runs", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-error-completed" })
+      .mockResolvedValueOnce({ status: "error", error: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-error-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-error-completed" },
+      waited: { status: "error", error: "completed" },
+    });
+  });
+
+  it("waits for the latest assistant history reply", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "still working" }] })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "HISTORY-REPLY-OK" }],
+          },
+        ],
+      });
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history",
+        (text) => text === "HISTORY-REPLY-OK",
+        1_000,
+        1,
+      ),
+    ).resolves.toMatchObject({
+      text: "HISTORY-REPLY-OK",
+    });
+    expect(gatewayCall).toHaveBeenLastCalledWith(
+      "chat.history",
+      { sessionKey: "session-history", limit: 12 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
   it("waits for a specific agent run id", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
 
@@ -698,7 +788,7 @@ describe("qa suite runtime agent process helpers", () => {
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
-      { runId: "run-oversized", timeoutMs: 9e15 },
+      { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
       { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });

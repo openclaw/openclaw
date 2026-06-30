@@ -89,28 +89,48 @@ enum SettingsNotificationStatus: Equatable {
     var text: String {
         switch self {
         case .checking: "Checking"
-        case .allowed: "Allowed"
-        case .notAllowed: "Not Allowed"
-        case .notSet: "Not Set"
+        case .allowed: "Enabled"
+        case .notAllowed: "Denied"
+        case .notSet: "Not Enabled"
         case .unknown: "Unknown"
         }
     }
 
     var actionTitle: String {
         switch self {
-        case .notSet, .checking:
-            "Request Access"
-        case .allowed, .notAllowed, .unknown:
-            "Open System Settings"
+        case .notSet:
+            "Enable Notifications"
+        case .checking:
+            "Checking"
+        case .allowed:
+            "Manage in iOS Settings"
+        case .notAllowed, .unknown:
+            "Open iOS Settings"
         }
     }
 
     var actionIcon: String {
-        self == .allowed ? "gear" : "bell.badge"
+        switch self {
+        case .allowed:
+            "gear"
+        case .notAllowed, .unknown:
+            "gear.badge"
+        case .checking:
+            "hourglass"
+        case .notSet:
+            "bell.badge"
+        }
     }
 
     var color: Color {
-        self == .allowed ? OpenClawBrand.ok : .secondary
+        switch self {
+        case .allowed:
+            OpenClawBrand.ok
+        case .notAllowed, .unknown:
+            OpenClawBrand.warn
+        case .checking, .notSet:
+            .secondary
+        }
     }
 
     var shouldOpenNotificationSettings: Bool {
@@ -120,6 +140,10 @@ enum SettingsNotificationStatus: Equatable {
         case .checking, .notSet:
             false
         }
+    }
+
+    var allowsNotifications: Bool {
+        self == .allowed
     }
 }
 

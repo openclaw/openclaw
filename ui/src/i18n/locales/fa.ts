@@ -63,7 +63,6 @@ export const fa: TranslationMap = {
     docs: "مستندات",
     theme: "پوسته",
     colorMode: "حالت رنگ",
-    colorModeOption: "حالت رنگ: {mode}",
     resources: "منابع",
     search: "جستجو",
     save: "ذخیره",
@@ -202,6 +201,7 @@ export const fa: TranslationMap = {
     inherit: "ارث‌بری",
     defaultOption: "پیش‌فرض ({value})",
     offExplicit: "خاموش (صریح)",
+    auto: "auto",
     on: "روشن",
     off: "خاموش",
     full: "کامل",
@@ -1443,6 +1443,7 @@ export const fa: TranslationMap = {
     jaJP: "日本語 (ژاپنی)",
     ko: "한국어 (کره‌ای)",
     fr: "Français (فرانسوی)",
+    hi: "हिन्दी (هندی)",
     ar: "العربية (عربی)",
     it: "Italiano (ایتالیایی)",
     tr: "Türkçe (ترکی)",
@@ -1453,6 +1454,7 @@ export const fa: TranslationMap = {
     vi: "Tiếng Việt (ویتنامی)",
     nl: "Nederlands (هلندی)",
     fa: "فارسی",
+    ru: "Русский (روسی)",
   },
   cron: {
     quickCreate: {
@@ -1620,6 +1622,7 @@ export const fa: TranslationMap = {
       nextHeartbeat: "ضربان بعدی",
       wakeModeHelp: "اکنون بلافاصله فعال می‌کند. ضربان بعدی تا چرخه بعدی منتظر می‌ماند.",
       payloadKind: "چه چیزی باید اجرا شود؟",
+      command: "Command",
       systemEvent: "ارسال پیام به خط زمانی اصلی",
       agentTurn: "اجرای وظیفه دستیار (ایزوله)",
       systemEventHelp:

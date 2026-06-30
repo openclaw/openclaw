@@ -39,6 +39,7 @@ describe("plugin npm runtime build args", () => {
     expect(() => parseBulkBuildArgs(["--package", "--package", "extensions/slack"])).toThrow(
       "missing value for --package",
     );
+    expect(() => parseBulkBuildArgs(["--package", "-h"])).toThrow("missing value for --package");
     expect(() => parseSingleBuildArgs(["--package"])).toThrow(
       "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>",
     );

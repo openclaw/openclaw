@@ -5,6 +5,7 @@
  */
 import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { toErrorObject } from "../infra/errors.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import {
@@ -20,6 +21,10 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import {
+  omitFoundryBearerCredentialHeaders,
+  usesFoundryBearerAuth,
+} from "../shared/anthropic-auth-headers.js";
 import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeAdaptiveThinking,
@@ -253,39 +258,6 @@ function adjustMaxTokensForThinking(params: {
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
-}
-
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
-  );
-}
-
-function usesFoundryBearerAuth(model: AnthropicTransportModel): boolean {
-  return (
-    model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
-  );
-}
-
-function omitFoundryBearerCredentialHeaders(
-  headers?: Record<string, string>,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
-      continue;
-    }
-    next[key] = value;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -681,7 +653,7 @@ function readAnthropicSseChunk(
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -1144,6 +1116,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
         const blocks = output.content;
+        const blockIndexes = new Map<number, number>();
         const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
@@ -1304,6 +1277,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const block: TransportContentBlock = { type: "text", text, index };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+              blockIndexes.set(index, contentIndex);
               eventSink.push({
                 type: "text_start",
                 contentIndex,
@@ -1331,6 +1305,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+              blockIndexes.set(index, contentIndex);
               eventSink.push({
                 type: "thinking_start",
                 contentIndex,
@@ -1355,6 +1330,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+              blockIndexes.set(index, output.content.length - 1);
               eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
@@ -1380,6 +1356,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+              blockIndexes.set(index, output.content.length - 1);
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
@@ -1390,8 +1367,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
-            let index = blocks.findIndex((block) => block.index === event.index);
-            let block = blocks[index];
+            const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
+            let block = index === undefined ? undefined : blocks[index];
             if (allowReasoningContentReplay) {
               const appendedThinking = appendReasoningContentThinkingDelta(
                 event.index,
@@ -1433,6 +1411,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               block = { type: "text", text: "", index: recoveredIndex };
               output.content.push(block);
               index = output.content.length - 1;
+              if (typeof event.index === "number") {
+                blockIndexes.set(event.index, index);
+              }
               eventSink.push({
                 type: "text_start",
                 contentIndex: index,
@@ -1498,12 +1479,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "content_block_stop") {
-            const index = blocks.findIndex((block) => block.index === event.index);
-            const block = blocks[index];
-            if (!block) {
+            const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
+            const block = index === undefined ? undefined : blocks[index];
+            if (eventIndex === undefined || index === undefined || !block) {
               finishReasoningContentSidecars(event.index);
               continue;
             }
+            blockIndexes.delete(eventIndex);
             delete block.index;
             if (block.type === "text") {
               eventSink.push({
@@ -1603,18 +1586,4 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     })();
     return eventStream as ReturnType<StreamFn>;
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

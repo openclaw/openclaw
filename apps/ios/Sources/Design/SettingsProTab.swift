@@ -54,6 +54,8 @@ struct SettingsProTab: View {
     @State var locationStatusText: String?
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
+    @State var isRequestingNotificationAuthorization = false
+    @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
@@ -61,15 +63,24 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
+    let navigateToRoute: ((SettingsRoute) -> Void)?
+    let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil)
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
+        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
+        self.navigateToRoute = navigateToRoute
+        self.onRouteChange = onRouteChange
     }
 
     var body: some View {
@@ -83,29 +94,37 @@ struct SettingsProTab: View {
         if let directRoute {
             self.destination(for: directRoute)
         } else {
-            self.settingsNavigationStack
+            if self.ownsNavigationStack {
+                self.settingsNavigationStack
+            } else {
+                self.settingsNavigationContent
+            }
         }
     }
 
     private var settingsNavigationStack: some View {
         NavigationStack(path: self.$navigationPath) {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.settingsHeader
-                        self.appearanceSection
-                        self.gatewaySection
-                        self.settingsListSection
-                    }
-                    .padding(.top, 18)
-                    .padding(.bottom, 18)
+            self.settingsNavigationContent
+        }
+    }
+
+    private var settingsNavigationContent: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    self.settingsHeader
+                    self.appearanceSection
+                    self.gatewaySection
+                    self.settingsListSection
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 18)
             }
-            .navigationBarHidden(true)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                self.destination(for: route)
-            }
+        }
+        .navigationBarHidden(true)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
         }
     }
 
@@ -117,6 +136,7 @@ struct SettingsProTab: View {
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
                 self.applyInitialRouteIfNeeded()
+                self.notifyRouteChange()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -152,6 +172,9 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
+            }
+            .onChange(of: self.navigationPath) { _, _ in
+                self.notifyRouteChange()
             }
     }
 
@@ -217,6 +240,23 @@ struct SettingsProTab: View {
             } message: {
                 Text(self.scannerError ?? "")
             }
+            .alert("Enable OpenClaw Hosted Push Relay?", isPresented: self.$showNotificationRelayDisclosure) {
+                    Button("Continue") {
+                        self.requestNotificationAuthorizationFromSettings()
+                    }
+                    Button("Not Now", role: .cancel) {}
+                } message: {
+                    Text(self.notificationRelayDisclosureMessage)
+                }
+    }
+
+    func openNotificationsRouteFromApprovals() {
+        guard self.directRoute == nil else { return }
+        if !self.ownsNavigationStack, let navigateToRoute {
+            navigateToRoute(.notifications)
+            return
+        }
+        self.navigationPath = [.notifications]
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -224,5 +264,13 @@ struct SettingsProTab: View {
         guard let initialRoute else { return }
         guard self.navigationPath != [initialRoute] else { return }
         self.navigationPath = [initialRoute]
+    }
+
+    private func notifyRouteChange() {
+        if let directRoute {
+            self.onRouteChange?(directRoute)
+            return
+        }
+        self.onRouteChange?(self.navigationPath.last)
     }
 }

@@ -466,7 +466,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         iconUrl: outboundIdentity.avatarUrl,
         iconEmoji: outboundIdentity.emoji,
       }
-    : undefined;
+    : prepared.relayIdentity;
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -688,7 +688,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
     });
+  // Slack's native streaming APIs do not accept chat:write.customize identity
+  // fields. Keep custom-identity replies on the draft/standard postMessage
+  // path so the configured username and icon are not silently discarded.
   const streamingEnabled =
+    !slackIdentity &&
     !sourceRepliesAreToolOnly &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,

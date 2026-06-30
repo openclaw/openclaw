@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
@@ -315,6 +316,16 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).rejects.toThrow("hung-prep timed out after 5ms");
 
     expect(signals).toEqual(["SIGKILL"]);
+  });
+
+  it("clamps oversized prep step timers before scheduling", async () => {
+    await expect(
+      runNodeStep(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        MAX_TIMER_TIMEOUT_MS + 1,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it.runIf(process.platform !== "win32")("kills timed-out prep step process groups", async () => {

@@ -190,11 +190,7 @@ describe("chat header controls (browser)", () => {
     expect(buttons).toHaveLength(3);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
-    expect(labels).toEqual([
-      t("common.colorModeOption", { mode: t("common.system") }),
-      t("common.colorModeOption", { mode: t("common.light") }),
-      t("common.colorModeOption", { mode: t("common.dark") }),
-    ]);
+    expect(labels).toEqual([t("common.system"), t("common.light"), t("common.dark")]);
 
     for (const button of buttons) {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));

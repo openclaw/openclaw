@@ -131,9 +131,58 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("rejects duplicate repeatable selectors", () => {
+    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+    expect(() =>
+      parseArgs([
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+  });
+
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
+  });
+
   it("rejects valued flags followed by another option", () => {
-    for (const flag of ["--repo-root", "--output-dir", "--plugin", "--qa-scenario"]) {
-      expect(() => parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    for (const flag of [
+      "--repo-root",
+      "--output-dir",
+      "--plugin",
+      "--shard-total",
+      "--shard-index",
+      "--limit",
+      "--qa-scenario",
+      "--qa-plugin-chunk-size",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+      "--max-rss-warn-mb",
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+    ]) {
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
     }
   });
 
@@ -558,6 +607,26 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+  });
+
+  it("clamps oversized measured command timers before scheduling", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => process.exit(0), 25)"],
+      label: "oversized-timeout",
+      phase: "probe",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    expect(row.timedOut).toBe(false);
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
   it.runIf(process.platform !== "win32")(

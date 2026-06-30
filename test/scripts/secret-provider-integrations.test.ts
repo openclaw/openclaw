@@ -297,6 +297,30 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("clamps oversized command timeout env values before scheduling timers", async () => {
+    const previousTimeout = process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+    process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=command-timeout-clamp-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "setTimeout(() => process.exit(0), 25);",
+        ]),
+      ).resolves.toMatchObject({ code: 0 });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = previousTimeout;
+      }
+    }
+  });
+
   it("parses JSON command output without swallowing brace-heavy diagnostics", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=json-${Date.now()}`);
 

@@ -6,10 +6,7 @@ import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
-import {
-  createHtmlEntityToolCallArgumentDecodingWrapper,
-  decodeHtmlEntitiesInObject,
-} from "../tool-call-argument-decoding.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
@@ -796,5 +793,3 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
-
-export { decodeHtmlEntitiesInObject };

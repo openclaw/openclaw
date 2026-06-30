@@ -73,7 +73,7 @@ export type { JsonlParseResult } from "./jsonl/parse.js";
 export type { YamlParseResult } from "./yaml/parse.js";
 
 export type { EmitOptions } from "./emit.js";
-export { emitMd, markDirty } from "./emit.js";
+export { emitMd } from "./emit.js";
 export type { JsoncEmitOptions } from "./jsonc/emit.js";
 export { emitJsonc } from "./jsonc/emit.js";
 export type { JsonlEmitOptions } from "./jsonl/emit.js";

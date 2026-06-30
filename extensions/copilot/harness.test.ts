@@ -1,4 +1,5 @@
 // Copilot tests cover harness plugin behavior.
+import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -7,11 +8,12 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientPool } from "./harness.js";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
+import { COPILOT_BYOK_PROVIDER_ERROR } from "./src/provider-bridge.js";
 
 const mocks = vi.hoisted(() => ({
   runCopilotAttempt: vi.fn(),
   resolvePoolAcquire: vi.fn(
-    () =>
+    (_params: any) =>
       ({
         auth: {
           agentId: "test",
@@ -22,12 +24,17 @@ const mocks = vi.hoisted(() => ({
         options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
       }) as any,
   ),
+  createCopilotByokProxy: vi.fn(),
   createCopilotClientPool: vi.fn(),
 }));
 
 vi.mock("./src/attempt.js", () => ({
   resolvePoolAcquire: mocks.resolvePoolAcquire,
   runCopilotAttempt: mocks.runCopilotAttempt,
+}));
+
+vi.mock("./src/byok-proxy.js", () => ({
+  createCopilotByokProxy: mocks.createCopilotByokProxy,
 }));
 
 vi.mock("./src/runtime.js", () => ({
@@ -86,6 +93,7 @@ describe("createCopilotAgentHarness", () => {
   beforeEach(() => {
     mocks.runCopilotAttempt.mockReset();
     mocks.resolvePoolAcquire.mockClear();
+    mocks.createCopilotByokProxy.mockReset();
     mocks.createCopilotClientPool.mockReset();
     mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
     mocks.resolvePoolAcquire.mockReturnValue({
@@ -98,6 +106,7 @@ describe("createCopilotAgentHarness", () => {
       options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
     });
     mocks.createCopilotClientPool.mockImplementation(() => makePoolMock());
+    mocks.createCopilotByokProxy.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -180,32 +189,108 @@ describe("createCopilotAgentHarness", () => {
     ).toEqual({ supported: true, priority: 100 });
   });
 
-  it("supports rejects providers outside the whitelist", () => {
+  it("supports custom provider ids for BYOK model entries", () => {
     const harness = createCopilotAgentHarness();
 
     expect(
       harness.supports({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.5",
+        provider: "custom-proxy",
+        modelId: "llama-3.1-8b",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+        },
+        providerOwnerStatus: "unowned",
+        providerOwnerPluginIds: [],
+        requestedRuntime: "copilot",
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
+
+  it("supports rejects custom provider ids without a supported BYOK model shape", () => {
+    const harness = createCopilotAgentHarness();
+
+    expect(
+      harness.supports({
+        provider: "custom-proxy",
+        modelId: "llama-3.1-8b",
+        providerOwnerStatus: "unowned",
+        providerOwnerPluginIds: [],
         requestedRuntime: "copilot",
       }),
     ).toEqual({
       supported: false,
-      reason: "provider is not one of: github-copilot",
+      reason:
+        "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
     });
-    // Legacy aspirational ids should not be claimed by the harness.
-    for (const legacyId of ["github", "openclaw", "copilot"]) {
+    expect(
+      harness.supports({
+        provider: "custom-proxy",
+        modelId: "llama-3.1-8b",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+          request: { proxy: { mode: "env-proxy" } },
+        },
+        providerOwnerStatus: "unowned",
+        providerOwnerPluginIds: [],
+        requestedRuntime: "copilot",
+      }),
+    ).toEqual({
+      supported: false,
+      reason:
+        "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
+    });
+  });
+
+  it("supports rejects manifest-owned providers outside the whitelist", () => {
+    const harness = createCopilotAgentHarness();
+
+    for (const [provider, ownerPluginIds] of [
+      ["anthropic", ["anthropic"]],
+      ["azure-openai-responses", ["openai"]],
+      ["deepinfra", ["deepinfra"]],
+      ["fireworks", ["fireworks"]],
+      ["github", ["github"]],
+      ["openclaw", ["openclaw"]],
+      ["sglang", ["sglang"]],
+      ["together", ["together"]],
+      ["vllm", ["vllm"]],
+    ] as const) {
       expect(
         harness.supports({
-          provider: legacyId,
+          provider,
           modelId: "gpt-4.1",
           requestedRuntime: "copilot",
+          providerOwnerStatus: "owned",
+          providerOwnerPluginIds: ownerPluginIds,
         }),
       ).toEqual({
         supported: false,
         reason: "provider is not one of: github-copilot",
       });
     }
+  });
+
+  it("supports rejects ambiguous custom provider ownership", () => {
+    const harness = createCopilotAgentHarness();
+
+    expect(
+      harness.supports({
+        provider: "custom-proxy",
+        modelId: "proxy-model",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+        },
+        requestedRuntime: "copilot",
+        providerOwnerStatus: "ambiguous",
+        providerOwnerPluginIds: ["first-owner", "second-owner"],
+      }),
+    ).toEqual({
+      supported: false,
+      reason: "provider is not one of: github-copilot",
+    });
   });
 
   it("runAttempt lazy-imports attempt by waiting until invocation to create a pool", async () => {
@@ -220,6 +305,18 @@ describe("createCopilotAgentHarness", () => {
 
     expect(mocks.createCopilotClientPool).toHaveBeenCalledTimes(1);
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps invalid BYOK provider configuration on the structured attempt path", async () => {
+    const pool = makePoolMock();
+    mocks.createCopilotClientPool.mockReturnValue(pool);
+    mocks.resolvePoolAcquire.mockImplementationOnce(() => {
+      throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
+    });
+    const harness = createCopilotAgentHarness();
+
+    await expect(harness.runAttempt(ATTEMPT_PARAMS)).resolves.toBe(ATTEMPT_RESULT);
+    expect(mocks.runCopilotAttempt).toHaveBeenCalledWith(ATTEMPT_PARAMS, { pool });
   });
 
   it("runAttempt creates one pool lazily and reuses it across two attempts on the same harness", async () => {
@@ -1186,6 +1283,88 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
     });
 
+    it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-byok",
+          pooledClient: { key: {} as any, client: { deleteSession: vi.fn() } as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.runAttempt(
+        makeAttemptParams({
+          provider: "custom-proxy",
+          model: {
+            provider: "custom-proxy",
+            id: "proxy-model",
+            api: "openai-responses",
+            baseUrl: "https://proxy.example/v1?routing=blue",
+          },
+          auth: undefined,
+          authProfileId: "custom-proxy:main",
+          resolvedApiKey: "byok-token",
+        }),
+      );
+
+      const stored = sessionStore.entries.get("oc-sess-reuse");
+      expect(stored?.compatKey).toContain("baseUrlFingerprint=sha256:");
+      expect(stored?.compatKey).not.toContain("proxy.example");
+      expect(stored?.compatKey).not.toContain("routing=blue");
+    });
+
+    it("does not reuse BYOK sessions when attached request auth mode changes", async () => {
+      const pool = makePoolMock();
+      const model = {
+        provider: "custom-proxy",
+        id: "proxy-model",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      };
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-byok",
+          pooledClient: { key: {} as any, client: { deleteSession: vi.fn() } as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(
+        makeAttemptParams({
+          provider: "custom-proxy",
+          model: attachModelProviderRequestTransport(model, { auth: { mode: "provider-default" } }),
+          auth: undefined,
+          authProfileId: "custom-proxy:main",
+          resolvedApiKey: "byok-token",
+        }),
+      );
+      await harness.runAttempt(
+        makeAttemptParams({
+          runId: "t2",
+          provider: "custom-proxy",
+          model: attachModelProviderRequestTransport(model, {
+            auth: { mode: "header", headerName: "x-api-key", value: "byok-token" },
+          }),
+          auth: undefined,
+          authProfileId: "custom-proxy:main",
+          resolvedApiKey: "byok-token",
+        }),
+      );
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
+    });
+
     it("resumes shipped schema v1 plugin-state bindings for attempts", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
@@ -1609,6 +1788,12 @@ describe("createCopilotAgentHarness", () => {
         success: true,
         tokensRemoved: 123,
         messagesRemoved: 4,
+        summaryContent: "compacted summary",
+        contextWindow: {
+          tokenLimit: 1000,
+          currentTokens: 777,
+          messagesLength: 12,
+        },
       }));
       const disconnect = vi.fn(async () => {
         throw new Error("disconnect failed");
@@ -1649,6 +1834,7 @@ describe("createCopilotAgentHarness", () => {
         model: "gpt-4.1",
         sessionKey: "agent:main:main",
         sessionId: "oc-sess-compact-1",
+        currentTokenCount: 900,
         workspaceDir: "/this\u0000is/illegal",
         customInstructions: "Keep decisions.",
       });
@@ -1684,6 +1870,25 @@ describe("createCopilotAgentHarness", () => {
         ok: true,
         compacted: true,
         reason: "copilot-sdk-history-compacted",
+        result: {
+          summary: "compacted summary",
+          firstKeptEntryId: "",
+          tokensBefore: 900,
+          tokensAfter: 777,
+          details: {
+            success: true,
+            tokensRemoved: 123,
+            messagesRemoved: 4,
+            summaryContent: "compacted summary",
+            contextWindow: {
+              tokenLimit: 1000,
+              currentTokens: 777,
+              messagesLength: 12,
+            },
+          },
+          sessionId: "oc-sess-compact-1",
+          sessionFile: "/session.json",
+        },
       });
     });
 
@@ -1858,6 +2063,148 @@ describe("createCopilotAgentHarness", () => {
         }),
       );
       expect(matchingResult?.compacted).toBe(true);
+    });
+
+    it("compacts tracked BYOK sessions from production compact params with a fresh proxy", async () => {
+      const compact = vi.fn(async () => ({
+        success: true,
+        tokensRemoved: 45,
+        messagesRemoved: 2,
+      }));
+      const resumeSession = vi.fn(async () => ({
+        disconnect: vi.fn(async () => undefined),
+        rpc: { history: { compact } },
+      }));
+      const pool = makePoolMock();
+      const acquire = vi.fn(async () => ({
+        key: {} as any,
+        client: { deleteSession: vi.fn(), resumeSession } as any,
+      }));
+      pool.acquire = acquire;
+      pool.release = vi.fn(async () => undefined);
+      const trackedRuntimeModel = {
+        provider: "local-proxy",
+        id: "proxy-model",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      };
+      mocks.resolvePoolAcquire.mockImplementation((params: any) => {
+        const runtimeModel = params.runtimeModel ?? params.model;
+        if (!runtimeModel?.baseUrl) {
+          throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
+        }
+        return {
+          auth: {
+            agentId: "test",
+            authMode: "byok",
+            authProfileId: "byok:local-proxy",
+            authProfileVersion:
+              runtimeModel.baseUrl === trackedRuntimeModel.baseUrl
+                ? "sha256:provider"
+                : "sha256:rotated",
+            copilotHome: "/copilot-home",
+          },
+          key: { agentId: "test", authMode: "byok", copilotHome: "/copilot-home" },
+          options: { copilotHome: "/copilot-home" },
+        };
+      });
+      const closeByokProxy = vi.fn(async () => undefined);
+      mocks.createCopilotByokProxy.mockImplementation(async (provider: any) => ({
+        close: closeByokProxy,
+        provider: {
+          ...provider,
+          provider: {
+            ...provider.provider,
+            baseUrl: "http://127.0.0.1:49152/proxy/v1",
+          },
+        },
+      }));
+      const trackedProvider = {
+        type: "openai" as const,
+        wireApi: "responses" as const,
+        baseUrl: "https://proxy.example/v1",
+        modelId: "proxy-model",
+        wireModel: "proxy-model",
+      };
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          compactionSessionConfig: {
+            ...TEST_SESSION_CONFIG,
+            provider: trackedProvider,
+          },
+          sdkSessionId: "sdk-sess-byok",
+          pooledClient: {
+            key: {} as any,
+            client: { deleteSession: vi.fn(), resumeSession } as any,
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(
+        makeCompactParams({
+          model: trackedRuntimeModel,
+          provider: "local-proxy",
+          authProfileId: "byok:local-proxy",
+          resolvedApiKey: "byok-token",
+          sessionId: "oc-sess-byok",
+        }),
+      );
+      mocks.resolvePoolAcquire.mockClear();
+
+      const rotatedResult = await harness.compact?.(
+        makeCompactParams({
+          model: "proxy-model",
+          runtimeModel: {
+            ...trackedRuntimeModel,
+            baseUrl: "https://rotated.example/v1",
+          },
+          provider: "local-proxy",
+          authProfileId: "byok:local-proxy",
+          sessionId: "oc-sess-byok",
+        }),
+      );
+
+      expect(mocks.resolvePoolAcquire).toHaveBeenCalledTimes(1);
+      expect(resumeSession).not.toHaveBeenCalled();
+      expect(rotatedResult).toEqual({
+        ok: false,
+        compacted: false,
+        reason: "missing_thread_binding",
+        failure: { reason: "missing_thread_binding" },
+      });
+      mocks.resolvePoolAcquire.mockClear();
+
+      const result = await harness.compact?.(
+        makeCompactParams({
+          model: "proxy-model",
+          runtimeModel: trackedRuntimeModel,
+          provider: "local-proxy",
+          authProfileId: "byok:local-proxy",
+          sessionId: "oc-sess-byok",
+        }),
+      );
+
+      expect(mocks.resolvePoolAcquire).toHaveBeenCalledTimes(1);
+      expect(mocks.createCopilotByokProxy).toHaveBeenCalledWith({
+        mode: "byok",
+        provider: trackedProvider,
+      });
+      expect(resumeSession).toHaveBeenCalledWith(
+        "sdk-sess-byok",
+        expect.objectContaining({
+          continuePendingWork: false,
+          model: "gpt-4.1",
+          provider: expect.objectContaining({
+            baseUrl: "http://127.0.0.1:49152/proxy/v1",
+          }),
+          suppressResumeEvent: true,
+        }),
+      );
+      expect(closeByokProxy).toHaveBeenCalledTimes(1);
+      expect(result?.compacted).toBe(true);
     });
 
     it("does not compact a tracked SDK session after model changes", async () => {

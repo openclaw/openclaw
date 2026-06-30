@@ -63,7 +63,7 @@ function readOption(args: string[], name: string): string | undefined {
     return undefined;
   }
   const value = args[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new CliArgumentError(`${name} requires a value`);
   }
   return value.trim();

@@ -190,6 +190,11 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseArgs(["--channel", "--json"])).toThrow(
       "--channel requires a value",
     );
+    for (const flag of ["--channel", "--token", "--timeout-ms", "--state-dir"]) {
+      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
   });
 
   it("redacts Discord webhook tokens from API paths", () => {
@@ -349,6 +354,14 @@ describe("script-specific dev tooling hardening", () => {
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
     expect(result.stdout).toBe("");
+  });
+
+  it("rejects short flags as TUI PTY watch option values", () => {
+    for (const flag of ["--mode", "--mirror-path"]) {
+      expect(() => tuiPtyWatchTesting.parseOptions([flag, "-h"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
   });
 
   it("keeps TUI PTY watch vitest args behind the separator", () => {

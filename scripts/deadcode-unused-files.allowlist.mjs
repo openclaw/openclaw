@@ -38,4 +38,5 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/tasks/task-registry-control.runtime.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
+  "extensions/qa-lab/src/mantis-phase-timer.runtime.ts",
 ];

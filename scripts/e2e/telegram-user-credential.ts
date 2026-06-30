@@ -84,7 +84,7 @@ function parseArgs(argv: string[]) {
       usage();
     }
     const value = args[index + 1];
-    if (!value || value.startsWith("--")) {
+    if (!value || value.startsWith("-")) {
       usage();
     }
     opts.set(key.slice(2), value);
@@ -717,4 +717,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   await main();
 }
 
-export { hydratePayloadFromLease, optionalPositiveInteger, parseChunkedPayloadMarker };
+export { hydratePayloadFromLease, optionalPositiveInteger, parseArgs, parseChunkedPayloadMarker };

@@ -458,6 +458,78 @@ function assignModelCallSizeTimingAttrs(
   );
 }
 
+function assignNumberAttr(
+  attrs: Record<string, string | number | boolean>,
+  key: string,
+  value: number | undefined,
+): void {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    attrs[key] = value;
+  }
+}
+
+function modelCallPromptTokens(usage: {
+  promptTokens?: number;
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}): number | undefined {
+  if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
+    return usage.promptTokens;
+  }
+  const input = usage.input ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const total = input + cacheRead + cacheWrite;
+  return total > 0 ? total : undefined;
+}
+
+function assignModelCallPromptStatsAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<Extract<DiagnosticEventPayload, { type: "model.call.started" }>, "promptStats">,
+): void {
+  const stats = evt.promptStats;
+  if (!stats) {
+    return;
+  }
+  for (const [key, value] of [
+    ["openclaw.model_call.prompt.input_messages_count", stats.inputMessagesCount],
+    ["openclaw.model_call.prompt.input_messages_chars", stats.inputMessagesChars],
+    ["openclaw.model_call.prompt.system_prompt_chars", stats.systemPromptChars],
+    ["openclaw.model_call.prompt.tool_definitions_count", stats.toolDefinitionsCount],
+    ["openclaw.model_call.prompt.tool_definitions_chars", stats.toolDefinitionsChars],
+    ["openclaw.model_call.prompt.total_chars", stats.totalChars],
+  ] as const) {
+    assignNumberAttr(attrs, key, value);
+  }
+}
+
+function assignModelCallUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
+): void {
+  const usage = evt.usage;
+  if (!usage) {
+    return;
+  }
+  const promptTokens = modelCallPromptTokens(usage);
+  for (const [key, value] of [
+    ["openclaw.model_call.usage.input_tokens", usage.input],
+    ["openclaw.model_call.usage.output_tokens", usage.output],
+    ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
+    ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
+    ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
+    ["openclaw.model_call.usage.prompt_tokens", promptTokens],
+    ["openclaw.model_call.usage.total_tokens", usage.total],
+    ["gen_ai.usage.input_tokens", promptTokens],
+    ["gen_ai.usage.output_tokens", usage.output],
+    ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
+    ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
+  ] as const) {
+    assignPositiveNumberAttr(attrs, key, value);
+  }
+}
+
 function assignGenAiSpanIdentityAttrs(
   attrs: Record<string, string | number | boolean>,
   input: { api?: string; model?: string; provider?: string },
@@ -468,7 +540,12 @@ function assignGenAiSpanIdentityAttrs(
     attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
   }
   if (input.model) {
-    attrs["gen_ai.request.model"] = lowCardinalityAttr(input.model);
+    // Span attributes carry the full model id; only metric labels need bounded cardinality
+    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
+    // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
+    // reads gen_ai.request.model). Keep the redacted raw model on the span.
+    attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
   }
   attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
 }
@@ -3175,6 +3252,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.transport) {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
+        assignModelCallPromptStatsAttrs(spanAttrs, evt);
         trackTrustedSpan(
           evt,
           metadata,
@@ -3213,6 +3291,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
+        assignModelCallPromptStatsAttrs(spanAttrs, evt);
+        assignModelCallUsageAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
@@ -3265,6 +3345,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
+        assignModelCallPromptStatsAttrs(spanAttrs, evt);
+        assignModelCallUsageAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??

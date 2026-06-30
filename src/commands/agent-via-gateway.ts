@@ -1,5 +1,7 @@
 // Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -64,7 +66,8 @@ const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 type AgentCliOpts = {
-  message: string;
+  message?: string;
+  messageFile?: string;
   agent?: string;
   model?: string;
   to?: string;
@@ -84,6 +87,9 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+};
+type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
+  message: string;
 };
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
@@ -110,6 +116,7 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
+const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
 let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
@@ -170,6 +177,63 @@ function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
   if (opts.json === true) {
     routeLogsToStderr();
   }
+}
+
+function missingAgentMessageError(): Error {
+  return new Error(
+    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+  );
+}
+
+function formatMessageFileReadFailure(messageFile: string, err: unknown): string {
+  const code =
+    typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
+  if (code === "ENOENT") {
+    return `Message file not found: ${messageFile}`;
+  }
+  if (code === "EISDIR") {
+    return `Message file is a directory: ${messageFile}`;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return `Unable to read message file ${messageFile}: ${message}`;
+}
+
+async function readAgentMessageFile(messageFile: string): Promise<string> {
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(messageFile);
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
+  try {
+    return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
+  } catch {
+    throw new Error(`Message file must be valid UTF-8: ${messageFile}`);
+  }
+}
+
+async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatchOpts> {
+  const { messageFile: rawMessageFile, ...rest } = opts;
+  const messageFile = rawMessageFile?.trim();
+  const hasInlineMessage = opts.message !== undefined;
+  if (hasInlineMessage && messageFile) {
+    throw new Error("Use either --message or --message-file, not both.");
+  }
+  if (rawMessageFile !== undefined && !messageFile) {
+    throw new Error("--message-file must not be empty.");
+  }
+  if (messageFile) {
+    const message = await readAgentMessageFile(messageFile);
+    if (!message.trim()) {
+      throw new Error(`Message file is empty: ${messageFile}`);
+    }
+    return { ...rest, message };
+  }
+  const message = opts.message ?? "";
+  if (!message.trim()) {
+    throw missingAgentMessageError();
+  }
+  return { ...rest, message };
 }
 
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
@@ -287,7 +351,9 @@ function validateExplicitSessionKeyForDispatch(
   }
 }
 
-async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
+async function normalizeSessionKeyOptsForDispatch(
+  opts: AgentDispatchOpts,
+): Promise<AgentDispatchOpts> {
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
@@ -567,7 +633,7 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
 }
 
 async function resolveAgentIdForGatewayTimeoutFallback(
-  opts: AgentCliOpts,
+  opts: AgentDispatchOpts,
 ): Promise<string | undefined> {
   const explicitSessionKey = opts.sessionKey?.trim();
   if (classifySessionKeyShape(explicitSessionKey) === "agent") {
@@ -619,17 +685,15 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
 }
 
 async function agentViaGatewayCommand(
-  opts: AgentCliOpts,
+  opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
   protectJsonStdout(opts);
-  const body = (opts.message ?? "").trim();
+  const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
-  if (!body) {
-    throw new Error(
-      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or pass --to/--session-key/--session-id for an existing conversation.`,
-    );
+  if (!body.trim()) {
+    throw missingAgentMessageError();
   }
   if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
     throw new Error(
@@ -805,7 +869,7 @@ async function agentViaGatewayCommand(
 }
 
 async function agentViaGatewayCommandWithTransientRetries(
-  opts: AgentCliOpts,
+  opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
@@ -838,18 +902,19 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
+  const messageOpts = await resolveAgentMessageOpts(opts);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
-  if (isCompactControlCommand(opts.message)) {
+  if (isCompactControlCommand(messageOpts.message)) {
     runtime.error?.(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
     runtime.exit(1);
     return undefined;
   }
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts

@@ -868,25 +868,32 @@ public final class OpenClawChatViewModel {
                 self.pendingLocalUserEchoMessageIDsByRunID[response.runId] = pendingUserMessageID
                 self.armPendingRunTimeout(runId: response.runId)
             }
-            let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
-            await self.refreshHistoryAfterRun(historyRequest: historyContext)
-            guard self.isCurrentSession(sessionSnapshot) else { return }
-            if !self.clearPendingRunIfAssistantMessagePresent(
-                runId: response.runId,
-                after: userMessageTimestamp)
-            {
-                self.armPostSendRefreshFallback(
+            if response.status == "ok" {
+                let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+                await self.refreshHistoryAfterRun(historyRequest: historyContext)
+                guard self.isCurrentSession(sessionSnapshot) else { return }
+                self.finishPendingRunAfterTerminalOkSendAck(response)
+            } else if !self.finishPendingRunIfTerminalSendAck(response) {
+                let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+                await self.refreshHistoryAfterRun(historyRequest: historyContext)
+                guard self.isCurrentSession(sessionSnapshot) else { return }
+                if !self.clearPendingRunIfAssistantMessagePresent(
                     runId: response.runId,
-                    sessionSnapshot: sessionSnapshot,
-                    userMessageTimestamp: userMessageTimestamp)
-                self.armRunCompletionRefresh(
-                    runId: response.runId,
-                    sessionSnapshot: sessionSnapshot,
-                    userMessageTimestamp: userMessageTimestamp)
+                    after: userMessageTimestamp)
+                {
+                    self.armPostSendRefreshFallback(
+                        runId: response.runId,
+                        sessionSnapshot: sessionSnapshot,
+                        userMessageTimestamp: userMessageTimestamp)
+                    self.armRunCompletionRefresh(
+                        runId: response.runId,
+                        sessionSnapshot: sessionSnapshot,
+                        userMessageTimestamp: userMessageTimestamp)
+                }
             }
         } catch {
             guard self.isCurrentSession(sessionSnapshot) else { return }
-            self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
+            self.removePendingLocalUserEcho(for: runId)
             self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             self.logDiagnostic(
@@ -1715,6 +1722,48 @@ public final class OpenClawChatViewModel {
             return message
         }
         return "Chat failed"
+    }
+
+    private func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
+        self.clearPendingRun(response.runId)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        self.logDiagnostic(
+            "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                + "runId=\(response.runId) status=ok")
+    }
+
+    private func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
+        switch response.status {
+        case "timeout":
+            self.removePendingLocalUserEcho(for: response.runId)
+            self.clearPendingRun(response.runId)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
+            self.errorText = "Chat failed before the run started; try again."
+            self.logDiagnostic(
+                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                    + "runId=\(response.runId) status=timeout")
+            return true
+        case "error":
+            self.removePendingLocalUserEcho(for: response.runId)
+            self.clearPendingRun(response.runId)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
+            self.errorText = "Chat failed before the run started; try again."
+            self.logDiagnostic(
+                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                    + "runId=\(response.runId) status=error")
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func removePendingLocalUserEcho(for runId: String) {
+        guard let messageID = self.pendingLocalUserEchoMessageIDsByRunID[runId] else { return }
+        self.messages.removeAll { $0.id == messageID }
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
     }
 
     private func armPostSendRefreshFallback(

@@ -9,7 +9,7 @@ type ResolveConfigPathMock = Mock<() => string>;
 
 type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
-  hasPotentialConfiguredChannels: UnknownMock;
+  hasConfiguredChannels: UnknownMock;
   hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
@@ -28,7 +28,7 @@ type StatusScanSharedMocks = {
 export function createStatusScanSharedMocks(configPathLabel: string): StatusScanSharedMocks {
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
-    hasPotentialConfiguredChannels: vi.fn(),
+    hasConfiguredChannels: vi.fn(),
     hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -182,9 +182,6 @@ export async function loadStatusScanModuleForTest(
     mocks.resolveMemorySearchConfig ??
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
-  vi.doMock("../channels/config-presence.js", () => ({
-    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
-  }));
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
     hasConfiguredChannelsForReadOnlyScope: (params: {
       config: OpenClawConfig;
@@ -196,7 +193,7 @@ export async function loadStatusScanModuleForTest(
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
     }) =>
-      mocks.hasPotentialConfiguredChannels(
+      mocks.hasConfiguredChannels(
         params.config,
         params.env,
         params.includePersistedAuthState === undefined
@@ -408,7 +405,7 @@ export function applyStatusScanDefaults(
   const sourceConfig = options.sourceConfig ?? createStatusScanConfig();
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
-  mocks.hasPotentialConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
+  mocks.hasConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
   mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
     const params = rawParams as {
       config: OpenClawConfig;
@@ -416,7 +413,7 @@ export function applyStatusScanDefaults(
       includePersistedAuthState?: boolean;
     };
     return Boolean(
-      mocks.hasPotentialConfiguredChannels(
+      mocks.hasConfiguredChannels(
         params.config,
         params.env,
         params.includePersistedAuthState === undefined

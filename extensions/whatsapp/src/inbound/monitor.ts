@@ -38,7 +38,7 @@ import {
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
-import { resolveJidToE164 } from "../text-runtime.js";
+import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -556,6 +556,8 @@ export async function attachWebInboxToSocket(
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
+  const resolveReactionTargetJids = async (jid: string): Promise<string[]> =>
+    resolveEquivalentWhatsAppDirectChatJids(jid, { authDir: options.authDir, lidLookup });
 
   const rememberBaileysMessage = (
     remoteJid: string | null | undefined,
@@ -1357,6 +1359,7 @@ export async function attachWebInboxToSocket(
           selfJid: self.jid,
           selfLid: self.lid,
           resolveInboundJid,
+          resolveReactionTargetJids,
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
         })
       ) {

@@ -17,6 +17,10 @@ import {
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
+import {
+  blockArtCodeBlockCopyPayloadEncoding,
+  encodeBlockArtCodeBlockCopyPayload,
+} from "../chat/code-block-copy-payload.ts";
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
@@ -102,23 +106,28 @@ const buildChatItemsMock = vi.hoisted(() =>
   }),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
+  vi.fn(
+    (
+      group: { messages: Array<{ message: unknown }> },
+      _opts?: { onAssistantAttachmentLoaded?: () => void },
+    ) => {
+      const element = document.createElement("div");
+      element.className = "chat-group";
+      element.textContent = group.messages
+        .map(({ message }) => {
+          if (typeof message === "object" && message !== null && "content" in message) {
+            const content = (message as { content?: unknown }).content;
+            if (typeof content === "string") {
+              return content;
+            }
+            return content == null ? "" : JSON.stringify(content);
           }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  }),
+          return String(message);
+        })
+        .join("\n");
+      return element;
+    },
+  ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
@@ -161,6 +170,7 @@ vi.mock("../chat/grouped-render.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  isMarkdownBlockArtText: () => false,
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
@@ -393,6 +403,7 @@ function createChatHeaderState(
     chatMessages: [],
     chatLoading: false,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
@@ -609,6 +620,62 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat code-block copy", () => {
+  it("copies decoded QR block-art boundary spaces from the delegated button handler", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const payload = "  ▀▀▀▀  \n  ▄▄▄▄  ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy";
+    button.dataset.code = encodeBlockArtCodeBlockCopyPayload(payload);
+    button.dataset.codeEncoding = blockArtCodeBlockCopyPayloadEncoding;
+    thread.appendChild(button);
+
+    button.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith(payload);
+  });
+
+  it("keeps legacy raw data-code payloads copyable", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy";
+    button.dataset.code = "legacy text";
+    thread.appendChild(button);
+
+    button.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith("legacy text");
+  });
+
+  it("does not decode unmarked raw data-code payloads that start with the block-art prefix", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const payload = 'openclaw:block-art-code:"literal"';
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy";
+    button.dataset.code = payload;
+    thread.appendChild(button);
+
+    button.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith(payload);
   });
 });
 
@@ -1144,6 +1211,20 @@ describe("chat transcript rendering cache", () => {
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
   });
 
+  it("passes assistant attachment load callbacks to transcript groups", () => {
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    renderChatView({
+      messages: [{ role: "assistant", content: "MEDIA:https://example.com/voice.ogg" }],
+      onAssistantAttachmentLoaded,
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      onAssistantAttachmentLoaded,
+    });
+  });
+
   it("rebuilds transcript items when the transcript reference changes", () => {
     const toolMessages: unknown[] = [];
     const streamSegments: Array<{ text: string; ts: number }> = [];
@@ -1476,11 +1557,12 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const sensitivityLabel = requireElement(
-      container,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "Talk sensitivity selected label",
+    const sensitivitySelect = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
+    if (sensitivitySelect === null) {
+      throw new Error("expected Talk sensitivity select");
+    }
 
     expect(getTalkSelectOptionValues(container, "voice")).toEqual([
       "",
@@ -1495,7 +1577,7 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(sensitivityLabel.textContent).toBe("Custom");
+    expect(sensitivitySelect.value).toBe("__custom");
     expect(getTalkSelectOptionValues(container, "sensitivity")).toEqual([
       "",
       "0.65",
@@ -1542,12 +1624,13 @@ describe("chat voice controls", () => {
       },
       onRealtimeTalkOptionsChange,
     });
-    const defaultSensitivityLabel = requireElement(
-      defaultContainer,
-      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
-      "default Talk sensitivity selected label",
+    const defaultSensitivitySelect = defaultContainer.querySelector<HTMLSelectElement>(
+      '[data-talk-select="sensitivity"] select',
     );
-    expect(defaultSensitivityLabel.textContent).toBe("Default");
+    if (defaultSensitivitySelect === null) {
+      throw new Error("expected default Talk sensitivity select");
+    }
+    expect(defaultSensitivitySelect.value).toBe("");
     expect(getTalkSelectOptionValues(defaultContainer, "sensitivity")).toEqual([
       "",
       "0.65",
@@ -1971,6 +2054,212 @@ describe("chat slash menu accessibility", () => {
     expect(onDraftChange).toHaveBeenCalledWith("submitted message");
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+  });
+
+  it("ignores a stale native InputEvent replay after send clears the host draft", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a new same-session draft when a delayed stale replay arrives", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        data: "new draft",
+        inputType: "insertText",
+      }),
+    );
+    textarea!.value = "new draft";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "new draft",
+        inputType: "insertText",
+      }),
+    );
+    expect(textarea?.value).toBe("new draft");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("new draft");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply a stale submitted draft replay to another session", () => {
+    const drafts: Record<string, string> = {
+      "stale-replay-a": "",
+      "stale-replay-b": "",
+    };
+    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+      drafts[sessionKey] = next;
+    });
+    const container = document.createElement("div");
+    const renderSession = (sessionKey: string) => {
+      render(
+        renderChat(
+          createChatProps({
+            currentAgentId: "stale-replay-agent",
+            draft: drafts[sessionKey],
+            getDraft: () => drafts[sessionKey],
+            onDraftChange: (next) => onDraftChange(sessionKey, next),
+            onSend: () => {
+              drafts[sessionKey] = "";
+            },
+            sessionKey,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderSession("stale-replay-a");
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    renderSession("stale-replay-b");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("");
+    expect(drafts["stale-replay-b"]).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an intervening session draft when a delayed stale replay arrives", () => {
+    const drafts: Record<string, string> = {
+      "delayed-replay-a": "",
+      "delayed-replay-b": "",
+    };
+    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+      drafts[sessionKey] = next;
+    });
+    const container = document.createElement("div");
+    const renderSession = (sessionKey: string) => {
+      render(
+        renderChat(
+          createChatProps({
+            currentAgentId: "delayed-replay-agent",
+            draft: drafts[sessionKey],
+            getDraft: () => drafts[sessionKey],
+            onDraftChange: (next) => onDraftChange(sessionKey, next),
+            onSend: () => {
+              drafts[sessionKey] = "";
+            },
+            sessionKey,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderSession("delayed-replay-a");
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    renderSession("delayed-replay-b");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    textarea!.value = "session b draft";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    expect(textarea?.value).toBe("session b draft");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("session b draft");
+    expect(drafts["delayed-replay-b"]).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
   it("commits local draft input before Enter sends", () => {
@@ -3003,6 +3292,189 @@ describe("chat session controls", () => {
     });
   });
 
+  it("skips hidden subagent pages when loading more chat picker sessions", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows(
+      [
+        { key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 6 },
+        {
+          key: "agent:main:spawn-child:first",
+          kind: "direct",
+          label: "Subagent first",
+          updatedAt: 5,
+          spawnedBy: "agent:main:main",
+        },
+      ],
+      {
+        hasMore: true,
+        nextOffset: 2,
+        totalCount: 177,
+      },
+    );
+    request
+      .mockResolvedValueOnce(
+        createSessionsResultFromRows(
+          [
+            {
+              key: "agent:main:spawn-child:second",
+              kind: "direct",
+              label: "Subagent second",
+              updatedAt: 4,
+              spawnedBy: "agent:main:main",
+            },
+            {
+              key: "agent:main:spawn-child:third",
+              kind: "direct",
+              label: "Subagent third",
+              updatedAt: 3,
+              spawnedBy: "agent:main:main",
+            },
+          ],
+          { hasMore: true, nextOffset: 4, offset: 2, totalCount: 177 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSessionsResultFromRows(
+          [
+            {
+              key: "agent:main:work",
+              kind: "direct",
+              label: "Main work",
+              updatedAt: 2,
+            },
+          ],
+          { hasMore: false, nextOffset: null, offset: 4, totalCount: 177 },
+        ),
+      );
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("1");
+
+    container
+      .querySelector<HTMLButtonElement>('button[data-chat-session-load-more="true"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:main",
+        "agent:main:spawn-child:first",
+        "agent:main:spawn-child:second",
+        "agent:main:spawn-child:third",
+        "agent:main:work",
+      ]),
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 2,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 4,
+    });
+
+    render(renderChatSessionSelect(state), container);
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual(["Main chat", "Main work"]);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("2");
+    expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeNull();
+  });
+
+  it("continues past many hidden chat picker pages until a visible session is loaded", async () => {
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows(
+      [{ key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 20 }],
+      { hasMore: true, nextOffset: 1, totalCount: 20 },
+    );
+    const request = vi.fn((method: string, params: Record<string, unknown> = {}) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const offset =
+        typeof params.offset === "number" && Number.isFinite(params.offset) ? params.offset : 0;
+      if (offset < 12) {
+        return Promise.resolve(
+          createSessionsResultFromRows(
+            [
+              {
+                key: `agent:main:spawn-child:${offset}`,
+                kind: "direct",
+                label: `Subagent ${offset}`,
+                updatedAt: 20 - offset,
+                spawnedBy: "agent:main:main",
+              },
+            ],
+            { hasMore: true, nextOffset: offset + 1, offset, totalCount: 20 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        createSessionsResultFromRows(
+          [{ key: "agent:main:work", kind: "direct", label: "Main work", updatedAt: 1 }],
+          { hasMore: false, nextOffset: null, offset, totalCount: 20 },
+        ),
+      );
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container
+      .querySelector<HTMLButtonElement>('button[data-chat-session-load-more="true"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(state.chatSessionPickerResult?.sessions.at(-1)?.key).toBe("agent:main:work"),
+    );
+    expect(request).toHaveBeenCalledTimes(12);
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 11,
+    });
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 12,
+    });
+
+    render(renderChatSessionSelect(state), container);
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual(["Main chat", "Main work"]);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("2");
+    expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeNull();
+  });
+
   it("loads unsearched picker pages from a scoped first page", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
@@ -3393,6 +3865,70 @@ describe("chat session controls", () => {
     expect(state.setTab).toHaveBeenCalledWith("usage");
   });
 
+  it("shows provider quota in the sidebar session switcher (regression #93041)", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [
+              { label: "3h", usedPercent: 18 },
+              { label: "Week", usedPercent: 72 },
+            ],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(
+      renderChatSessionSelect(state, () => undefined, {
+        sessionSwitcherOnly: true,
+        surface: "sidebar",
+      }),
+      container,
+    );
+
+    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
+
+    const row = container.querySelector(".chat-controls__session-row");
+    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(true);
+  });
+
+  it("hides provider quota when the sidebar session switcher is collapsed", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [{ label: "3h", usedPercent: 18 }],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(
+      renderChatSessionSelect(state, () => undefined, {
+        sessionSwitcherOnly: true,
+        compact: true,
+        surface: "sidebar",
+      }),
+      container,
+    );
+
+    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
+  });
+
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
@@ -3563,6 +4099,25 @@ describe("chat session controls", () => {
     });
   });
 
+  it("sets composer speed to auto", async () => {
+    const { state, request } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>("[data-chat-speed-option]")).map(
+        (option) => option.textContent?.trim(),
+      ),
+    ).toEqual(["Default", "Fast", "Standard", "Auto"]);
+
+    clickChatSpeedOption(container, "auto");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      fastMode: "auto",
+    });
+  });
+
   it("scopes composer model changes for a selected global-session agent", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionKey = "global";
@@ -3639,7 +4194,7 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(3);
+    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(4);
 
     clickChatSpeedOption(container, "");
 
@@ -3917,5 +4472,190 @@ describe("chat session controls", () => {
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
     expect(thinkingSelect.title).toContain("Adaptive");
+  });
+});
+
+describe("right-click Reply", () => {
+  it("opens context menu and calls onSetReply when Reply is selected", () => {
+    const onSetReply = vi.fn();
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    // Create a real chat bubble inside a group with the data-message-text attribute
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "msg-stable-1";
+    bubble.dataset.messageText = "hello world";
+    const sender = document.createElement("span");
+    sender.className = "chat-sender-name";
+    sender.textContent = "User";
+    group.appendChild(sender);
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(evt);
+
+    const menu = document.querySelector(".chat-reply-context-menu");
+    expect(menu).not.toBeNull();
+    menu!.querySelector("button")!.click();
+
+    expect(onSetReply).toHaveBeenCalledTimes(1);
+    const target = onSetReply.mock.calls[0][0];
+    expect(target.messageId).toBe("msg-stable-1");
+    expect(target.text).toBe("hello world");
+    expect(target.senderLabel).toBe("User");
+  });
+
+  it("keeps the native context menu when Reply is unavailable", () => {
+    const container = renderChatView();
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble streaming";
+    bubble.dataset.messageText = "still streaming";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("dismisses the reply context menu with Escape after delayed listeners register", () => {
+    const onSetReply = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "hello world";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+
+    const menu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+    expect(menu).not.toBeNull();
+    expect(menu!.getAttribute("role")).toBe("menu");
+    expect(menu!.getAttribute("aria-label")).toBe("Message actions");
+    const button = menu!.querySelector<HTMLButtonElement>("button");
+    expect(button?.getAttribute("role")).toBe("menuitem");
+    expect(document.activeElement).toBe(button);
+
+    const evt = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.dispatchEvent(evt);
+
+    expect(evt.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("renders reply preview bar with quote text and dismiss button", () => {
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted message",
+        senderLabel: "User",
+      },
+    });
+
+    const preview = container.querySelector(".chat-reply-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toContain("quoted message");
+    expect(preview!.textContent).toContain("User");
+
+    const dismiss = preview!.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss");
+    expect(dismiss).not.toBeNull();
+  });
+
+  it("calls onClearReply when dismiss button is clicked", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    container.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss")!.click();
+    expect(onClearReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears reply target on Escape when no other handler intercepted", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const evt = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    section!.dispatchEvent(evt);
+
+    expect(onClearReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear reply target when Escape is already defaultPrevented", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-1",
+        text: "quoted",
+        senderLabel: "User",
+      },
+      onClearReply,
+    });
+
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const evt = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(evt, "defaultPrevented", { value: true });
+    section!.dispatchEvent(evt);
+
+    expect(onClearReply).not.toHaveBeenCalled();
+  });
+
+  it("does not open Reply menu when onSetReply is absent", () => {
+    renderChatView({
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    });
+
+    // Without onSetReply, the handler returns early and no menu is created
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 });

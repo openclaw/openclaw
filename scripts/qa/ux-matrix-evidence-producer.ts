@@ -10,11 +10,16 @@ import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+  resolveQaEvidenceEnvironment,
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import {
+  ensurePlaywrightChromium,
+  resolveSystemChromiumExecutablePath,
+} from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "ux-matrix-evidence-dashboard";
@@ -31,6 +36,9 @@ type MatrixCell = {
   title: string;
   wallMs: number;
 };
+
+type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
+type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
 export type ProducerOptions = {
   artifactBase: string;
@@ -53,29 +61,55 @@ Options:
 
 function readOptionValue(argv: readonly string[], index: number, arg: string) {
   const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${arg} requires a value`);
   }
   return value;
+}
+
+function isHelpRequest(argv: readonly string[]) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--artifact-base" || arg === "--repo-root") {
+      index += 1;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
   let skipVisualProof = false;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      artifactBase = value;
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      repoRoot = value;
       index += 1;
       continue;
     }
     if (arg === "--skip-visual-proof") {
+      recordOnce(arg);
       skipVisualProof = true;
       continue;
     }
@@ -141,15 +175,15 @@ function sanitizeArtifactText(
 
 function buildExecution(params: {
   artifacts: MatrixCell["artifacts"];
+  repoRoot: string;
   source: string;
 }): QaEvidenceSummaryEntry["execution"] {
   return {
     runner: "ux-matrix-script-producer",
-    environment: {
-      ref: process.env.OPENCLAW_QA_REF?.trim() || process.env.GITHUB_SHA?.trim() || null,
-      os: process.platform,
-      nodeVersion: process.version,
-    },
+    environment: resolveQaEvidenceEnvironment({
+      env: process.env,
+      repoRoot: params.repoRoot,
+    }),
     provider: {
       id: "ux-matrix",
       live: false,
@@ -169,7 +203,7 @@ function buildExecution(params: {
   };
 }
 
-function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
+function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSummaryEntry {
   const source = `ux-matrix:${cell.surface}:${cell.stage}`;
   return {
     test: {
@@ -188,6 +222,7 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
     ],
     execution: buildExecution({
       artifacts: cell.artifacts,
+      repoRoot,
       source,
     }),
     result: {
@@ -210,13 +245,14 @@ function buildEvidenceEntry(cell: MatrixCell): QaEvidenceSummaryEntry {
 function buildEvidenceSummary(params: {
   cells: readonly MatrixCell[];
   generatedAt: string;
+  repoRoot: string;
 }): QaEvidenceSummaryJson {
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
     evidenceMode: "full",
-    entries: params.cells.map(buildEvidenceEntry),
+    entries: params.cells.map((cell) => buildEvidenceEntry(cell, params.repoRoot)),
   });
 }
 
@@ -275,6 +311,54 @@ async function writePreflight(artifactBase: string) {
   );
 }
 
+function isMissingManagedPlaywrightBrowser(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Executable doesn't exist") &&
+    message.includes(".cache/ms-playwright") &&
+    message.includes("playwright install")
+  );
+}
+
+export async function launchUxMatrixChromium(params?: {
+  chromium?: Pick<ChromiumLauncher, "launch">;
+  systemExecutablePath?: string;
+}): Promise<{ browser: ChromiumBrowser; usedSystemExecutablePath?: string }> {
+  const chromium = params?.chromium ?? (await import("playwright")).chromium;
+  try {
+    return { browser: await chromium.launch() };
+  } catch (error) {
+    if (!isMissingManagedPlaywrightBrowser(error)) {
+      throw error;
+    }
+    const executablePath = params?.systemExecutablePath ?? resolveSystemChromiumExecutablePath();
+    if (!executablePath) {
+      throw error;
+    }
+    return {
+      browser: await chromium.launch({ executablePath }),
+      usedSystemExecutablePath: executablePath,
+    };
+  }
+}
+
+export function ensureUxMatrixVideoDependencies(params: {
+  ensureChromium?: typeof ensurePlaywrightChromium;
+  usedSystemExecutablePath?: string;
+}) {
+  if (!params.usedSystemExecutablePath) {
+    return;
+  }
+  const ensureChromium = params.ensureChromium ?? ensurePlaywrightChromium;
+  const status = ensureChromium({
+    ensureFfmpeg: true,
+    systemExecutablePath: params.usedSystemExecutablePath,
+  });
+  if (status !== 0) {
+    throw new Error(`Playwright ffmpeg install failed with status ${status}`);
+  }
+}
+
 async function captureControlUiScreenshot(params: {
   artifactBase: string;
   htmlPath: string;
@@ -284,8 +368,7 @@ async function captureControlUiScreenshot(params: {
 }) {
   const startedAt = Date.now();
   try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+    const { browser } = await launchUxMatrixChromium();
     try {
       const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
       await page.goto(pathToFileURL(params.htmlPath).href);
@@ -422,12 +505,12 @@ async function captureProducerArtifactFixtureProof(params: {
     };
   }
   try {
-    const { chromium } = await import("playwright");
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
-    const browser = await chromium.launch();
+    const { browser, usedSystemExecutablePath } = await launchUxMatrixChromium();
     let recordedVideo: string | undefined;
     try {
+      ensureUxMatrixVideoDependencies({ usedSystemExecutablePath });
       const context = await browser.newContext({
         viewport: { width: 1280, height: 820 },
         recordVideo: {
@@ -613,6 +696,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   const previewEvidence = buildEvidenceSummary({
     cells: initialCells,
     generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
   });
   const screenshotLog = await fs.readFile(path.join(screenshotCellDir, "logs.txt"), "utf8");
   await writeProducerArtifactFixtureHtml({
@@ -673,7 +757,11 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     ...initialCells,
   ];
 
-  const evidence = buildEvidenceSummary({ cells, generatedAt: new Date().toISOString() });
+  const evidence = buildEvidenceSummary({
+    cells,
+    generatedAt: new Date().toISOString(),
+    repoRoot: options.repoRoot,
+  });
   await writeProducerArtifactFixtureHtml({
     artifactBase: options.artifactBase,
     evidence,
@@ -698,7 +786,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   (async () => {
     const cliArgs = process.argv.slice(2);
-    if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+    if (isHelpRequest(cliArgs)) {
       console.log(usage());
       return;
     }

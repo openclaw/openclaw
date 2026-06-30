@@ -1245,6 +1245,26 @@ describe("tui session actions", () => {
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
   });
 
+  it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "reply" }] }],
+    });
+    const requestRender = vi.fn();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory,
+      } as unknown as TuiBackend,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+    });
+
+    await runLoadHistory();
+
+    expect(requestRender).toHaveBeenCalledWith(true);
+  });
+
   it("hydrates session info from chat history without listing sessions", async () => {
     const listSessions = vi.fn();
     const loadHistory = vi.fn().mockResolvedValue({

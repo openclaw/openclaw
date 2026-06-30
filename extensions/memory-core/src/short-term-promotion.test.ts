@@ -19,6 +19,7 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  filterLiveShortTermRecallEntries,
   isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
@@ -109,6 +110,7 @@ describe("short-term promotion", () => {
         claimHash?: unknown;
         firstRecalledAt?: unknown;
         lastRecalledAt?: unknown;
+        dailyCount?: unknown;
         recallCount?: unknown;
         snippet?: unknown;
         totalScore?: unknown;
@@ -168,6 +170,42 @@ describe("short-term promotion", () => {
       });
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
       expect(Object.keys(store.entries).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("deduplicates source-file checks within a recall batch", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Deduplicated source check note.",
+      ]);
+      const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
+      const entry = {
+        key: "duplicate-source",
+        path: relativePath,
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "Deduplicated source check note.",
+        recallCount: 1,
+        dailyCount: 1,
+        groundedCount: 0,
+        totalScore: 0.9,
+        maxScore: 0.9,
+        firstRecalledAt: "2026-04-03T00:00:00.000Z",
+        lastRecalledAt: "2026-04-03T00:00:00.000Z",
+        queryHashes: ["query"],
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+      };
+      const statSpy = vi.spyOn(fs, "stat");
+
+      const live = await filterLiveShortTermRecallEntries({
+        workspaceDir,
+        entries: [entry, { ...entry, key: "duplicate-source-2" }],
+      });
+
+      expect(live).toHaveLength(2);
+      expect(statSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -540,6 +578,51 @@ describe("short-term promotion", () => {
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.recallCount).toBe(8);
       expect(ranked[0]?.uniqueQueries).toBe(4);
+    });
+  });
+
+  it("keeps duplicate daily signals from refreshing recall freshness", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T11:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entry?.dailyCount).toBe(1);
+      expect(entry?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
     });
   });
 
@@ -3152,7 +3235,9 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
+      // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
+      // per-script min-length gate (the longer terms still match as substrings).
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {

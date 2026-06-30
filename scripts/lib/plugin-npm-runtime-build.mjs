@@ -307,7 +307,7 @@ function readPackageDirArg(argv) {
   if (packageDir === "--help" || packageDir === "-h") {
     return { help: true, packageDir: "" };
   }
-  if (!packageDir || packageDir.startsWith("--")) {
+  if (!packageDir || packageDir.startsWith("-")) {
     throw new Error(usage());
   }
   const extraArg = args[1];

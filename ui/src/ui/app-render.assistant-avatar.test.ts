@@ -129,6 +129,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -348,6 +349,18 @@ describe("renderApp assistant avatar routing", () => {
     expect(content?.classList.contains("content--chat")).toBe(false);
   });
 
+  it("auto-expands chat tool calls when the effective verbose level is full", () => {
+    renderApp(createState({ tab: "chat", chatVerboseLevel: "full" }));
+
+    expect(chatProps.current?.autoExpandToolCalls).toBe(true);
+  });
+
+  it("keeps chat tool calls collapsed by default for non-full verbose levels", () => {
+    renderApp(createState({ tab: "chat", chatVerboseLevel: "tokens" }));
+
+    expect(chatProps.current?.autoExpandToolCalls).toBe(false);
+  });
+
   it("does not render chat errors in non-chat page headers", () => {
     const container = document.createElement("div");
 
@@ -503,6 +516,29 @@ describe("renderApp assistant avatar routing", () => {
       | undefined;
     expect(tools?.profile).toBe("full");
     expect(tools?.exec?.security).toBe("full");
+  });
+
+  it("passes effective fast mode to Quick Settings", () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            effectiveFastMode: "auto",
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+
+    renderApp(state);
+
+    expect(quickSettingsProps.current?.fastMode).toBe("auto");
   });
 
   it("renders stale cron state containing a job without a payload", () => {

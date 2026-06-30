@@ -46,6 +46,7 @@ export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
 const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
 const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
@@ -133,6 +134,24 @@ function parseBool(raw, fallback) {
     return fallback;
   }
   return !/^(?:0|false|no)$/i.test(raw);
+}
+
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  const value = numericTimerValueMs(valueMs);
+  if (value === undefined || value <= 0) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(value);
 }
 
 function resourceLimitsSummary(resourceLimits) {
@@ -567,7 +586,13 @@ export function runShellCommand({
     return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
   }
   return new Promise((resolve) => {
-    const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
+    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
@@ -593,27 +618,30 @@ export function runShellCommand({
         console.error(`==> [${label}] ${message}; sending SIGTERM`);
       }
       terminateChild(child, "SIGTERM");
-      killAt = Date.now() + timeoutKillGraceMs;
-      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), timeoutKillGraceMs);
+      killAt = Date.now() + resolvedTimeoutKillGraceMs;
+      killTimer = setTimeout(
+        () => terminateChild(child, "SIGKILL"),
+        resolvedTimeoutKillGraceMs,
+      );
       killTimer.unref?.();
     };
     const resetNoOutputTimer = () => {
-      if (!noOutputTimeoutMs || noOutputTimeoutMs <= 0 || timedOut) {
+      if (!resolvedNoOutputTimeoutMs || timedOut) {
         return;
       }
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
       noOutputTimer = setTimeout(() => {
-        terminateForTimeout(`no output for ${noOutputTimeoutMs}ms`, { noOutput: true });
-      }, noOutputTimeoutMs);
+        terminateForTimeout(`no output for ${resolvedNoOutputTimeoutMs}ms`, { noOutput: true });
+      }, resolvedNoOutputTimeoutMs);
       noOutputTimer.unref?.();
     };
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
-            terminateForTimeout(`timeout after ${timeoutMs}ms`);
-          }, timeoutMs)
+            terminateForTimeout(`timeout after ${resolvedTimeoutMs}ms`);
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
 
@@ -661,10 +689,10 @@ export function runShellCommand({
         resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
       };
       if (timedOut) {
-        void finishTimedOutShellProcessTree(child, { killAt, timeoutKillGraceMs }).then(
-          finish,
-          finish,
-        );
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
       finish();
@@ -691,6 +719,11 @@ export function runShellCaptureCommand({
     return activeChildrenShutdownPromise.then(() => shellCaptureSkippedForShutdown(label));
   }
   return new Promise((resolve) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
@@ -706,14 +739,17 @@ export function runShellCaptureCommand({
     let killTimer;
     let killAt;
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            killAt = Date.now() + timeoutKillGraceMs;
-            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), timeoutKillGraceMs);
+            killAt = Date.now() + resolvedTimeoutKillGraceMs;
+            killTimer = setTimeout(
+              () => terminateChild(child, "SIGKILL"),
+              resolvedTimeoutKillGraceMs,
+            );
             killTimer.unref?.();
-          }, timeoutMs)
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
     child.stdout.on("data", (chunk) => {
@@ -749,10 +785,10 @@ export function runShellCaptureCommand({
         });
       };
       if (timedOut) {
-        void finishTimedOutShellProcessTree(child, { killAt, timeoutKillGraceMs }).then(
-          finish,
-          finish,
-        );
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
       finish();

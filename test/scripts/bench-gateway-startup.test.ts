@@ -81,6 +81,12 @@ describe("gateway startup benchmark script", () => {
     expect(() => testing.parseOptions(["--runs", "--warmup", "0"])).toThrow(
       "--runs requires a value",
     );
+    expect(() => testing.parseOptions(["--case", "default", "--case", "default"])).toThrow(
+      'Duplicate --case "default"',
+    );
+    expect(() =>
+      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
+    ).toThrow("--output was provided more than once");
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
@@ -101,6 +107,34 @@ describe("gateway startup benchmark script", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("reports duplicate benchmark cases without a stack trace", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-gateway-startup.ts",
+        "--case",
+        "default",
+        "--case",
+        "default",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('Duplicate --case "default"');
     expect(result.stderr).not.toContain("\n    at ");
   });
 

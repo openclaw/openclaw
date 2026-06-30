@@ -16,10 +16,17 @@ function runSigningResult(args: string[]): { ok: boolean; stdout: string; stderr
     const e = error as { stdout?: unknown; stderr?: unknown };
     return {
       ok: false,
-      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? ""),
-      stderr: Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? ""),
+      stdout: formatProcessOutput(e.stdout),
+      stderr: formatProcessOutput(e.stderr),
     };
   }
+}
+
+function formatProcessOutput(value: unknown): string {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  return typeof value === "string" ? value : "";
 }
 
 function runSigning(mode: string): string {
@@ -33,7 +40,9 @@ describe("scripts/ios-release-signing.mjs", () => {
   it.each([
     ["--mode"],
     ["--mode", "--manifest"],
+    ["--mode", "-h"],
     ["--manifest"],
+    ["--manifest", "-h"],
   ])("rejects missing values for %s before reading signing manifests", (...args) => {
     const result = runSigningResult(args);
 
@@ -70,7 +79,7 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain("Signing branch: main");
     expect(output).toContain("Signing setup and sync: Fastlane match");
     expect(output).not.toContain("OpenClawWatchExtension");
-    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS");
+    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS, APP_ATTEST");
     expect(output).toContain("app groups: group.ai.openclawfoundation.app.shared");
   });
 });

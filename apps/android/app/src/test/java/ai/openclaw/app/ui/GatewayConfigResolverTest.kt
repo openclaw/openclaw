@@ -204,17 +204,18 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsRawSetupCode() {
+  fun resolveScannedSetupCodeResultAcceptsRawSetupCode() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsQrJsonPayload() {
+  fun resolveScannedSetupCodeResultAcceptsQrJsonPayload() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
     val qrJson =
@@ -227,49 +228,55 @@ class GatewayConfigResolverTest {
       }
       """.trimIndent()
 
-    val resolved = resolveScannedSetupCode(qrJson)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsInvalidInput() {
-    val resolved = resolveScannedSetupCode("not-a-valid-setup-code")
-    assertNull(resolved)
+  fun resolveScannedSetupCodeResultRejectsInvalidInput() {
+    val resolved = resolveScannedSetupCodeResult("not-a-valid-setup-code")
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsJsonWithInvalidSetupCode() {
+  fun resolveScannedSetupCodeResultRejectsJsonWithInvalidSetupCode() {
     val qrJson = """{"setupCode":"invalid"}"""
-    val resolved = resolveScannedSetupCode(qrJson)
-    assertNull(resolved)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsJsonWithNonStringSetupCode() {
+  fun resolveScannedSetupCodeResultRejectsJsonWithNonStringSetupCode() {
     val qrJson = """{"setupCode":{"nested":"value"}}"""
-    val resolved = resolveScannedSetupCode(qrJson)
-    assertNull(resolved)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsNonLoopbackCleartextGateway() {
+  fun resolveScannedSetupCodeResultRejectsNonLoopbackCleartextGateway() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertNull(resolved)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsPrivateLanCleartextGateway() {
+  fun resolveScannedSetupCodeResultAcceptsPrivateLanCleartextGateway() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://192.168.31.100:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test

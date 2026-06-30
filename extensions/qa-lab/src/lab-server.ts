@@ -446,7 +446,7 @@ export async function startQaLabServer(
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
           });
-          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
+          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir, repoRoot) }));
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/outcomes") {

@@ -93,7 +93,7 @@ export function parseVersionSyncArgs(argv: string[]): VersionSyncCliOptions {
 
 function readOptionValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`Missing value for ${flag}.`);
   }
   return value;

@@ -827,12 +827,18 @@ function updateActiveMemoryGlobalEnabledInConfig(
   };
 }
 
-function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
-  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+function lacksAdminToMutateActiveMemoryGlobal(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
 }
 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
-  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
+  "⚠️ /active-memory global enable/disable changes require owner or operator.admin.";
 
 function normalizePluginConfig(
   pluginConfig: unknown,
@@ -1153,6 +1159,19 @@ function isEligibleInteractiveSession(ctx: {
   channelId?: string;
 }): boolean {
   if (ctx.trigger !== "user") {
+    return false;
+  }
+  // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
+  // Canonical forms: "dreaming-narrative-<phase>-<hash>" or
+  // "agent:<agentId>:dreaming-narrative-<phase>-<hash>".
+  // A colon-delimited match would also exclude real chat session ids whose peer id
+  // begins with a phased dreaming-narrative phrase (e.g.
+  // "agent:main:feishu:group:dreaming-narrative-light-room").
+  const sessionKey = ctx.sessionKey ?? "";
+  if (
+    /^dreaming-narrative-(light|rem|deep)-/i.test(sessionKey) ||
+    /^agent:[^:]+:dreaming-narrative-(light|rem|deep)-/i.test(sessionKey)
+  ) {
     return false;
   }
   if (!ctx.sessionKey && !ctx.sessionId) {
@@ -3474,6 +3493,7 @@ export default definePluginEntry({
       name: "active-memory",
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const tokens = ctx.args?.trim().split(/\s+/).filter(Boolean) ?? [];
         const isGlobal = tokens.includes("--global");
@@ -3488,7 +3508,12 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
-          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutateActiveMemoryGlobal({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
             };
@@ -3617,7 +3642,12 @@ export default definePluginEntry({
               });
               return undefined;
             }
-            if (!isEligibleInteractiveSession(ctx)) {
+            if (
+              !isEligibleInteractiveSession({
+                ...ctx,
+                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              })
+            ) {
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,

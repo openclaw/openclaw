@@ -2,7 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-describe("docs-i18n Go module", () => {
+const hasGoToolchain = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
+
+describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
   it("passes Go tests", () => {
     const result = spawnSync("go", ["test", "./...", "-count=1"], {
       cwd: "scripts/docs-i18n",

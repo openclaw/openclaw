@@ -274,6 +274,24 @@ describe("telegram user credential IO", () => {
     );
   });
 
+  it("rejects short flags as credential script option values", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=args-${Date.now()}`
+    )) as {
+      parseArgs(argv: string[]): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseArgs([
+        "node",
+        "scripts/e2e/telegram-user-credential.ts",
+        "restore",
+        "--payload-file",
+        "-h",
+      ]),
+    ).toThrow("Usage:");
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
