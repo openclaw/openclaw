@@ -1,7 +1,7 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
-import { captureFullEnv } from "../../test-utils/env.js";
+import { captureFullEnv, withEnvAsync } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
 
@@ -481,6 +481,70 @@ describe("runDaemonInstall", () => {
     });
   });
 
+  it("blocks managed install when explicit no-auth would bind to LAN", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: {
+          mode: "none",
+          token: "durable-token",
+        },
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    resolveGatewayAuthMock.mockReturnValue({
+      mode: "none",
+      token: "durable-token",
+      password: undefined,
+      allowTailscale: false,
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Gateway install blocked");
+    expect(actionState.failed[0]?.message).toContain("gateway.bind=lan");
+    expect(actionState.failed[0]?.message).toContain("gateway.auth.mode=none");
+    expect(actionState.failed[0]?.message).toContain("openclaw config set gateway.auth.mode token");
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("allows managed install when explicit no-auth stays on loopback", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "none",
+        },
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    resolveGatewayAuthMock.mockReturnValue({
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toStrictEqual([]);
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not persist gateway mode when runtime validation fails", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -765,27 +829,27 @@ describe("runDaemonInstall", () => {
       },
     } as never);
 
-    const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    try {
-      await runDaemonInstall({ json: true, force: true });
+    await withEnvAsync(
+      {
+        OPENAI_API_KEY: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENCLAW_CONFIG_PATH: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        await runDaemonInstall({ json: true, force: true });
 
-      expectFields(readFirstInstallPlanArg().env, {
-        OPENAI_API_KEY: "service-openai-key",
-      });
-      const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
-      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.PATH).not.toContain("/tmp/doctor-bin");
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+        expectFields(readFirstInstallPlanArg().env, {
+          OPENAI_API_KEY: "service-openai-key",
+        });
+        const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
+        expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+        expect(env.NODE_OPTIONS).toBeUndefined();
+        expect(env.PATH).not.toContain("/tmp/doctor-bin");
+        expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 });
