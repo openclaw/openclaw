@@ -313,7 +313,10 @@ describe("gateway talk.config", () => {
     });
 
     await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
-      await expectTalkSecretsConfig({ apiKey: talkApiSecretRef() });
+      await expectTalkSecretsConfig({
+        providerApiKey: talkApiSecretRef(),
+        resolvedApiKey: "env-acme-key",
+      });
     });
   });
 
@@ -402,7 +405,8 @@ describe("gateway talk.config", () => {
 
           await expectTalkSecretsConfig({
             voiceId: "voice-secretref",
-            apiKey: talkApiSecretRef(),
+            providerApiKey: talkApiSecretRef(),
+            resolvedApiKey: "env-acme-key",
           });
         },
       );

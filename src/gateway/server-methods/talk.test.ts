@@ -516,6 +516,87 @@ describe("talk.config handler", () => {
     expectRecordFields(resolved, { provider: "acme" });
     expectRecordFields(resolved?.config, { apiKey: "__OPENCLAW_REDACTED__" });
   });
+
+  it("returns runtime-resolved Talk provider SecretRefs to authorized clients", async () => {
+    const sourceConfig = createTalkConfig({
+      source: "env",
+      provider: "default",
+      id: "ACME_SPEECH_API_KEY",
+    });
+    const runtimeConfig = createTalkConfig("runtime-resolved-talk-key");
+
+    mocks.getSpeechProvider.mockReturnValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: sourceConfig,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: { includeSecrets: true },
+      client: { connect: { scopes: ["operator.talk.secrets"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    const talkConfig = response.config?.talk;
+    expectRecordFields(talkConfig, { provider: "acme" });
+    const providers = talkConfig?.providers as Record<string, unknown> | undefined;
+    const providerConfig = expectRecordFields(providers?.acme, { voiceId: "stub-default-voice" });
+    expectRecordFields(providerConfig.apiKey, {
+      source: "env",
+      provider: "default",
+      id: "ACME_SPEECH_API_KEY",
+    });
+    const resolved = talkConfig?.resolved as Record<string, unknown> | undefined;
+    expectRecordFields(resolved, { provider: "acme" });
+    expectRecordFields(resolved?.config, { apiKey: "runtime-resolved-talk-key" });
+  });
+
+  it("redacts runtime-resolved Talk provider SecretRefs without Talk secret scope", async () => {
+    const sourceConfig = createTalkConfig({
+      source: "env",
+      provider: "default",
+      id: "ACME_SPEECH_API_KEY",
+    });
+    const runtimeConfig = createTalkConfig("runtime-resolved-talk-key");
+
+    mocks.getSpeechProvider.mockReturnValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: sourceConfig,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    const resolved = response.config?.talk?.resolved as Record<string, unknown> | undefined;
+    expectRecordFields(resolved, { provider: "acme" });
+    const resolvedConfig = expectRecordFields(resolved?.config, {});
+    expectRecordFields(resolvedConfig.apiKey, {
+      source: "__OPENCLAW_REDACTED__",
+      provider: "__OPENCLAW_REDACTED__",
+      id: "__OPENCLAW_REDACTED__",
+    });
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain("runtime-resolved-talk-key");
+    expect(serialized).not.toContain("ACME_SPEECH_API_KEY");
+  });
 });
 
 describe("talk.session unified handlers", () => {

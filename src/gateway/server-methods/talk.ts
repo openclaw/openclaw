@@ -45,6 +45,7 @@ import {
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
+import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
 import { talkClientHandlers } from "./talk-client.js";
 import { talkSessionHandlers } from "./talk-session.js";
@@ -396,11 +397,11 @@ function inferMimeType(
   return undefined;
 }
 
-function resolveTalkResponseFromConfig(params: {
+async function resolveTalkResponseFromConfig(params: {
   includeSecrets: boolean;
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
-}): TalkConfigResponse | undefined {
+}): Promise<TalkConfigResponse | undefined> {
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
   if (!normalizedTalk) {
     return undefined;
@@ -409,10 +410,6 @@ function resolveTalkResponseFromConfig(params: {
   const payload = buildTalkConfigResponse(normalizedTalk);
   if (!payload) {
     return undefined;
-  }
-
-  if (params.includeSecrets) {
-    return payload;
   }
 
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
@@ -436,15 +433,18 @@ function resolveTalkResponseFromConfig(params: {
     Object.keys(runtimeBaseTts).length > 0
       ? runtimeBaseTts
       : stripUnresolvedSecretApiKeysFromBaseTtsProviders(sourceBaseTts);
-  // Prefer runtime-resolved provider config (already-substituted secrets) and
-  // fall back to source. Strip any apiKey that is still a SecretRef wrapper —
-  // provider plugins (ElevenLabs/OpenAI) call strict secret helpers that throw
-  // on unresolved wrappers, and the discovery path doesn't need the resolved
-  // value: the response's apiKey is restored from source so the UI keeps the
-  // SecretRef shape, and redaction strips the value when includeSecrets=false.
-  const providerInputConfig = stripUnresolvedSecretApiKey(
-    Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
-  );
+  // Prefer runtime-resolved provider config and fall back to source. Provider
+  // plugins (ElevenLabs/OpenAI) call strict secret helpers that throw on
+  // unresolved wrappers, so only the already-authorized includeSecrets path may
+  // materialize SecretRef apiKey values before provider resolution. Read-scope
+  // calls keep the old strip/redact behavior.
+  const providerInputConfig = await resolveTalkProviderInputConfig({
+    includeSecrets: params.includeSecrets,
+    config: params.runtimeConfig,
+    providerConfig:
+      Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
+    provider,
+  });
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
       cfg: params.runtimeConfig,
@@ -452,8 +452,9 @@ function resolveTalkResponseFromConfig(params: {
       talkProviderConfig: providerInputConfig,
       timeoutMs: typeof selectedBaseTts.timeoutMs === "number" ? selectedBaseTts.timeoutMs : 30_000,
     }) ?? providerInputConfig;
-  const responseConfig =
-    sourceProviderConfig.apiKey === undefined
+  const responseConfig = params.includeSecrets
+    ? resolvedConfig
+    : sourceProviderConfig.apiKey === undefined
       ? resolvedConfig
       : { ...resolvedConfig, apiKey: sourceProviderConfig.apiKey };
 
@@ -465,6 +466,27 @@ function resolveTalkResponseFromConfig(params: {
       config: responseConfig,
     },
   };
+}
+
+async function resolveTalkProviderInputConfig(params: {
+  includeSecrets: boolean;
+  config: OpenClawConfig;
+  providerConfig: TalkProviderConfig;
+  provider: string;
+}): Promise<TalkProviderConfig> {
+  const strippedConfig = stripUnresolvedSecretApiKey(params.providerConfig);
+  if (!params.includeSecrets || params.providerConfig.apiKey === undefined) {
+    return strippedConfig;
+  }
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.config,
+    env: process.env,
+    value: params.providerConfig.apiKey,
+    path: `talk.providers.${params.provider}.apiKey`,
+  });
+  return resolved.value === undefined
+    ? strippedConfig
+    : { ...params.providerConfig, apiKey: resolved.value };
 }
 
 function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderConfig {
@@ -564,7 +586,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     const runtimeConfig = context.getRuntimeConfig();
     const configPayload: Record<string, unknown> = {};
 
-    const talk = resolveTalkResponseFromConfig({
+    const talk = await resolveTalkResponseFromConfig({
       includeSecrets,
       sourceConfig: snapshot.config,
       runtimeConfig,
