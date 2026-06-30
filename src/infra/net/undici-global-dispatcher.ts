@@ -178,9 +178,9 @@ function createNoProxyAwareEnvDispatcher(
         };
       }
       const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") {
-        return value;
-      }
+      // Check lifecycle methods before the typeof guard: even if the
+      // underlying dispatcher does not define close/destroy (e.g. test
+      // mocks), the wrapper must always expose callable lifecycle methods.
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
         return (...args: unknown[]) => {
           // Clean up both the proxy dispatcher and the bypass agent.
