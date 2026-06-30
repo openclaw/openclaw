@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
@@ -48,9 +49,11 @@ import {
   type CronDeliveryPlan,
 } from "../delivery-plan.js";
 import {
+  createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
+  toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
@@ -61,6 +64,7 @@ import type {
   CronDeliveryTraceMessageTarget,
   CronDeliveryTraceTarget,
   CronJob,
+  CronRunDiagnostics,
   CronRunTelemetry,
 } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
@@ -132,6 +136,10 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
+const codexNativeWebSearchLoader = createLazyImportLoader(
+  () => import("../../agents/codex-native-web-search.js"),
+);
+const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
 
 async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
@@ -167,6 +175,14 @@ async function loadCronModelPreflightRuntime() {
 
 async function loadRuntimePlugins() {
   return await runtimePluginsLoader.load();
+}
+
+async function loadCodexNativeWebSearch() {
+  return await codexNativeWebSearchLoader.load();
+}
+
+async function loadWebSearchRuntime() {
+  return await webSearchRuntimeLoader.load();
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -326,6 +342,59 @@ function canPromptForMessageTool(params: {
   );
 }
 
+async function createCronToolsAllowPreflightDiagnostics(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  provider: string;
+  model: string;
+  modelApi?: string;
+  agentId?: string;
+  agentDir?: string;
+  sessionKey?: string;
+  agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+}): Promise<CronRunDiagnostics | undefined> {
+  const toolsAllow = params.agentPayload?.toolsAllow;
+  if (
+    params.agentPayload?.toolsAllowIsDefault === true ||
+    !toolsAllowRequestsWebSearch(toolsAllow)
+  ) {
+    return undefined;
+  }
+  try {
+    const { shouldSuppressManagedWebSearchTool } = await loadCodexNativeWebSearch();
+    if (
+      shouldSuppressManagedWebSearchTool({
+        config: params.cfg,
+        modelProvider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.model,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        agentDir: params.agentDir,
+      })
+    ) {
+      return undefined;
+    }
+    const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
+    const webSearchProviders = listWebSearchProviders({ config: params.cfg });
+    return createCronRunDiagnosticsFromMissingWebSearchProvider({
+      toolsAllow,
+      hasWebSearchProvider: Boolean(
+        resolveWebSearchProviderId({
+          config: params.cfg,
+          agentDir: params.agentDir,
+          providers: webSearchProviders,
+        }),
+      ),
+    });
+  } catch (error) {
+    logWarn(
+      `[cron:${params.jobId}] Failed to inspect web_search providers for toolsAllow diagnostics: ${String(error)}`,
+    );
+    return undefined;
+  }
+}
+
 /** Exported for #91613 keyless-inherited delivery-context regression coverage. */
 export async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
@@ -476,6 +545,7 @@ type PreparedCronRunContext = {
   modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  preflightDiagnostics?: CronRunDiagnostics;
   /**
    * Set when the cron payload's `timeoutSeconds` was explicitly configured
    * for this run (independent of whether its numeric value happens to equal
@@ -758,6 +828,22 @@ async function prepareCronRunContext(params: {
   // `timeoutSeconds` happens to numerically equal `agents.defaults.timeoutSeconds`.
   const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+  const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
+  const modelApi =
+    findModelInCatalog(thinkingCatalog, provider, model)?.api ??
+    configuredProvider?.models.find((candidate) => candidate.id === model)?.api ??
+    configuredProvider?.api;
+  const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
+    cfg: cfgWithAgentDefaults,
+    jobId: input.job.id,
+    provider,
+    model,
+    modelApi,
+    agentId,
+    agentDir,
+    sessionKey: agentSessionKey,
+    agentPayload,
+  });
   const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
     await resolveCronDeliveryContext({
       cfg: cfgWithAgentDefaults,
@@ -911,6 +997,7 @@ async function prepareCronRunContext(params: {
       modelFallbacksOverride,
       thinkLevel,
       timeoutMs,
+      preflightDiagnostics,
       runTimeoutOverrideMs,
     },
   };
@@ -1093,6 +1180,7 @@ async function finalizeCronRun(params: {
       status: "error",
       error: params.abortReason(),
       diagnostics: mergeCronRunDiagnostics(
+        prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
@@ -1125,6 +1213,7 @@ async function finalizeCronRun(params: {
       status: "error",
       error,
       diagnostics: mergeCronRunDiagnostics(
+        prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
@@ -1142,6 +1231,7 @@ async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
+  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -1159,13 +1249,13 @@ async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: hasFatalErrorPayload
         ? mergeCronRunDiagnostics(
-            agentDiagnostics,
+            runDiagnostics,
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : agentDiagnostics,
+        : runDiagnostics,
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1269,7 +1359,7 @@ async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
       diagnostics: mergeCronRunDiagnostics(
-        agentDiagnostics,
+        runDiagnostics,
         deliveryResult.result.diagnostics,
         deliveryResult.result.status === "error" && deliveryResult.result.error
           ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)
@@ -1488,9 +1578,12 @@ export async function runCronIsolatedAgentTurn(params: {
     return prepared.context.withRunSession({
       status: "error",
       error,
-      diagnostics: createCronRunDiagnosticsFromError(
-        isCronLaneTimeout ? "cron-setup" : "agent-run",
-        isCronLaneTimeout ? error : err,
+      diagnostics: mergeCronRunDiagnostics(
+        prepared.context.preflightDiagnostics,
+        createCronRunDiagnosticsFromError(
+          isCronLaneTimeout ? "cron-setup" : "agent-run",
+          isCronLaneTimeout ? error : err,
+        ),
       ),
     });
   } finally {

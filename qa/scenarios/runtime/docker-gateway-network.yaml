@@ -21,7 +21,7 @@ scenario:
     - scripts/e2e/lib/gateway-network/client.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing gateway-network Docker E2E lane for compose-style container network access coverage.
     args:
       - --lane
