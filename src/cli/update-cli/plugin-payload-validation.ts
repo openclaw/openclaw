@@ -208,6 +208,10 @@ function isBundleInstallRecord(record: PluginInstallRecord): boolean {
   );
 }
 
+function isKnownNativePackageInstallRecord(record: PluginInstallRecord): boolean {
+  return record.clawhubFamily === "code-plugin";
+}
+
 function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | null {
   const raw = (record as { bundleFormat?: unknown }).bundleFormat;
   return raw === "codex" || raw === "claude" || raw === "cursor" ? raw : null;
@@ -236,6 +240,9 @@ async function resolveBundlePayloadFormat(params: {
   installPath: string;
   record: PluginInstallRecord;
 }): Promise<PluginBundleFormat | null> {
+  if (isKnownNativePackageInstallRecord(params.record)) {
+    return null;
+  }
   const explicitManifestFormat = await detectExplicitBundleManifestFormat(params.installPath);
   if (explicitManifestFormat) {
     return explicitManifestFormat;
