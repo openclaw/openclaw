@@ -16,6 +16,8 @@ import {
 } from "./config.js";
 import type { v2 } from "./protocol.js";
 
+const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
+
 /** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -108,9 +110,7 @@ export async function readCodexPluginInventory(
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
+  const marketplaceEntry = listed.marketplaces.find(isOpenAiCuratedMarketplace);
   if (!marketplaceEntry) {
     return {
       policy,
@@ -155,7 +155,7 @@ export async function readCodexPluginInventory(
       continue;
     }
 
-    const detail = await readPluginDetail(params, marketplace, pluginPolicy, diagnostics);
+    const detail = await readPluginDetail(params, marketplace, pluginPolicy, summary, diagnostics);
     const ownedAppIds =
       detail?.apps
         .map((app) => app.id)
@@ -213,9 +213,7 @@ export function findOpenAiCuratedPluginSummary(
   listed: v2.PluginListResponse,
   pluginName: string,
 ): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
+  const marketplaceEntry = listed.marketplaces.find(isOpenAiCuratedMarketplace);
   if (!marketplaceEntry) {
     return undefined;
   }
@@ -257,6 +255,7 @@ async function readPluginDetail(
   params: ReadCodexPluginInventoryParams,
   marketplace: CodexPluginMarketplaceRef,
   pluginPolicy: ResolvedCodexPluginPolicy,
+  summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
   if (params.readPluginDetails === false) {
@@ -265,7 +264,12 @@ async function readPluginDetail(
   try {
     const response = (await params.request(
       "plugin/read",
-      pluginReadParams(marketplace, pluginPolicy.pluginName),
+      pluginReadParams(
+        marketplace,
+        marketplace.remoteMarketplaceName && summary.remotePluginId
+          ? summary.remotePluginId
+          : pluginPolicy.pluginName,
+      ),
     )) as v2.PluginReadResponse;
     return response.plugin;
   } catch (error) {
@@ -369,4 +373,11 @@ function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMark
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
+}
+
+function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
+  return (
+    marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||
+    marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME
+  );
 }
