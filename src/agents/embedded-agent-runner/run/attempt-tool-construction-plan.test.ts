@@ -99,8 +99,9 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   it("keeps plugin-only allowlists on the shared tool policy path", () => {
     const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
 
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }))
-      .toHaveProperty("includeCoreTools", false);
+    expect(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
+    ).toHaveProperty("includeCoreTools", false);
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
     ).toEqual(["memory_search"]);
@@ -430,6 +431,13 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
       shouldCreateBundleMcpRuntimeForAttempt({
         toolsEnabled: true,
         toolsAllow: ["bundle-mcp"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["composio-dawson"],
+        mcpServerNames: ["composio-dawson"],
       }),
     ).toBe(true);
     expect(

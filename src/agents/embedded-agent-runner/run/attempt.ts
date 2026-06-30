@@ -95,6 +95,7 @@ import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  resolveSessionMcpConfigSummary,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
@@ -1532,10 +1533,18 @@ export async function runEmbeddedAttempt(
         }),
     });
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
+    const bundleMcpServerNames =
+      effectiveToolsAllow && effectiveToolsAllow.length > 0
+        ? resolveSessionMcpConfigSummary({
+            workspaceDir: effectiveWorkspace,
+            cfg: params.config,
+          }).serverNames
+        : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
+      toolsAllow: effectiveToolsAllow,
+      mcpServerNames: bundleMcpServerNames,
     });
     const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
