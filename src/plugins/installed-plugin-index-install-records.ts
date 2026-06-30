@@ -66,6 +66,8 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "spec", record.spec);
   setInstallStringField(normalized, "sourcePath", record.sourcePath);
   setInstallStringField(normalized, "installPath", record.installPath);
+  setInstallStringField(normalized, "format", record.format);
+  setInstallStringField(normalized, "bundleFormat", record.bundleFormat);
   setInstallStringField(normalized, "version", record.version);
   setInstallStringField(normalized, "resolvedName", record.resolvedName);
   setInstallStringField(normalized, "resolvedVersion", record.resolvedVersion);
@@ -121,6 +123,24 @@ function restoreInstallRecord(
   return structuredClone(record) as PluginInstallRecord;
 }
 
+function isBundleFormat(value: unknown): value is NonNullable<PluginInstallRecord["bundleFormat"]> {
+  return value === "codex" || value === "claude" || value === "cursor";
+}
+
+function enrichInstallRecordWithIndexedFormat(
+  restored: PluginInstallRecord | undefined,
+  plugin: InstalledPluginIndex["plugins"][number],
+): PluginInstallRecord | undefined {
+  if (!restored || plugin.format !== "bundle" || !isBundleFormat(plugin.bundleFormat)) {
+    return restored;
+  }
+  return {
+    ...restored,
+    format: "bundle",
+    bundleFormat: plugin.bundleFormat,
+  };
+}
+
 /** Normalizes raw plugin install records into index-safe install record metadata. */
 export function normalizeInstallRecordMap(
   records: Record<string, PluginInstallRecord> | undefined,
@@ -157,11 +177,21 @@ export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
   if (index && Object.hasOwn(index, "installRecords")) {
-    return restoreInstallRecordMap(index.installRecords);
+    const records = restoreInstallRecordMap(index.installRecords);
+    for (const plugin of index.plugins) {
+      const enriched = enrichInstallRecordWithIndexedFormat(records[plugin.pluginId], plugin);
+      if (enriched) {
+        records[plugin.pluginId] = enriched;
+      }
+    }
+    return records;
   }
   const records: Record<string, PluginInstallRecord> = {};
   for (const plugin of index?.plugins ?? []) {
-    const record = restoreInstallRecord(plugin.installRecord);
+    const record = enrichInstallRecordWithIndexedFormat(
+      restoreInstallRecord(plugin.installRecord),
+      plugin,
+    );
     if (record) {
       records[plugin.pluginId] = record;
     }

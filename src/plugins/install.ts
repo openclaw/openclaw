@@ -157,6 +157,8 @@ export type InstallPluginResult =
       ok: true;
       pluginId: string;
       targetDir: string;
+      format?: "bundle";
+      bundleFormat?: "codex" | "claude" | "cursor";
       manifestName?: string;
       version?: string;
       extensions: string[];
@@ -545,6 +547,8 @@ function buildFileInstallResult(pluginId: string, targetFile: string): InstallPl
 function buildDirectoryInstallResult(params: {
   pluginId: string;
   targetDir: string;
+  format?: "bundle";
+  bundleFormat?: "codex" | "claude" | "cursor";
   manifestName?: string;
   version?: string;
   extensions: string[];
@@ -553,6 +557,8 @@ function buildDirectoryInstallResult(params: {
     ok: true,
     pluginId: params.pluginId,
     targetDir: params.targetDir,
+    ...(params.format ? { format: params.format } : {}),
+    ...(params.bundleFormat ? { bundleFormat: params.bundleFormat } : {}),
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
@@ -2114,6 +2120,8 @@ async function runInstallSourceScan(params: {
 async function installPluginDirectoryIntoExtensions(params: {
   sourceDir: string;
   pluginId: string;
+  format?: "bundle";
+  bundleFormat?: "codex" | "claude" | "cursor";
   manifestName?: string;
   version?: string;
   extensions: string[];
@@ -2160,6 +2168,8 @@ async function installPluginDirectoryIntoExtensions(params: {
     return buildDirectoryInstallResult({
       pluginId: params.pluginId,
       targetDir,
+      format: params.format,
+      bundleFormat: params.bundleFormat,
       manifestName: params.manifestName,
       version: params.version,
       extensions: params.extensions,
@@ -2200,6 +2210,8 @@ async function installPluginDirectoryIntoExtensions(params: {
   return buildDirectoryInstallResult({
     pluginId: params.pluginId,
     targetDir,
+    format: params.format,
+    bundleFormat: params.bundleFormat,
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
@@ -2327,6 +2339,8 @@ async function installBundleFromSourceDir(
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.sourceDir,
     pluginId,
+    format: "bundle",
+    bundleFormat,
     manifestName: manifestRes.manifest.name,
     version: manifestRes.manifest.version,
     extensions: [],

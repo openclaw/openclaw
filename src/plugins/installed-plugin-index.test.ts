@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
@@ -403,6 +404,40 @@ describe("installed plugin index", () => {
       bundleFormat: "claude",
     });
     expectSha256(plugin.manifestHash);
+  });
+
+  it("restores bundle install metadata from indexed plugin records", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir);
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      installRecords: {
+        workspace: {
+          source: "marketplace",
+          installPath: rootDir,
+          marketplaceSource: "owner/repo",
+          marketplacePlugin: "workspace",
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.installRecords.workspace?.format).toBeUndefined();
+    expect(extractPluginInstallRecordsFromInstalledPluginIndex(index).workspace).toMatchObject({
+      source: "marketplace",
+      installPath: rootDir,
+      format: "bundle",
+      bundleFormat: "claude",
+    });
   });
 
   it("changes manifestless Claude bundle hashes when derived metadata changes", () => {

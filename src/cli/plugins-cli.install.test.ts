@@ -1206,6 +1206,8 @@ describe("plugins cli install", () => {
       ok: true,
       pluginId: "alpha",
       targetDir: cliInstallPath("alpha"),
+      format: "bundle",
+      bundleFormat: "claude",
       extensions: ["index.js"],
       version: "1.2.3",
       marketplaceName: "Claude",
@@ -1230,6 +1232,8 @@ describe("plugins cli install", () => {
 
     expect(persistedInstallRecord("alpha").source).toBe("marketplace");
     expect(persistedInstallRecord("alpha").installPath).toBe(cliInstallPath("alpha"));
+    expect(persistedInstallRecord("alpha").format).toBe("bundle");
+    expect(persistedInstallRecord("alpha").bundleFormat).toBe("claude");
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(replaceConfigCall().baseHash).toBe("mock");
     expect(replaceConfigCall().nextConfig).toBe(enabledCfg);

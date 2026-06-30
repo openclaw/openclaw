@@ -56,6 +56,8 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "spec"
   | "sourcePath"
   | "installPath"
+  | "format"
+  | "bundleFormat"
   | "version"
   | "resolvedName"
   | "resolvedVersion"

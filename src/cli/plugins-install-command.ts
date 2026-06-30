@@ -1016,6 +1016,8 @@ export async function runPluginInstallCommand(params: {
       install: {
         source: "marketplace",
         installPath: result.targetDir,
+        ...(result.format ? { format: result.format } : {}),
+        ...(result.bundleFormat ? { bundleFormat: result.bundleFormat } : {}),
         version: result.version,
         marketplaceName: result.marketplaceName,
         marketplaceSource: result.marketplaceSource,

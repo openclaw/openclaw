@@ -4,6 +4,8 @@ export type InstallRecordBase = {
   spec?: string;
   sourcePath?: string;
   installPath?: string;
+  format?: "bundle";
+  bundleFormat?: "codex" | "claude" | "cursor";
   version?: string;
   resolvedName?: string;
   resolvedVersion?: string;

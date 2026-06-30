@@ -141,6 +141,8 @@ describe("runPluginPayloadSmokeCheck", () => {
         marketplace: {
           source: "marketplace",
           installPath: dir,
+          format: "bundle",
+          bundleFormat: "claude",
           marketplaceName: "local",
           marketplaceSource: "owner/repo",
           marketplacePlugin: "claude-bundle",
@@ -150,6 +152,31 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
     expect(result.checked).toEqual(["marketplace"]);
     expect(result.failures).toEqual([]);
+  });
+
+  it("does not reinterpret marketplace package records without durable bundle metadata", async () => {
+    const dir = path.join(tmpRoot, "marketplace-native-with-skills-leftover");
+    await writeManifestlessClaudeBundle(dir);
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        marketplace: {
+          source: "marketplace",
+          installPath: dir,
+          marketplaceName: "local",
+          marketplaceSource: "owner/repo",
+          marketplacePlugin: "native",
+        },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "marketplace",
+        installPath: dir,
+        reason: "missing-package-json",
+        detail: `package.json is missing under ${dir}`,
+      },
+    ]);
   });
 
   it("keeps reporting missing package.json for non-bundle payloads without package.json", async () => {
