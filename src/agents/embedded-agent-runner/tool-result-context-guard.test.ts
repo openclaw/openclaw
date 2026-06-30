@@ -1,6 +1,6 @@
 // Tool-result context guard tests cover live replay truncation, mid-turn
 // prechecks, and context-engine loop hooks for oversized tool outputs.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage, BashExecutionMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
@@ -418,6 +418,63 @@ describe("installToolResultContextGuard", () => {
     const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
 
     expect(transformed).toBe(contextForNextCall);
+  });
+
+  // #97927: harness roles (bashExecution, compactionSummary, branchSummary, custom)
+  // were estimated as flat 256 chars, blinding the guard to real context pressure.
+  // With the fix, the guard sees actual rendered text and triggers overflow protection.
+  it("detects preemptive overflow from large bashExecution output (#97927)", async () => {
+    const agent = makeGuardableAgent();
+    const bashMsg = castAgentMessage({
+      role: "bashExecution",
+      command: "cat /var/log/syslog",
+      output: "error: disk full\n".repeat(400),
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage);
+    // 500 token window → maxContextChars ≈ 500 * 4 * 0.85 ≈ 1700 chars.
+    // bashExecution renders to ~7200 chars → should trigger overflow.
+    // Before #97927 the guard estimated this as 256 chars and let it pass.
+    await expect(applyGuardToContext(agent, [makeUser("hi"), bashMsg], 500)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
+  });
+
+  it("correctly estimates compactionSummary context pressure (#97927)", async () => {
+    const agent = makeGuardableAgent();
+    const summary = "The conversation covered database schema, API design, and deployment.".repeat(
+      30,
+    );
+    const compactionMsg = castAgentMessage({
+      role: "compactionSummary",
+      summary,
+      tokensBefore: 8000,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage);
+    // COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX ≈ 2000+ chars
+    // Window: 500 tokens → maxContextChars ≈ 1700 → should overflow
+    await expect(applyGuardToContext(agent, [makeUser("hi"), compactionMsg], 500)).rejects.toThrow(
+      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    );
+  });
+
+  it("skips bashExecution records excluded from context (#97927)", async () => {
+    const agent = makeGuardableAgent();
+    const excludedBash = castAgentMessage({
+      role: "bashExecution",
+      command: "secret",
+      output: "classified data\n".repeat(500),
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      excludeFromContext: true,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage);
+    // excludeFromContext → estimate = 0 → guard should NOT overflow
+    const transformed = await applyGuardToContext(agent, [makeUser("hi"), excludedBash], 500);
+    expect(transformed).toEqual([makeUser("hi"), excludedBash]);
   });
 });
 

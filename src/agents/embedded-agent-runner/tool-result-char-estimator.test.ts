@@ -1,7 +1,14 @@
 // Tool-result char estimator tests cover malformed transcript blocks and cached
 // character estimates used by context pressure guards.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage, BashExecutionMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import {
+  bashExecutionToText,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../runtime/index.js";
 import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
@@ -66,5 +73,87 @@ describe("tool-result-char-estimator", () => {
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
     expect(chars).toBe(22);
+  });
+
+  it("estimates bashExecution from rendered text, not flat 256", () => {
+    const msg = {
+      role: "bashExecution",
+      command: "ls -la",
+      output: "total 42\ndrwxr-xr-x  5 user  staff   160 Jun 30 12:00 .",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    // Rendered text matches bashExecutionToText output exactly; no longer flat 256.
+    const rendered = bashExecutionToText(msg as unknown as BashExecutionMessage);
+    expect(chars).toBe(rendered.length);
+    expect(chars).not.toBe(256);
+  });
+
+  it("returns 0 for bashExecution excluded from context", () => {
+    const msg = {
+      role: "bashExecution",
+      command: "secret-command",
+      output: "classified",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      excludeFromContext: true,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    expect(estimateMessageCharsCached(msg, cache)).toBe(0);
+  });
+
+  it("estimates branchSummary from rendered prefix + summary + suffix", () => {
+    const summary = "This branch explored an alternative approach to authentication.";
+    const msg = {
+      role: "branchSummary",
+      summary,
+      fromId: "entry-123",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    expect(chars).toBeGreaterThan(summary.length);
+    expect(chars).toBe(
+      BRANCH_SUMMARY_PREFIX.length + summary.length + BRANCH_SUMMARY_SUFFIX.length,
+    );
+  });
+
+  it("estimates compactionSummary from rendered prefix + summary + suffix", () => {
+    const summary = "Compacted conversation about database schema design.";
+    const msg = {
+      role: "compactionSummary",
+      summary,
+      tokensBefore: 5000,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    expect(chars).toBeGreaterThan(summary.length);
+    expect(chars).toBe(
+      COMPACTION_SUMMARY_PREFIX.length + summary.length + COMPACTION_SUMMARY_SUFFIX.length,
+    );
+  });
+
+  it("estimates custom message from content string length", () => {
+    const msg = {
+      role: "custom",
+      customType: "test-marker",
+      content: "custom content string",
+      display: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    expect(estimateMessageCharsCached(msg, cache)).toBe(21);
   });
 });

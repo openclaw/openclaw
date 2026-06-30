@@ -1,7 +1,14 @@
 /**
  * Estimates message and tool-result character costs for context guards.
  */
-import type { AgentMessage } from "../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
+import {
+  bashExecutionToText,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../runtime/index.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
@@ -137,6 +144,46 @@ function estimateMessageChars(msg: AgentMessage): number {
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );
     return Math.max(chars, weightedChars);
+  }
+
+  // Harness roles whose rendering is defined by convertToLlm must be
+  // estimated from the same rendered text so the guard sees what the
+  // provider actually receives.  Without these branches the fallthrough
+  // returns a flat 256 for every summary or shell record, so long
+  // agent loops can silently overflow context.
+  if (msg.role === "bashExecution") {
+    const record = msg as unknown as Record<string, unknown>;
+    if (record.excludeFromContext === true) {
+      return 0;
+    }
+    return bashExecutionToText(msg as unknown as BashExecutionMessage).length;
+  }
+
+  if (msg.role === "branchSummary") {
+    const summary =
+      typeof (msg as { summary?: unknown }).summary === "string"
+        ? (msg as { summary: string }).summary
+        : "";
+    return BRANCH_SUMMARY_PREFIX.length + summary.length + BRANCH_SUMMARY_SUFFIX.length;
+  }
+
+  if (msg.role === "compactionSummary") {
+    const summary =
+      typeof (msg as { summary?: unknown }).summary === "string"
+        ? (msg as { summary: string }).summary
+        : "";
+    return COMPACTION_SUMMARY_PREFIX.length + summary.length + COMPACTION_SUMMARY_SUFFIX.length;
+  }
+
+  if (msg.role === "custom") {
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content.length;
+    }
+    if (Array.isArray(content)) {
+      return estimateContentBlockChars(content);
+    }
+    return 0;
   }
 
   return 256;
