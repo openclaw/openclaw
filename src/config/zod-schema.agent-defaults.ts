@@ -159,6 +159,18 @@ export const AgentDefaultsSchema = z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
+        thinkingLevel: z
+          .union([
+            z.literal("off"),
+            z.literal("minimal"),
+            z.literal("low"),
+            z.literal("medium"),
+            z.literal("high"),
+            z.literal("xhigh"),
+            z.literal("adaptive"),
+            z.literal("max"),
+          ])
+          .optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),

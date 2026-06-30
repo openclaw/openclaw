@@ -1903,6 +1903,8 @@ export class AgentSession {
     signal: AbortSignal;
     customInstructions?: string;
     mode: "manual" | "auto";
+    /** Override thinking level for compaction summarization. Defaults to session thinking level. */
+    compactionThinkingLevel?: ThinkingLevel;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     if (!this.model) {
@@ -1962,7 +1964,7 @@ export class AgentSession {
         auth.headers,
         options.customInstructions,
         options.signal,
-        this.thinkingLevel,
+        options.compactionThinkingLevel ?? this.thinkingLevel,
         this.agent.streamFn,
       ),
     );
