@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
+import type { ConfigWriteOptions } from "./io.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 function makeEaccesFs(configPath: string) {
@@ -46,7 +47,6 @@ describe("config io EACCES handling", () => {
     expect(snapshot.issues[0].message).toContain("EACCES");
     expect(snapshot.issues[0].message).toContain("chown");
     expect(snapshot.issues[0].message).toContain(configPath);
-    // Should also emit to the logger
     expect(errors.join("\n")).toContain("chown");
   });
 
@@ -110,82 +110,48 @@ describe("config write guard after unreadable config", () => {
     }
   });
 
-  it("refuses to overwrite a present-but-unreadable config and preserves the live file", async () => {
-    const home = fsNode.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreadable-"));
-    tempRoots.push(home);
-    const stateDir = path.join(home, ".openclaw");
-    fsNode.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    const liveConfig = {
-      gateway: { mode: "local", port: 18789, auth: { mode: "token" } },
-      channels: { telegram: { enabled: true } },
-      agents: { list: [{ id: "main" }] },
-      meta: { lastTouchedVersion: "2026.5.3-1" },
-    };
-    const liveBytes = `${JSON.stringify(liveConfig, null, 2)}\n`;
-    fsNode.writeFileSync(configPath, liveBytes, { mode: 0o600 });
+  it.each([
+    { label: "default write" },
+    { label: "update doctor size-drop write", writeOptions: { allowConfigSizeDrop: true } },
+  ] satisfies Array<{ label: string; writeOptions?: ConfigWriteOptions }>)(
+    "refuses to overwrite a present-but-unreadable config during $label",
+    async ({ writeOptions }) => {
+      const home = fsNode.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreadable-"));
+      tempRoots.push(home);
+      const stateDir = path.join(home, ".openclaw");
+      fsNode.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      const configPath = path.join(stateDir, "openclaw.json");
+      const liveConfig = {
+        gateway: { mode: "local", port: 18789, auth: { mode: "token" } },
+        channels: { telegram: { enabled: true } },
+        agents: { list: [{ id: "main" }] },
+        meta: { lastTouchedVersion: "2026.5.3-1" },
+      };
+      const liveBytes = `${JSON.stringify(liveConfig, null, 2)}\n`;
+      fsNode.writeFileSync(configPath, liveBytes, { mode: 0o600 });
 
-    const io = createConfigIO({
-      configPath,
-      fs: makeUnreadableConfigFs(configPath),
-      homedir: () => home,
-      env: {},
-      observe: false,
-      logger: { error: () => {}, warn: () => {} },
-    });
+      const io = createConfigIO({
+        configPath,
+        fs: makeUnreadableConfigFs(configPath),
+        homedir: () => home,
+        env: {},
+        observe: false,
+        logger: { error: () => {}, warn: () => {} },
+      });
 
-    const snapshot = await io.readConfigFileSnapshot();
-    expect(snapshot.readError).toEqual({ code: "EACCES" });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.readError).toEqual({ code: "EACCES" });
 
-    const skeletal = { channels: { telegram: { enabled: true } } } as OpenClawConfig;
-    let rejected: { code?: string; reasons?: string[] } | null = null;
-    try {
-      await io.writeConfigFile(skeletal);
-    } catch (err) {
-      rejected = err as { code?: string; reasons?: string[] };
-    }
-
-    expect(rejected?.code).toBe("CONFIG_WRITE_REJECTED");
-    expect(rejected?.reasons).toContain("unreadable-config-before-write");
-    expect(fsNode.readFileSync(configPath, "utf-8")).toBe(liveBytes);
-    const rejectedArtifacts = fsNode
-      .readdirSync(stateDir)
-      .filter((name) => name.startsWith("openclaw.json.rejected."));
-    expect(rejectedArtifacts).toHaveLength(1);
-  });
-
-  it("rejects even when the update doctor pass allows a size drop", async () => {
-    const home = fsNode.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreadable-"));
-    tempRoots.push(home);
-    const stateDir = path.join(home, ".openclaw");
-    fsNode.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    const liveBytes = `${JSON.stringify(
-      { gateway: { mode: "local", port: 18789 }, meta: { lastTouchedVersion: "2026.5.3-1" } },
-      null,
-      2,
-    )}\n`;
-    fsNode.writeFileSync(configPath, liveBytes, { mode: 0o600 });
-
-    const io = createConfigIO({
-      configPath,
-      fs: makeUnreadableConfigFs(configPath),
-      homedir: () => home,
-      env: {},
-      observe: false,
-      logger: { error: () => {}, warn: () => {} },
-    });
-
-    const skeletal = { channels: { telegram: { enabled: true } } } as OpenClawConfig;
-    let rejected: { code?: string; reasons?: string[] } | null = null;
-    try {
-      await io.writeConfigFile(skeletal, { allowConfigSizeDrop: true });
-    } catch (err) {
-      rejected = err as { code?: string; reasons?: string[] };
-    }
-
-    expect(rejected?.code).toBe("CONFIG_WRITE_REJECTED");
-    expect(rejected?.reasons).toContain("unreadable-config-before-write");
-    expect(fsNode.readFileSync(configPath, "utf-8")).toBe(liveBytes);
-  });
+      const skeletal: OpenClawConfig = { channels: { telegram: { enabled: true } } };
+      await expect(io.writeConfigFile(skeletal, writeOptions)).rejects.toMatchObject({
+        code: "CONFIG_WRITE_REJECTED",
+        reasons: expect.arrayContaining(["unreadable-config-before-write"]),
+      });
+      expect(fsNode.readFileSync(configPath, "utf-8")).toBe(liveBytes);
+      const rejectedArtifacts = fsNode
+        .readdirSync(stateDir)
+        .filter((name) => name.startsWith("openclaw.json.rejected."));
+      expect(rejectedArtifacts).toHaveLength(1);
+    },
+  );
 });
