@@ -24,7 +24,7 @@ scenario:
     - scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing npm-onboard-channel-agent Docker E2E lane for package-installed Docker agent setup and turn coverage.
     args:
       - --lane

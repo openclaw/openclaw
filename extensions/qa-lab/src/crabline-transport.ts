@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Crabline fake-provider transport behavior.
+// Qa Lab plugin module implements Crabline local-provider transport behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -225,7 +225,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }) {
     super({
       id: CRABLINE_TRANSPORT_ID,
-      label: `crabline fake ${params.selection.channel}`,
+      label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
       state: params.state,
@@ -263,11 +263,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline fake-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
-    `Runs OpenClaw's ${this.#selection.channel} channel plugin against a Crabline fake provider server.`,
+    `Runs OpenClaw's ${this.#selection.channel} channel plugin against a Crabline local provider server.`,
     "No live channel service or external credential lease is required.",
   ];
 
