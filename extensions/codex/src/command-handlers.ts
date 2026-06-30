@@ -24,10 +24,7 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
-import {
-  canMutateCodexHost,
-  CODEX_NATIVE_EXECUTION_AUTH_ERROR,
-} from "./command-authorization.js";
+import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import {
   buildHelp,
   formatAccount,
