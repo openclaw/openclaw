@@ -8,6 +8,49 @@ import {
 import { validateConfigObject } from "./validation.js";
 
 describe("sandbox docker config", () => {
+  it("accepts SecretRef values in sandbox.docker.env", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                LANG: "C.UTF-8",
+                DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            sandbox: {
+              docker: {
+                env: {
+                  API_TOKEN: { source: "env", provider: "default", id: "WORKER_API_TOKEN" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.env?.DATABASE_URL).toEqual({
+        source: "env",
+        provider: "default",
+        id: "DATABASE_URL",
+      });
+      expect(res.config.agents?.list?.[0]?.sandbox?.docker?.env?.API_TOKEN).toEqual({
+        source: "env",
+        provider: "default",
+        id: "WORKER_API_TOKEN",
+      });
+    }
+  });
+
   it("joins setupCommand arrays with newlines", () => {
     const res = validateConfigObject({
       agents: {

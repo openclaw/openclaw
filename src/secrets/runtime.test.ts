@@ -25,6 +25,119 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("resolves sandbox docker env secret refs for active docker backends", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "docker",
+              docker: {
+                env: {
+                  LANG: "C.UTF-8",
+                  DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                mode: "all",
+                backend: "docker",
+                docker: {
+                  env: {
+                    API_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "WORKER_API_TOKEN",
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {
+        DATABASE_URL: "postgres://sandbox-db",
+        WORKER_API_TOKEN: "worker-token",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env).toMatchObject({
+      LANG: "C.UTF-8",
+      DATABASE_URL: "postgres://sandbox-db",
+    });
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env).toMatchObject({
+      API_TOKEN: "worker-token",
+    });
+  });
+
+  it("treats sandbox docker env secret refs as inactive when Docker sandbox is not selected", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "docker",
+              docker: {
+                env: {
+                  DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                mode: "all",
+                backend: "ssh",
+                docker: {
+                  env: {
+                    API_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "WORKER_API_TOKEN",
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.DATABASE_URL).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DATABASE_URL",
+    });
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env?.API_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "WORKER_API_TOKEN",
+    });
+    expectWarning(snapshot, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "agents.defaults.sandbox.docker.env.DATABASE_URL",
+    });
+    expectWarning(snapshot, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "agents.list.0.sandbox.docker.env.API_TOKEN",
+    });
+  });
+
   it("resolves sandbox ssh secret refs for active ssh backends", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

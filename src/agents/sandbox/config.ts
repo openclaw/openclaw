@@ -6,7 +6,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SandboxSshSettings } from "../../config/types.sandbox.js";
+import type { SandboxDockerSettings, SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
@@ -51,8 +51,8 @@ function resolveSandboxBrowserAutoStartTimeoutMs(value: number | undefined): num
 }
 
 function resolveDangerousSandboxDockerBooleans(
-  agentDocker?: Partial<SandboxDockerConfig>,
-  globalDocker?: Partial<SandboxDockerConfig>,
+  agentDocker?: Partial<SandboxDockerSettings>,
+  globalDocker?: Partial<SandboxDockerSettings>,
 ): DangerousSandboxDockerBooleans {
   const resolved = {} as DangerousSandboxDockerBooleans;
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
@@ -90,17 +90,41 @@ export function resolveSandboxScope(params: {
   return "agent";
 }
 
+function normalizeSandboxDockerEnv(
+  env: SandboxDockerSettings["env"] | undefined,
+): Record<string, string> | undefined {
+  if (!env) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") {
+      normalized[key] = value;
+      continue;
+    }
+    const resolved = normalizeSecretInputString(value);
+    if (resolved !== undefined) {
+      normalized[key] = resolved;
+    }
+  }
+  return normalized;
+}
+
 export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
-  globalDocker?: Partial<SandboxDockerConfig>;
-  agentDocker?: Partial<SandboxDockerConfig>;
+  globalDocker?: Partial<SandboxDockerSettings>;
+  agentDocker?: Partial<SandboxDockerSettings>;
 }): SandboxDockerConfig {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
+  const globalEnv = normalizeSandboxDockerEnv(globalDocker?.env);
+  const agentEnv = normalizeSandboxDockerEnv(agentDocker?.env);
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const env = agentEnv
+    ? { ...(globalEnv ?? { LANG: "C.UTF-8" }), ...agentEnv }
+    : (globalEnv ?? {
+        LANG: "C.UTF-8",
+      });
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
