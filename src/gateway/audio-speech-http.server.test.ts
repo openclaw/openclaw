@@ -69,6 +69,25 @@ describe("OpenAI-compatible audio speech HTTP API (integration)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects a bad explicit agent selector with a JSON 400", async () => {
+    const res = await postSpeech(
+      { model: "tts/openai", input: "hi" },
+      { "x-openclaw-agent-id": "definitely-not-an-agent" },
+    );
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+  });
+
+  it("rejects a bad explicit agent selector on /v1/models with a JSON 400", async () => {
+    const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/models`, {
+      headers: { authorization: "Bearer secret", "x-openclaw-agent-id": "definitely-not-an-agent" },
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+  });
+
   it("returns 405 for non-POST methods", async () => {
     const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/audio/speech`, {
       method: "GET",
