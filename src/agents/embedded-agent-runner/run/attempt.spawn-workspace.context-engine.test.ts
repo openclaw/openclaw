@@ -2106,6 +2106,46 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
+  it("keeps the generic precheck active when owning context engine assembly fails", async () => {
+    const lockEvents = trackSessionWriteLocks();
+    let sawPrompt = false;
+    const hugeHistory = "large raw history ".repeat(2_000);
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        info: {
+          id: "test-context-engine",
+          name: "Test Context Engine",
+          version: "0.0.1",
+          ownsCompaction: true,
+        },
+        assemble: async () => {
+          throw new Error("assembly failed");
+        },
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+      attemptOverrides: {
+        contextTokenBudget: 500,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
   it("repairs tool-result pairing after context engine assembly", async () => {
     let promptMessages: AgentMessage[] = [];
 

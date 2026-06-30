@@ -2577,6 +2577,7 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      let contextEngineAssemblySucceeded = false;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -3334,6 +3335,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            contextEngineAssemblySucceeded = true;
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
                 preassemblyContextEngineMessagesForPrecheck;
@@ -4604,7 +4606,8 @@ export async function runEmbeddedAttempt(
           let preemptiveCompaction = null;
           const shouldSkipPrecheck =
             skipPromptSubmission ||
-            (activeContextEngine?.info.ownsCompaction &&
+            (contextEngineAssemblySucceeded &&
+              activeContextEngine?.info.ownsCompaction &&
               contextEnginePromptAuthority !== "preassembly_may_overflow");
 
           if (shouldSkipPrecheck && !skipPromptSubmission) {
