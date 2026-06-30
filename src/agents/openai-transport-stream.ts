@@ -1852,6 +1852,8 @@ async function processResponsesStream(
       ) {
         output.stopReason = "toolUse";
       }
+      // Break immediately after response.completed to avoid waiting for timeout
+      break;
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
