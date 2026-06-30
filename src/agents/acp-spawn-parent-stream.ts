@@ -86,6 +86,38 @@ function buildLifecycleFallbackNotice(
   return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary ?? "selected model unavailable"})`;
 }
 
+function formatLifecycleFallbackStepModelRef(value: unknown): string | undefined {
+  const modelRef = normalizeOptionalString(value);
+  if (!modelRef) {
+    return undefined;
+  }
+  const separator = modelRef.indexOf("/");
+  if (separator <= 0 || separator >= modelRef.length - 1) {
+    return undefined;
+  }
+  return formatProviderModelRef(modelRef.slice(0, separator), modelRef.slice(separator + 1));
+}
+
+function formatLifecycleFallbackStepReason(value: unknown): string | undefined {
+  return normalizeOptionalString(value)?.replace(/_/g, " ");
+}
+
+function buildLifecycleFallbackStepNotice(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const outcome = normalizeOptionalString(data?.fallbackStepFinalOutcome);
+  if (outcome === "chain_exhausted") {
+    return undefined;
+  }
+  const selected = formatLifecycleFallbackStepModelRef(data?.fallbackStepFromModel);
+  const active = formatLifecycleFallbackStepModelRef(data?.fallbackStepToModel);
+  if (!selected || !active) {
+    return undefined;
+  }
+  const reasonSummary = formatLifecycleFallbackStepReason(data?.fallbackStepFromFailureReason);
+  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary ?? "selected model unavailable"})`;
+}
+
 function buildLifecycleFallbackClearedNotice(
   data: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -414,6 +446,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     mainKey: params.mainKey,
     sessionScope: params.sessionScope,
   };
+  let lastFallbackNoticeText: string | undefined;
   const wake = () => {
     if (!shouldSurfaceUpdates) {
       return;
@@ -445,6 +478,13 @@ export function startAcpSpawnParentStreamRelay(params: {
       deliveryContext: params.deliveryContext,
     });
     wake();
+  };
+  const emitFallbackNotice = (notice: string, contextKey: string) => {
+    if (notice === lastFallbackNoticeText) {
+      return;
+    }
+    lastFallbackNoticeText = notice;
+    emit(`${relayLabel}: ${notice}`, contextKey);
   };
   const emitStartNotice = () => {
     recordTaskRunProgressByRunId({
@@ -757,11 +797,14 @@ export function startAcpSpawnParentStreamRelay(params: {
     const lifecycleData = asObjectRecord(event.data);
     const phase = normalizeOptionalString(lifecycleData?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
-    if (phase === "fallback") {
+    if (phase === "fallback" || phase === "fallback_step") {
       flushPending();
-      const notice = buildLifecycleFallbackNotice(lifecycleData);
+      const notice =
+        phase === "fallback_step"
+          ? buildLifecycleFallbackStepNotice(lifecycleData)
+          : buildLifecycleFallbackNotice(lifecycleData);
       if (notice) {
-        emit(`${relayLabel}: ${notice}`, `${contextPrefix}:fallback`);
+        emitFallbackNotice(notice, `${contextPrefix}:fallback`);
       }
       return;
     }

@@ -252,6 +252,49 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("relays production fallback_step lifecycle notices to the parent session", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fallback-step",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-fallback-step",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-fallback-step",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "zai/glm-5-turbo",
+        fallbackStepToModel: "minimax/MiniMax-M3",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "succeeded",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback",
+        selectedProvider: "zai",
+        selectedModel: "glm-5-turbo",
+        activeProvider: "minimax",
+        activeModel: "MiniMax-M3",
+        reasonSummary: "timeout",
+      },
+    });
+
+    const fallbackNotices = collectedTexts().filter((text) => text.includes("Model Fallback:"));
+    expect(fallbackNotices).toEqual([
+      "codex: ↪️ Model Fallback: minimax/MiniMax-M3 (selected zai/glm-5-turbo; timeout)",
+    ]);
+    expect(requestHeartbeatMock).toHaveBeenCalled();
+    relay.dispose();
+  });
+
   it("remaps cron-run parent session keys while relaying stream events", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-cron",
