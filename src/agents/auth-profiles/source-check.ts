@@ -50,13 +50,11 @@ function rawStoreHasProviderProfile(raw: unknown, provider: string): boolean {
     if (normalizeProvider(profileId).startsWith(`${expected}:`)) {
       return true;
     }
-    if (
-      rawCredential &&
-      typeof rawCredential === "object" &&
-      normalizeProvider(String((rawCredential as { provider?: unknown }).provider ?? "")) ===
-        expected
-    ) {
-      return true;
+    if (rawCredential && typeof rawCredential === "object") {
+      const rawProvider = (rawCredential as { provider?: unknown }).provider;
+      if (typeof rawProvider === "string" && normalizeProvider(rawProvider) === expected) {
+        return true;
+      }
     }
   }
   return false;

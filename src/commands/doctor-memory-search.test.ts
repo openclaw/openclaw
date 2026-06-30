@@ -502,10 +502,12 @@ describe("noteMemorySearchHealth", () => {
     });
   });
 
-  it("skips QMD binary probing when requested by lint collection", async () => {
+  it("skips QMD binary probing while preserving QMD session export warnings", async () => {
     const qmdCfg = { memory: { backend: "qmd", qmd: { command: "custom-qmd" } } } as OpenClawConfig;
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
       local: {},
       remote: {},
     });
@@ -517,7 +519,8 @@ describe("noteMemorySearchHealth", () => {
 
     expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
     expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("QMD session transcript export is not enabled");
   });
 
   it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
