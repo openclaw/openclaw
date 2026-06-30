@@ -919,6 +919,7 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+        ask: hostAsk,
       }),
     };
   }

@@ -502,6 +502,7 @@ export function buildExecApprovalPendingToolResult(params: {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
+  ask?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
@@ -524,6 +525,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 warningText: params.warningText,
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
+                ask: params.ask,
                 allowedDecisions,
                 command: params.command,
                 cwd: params.cwd,
