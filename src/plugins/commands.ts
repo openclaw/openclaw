@@ -73,10 +73,18 @@ export function matchPluginCommand(
     return null;
   }
 
-  // Extract command name and args
-  const spaceIndex = trimmed.indexOf(" ");
-  const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
-  const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
+  const bodyAfterSlash = trimmed.slice(1).trimStart();
+  if (!bodyAfterSlash) {
+    return null;
+  }
+
+  // Extract command name and args. Accept whitespace after the slash so
+  // "/ pair qr" is still owned by the registered "/pair" plugin command.
+  const spaceMatch = bodyAfterSlash.match(/\s/);
+  const spaceIndex = spaceMatch?.index ?? -1;
+  const commandName =
+    spaceIndex === -1 ? `/${bodyAfterSlash}` : `/${bodyAfterSlash.slice(0, spaceIndex)}`;
+  const args = spaceIndex === -1 ? undefined : bodyAfterSlash.slice(spaceIndex + 1).trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
   const alternateKeys = [key];
