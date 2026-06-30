@@ -750,6 +750,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   params.stream.push({ type: "start", partial: params.output });
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = params.output.content;
+  const toolCallIds = new Set<string>();
+  for (const block of blocks) {
+    if (block.type === "toolCall") {
+      toolCallIds.add(block.id);
+    }
+  }
   const blockIndex = () => blocks.length - 1;
 
   const endCurrentBlock = () => {
@@ -835,11 +841,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
         if (part.functionCall) {
           endCurrentBlock();
           const providedId = part.functionCall.id;
-          const needsNewId =
-            !providedId ||
-            params.output.content.some(
-              (block) => block.type === "toolCall" && block.id === providedId,
-            );
+          const needsNewId = !providedId || toolCallIds.has(providedId);
           const toolCall: ToolCall = {
             type: "toolCall",
             id: needsNewId ? params.nextToolCallId(part.functionCall.name) : providedId,
@@ -849,6 +851,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
           };
 
           params.output.content.push(toolCall);
+          toolCallIds.add(toolCall.id);
           params.stream.push({
             type: "toolcall_start",
             contentIndex: blockIndex(),
@@ -872,7 +875,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
     if (candidate?.finishReason) {
       params.output.stopReason = mapStopReason(candidate.finishReason);
-      if (params.output.content.some((block) => block.type === "toolCall")) {
+      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Google stop may promote parsed calls into an executable tool-use turn.
+      if (
+        params.output.stopReason === "stop" &&
+        params.output.content.some((block) => block.type === "toolCall")
+      ) {
         params.output.stopReason = "toolUse";
       }
     }

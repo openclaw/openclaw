@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { preserveHumanNotesBlock } from "./markdown.js";
 import {
   setImportedSourceEntry,
   shouldSkipImportedSourceWrite,
@@ -52,11 +53,12 @@ export async function writeImportedSourcePage(params: {
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
-  if (existing !== rendered) {
+  const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
+  if (existing !== nextRendered) {
     await writeGuardedVaultPage({
       vault,
       pagePath: params.pagePath,
-      content: rendered,
+      content: nextRendered,
       pageStat,
       pageLabel: "imported source page",
     });
@@ -74,5 +76,5 @@ export async function writeImportedSourcePage(params: {
       renderFingerprint: params.renderFingerprint,
     },
   });
-  return { pagePath: params.pagePath, changed: existing !== rendered, created };
+  return { pagePath: params.pagePath, changed: existing !== nextRendered, created };
 }

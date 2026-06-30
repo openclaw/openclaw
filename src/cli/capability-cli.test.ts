@@ -2078,6 +2078,234 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
+  it("fails closed when an url-only generated video exceeds the in-memory byte cap", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/oversized-video.mp4?sig=secret-presigned-token",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    // Offer far more than the 16 MiB default video cap in 1 MiB chunks so the
+    // bounded reader has to cancel mid-stream instead of buffering it all. The
+    // source would yield 64 MiB if fully drained; a correct guard stops early.
+    const oneMiBChunk = new Uint8Array(1024 * 1024);
+    const overCapChunks = 64;
+    let enqueued = 0;
+    let canceled = false;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (enqueued >= overCapChunks) {
+          controller.close();
+          return;
+        }
+        enqueued += 1;
+        controller.enqueue(oneMiBChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(oversizedBody, {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        // No --output: forces the in-memory buffered fallback path.
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    // Real path was driven: the provider URL was actually fetched...
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
+    expect(fetchCalls[0]?.[0]).toBe(
+      "https://example.com/oversized-video.mp4?sig=secret-presigned-token",
+    );
+    // ...and the read was rejected (fail-closed) referencing the provider label
+    // and the 16 MiB default cap rather than buffering the body.
+    expectRuntimeErrorContains("vydra generated video download exceeds 16777216 bytes");
+    // Security regression guard: the overflow error must NOT echo the raw
+    // provider URL (it may carry signed/tokenized access material). See the
+    // sibling generated-media downloaders, which report provider + cap only.
+    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("https://example.com");
+    // The reader cancelled shortly after crossing the 16 MiB cap rather than
+    // draining the full 64 MiB the source was willing to produce.
+    expect(canceled).toBe(true);
+    expect(enqueued).toBeLessThan(overCapChunks);
+    expect(enqueued).toBeLessThanOrEqual(18);
+  });
+
+  it("redacts provider video URLs when the no-output download fails", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/private-video.mp4?sig=secret-presigned-token",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("download forbidden", {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "text/plain" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("vydra generated video download failed");
+    expectRuntimeErrorContains("HTTP 403");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("https://example.com");
+  });
+
+  it("buffers an url-only generated video that stays under the byte cap", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/small-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("small-video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      // No --output: in-memory buffered fallback path, under cap.
+      argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+    });
+
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
+    expect(fetchCalls[0]?.[0]).toBe("https://example.com/small-video.mp4");
+    const output = firstJsonOutput();
+    expect(output?.capability).toBe("video.generate");
+    expect(output?.provider).toBe("vydra");
+    expect(output?.outputs as Array<Record<string, unknown>>).toHaveLength(1);
+    // No overflow error on the under-cap path.
+    expect(runtimeErrorMessages().join("\n")).not.toContain("exceeds");
+  });
+
+  it("honors a smaller configured mediaMaxMb cap on the in-memory video path", async () => {
+    // Operators can lower the cap via agents.defaults.mediaMaxMb; the bounded
+    // read must respect it (here 2 MiB) and cancel even earlier.
+    mocks.loadConfig.mockReturnValue({ agents: { defaults: { mediaMaxMb: 2 } } });
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/over-2mb-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const oneMiBChunk = new Uint8Array(1024 * 1024);
+    const totalChunks = 16;
+    let enqueued = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (enqueued >= totalChunks) {
+          controller.close();
+          return;
+        }
+        enqueued += 1;
+        controller.enqueue(oneMiBChunk);
+      },
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(body, { status: 200, headers: { "content-type": "video/mp4" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    // Cap resolved from config (2 MiB = 2097152), not the 16 MiB default.
+    expectRuntimeErrorContains("vydra generated video download exceeds 2097152 bytes");
+    // Cancelled after crossing 2 MiB, far below the 16 MiB the source offered.
+    expect(enqueued).toBeLessThanOrEqual(4);
+  });
+
+  it("buffers an empty-body url-only generated video without error", async () => {
+    // Boundary: a 0-byte body is trivially under the cap and must not error.
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/empty-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.alloc(0), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+    });
+
+    const output = firstJsonOutput();
+    expect(output?.capability).toBe("video.generate");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("exceeds");
+  });
+
   it("rejects partial image generate count before provider dispatch", async () => {
     await expect(
       runRegisteredCli({

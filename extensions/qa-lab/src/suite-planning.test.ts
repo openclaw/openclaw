@@ -14,6 +14,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioRequiresIsolatedQaSuiteWorker,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
@@ -80,6 +81,22 @@ describe("qa suite planning helpers", () => {
       await expect(resolveQaSuiteOutputDir(repoRoot, "/tmp/outside")).rejects.toThrow(
         "QA suite outputDir must stay within the repo root.",
       );
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("creates unique default suite output dirs inside the repo root", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-default-root-"));
+    try {
+      const firstDir = await resolveQaSuiteOutputDir(repoRoot);
+      const secondDir = await resolveQaSuiteOutputDir(repoRoot);
+
+      expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      expect(path.basename(firstDir)).toMatch(/^suite-[a-z0-9]+-[a-f0-9]{8}$/u);
+      expect(secondDir).not.toBe(firstDir);
+      await expect(lstat(firstDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
+      await expect(lstat(secondDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
@@ -202,6 +219,16 @@ describe("qa suite planning helpers", () => {
         }),
       ).toBe(1500);
     }
+    expect(resolveQaSuiteWorkerStartStaggerMs(4, {}, 500)).toBe(500);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(
+        4,
+        {
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
+        },
+        500,
+      ),
+    ).toBe(25);
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {
@@ -281,6 +308,15 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+  });
+
+  it("isolates flow scenarios with explicit suite isolation metadata", () => {
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(
+        makeQaSuiteTestScenario("explicit-isolated", { suiteIsolation: "isolated" }),
+      ),
+    ).toBe(true);
+    expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -526,6 +562,54 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
+  });
+
+  it("filters channel-driver-specific scenarios from implicit suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+      makeQaSuiteTestScenario("crabline-only", {
+        config: { requiredChannelDriver: "crabline" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "qa-channel-only"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "crabline-only"]);
+  });
+
+  it("keeps explicitly requested channel-driver-specific scenarios", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["qa-channel-only"]);
   });
 
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {

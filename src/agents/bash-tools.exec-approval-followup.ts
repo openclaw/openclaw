@@ -15,6 +15,7 @@ import {
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -271,21 +272,11 @@ function buildAgentFollowupArgs(params: {
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
-    to: deliveryTarget.deliver
-      ? deliveryTarget.to
-      : sessionOnlyOriginChannel
-        ? params.turnSourceTo
-        : undefined,
-    accountId: deliveryTarget.deliver
-      ? deliveryTarget.accountId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceAccountId
-        : undefined,
+    to: deliveryTarget.deliver ? deliveryTarget.to : params.turnSourceTo,
+    accountId: deliveryTarget.deliver ? deliveryTarget.accountId : params.turnSourceAccountId,
     threadId: deliveryTarget.deliver
       ? deliveryTarget.threadId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceThreadId
-        : undefined,
+      : stringifyRouteThreadId(params.turnSourceThreadId),
     idempotencyKey:
       params.idempotencyKey ??
       buildExecApprovalFollowupIdempotencyKey({

@@ -1,5 +1,5 @@
+import Foundation
 import SwiftUI
-import Textual
 
 public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case standard
@@ -22,46 +22,28 @@ struct ChatMarkdownRenderer: View {
     var body: some View {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
         VStack(alignment: .leading, spacing: 10) {
-            StructuredText(markdown: processed.cleaned)
-                .modifier(ChatMarkdownStyle(
-                    variant: self.variant,
-                    context: self.context,
-                    font: self.font,
-                    textColor: self.textColor))
+            Text(self.markdownText(processed.cleaned))
+                .font(self.font)
+                .foregroundStyle(self.textColor)
+                .tint(self.linkColor)
+                .textSelection(.enabled)
+                .lineSpacing(self.variant == .compact ? 2 : 4)
 
             if !processed.images.isEmpty {
                 InlineImageList(images: processed.images)
             }
         }
     }
-}
 
-private struct ChatMarkdownStyle: ViewModifier {
-    let variant: ChatMarkdownVariant
-    let context: ChatMarkdownRenderer.Context
-    let font: Font
-    let textColor: Color
-
-    func body(content: Content) -> some View {
-        Group {
-            if self.variant == .compact {
-                content.textual.structuredTextStyle(.default)
-            } else {
-                content.textual.structuredTextStyle(.gitHub)
-            }
-        }
-        .font(self.font)
-        .foregroundStyle(self.textColor)
-        .textual.inlineStyle(self.inlineStyle)
-        .textual.textSelection(.enabled)
+    private var linkColor: Color {
+        self.context == .user ? self.textColor : OpenClawChatTheme.accent
     }
 
-    private var inlineStyle: InlineStyle {
-        let linkColor: Color = self.context == .user ? self.textColor : OpenClawChatTheme.accent
-        let codeScale: CGFloat = self.variant == .compact ? 0.85 : 0.9
-        return InlineStyle()
-            .code(.monospaced, .fontScale(codeScale))
-            .link(.foregroundColor(linkColor))
+    private func markdownText(_ markdown: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .full,
+            failurePolicy: .returnPartiallyParsedIfPossible)
+        return (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
     }
 }
 

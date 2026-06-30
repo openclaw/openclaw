@@ -1130,6 +1130,37 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("handles a large transport chunk containing many valid small SSE events", async () => {
+    // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
+    // events; the cap must apply only to the unterminated tail, not the full chunk.
+    const eventCount = 5_000;
+    const manyEvents = `data: ${JSON.stringify({ ok: true })}\n\n`.repeat(eventCount);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(manyEvents, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items: unknown[] = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+    expect(items.length).toBe(eventCount);
+    expect(items[0]).toEqual({ ok: true });
+  });
+
   it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('  {"ok": true}  ', {
@@ -1336,6 +1367,186 @@ describe("buildGuardedModelFetch", () => {
 
     expect(items).toEqual([{ ok: true }]);
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it("errors on oversized SSE body without event boundary in sanitizer", async () => {
+    const oversized = "x".repeat(65 * 1024);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(oversized));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) {
+          break;
+        }
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded max buffer size/i);
+  });
+
+  it("errors on oversized streaming JSON body without content-length in SSE synthesis", async () => {
+    const CHUNK = 1024 * 1024;
+    let sends = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (sends < 17) {
+              sends++;
+              controller.enqueue(new Uint8Array(CHUNK));
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) {
+          break;
+        }
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
+  });
+
+  it("caps non-OK response body lazily so SDK can still cancel retryable responses", async () => {
+    // Regression: a 429/5xx non-OK body used to be returned unchanged by the
+    // shared sanitizer, so a hostile endpoint could OOM the SDK when it called
+    // response.text(). The cap is applied lazily via TransformStream so the SDK
+    // can still cancel the response before reading any body.
+    const OVER_LIMIT = 100 * 1024;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(OVER_LIMIT));
+            controller.close();
+          },
+        }),
+        { status: 429, statusText: "Too Many Requests" },
+      ),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.ok).toBe(false);
+
+    const text = await response.text();
+    expect(text.length).toBeLessThanOrEqual(64 * 1024);
+    expect(text.length).toBeLessThan(OVER_LIMIT);
+  });
+
+  it("preserves SDK ability to cancel retryable non-OK responses before reading body", async () => {
+    // Regression: a non-OK body wrapper must be lazy. The OpenAI SDK may decide
+    // to cancel a 429/5xx response and retry before reading the body. If the
+    // wrapper eagerly reads the body, the SDK loses that capability.
+    const TOTAL_BYTES = 80 * 1024;
+    let bytesPulled = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (bytesPulled < TOTAL_BYTES) {
+              const chunk = new Uint8Array(8 * 1024);
+              bytesPulled += chunk.byteLength;
+              controller.enqueue(chunk);
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { status: 503, statusText: "Service Unavailable" },
+      ),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(503);
+    // SDK cancels the response body before reading anything. The lazy cap must
+    // not pull the full body from the source — a small pre-buffered chunk is
+    // allowed (ReadableStream default high-water-mark), but the full payload
+    // must remain unconsumed so the SDK can still retry.
+    await response.body?.cancel();
+    expect(bytesPulled).toBeLessThan(TOTAL_BYTES);
   });
 
   describe("long retry-after handling", () => {

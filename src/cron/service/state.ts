@@ -197,7 +197,7 @@ export type CronServiceState = {
   stopped: boolean;
   restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
-  manualSetupTimeoutRestartNotified: boolean;
+  manualSetupTimeoutNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -221,7 +221,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
-    manualSetupTimeoutRestartNotified: false,
+    manualSetupTimeoutNotified: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),

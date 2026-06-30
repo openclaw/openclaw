@@ -1,7 +1,7 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -91,29 +91,6 @@ function unableToInitializeProviderError(params: {
   });
 }
 
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): Record<string, unknown> | null {
-  for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
-}
-
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
   return sortUniqueStrings(pluginIds);
 }
@@ -125,7 +102,7 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
 }): Array<TProvider & { pluginId: string }> | null {
-  const mod = tryLoadBundledPublicArtifactModule({
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: params.artifactCandidates,
   });

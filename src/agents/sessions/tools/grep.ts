@@ -14,7 +14,13 @@ import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
-import { formatSessionToolOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import {
+  appendSessionToolTruncationWarning,
+  formatSessionToolOutput,
+  invalidArgText,
+  shortenPath,
+  str,
+} from "./render-utils.js";
 import type { GrepToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
@@ -107,25 +113,17 @@ function formatGrepResult(
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
   showImages: boolean,
 ): string {
-  let text = formatSessionToolOutput(result, options, theme, showImages, 15);
-
   const matchLimit = result.details?.matchLimitReached;
-  const truncation = result.details?.truncation;
   const linesTruncated = result.details?.linesTruncated;
-  if (matchLimit || truncation?.truncated || linesTruncated) {
-    const warnings: string[] = [];
-    if (matchLimit) {
-      warnings.push(`${matchLimit} matches limit`);
-    }
-    if (truncation?.truncated) {
-      warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-    }
-    if (linesTruncated) {
-      warnings.push("some lines truncated");
-    }
-    text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
-  }
-  return text;
+  return appendSessionToolTruncationWarning(
+    formatSessionToolOutput(result, options, theme, showImages, 15),
+    theme,
+    {
+      limit: matchLimit ? { count: matchLimit, noun: "matches" } : undefined,
+      truncation: result.details?.truncation,
+      additionalWarnings: linesTruncated ? ["some lines truncated"] : undefined,
+    },
+  );
 }
 
 export function createGrepToolDefinition(

@@ -45,7 +45,7 @@ type RelayApnsRegistration = {
   sendGrant: string;
   installationId: string;
   topic: string;
-  environment: "production";
+  environment: ApnsEnvironment;
   distribution: "official";
   updatedAtMs: number;
   relayOrigin?: string;
@@ -350,7 +350,7 @@ function normalizeRelayRegistration(
     !sendGrant ||
     !installationId ||
     !isValidTopic(topic) ||
-    environment !== "production" ||
+    !environment ||
     distribution !== "official"
   ) {
     return null;
@@ -465,8 +465,8 @@ export async function registerApnsRegistration(
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
       const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
-      if (environment !== "production") {
-        throw new Error("relay registrations must use production environment");
+      if (!environment) {
+        throw new Error("relay registrations must use valid APNs environment");
       }
       if (distribution !== "official") {
         throw new Error("relay registrations must use official distribution");
@@ -558,6 +558,7 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
+      a.relayOrigin === b.relayOrigin &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
     );
   }
@@ -838,7 +839,7 @@ function toPushResult(params: {
         "tokenSuffix" in response ? response : undefined,
       ),
     topic: params.registration.topic,
-    environment: params.registration.transport === "relay" ? "production" : response.environment,
+    environment: response.environment ?? params.registration.environment,
     transport: params.registration.transport,
   };
 }

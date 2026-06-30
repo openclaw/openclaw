@@ -205,7 +205,8 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
     result.status === "coalesced"
       ? "safe restart request joined an existing pending gateway restart"
       : result.status === "deferred"
-        ? "safe restart requested; gateway will restart after active work drains"
+        ? "safe restart requested; gateway will restart after active work drains " +
+          "(bounded by gateway.reload.deferralTimeoutMs; may force after timeout expires)"
         : skipDeferral
           ? "safe restart requested; gateway bypassing active-work deferral"
           : "safe restart requested; gateway will restart momentarily";
@@ -280,11 +281,12 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
       process.platform === "darwin"
         ? async () => await recoverInstalledLaunchAgent({ result: "started" })
         : undefined,
-    repairLoadedService: async ({ json, stdout, state, issues }) =>
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
         service,
         json,
         stdout,
+        warn,
         state,
         issues,
       }),
@@ -352,7 +354,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout }) => {
+    postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
       if (restartedWithoutServiceManager) {
         // SIGUSR1 restarts have no service-manager state to watch; use listener health only.
         const health = await waitForGatewayHealthyListener({
@@ -402,7 +404,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        const retryRestart = await service.restart({ env: process.env, stdout });
+        const retryRestart = await service.restart({ env: process.env, stdout, warn });
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }

@@ -609,7 +609,6 @@ jobs:
             requires_repo_e2e: true
             requires_live_suites: false
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_E2E_WORKERS: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
@@ -643,8 +642,73 @@ jobs:
           set -euo pipefail
           case "${{ matrix.suite_id }}" in
             openshell-e2e)
+              echo "OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=$HOME/.config" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Install OpenShell CLI
+        if: |
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENSHELL_VERSION=v0.0.68
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh | sh
+          openshell --version
+
+      - name: Bootstrap OpenShell gateway
+        if: |
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mtls_dir="$HOME/.config/openshell/gateways/openshell/mtls"
+          gateway_tls_dir="$RUNNER_TEMP/openshell-gateway-certs"
+          fallback_pid=""
+          if ! openshell --gateway openshell sandbox list >/dev/null 2>&1; then
+            rm -rf "$gateway_tls_dir"
+            openshell-gateway generate-certs \
+              --output-dir "$gateway_tls_dir" \
+              --server-san 127.0.0.1 \
+              --server-san localhost \
+              --server-san host.openshell.internal
+            rm -rf "$mtls_dir"
+            mkdir -p "$mtls_dir"
+            cp "$gateway_tls_dir/ca.crt" "$mtls_dir/ca.crt"
+            cp "$gateway_tls_dir/client/tls.crt" "$mtls_dir/tls.crt"
+            cp "$gateway_tls_dir/client/tls.key" "$mtls_dir/tls.key"
+            openshell gateway remove openshell >/dev/null 2>&1 || true
+            OPENSHELL_LOCAL_TLS_DIR="$gateway_tls_dir" nohup openshell-gateway \
+              --bind-address 0.0.0.0 \
+              --port 17670 \
+              --drivers docker \
+              --tls-cert "$gateway_tls_dir/server/tls.crt" \
+              --tls-key "$gateway_tls_dir/server/tls.key" \
+              --tls-client-ca "$mtls_dir/ca.crt" \
+              >"$RUNNER_TEMP/openshell-gateway.log" 2>&1 &
+            fallback_pid=$!
+            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=$fallback_pid" >> "$GITHUB_ENV"
+            for _ in $(seq 1 30); do
+              if openshell gateway add --local --name openshell https://127.0.0.1:17670; then
+                break
+              fi
+              sleep 1
+            done
+            openshell gateway select openshell
+            for _ in $(seq 1 60); do
+              if openshell --gateway openshell sandbox list >/dev/null 2>&1; then
+                break
+              fi
+              sleep 1
+            done
+          fi
+          if [[ -z "$fallback_pid" ]]; then
+            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=" >> "$GITHUB_ENV"
+          fi
+          openshell --gateway openshell sandbox list >/dev/null
+          openshell gateway list
 
       - name: Validate suite credentials
         if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
@@ -664,6 +728,15 @@ jobs:
           ) &&
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: ${{ matrix.command }}
+
+      - name: Stop fallback OpenShell gateway
+        if: always() && matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${OPENCLAW_OPENSHELL_FALLBACK_PID:-}" ]]; then
+            kill "$OPENCLAW_OPENSHELL_FALLBACK_PID" 2>/dev/null || true
+          fi
 
   validate_docker_e2e:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]

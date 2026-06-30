@@ -7,6 +7,7 @@ import {
   spawnSync,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -270,6 +271,10 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
+function createTelegramProofRunId() {
+  return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
+}
+
 export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -285,7 +290,6 @@ export function parseArgs(argvInput: string[]): Options {
     "view",
   ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
     crabboxClass: "standard",
     command,
@@ -299,7 +303,7 @@ export function parseArgs(argvInput: string[]): Options {
     keepBox: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
-    outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
+    outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
     previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
@@ -322,12 +326,19 @@ export function parseArgs(argvInput: string[]): Options {
     argv = argv.slice(0, commandSeparator);
   }
   let expectWasPassed = false;
+  const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = () => {
+    const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
       if (isMissingOptionValue(value)) {
         usage();
+      }
+      if (!options.repeatable) {
+        if (seenSingleValueOptions.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueOptions.add(arg);
       }
       index += 1;
       return value;
@@ -347,7 +358,7 @@ export function parseArgs(argvInput: string[]): Options {
         opts.expect = [];
         expectWasPassed = true;
       }
-      opts.expect.push(readValue());
+      opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
@@ -1993,6 +2004,7 @@ const FULL_ARTIFACT_JSON_NAMES = new Set([
   "telegram-user-crabbox-session-summary.json",
 ]);
 const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const FULL_ARTIFACT_PROOF_REPORT = "telegram-user-crabbox-proof.md";
 const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
 
 function isFullArtifactJsonName(name: string) {
@@ -2000,6 +2012,10 @@ function isFullArtifactJsonName(name: string) {
 }
 
 export function stageFullSessionArtifacts(outputDir: string) {
+  if (!fs.existsSync(path.join(outputDir, FULL_ARTIFACT_PROOF_REPORT))) {
+    throw new Error(`Missing proof report. Run finish first: ${FULL_ARTIFACT_PROOF_REPORT}`);
+  }
+
   const publishDir = path.join(outputDir, "publish-full-artifacts");
   fs.rmSync(publishDir, { force: true, recursive: true });
   fs.mkdirSync(publishDir, { recursive: true });

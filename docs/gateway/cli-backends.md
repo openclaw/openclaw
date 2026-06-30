@@ -199,6 +199,10 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
+Docker installs need Claude Code installed and logged in inside the persisted
+container home, not only on the host. See
+[Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
+
 Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
 binary is not already on `PATH`.
 

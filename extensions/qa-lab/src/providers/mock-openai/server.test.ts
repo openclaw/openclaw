@@ -127,6 +127,29 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("retains enough debug requests for long shared QA runs", async () => {
+    const server = await startMockServer();
+
+    for (let index = 0; index < 250; index += 1) {
+      await expectResponsesJson(server, {
+        stream: false,
+        model: "gpt-5.5",
+        input: [makeUserInput(`debug retention request ${index}`)],
+      });
+    }
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    const requestLog = requireArray(await requests.json(), "debug requests");
+    expect(requestLog).toHaveLength(250);
+    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
+      "debug retention request 0",
+    );
+    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
+      "debug retention request 249",
+    );
+  });
+
   it("serves health and streamed responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -991,6 +1014,27 @@ describe("qa mock openai server", () => {
     expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
   });
 
+  it("uses unique ids for repeated identical tool calls", async () => {
+    const server = await startMockServer();
+    const body = {
+      stream: false,
+      model: "gpt-5.5",
+      input: [makeUserInput("Read QA_KICKOFF_TASK.md, then answer with exactly QA-READ-OK.")],
+    };
+
+    const first = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(server, body);
+    const second = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(
+      server,
+      body,
+    );
+
+    const firstCallId = first.output?.[0]?.call_id;
+    const secondCallId = second.output?.[0]?.call_id;
+    expect(firstCallId).toMatch(/^call_mock_read_/);
+    expect(secondCallId).toMatch(/^call_mock_read_/);
+    expect(firstCallId).not.toBe(secondCallId);
+  });
+
   it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1801,6 +1845,52 @@ describe("qa mock openai server", () => {
     });
     expect(memorySearch.status).toBe(200);
     expect(await memorySearch.text()).toContain('"name":"memory_search"');
+
+    const memoryGetFromPathOnlySearchResult = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "MEMORY.md",
+                  snippet: "Hidden QA fact: the project codename is ORBIT-9.",
+                },
+              ],
+            }),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(memoryGetFromPathOnlySearchResult.status).toBe(200);
+    const memoryGetText = await memoryGetFromPathOnlySearchResult.text();
+    expect(memoryGetText).toContain('"name":"memory_get"');
+    expect(memoryGetText).toContain('\\"path\\":\\"MEMORY.md\\"');
+    expect(memoryGetText).toContain('\\"from\\":1');
 
     const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
       method: "POST",
@@ -3298,6 +3388,45 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
+  it("keeps QA tool-search result summaries ahead of generic worked/failed/blocked summaries", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Answer in worked/failed/blocked format with source and docs notes.",
+            },
+          ],
+        },
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_tool_search_code_1",
+          output: JSON.stringify({
+            ok: true,
+            value: {
+              tool: { name: targetTool },
+              result: {
+                content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool}` }],
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -3314,7 +3443,7 @@ describe("qa mock openai server", () => {
     const toolPlanOutput = outputItem(await response.json());
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("web_search");
-    expect(String(toolPlanOutput.arguments)).toContain("denied-input");
+    expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
   });
 
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {

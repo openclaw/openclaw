@@ -4,7 +4,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
@@ -19,21 +18,12 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import { resolvePrecomputedSubcommandHelpCommand } from "./precomputed-help.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set([
-  "doctor",
-  "gateway",
-  "models",
-  "plugins",
-  "sessions",
-  "tasks",
-]);
-const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-V", "--version"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
@@ -41,44 +31,6 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
 
 function hasHelpFlag(argv: string[]): boolean {
   return hasFlag(argv, "-h") || hasFlag(argv, "--help");
-}
-
-function resolveStrictPrecomputedSubcommandHelpCommand(argv: string[]): string | null {
-  const args = argv.slice(2);
-  let commandName: string | null = null;
-  let sawHelp = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    if (VERSION_FLAGS.has(arg)) {
-      return null;
-    }
-    if (!commandName) {
-      const consumed = consumeRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      if (!PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.has(arg)) {
-        return null;
-      }
-      commandName = arg;
-      continue;
-    }
-    if (HELP_FLAGS.has(arg)) {
-      sawHelp = true;
-      continue;
-    }
-    return null;
-  }
-
-  return commandName && sawHelp ? commandName : null;
 }
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
@@ -197,7 +149,7 @@ export function resolvePrecomputedSubcommandHelpFastPath(
   if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
     return null;
   }
-  return resolveStrictPrecomputedSubcommandHelpCommand(argv);
+  return resolvePrecomputedSubcommandHelpCommand(argv);
 }
 
 export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {

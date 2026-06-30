@@ -471,6 +471,7 @@ describe("active-memory plugin", () => {
     };
     expect(command.name).toBe("active-memory");
     expect(command.acceptsArgs).toBe(true);
+    expect(command.exposeSenderIsOwner).toBe(true);
 
     const offResult = await command.handler({
       channel: "webchat",
@@ -568,6 +569,7 @@ describe("active-memory plugin", () => {
     const offResult = await command.handler({
       channel: "webchat",
       isAuthorizedSender: true,
+      senderIsOwner: true,
       args: "off --global",
       commandBody: "/active-memory off --global",
       config: {},
@@ -617,6 +619,7 @@ describe("active-memory plugin", () => {
     const onResult = await command.handler({
       channel: "webchat",
       isAuthorizedSender: true,
+      senderIsOwner: true,
       args: "on --global",
       commandBody: "/active-memory on --global",
       config: {},
@@ -650,6 +653,30 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks external non-owner callers from changing global active-memory config", async () => {
+    const command = registeredCommands["active-memory"];
+
+    for (const args of ["off --global", "on --global"]) {
+      const result = await command.handler({
+        channel: "telegram",
+        isAuthorizedSender: true,
+        senderIsOwner: false,
+        args,
+        commandBody: `/active-memory ${args}`,
+        config: {},
+        requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      });
+
+      expect(result.text).toContain(
+        "global enable/disable changes require owner or operator.admin",
+      );
+    }
+
+    expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
   it("blocks gateway callers without admin scope from changing global active-memory config", async () => {
     const command = registeredCommands["active-memory"];
 
@@ -674,7 +701,9 @@ describe("active-memory plugin", () => {
         getCurrentConversationBinding: async () => null,
       });
 
-      expect(result.text).toContain("global enable/disable changes require operator.admin");
+      expect(result.text).toContain(
+        "global enable/disable changes require owner or operator.admin",
+      );
     }
 
     expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();

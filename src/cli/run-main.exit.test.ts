@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { CommanderError } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
@@ -107,6 +108,11 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
   >((argv: string[]) => ({ handled: false, argv })),
 );
+const serviceEnvSnapshot = captureEnv([
+  "OPENCLAW_SERVICE_MARKER",
+  "OPENCLAW_SERVICE_KIND",
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+]);
 
 function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
   const call = runCrestodianMock.mock.calls[index];
@@ -346,7 +352,14 @@ async function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
 }
 
 describe("runCli exit behavior", () => {
+  afterAll(() => {
+    serviceEnvSnapshot.restore();
+  });
+
   beforeEach(() => {
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+    delete process.env.OPENCLAW_SERVICE_KIND;
+    delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,

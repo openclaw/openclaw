@@ -27,9 +27,11 @@ internal fun ClawPanel(
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surfaceRaised,
+    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.82f),
     contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    border = null,
+    tonalElevation = 2.dp,
+    shadowElevation = 4.dp,
   ) {
     Column(modifier = Modifier.padding(contentPadding)) {
       content()

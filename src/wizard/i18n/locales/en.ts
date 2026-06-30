@@ -238,6 +238,9 @@ export const en = {
       authChoiceRequired: "auth choice is required",
       channelsTitle: "Channels",
       configHandling: "Config handling",
+      durationNote:
+        "We'll walk through model/auth, workspace, Gateway, channels, web search, skills, and optional plugin setup. QuickStart is usually only a few minutes, but provider sign-in, channel pairing, daemon install, network downloads, and optional dependencies can take longer. You can skip optional steps and return later with {command}.",
+      durationTitle: "Setup timeline",
       existingConfigTitle: "Existing config detected",
       flowAdvanced: "Manual setup",
       flowAdvancedHint: "Choose Gateway port, network exposure, Tailscale, and auth.",

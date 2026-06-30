@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
@@ -102,6 +103,9 @@ function startAcceptedTypingFeedback(params: {
       accountId: ctx.accountId,
       channelId: ctx.messageChannelId,
       log: logVerbose,
+      keepaliveIntervalMs: finiteSecondsToTimerSafeMilliseconds(
+        ctx.cfg.agents?.defaults?.typingIntervalSeconds ?? ctx.cfg.session?.typingIntervalSeconds,
+      ),
     });
   const cleanup = replyTypingFeedback.onCleanup;
   replyTypingFeedback.onCleanup = () => {

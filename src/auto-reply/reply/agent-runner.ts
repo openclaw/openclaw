@@ -16,7 +16,6 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -40,7 +39,6 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -65,12 +63,9 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { buildUsageContract } from "../usage-bar/contract.js";
-import { loadUsageBarTemplate } from "../usage-bar/template.js";
-import { renderUsageBar } from "../usage-bar/translator.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
@@ -89,7 +84,7 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
+import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -126,7 +121,7 @@ import {
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
-import { recordReplyUsageState } from "./reply-usage-state.js";
+import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -134,6 +129,8 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const RESTART_LIFECYCLE_REPLY_TEXT =
+  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
 function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -1566,6 +1563,18 @@ export async function runReplyAgent(params: {
       }
     }
   };
+  const isRestartRecoveryArmed = (): boolean => {
+    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
+      return false;
+    }
+    const persisted = loadSessionEntry({
+      sessionKey,
+      storePath,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+    });
+    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
+  };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
@@ -1669,7 +1678,6 @@ export async function runReplyAgent(params: {
       toolProgressDetail,
     });
 
-    let responseUsageLine: string | undefined;
     type SessionResetOptions = {
       failureLabel: string;
       buildLogMessage: (nextSessionId: string) => string;
@@ -1740,6 +1748,7 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
+        isRestartRecoveryArmed,
       }),
     );
 
@@ -1814,80 +1823,52 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
 
-    let replyUsageState: PluginHookReplyUsageState | undefined;
-    {
-      const winnerProvider = fallbackExhausted
-        ? undefined
-        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
-      const winnerModel = fallbackExhausted
-        ? undefined
-        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
-      const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
-      const compactions = runResult.meta?.agentMeta?.compactionCount;
-      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
-      replyUsageState = {
-        provider: providerUsed,
-        model: modelUsed,
-        resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
-        reasoningEffort:
-          typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
-        fastMode: resolveFastModeState({
-          cfg,
-          provider: providerUsed ?? "",
-          model: modelUsed ?? "",
-          agentId: followupRun.run.agentId,
-          sessionEntry: activeSessionEntry,
-        }).enabled,
-        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+    const winnerProvider = fallbackExhausted
+      ? undefined
+      : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+    const winnerModel = fallbackExhausted
+      ? undefined
+      : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
+    const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
+    const compactions = runResult.meta?.agentMeta?.compactionCount;
+    const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+    const replyUsageState = buildReplyUsageState({
+      config: cfg,
+      provider: providerUsed,
+      model: modelUsed,
+      fallbackExhausted,
+      winnerProvider,
+      winnerModel,
+      reasoningEffort:
+        typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+      fastMode: resolveFastModeState({
+        cfg,
+        provider: providerUsed ?? "",
+        model: modelUsed ?? "",
         agentId: followupRun.run.agentId,
-        sessionId: followupRun.run.sessionId,
-        chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
-        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
-        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
-        requested:
-          followupRun.run.provider && followupRun.run.model
-            ? `${followupRun.run.provider}/${followupRun.run.model}`
-            : undefined,
-        turnUsd: hasBillableUsageBuckets
-          ? estimateUsageCost({
-              usage,
-              cost: resolveModelCostConfig({
-                provider: providerUsed,
-                model: modelUsed,
-                config: cfg,
-              }),
-            })
+        sessionEntry: activeSessionEntry,
+      }).enabled,
+      fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+      agentId: followupRun.run.agentId,
+      sessionId: followupRun.run.sessionId,
+      chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+      authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+      overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+      requestedProvider: followupRun.run.provider,
+      requestedModel: followupRun.run.model,
+      durationMs: Date.now() - runStartedAt,
+      compactionCount: typeof compactions === "number" ? compactions : undefined,
+      contextTokenBudget:
+        typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+      contextUsedTokens:
+        typeof promptTokens === "number" && Number.isFinite(promptTokens)
+          ? promptTokens
           : undefined,
-        durationMs: Date.now() - runStartedAt,
-        identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
-        compactionCount: typeof compactions === "number" ? compactions : undefined,
-        contextTokenBudget:
-          typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-        contextUsedTokens:
-          typeof promptTokens === "number" && Number.isFinite(promptTokens)
-            ? promptTokens
-            : undefined,
-        usage: usage
-          ? {
-              input: usage.input,
-              output: usage.output,
-              cacheRead: usage.cacheRead,
-              cacheWrite: usage.cacheWrite,
-              total: usage.total,
-            }
-          : undefined,
-        lastUsage: lastCallUsage
-          ? {
-              input: lastCallUsage.input,
-              output: lastCallUsage.output,
-              cacheRead: lastCallUsage.cacheRead,
-              cacheWrite: lastCallUsage.cacheWrite,
-              total: lastCallUsage.total,
-            }
-          : undefined,
-      };
-      recordReplyUsageState(runId, replyUsageState);
-    }
+      promptTokens,
+      usage,
+      lastCallUsage,
+    });
+    recordReplyUsageState(runId, replyUsageState);
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,
@@ -2255,39 +2236,19 @@ export async function runReplyAgent(params: {
       });
     }
 
-    const responseUsageRaw =
+    const responseUsageSessionRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
-    if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
-      const costConfig = resolveModelCostConfig({
-        provider: providerUsed,
-        model: modelUsed,
-        config: cfg,
-        allowPluginNormalization: false,
-      });
-      const showCost = responseUsageMode === "full" && costConfig !== undefined;
-      let formatted = formatResponseUsageLine({
-        usage,
-        showCost,
-        costConfig,
-      });
-      const usageTemplate =
-        responseUsageMode === "full" && replyUsageState
-          ? loadUsageBarTemplate(cfg.messages?.usageTemplate)
-          : undefined;
-      const renderedUsageLine = usageTemplate
-        ? renderUsageBar(usageTemplate, buildUsageContract(replyUsageState, replyToChannel))
-        : undefined;
-      if (renderedUsageLine) {
-        formatted = renderedUsageLine;
-      } else if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session \`${sessionKey}\``;
-      }
-      if (formatted) {
-        responseUsageLine = formatted;
-      }
-    }
+    const responseUsageLine = resolveResponseUsageLine({
+      config: cfg,
+      sessionRaw: responseUsageSessionRaw,
+      channel: replyToChannel,
+      usage,
+      provider: providerUsed,
+      model: modelUsed,
+      preserveUserFacingSessionState,
+      replyUsageState,
+    });
 
     if (verboseEnabled) {
       activeSessionEntry = refreshSessionEntryFromStore({
@@ -2588,24 +2549,36 @@ export async function runReplyAgent(params: {
 
     return result;
   } catch (error) {
+    // Drain/restart aborts stay silent and defer to post-restart main-session
+    // recovery, which resumes the interrupted turn (or emits its own genuine
+    // non-resumable notice). Surfacing a generic "try again" here is a false
+    // terminal: it looks like the owed work was abandoned and invites a
+    // duplicate manual retry. `aborted_for_restart` is an "aborted" result, so
+    // it falls through to the shared abort branch below.
+    if (
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_by_user"
+    ) {
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    }
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
+      if (isRestartRecoveryArmed()) {
+        return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      }
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
-    }
-    if (replyOperation.result?.kind === "aborted") {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
     }
@@ -2613,7 +2586,7 @@ export async function runReplyAgent(params: {
       replyOperation.fail("command_lane_cleared", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
     }

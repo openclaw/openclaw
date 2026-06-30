@@ -536,6 +536,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         index: number;
       };
       const blocks = output.content as Block[];
+      const blockIndexes = new Map<number, number>();
 
       for await (const event of iterateAnthropicEvents(
         response,
@@ -568,6 +569,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "text_start",
               contentIndex: output.content.length - 1,
@@ -581,6 +583,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -595,6 +598,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -612,6 +616,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+            blockIndexes.set(event.index, output.content.length - 1);
             eventSink.push({
               type: "toolcall_start",
               contentIndex: output.content.length - 1,
@@ -620,9 +625,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
         } else if (event.type === "content_block_delta") {
           if (event.delta.type === "text_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "text") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "text") {
               block.text += event.delta.text;
               eventSink.push({
                 type: "text_delta",
@@ -632,9 +637,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "thinking_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "thinking") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "thinking") {
               block.thinking += event.delta.thinking;
               eventSink.push({
                 type: "thinking_delta",
@@ -644,9 +649,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "input_json_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "toolCall") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "toolCall") {
               block.partialJson += event.delta.partial_json;
               block.arguments = parseStreamingJson(block.partialJson);
               eventSink.push({
@@ -657,17 +662,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "signature_delta") {
-            const index = blocks.findIndex((b) => b.index === event.index);
-            const block = blocks[index];
-            if (block && block.type === "thinking") {
+            const index = blockIndexes.get(event.index);
+            const block = index === undefined ? undefined : blocks[index];
+            if (index !== undefined && block?.type === "thinking") {
               block.thinkingSignature = block.thinkingSignature || "";
               block.thinkingSignature += event.delta.signature;
             }
           }
         } else if (event.type === "content_block_stop") {
-          const index = blocks.findIndex((b) => b.index === event.index);
-          const block = blocks[index];
-          if (block) {
+          const index = blockIndexes.get(event.index);
+          const block = index === undefined ? undefined : blocks[index];
+          if (index !== undefined && block) {
+            blockIndexes.delete(event.index);
             delete (block as Partial<Block>).index;
             if (block.type === "text") {
               eventSink.push({

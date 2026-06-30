@@ -47,4 +47,12 @@ describe("scripts/bench-sqlite-state", () => {
       'error: --profile must be one of smoke, default, large; got "huge"',
     );
   });
+
+  it("rejects duplicate single-value controls before seeding benchmark databases", () => {
+    const result = runBench(["--profile", "smoke", "--profile", "large"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("error: --profile was provided more than once");
+  });
 });

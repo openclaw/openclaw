@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
   collectInstalledPluginSdkZodArtifactErrors,
@@ -404,6 +405,42 @@ describe("collectInstalledPackageErrors", () => {
       ).toContain(
         "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
       );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces invalid installed bundled extension manifests", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
+        "{not-json\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
+        "export {};\n",
+        "utf8",
+      );
+
+      const manifestErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
+      expect(manifestErrors).toHaveLength(1);
+      expect(manifestErrors[0]).toContain(
+        "installed bundled extension manifest invalid: failed to parse",
+      );
+      expect(manifestErrors[0]).toContain("dist/extensions/telegram/package.json");
+
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toContain(manifestErrors[0]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

@@ -133,17 +133,21 @@ export type ExecProcessOutcome =
       status: "completed";
       exitCode: number;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: false;
+      noOutputTimedOut?: boolean;
     }
   | {
       status: "failed";
       exitCode: number | null;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: boolean;
+      noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
       reason: string;
     };
@@ -490,9 +494,11 @@ export function buildExecExitOutcome(params: {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
+      exitReason: params.exit.reason,
       durationMs: params.durationMs,
       aggregated: params.aggregated + exitMsg,
       timedOut: false,
+      noOutputTimedOut: params.exit.noOutputTimedOut,
     };
   }
   const failureKind = classifyExecFailureKind({
@@ -510,9 +516,11 @@ export function buildExecExitOutcome(params: {
     status: "failed",
     exitCode: params.exit.exitCode,
     exitSignal: params.exit.exitSignal,
+    exitReason: params.exit.reason,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
     timedOut: params.exit.timedOut,
+    noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
@@ -715,6 +723,21 @@ export async function runExecProcess(opts: {
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
+  let sandboxFinalized = false;
+  const finalizeSandboxExec = async (params: {
+    status: "completed" | "failed";
+    exitCode: number | null;
+    timedOut: boolean;
+  }) => {
+    if (sandboxFinalized || !opts.sandbox?.finalizeExec) {
+      return;
+    }
+    sandboxFinalized = true;
+    await opts.sandbox.finalizeExec({
+      ...params,
+      token: sandboxFinalizeToken,
+    });
+  };
 
   const spawnSpec:
     | {
@@ -861,6 +884,13 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        await finalizeSandboxExec({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+        }).catch((finalizeErr: unknown) => {
+          logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
+        });
         emitExecProcessCompleted({
           command: opts.command,
           mode: "child",
@@ -877,6 +907,13 @@ export async function runExecProcess(opts: {
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      await finalizeSandboxExec({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+      }).catch((finalizeErr: unknown) => {
+        logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
+      });
       emitExecProcessCompleted({
         command: opts.command,
         mode: spawnSpec.mode,
@@ -910,19 +947,23 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
+      markExited(
+        session,
+        exit.exitCode,
+        exit.exitSignal,
+        outcome.status,
+        exit.reason,
+        exit.noOutputTimedOut,
+      );
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
-      if (opts.sandbox?.finalizeExec) {
-        await opts.sandbox.finalizeExec({
-          status: outcome.status,
-          exitCode: exit.exitCode ?? null,
-          timedOut: exit.timedOut,
-          token: sandboxFinalizeToken,
-        });
-      }
+      await finalizeSandboxExec({
+        status: outcome.status,
+        exitCode: exit.exitCode ?? null,
+        timedOut: exit.timedOut,
+      });
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",

@@ -26,6 +26,7 @@ import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
+import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -97,7 +98,10 @@ import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.j
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -1274,6 +1278,8 @@ function convertResponsesMessages(
         .filter((item) => item.type === "text")
         .map((item) => item.text)
         .join("\n");
+      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
+      const hasText = sanitizedTextResult.trim().length > 0;
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -1282,9 +1288,7 @@ function convertResponsesMessages(
         output:
           hasImages && model.input.includes("image")
             ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
+                ...(hasText ? [{ type: "input_text", text: sanitizedTextResult }] : []),
                 ...msg.content
                   .filter((item) => item.type === "image")
                   .map((item) => ({
@@ -1293,7 +1297,10 @@ function convertResponsesMessages(
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
+            : sanitizeNonEmptyTransportPayloadText(
+                textResult,
+                hasImages ? "(see attached image)" : "(no output)",
+              ),
       });
     }
     msgIndex += 1;
@@ -2800,15 +2807,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: options?.signal,
           emitReasoning,
         });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2853,6 +2854,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -2974,7 +2976,6 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    output.stopReason = "toolUse";
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
@@ -2985,14 +2986,15 @@ async function processOpenAICompletionsStream(
     };
     currentBlock = block;
     output.content.push(block);
+    toolCallBlockIndices.set(block, output.content.length - 1);
     pushStreamEvent({
       type: "toolcall_start",
-      contentIndex: output.content.indexOf(block),
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
       partial: output,
     });
     pushStreamEvent({
       type: "toolcall_delta",
-      contentIndex: output.content.indexOf(block),
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
       delta: toolCall.partialArgs,
       partial: output,
     });
@@ -3101,7 +3103,9 @@ async function processOpenAICompletionsStream(
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
-      const finishReasonResult = mapStopReason(choice.finish_reason);
+      const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
+        allowSingularToolCall: true,
+      });
       output.stopReason = finishReasonResult.stopReason;
       if (finishReasonResult.stopReason === "stop") {
         sawStopFinishReason = true;
@@ -3183,9 +3187,10 @@ async function processOpenAICompletionsStream(
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           output.content.push(block);
+          toolCallBlockIndices.set(block, output.content.length - 1);
           pushStreamEvent({
             type: "toolcall_start",
-            contentIndex: output.content.indexOf(block),
+            contentIndex: toolCallBlockIndices.get(block) ?? -1,
             partial: output,
           });
         }
@@ -3215,7 +3220,7 @@ async function processOpenAICompletionsStream(
           block.arguments = parseStreamingJson(block.partialArgs);
           pushStreamEvent({
             type: "toolcall_delta",
-            contentIndex: output.content.indexOf(block),
+            contentIndex: toolCallBlockIndices.get(block) ?? -1,
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -3240,6 +3245,8 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+  // Tool-call recovery is executable only after an explicit provider terminal.
+  // EOF alone can mean transport truncation, even when the recovered call parses.
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
   }
@@ -4476,32 +4483,6 @@ function hasOpenAICompletionsReasoningUsageActivity(
   return (
     typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
   );
-}
-
-function mapStopReason(reason: string | null) {
-  if (reason === null) {
-    return { stopReason: "stop" };
-  }
-  switch (reason) {
-    case "stop":
-    case "end":
-      return { stopReason: "stop" };
-    case "length":
-      return { stopReason: "length" };
-    case "function_call":
-    case "tool_call":
-    case "tool_calls":
-      return { stopReason: "toolUse" };
-    case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
-    case "network_error":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
-    default:
-      return {
-        stopReason: "error",
-        errorMessage: `Provider finish_reason: ${reason}`,
-      };
-  }
 }
 
 export const testing = {

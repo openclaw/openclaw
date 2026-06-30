@@ -12,7 +12,13 @@ import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
-import { formatSessionToolOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import {
+  appendSessionToolTruncationWarning,
+  formatSessionToolOutput,
+  invalidArgText,
+  shortenPath,
+  str,
+} from "./render-utils.js";
 import type { LsToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
@@ -79,21 +85,15 @@ function formatLsResult(
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
   showImages: boolean,
 ): string {
-  let text = formatSessionToolOutput(result, options, theme, showImages, 20);
-
   const entryLimit = result.details?.entryLimitReached;
-  const truncation = result.details?.truncation;
-  if (entryLimit || truncation?.truncated) {
-    const warnings: string[] = [];
-    if (entryLimit) {
-      warnings.push(`${entryLimit} entries limit`);
-    }
-    if (truncation?.truncated) {
-      warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-    }
-    text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
-  }
-  return text;
+  return appendSessionToolTruncationWarning(
+    formatSessionToolOutput(result, options, theme, showImages, 20),
+    theme,
+    {
+      limit: entryLimit ? { count: entryLimit, noun: "entries" } : undefined,
+      truncation: result.details?.truncation,
+    },
+  );
 }
 
 export function createLsToolDefinition(

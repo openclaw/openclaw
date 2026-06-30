@@ -1116,6 +1116,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
         const blocks = output.content;
+        const blockIndexes = new Map<number, number>();
         const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
@@ -1276,6 +1277,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const block: TransportContentBlock = { type: "text", text, index };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+              blockIndexes.set(index, contentIndex);
               eventSink.push({
                 type: "text_start",
                 contentIndex,
@@ -1303,6 +1305,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+              blockIndexes.set(index, contentIndex);
               eventSink.push({
                 type: "thinking_start",
                 contentIndex,
@@ -1327,6 +1330,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+              blockIndexes.set(index, output.content.length - 1);
               eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
@@ -1352,6 +1356,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+              blockIndexes.set(index, output.content.length - 1);
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
@@ -1362,8 +1367,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
-            let index = blocks.findIndex((block) => block.index === event.index);
-            let block = blocks[index];
+            const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
+            let block = index === undefined ? undefined : blocks[index];
             if (allowReasoningContentReplay) {
               const appendedThinking = appendReasoningContentThinkingDelta(
                 event.index,
@@ -1405,6 +1411,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               block = { type: "text", text: "", index: recoveredIndex };
               output.content.push(block);
               index = output.content.length - 1;
+              if (typeof event.index === "number") {
+                blockIndexes.set(event.index, index);
+              }
               eventSink.push({
                 type: "text_start",
                 contentIndex: index,
@@ -1470,12 +1479,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "content_block_stop") {
-            const index = blocks.findIndex((block) => block.index === event.index);
-            const block = blocks[index];
-            if (!block) {
+            const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
+            const block = index === undefined ? undefined : blocks[index];
+            if (eventIndex === undefined || index === undefined || !block) {
               finishReasoningContentSidecars(event.index);
               continue;
             }
+            blockIndexes.delete(eventIndex);
             delete block.index;
             if (block.type === "text") {
               eventSink.push({
