@@ -661,6 +661,52 @@ describe("getMessageFeishu", () => {
       },
     ]);
   });
+
+  it("rethrows retryable errors so callers can retry", async () => {
+    mockClientGet.mockRejectedValueOnce(
+      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    );
+
+    await expect(
+      getMessageFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_retry" }),
+    ).rejects.toThrow("socket hang up");
+
+    expect(mockClientGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows Feishu rate-limit errors so callers can retry", async () => {
+    const rateLimitErr = new Error("rate limited") as Error & { response?: unknown };
+    rateLimitErr.response = { data: { code: 11232, msg: "rate limit" } };
+    mockClientGet.mockRejectedValueOnce(rateLimitErr);
+
+    await expect(
+      getMessageFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_ratelimited" }),
+    ).rejects.toThrow("rate limited");
+
+    expect(mockClientGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null for non-retryable errors like auth failures", async () => {
+    mockClientGet.mockRejectedValueOnce(
+      Object.assign(new Error("Unauthorized"), { statusCode: 401 }),
+    );
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_auth",
+    });
+
+    expect(result).toBeNull();
+    expect(mockClientGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows for network timeout errors", async () => {
+    mockClientGet.mockRejectedValueOnce(new Error("Request timed out after 30000ms"));
+
+    await expect(
+      getMessageFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_timeout" }),
+    ).rejects.toThrow("Request timed out");
+  });
 });
 
 describe("editMessageFeishu", () => {

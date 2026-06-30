@@ -10,7 +10,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
+import { requestFeishuApi, getFeishuSendRateLimitCode } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -399,6 +399,35 @@ function parseFeishuMessageItem(
  * Get a message by its ID.
  * Useful for fetching quoted/replied message content.
  */
+const RETRYABLE_NETWORK_ERROR_PATTERNS = [
+  /ECONNRESET/i,
+  /ECONNREFUSED/i,
+  /ETIMEDOUT/i,
+  /ENOTFOUND/i,
+  /timeout/i,
+  /timed\s*out/i,
+  /network\s*error/i,
+  /fetch\s*failed/i,
+  /abort/i,
+] as const;
+
+function isFeishuMessageGetRetryableError(err: unknown): boolean {
+  if (getFeishuSendRateLimitCode(err) !== undefined) {
+    return true;
+  }
+  if (isRecord(err)) {
+    const code = typeof err.code === "string" ? err.code : undefined;
+    if (code && (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED")) {
+      return true;
+    }
+  }
+  const message =
+    typeof err === "object" && err !== null && "message" in err
+      ? String((err as { message: unknown }).message)
+      : "";
+  return RETRYABLE_NETWORK_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 export async function getMessageFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -434,7 +463,10 @@ export async function getMessageFeishu(params: {
     }
 
     return parseFeishuMessageItem(item, messageId);
-  } catch {
+  } catch (err) {
+    if (isFeishuMessageGetRetryableError(err)) {
+      throw err;
+    }
     return null;
   }
 }
