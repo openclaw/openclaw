@@ -81,11 +81,12 @@ import {
   resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
+  sortSessionRowsByUpdatedAtDesc,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -1599,5 +1600,51 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkTranscript).toBeNull();
+  });
+});
+
+describe("sortSessionRowsByUpdatedAtDesc", () => {
+  function sessionRow(
+    key: string,
+    updatedAt: number | null,
+    overrides: Partial<GatewaySessionRow> = {},
+  ): GatewaySessionRow {
+    return { key, kind: "direct", updatedAt, ...overrides } as GatewaySessionRow;
+  }
+
+  it("sorts sessions newest first and treats missing updatedAt as 0", () => {
+    const rows = [
+      sessionRow("a", 100),
+      sessionRow("b", 300),
+      sessionRow("c", null),
+      sessionRow("d", 200),
+    ];
+    const sorted = sortSessionRowsByUpdatedAtDesc(rows);
+    expect(sorted.map((entry) => entry.key)).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const rows = [sessionRow("old", 1), sessionRow("new", 2)];
+    const snapshot = rows.map((entry) => entry.key);
+    sortSessionRowsByUpdatedAtDesc(rows);
+    expect(rows.map((entry) => entry.key)).toEqual(snapshot);
+  });
+
+  it("works on browsers without Array.prototype.toSorted (regression for #98158)", () => {
+    // Simulate older Chrome (e.g. Chrome 109 on Windows 7) which does not
+    // implement Array.prototype.toSorted. The sidebar render path must not
+    // rely on it, otherwise the whole Control UI white-screens on load.
+    const arrayProto = Array.prototype as unknown as { toSorted?: unknown };
+    const originalToSorted = arrayProto.toSorted;
+    delete arrayProto.toSorted;
+    try {
+      const rows = [sessionRow("older", 50), sessionRow("newer", 150)];
+      const sorted = sortSessionRowsByUpdatedAtDesc(rows);
+      expect(sorted.map((entry) => entry.key)).toEqual(["newer", "older"]);
+    } finally {
+      if (originalToSorted !== undefined) {
+        arrayProto.toSorted = originalToSorted;
+      }
+    }
   });
 });

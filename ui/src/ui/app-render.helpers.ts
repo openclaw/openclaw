@@ -42,7 +42,7 @@ import {
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
@@ -892,4 +892,15 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
       title=${t("chat.gatewayStatus", { status: label })}
     ></span>
   `;
+}
+
+// Browsers that predate ES2023 (e.g. Chrome 109 / last Win7-supporting Chrome) do
+// not implement Array.prototype.toSorted, so calling it on the sidebar load path
+// crashes the whole Control UI render. Use a plain copy-then-sort so the sidebar
+// stays renderable on those browsers without depending on a polyfill.
+export function sortSessionRowsByUpdatedAtDesc(
+  rows: readonly GatewaySessionRow[],
+): GatewaySessionRow[] {
+  // oxlint-disable-next-line unicorn/no-array-sort -- intentional fallback for browsers without Array.prototype.toSorted (#98158)
+  return rows.slice().sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
