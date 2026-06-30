@@ -9,7 +9,7 @@
 // (when no custom fetch is supplied), so a test that only asserts the SDK
 // reached globalThis.fetch would pass even without any guard wired in.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "../types.js";
 
@@ -108,7 +108,9 @@ describe("Anthropic guard real wire loopback proof (http.createServer)", () => {
       });
     });
 
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
     const port = (server.address() as AddressInfo).port;
 
     try {
@@ -154,7 +156,9 @@ describe("Anthropic guard real wire loopback proof (http.createServer)", () => {
           `stop_reason=${result.stopReason}`,
       );
     } finally {
-      await new Promise<void>((r) => server.close(r));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
