@@ -27,6 +27,7 @@ export type ProviderThinkingModelCompat = {
  * profiles only when the configured payload style supports them.
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  api?: string;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
