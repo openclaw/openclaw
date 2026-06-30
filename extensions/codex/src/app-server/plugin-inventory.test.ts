@@ -150,17 +150,25 @@ describe("Codex plugin inventory", () => {
         nextCursor: null,
       }),
     });
-    const listed = pluginList(
-      [
-        pluginSummary("google-calendar@openai-curated-remote", {
-          name: "google-calendar",
-          remotePluginId: "plugin_connector_google_calendar",
-          installed: true,
-          enabled: true,
-        }),
+    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
+      name: "google-calendar",
+      remotePluginId: "plugin_connector_google_calendar",
+      installed: true,
+      enabled: true,
+    });
+    const localListed = pluginList([pluginSummary("github")]);
+    const listed = {
+      ...localListed,
+      marketplaces: [
+        ...localListed.marketplaces,
+        {
+          name: "openai-curated-remote",
+          path: null,
+          interface: null,
+          plugins: [remoteSummary],
+        },
       ],
-      { name: "openai-curated-remote", path: null },
-    );
+    } satisfies v2.PluginListResponse;
 
     const inventory = await readCodexPluginInventory({
       pluginConfig: {

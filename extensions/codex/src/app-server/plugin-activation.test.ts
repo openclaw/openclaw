@@ -237,6 +237,12 @@ describe("Codex plugin activation", () => {
             ...pluginList([remoteSummary]),
             marketplaces: [
               {
+                name: CODEX_PLUGINS_MARKETPLACE_NAME,
+                path: "/marketplaces/openai-curated",
+                interface: null,
+                plugins: [pluginSummary("github")],
+              },
+              {
                 name: "openai-curated-remote",
                 path: null,
                 interface: null,
