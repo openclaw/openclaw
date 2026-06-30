@@ -2348,13 +2348,20 @@ export async function runAgentTurnWithFallback(params: {
                     if (payload.phase === "result") {
                       return;
                     }
-                    const { name, phase, args } = payload;
+                    const { name, phase, args, toolCallId } = payload;
                     await Promise.all([
                       params.typingSignals.signalToolStart(),
+                      // Forward toolCallId so the channel keys this tool's live
+                      // progress line by it. The silent-window keep-alive
+                      // ("update" phase) carries the same id; dropping it here
+                      // leaves the start line unkeyed, so the keep-alive cannot
+                      // refresh it in place and the tool renders as a duplicate
+                      // "still working" line that never collapses.
                       params.opts?.onToolStart?.({
                         name,
                         phase,
                         args,
+                        ...(toolCallId !== undefined ? { toolCallId } : {}),
                         detailMode: params.toolProgressDetail,
                       }),
                     ]);

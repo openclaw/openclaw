@@ -2879,6 +2879,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "DONE" });
   });
 
+  it("keeps one tool line across the silent-window keep-alive and collapses it on the final answer", async () => {
+    // Regression: the claude-cli tool-start now forwards its toolCallId (see
+    // agent-runner-execution), and the silent-window keep-alive arrives as an
+    // onToolStart "update" carrying that SAME id. Both build a line keyed by
+    // tool:<toolCallId>, so the keep-alive refreshes THAT line in place — it must
+    // never stack a second "still working" line for the same tool — and the live
+    // preview must be cleared (collapsed) on the final answer, not left behind.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({
+          name: "exec",
+          phase: "start",
+          toolCallId: "call-1",
+          args: { command: "du -sh" },
+        });
+        // The claude-cli active-tool heartbeat re-emits the running tool as an
+        // "update" reusing the start's toolCallId.
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "call-1" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "call-1" });
+        await dispatcherOptions.deliver({ text: "Disk usage report" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    // No duplicate block: every rendered preview shows exactly one tool header
+    // for the single running tool. Before the toolCallId was forwarded the start
+    // line was unkeyed and could not merge with the keep-alive line, so the same
+    // tool stacked twice.
+    const previews = answerDraftStream.updatePreview.mock.calls.map(
+      (call) => (call[0] as { text?: string } | undefined)?.text ?? "",
+    );
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) {
+      const toolHeaderCount = (preview.match(/<b>🛠️/gu) ?? []).length;
+      expect(toolHeaderCount).toBe(1);
+    }
+
+    // The preview is collapsed on the final answer (its draft is cleared after
+    // the last preview render), and the final is delivered once durably.
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const lastClearOrder = answerDraftStream.clear.mock.invocationCallOrder.at(-1) ?? 0;
+    const lastPreviewOrder = answerDraftStream.updatePreview.mock.invocationCallOrder.at(-1) ?? 0;
+    expect(lastClearOrder).toBeGreaterThan(lastPreviewOrder);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Disk usage report" });
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
