@@ -879,6 +879,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       agentId,
       content: `The generated ${mediaLabel} is ready.`,
       mediaUrls: Array.from(params.mediaUrls),
+      ...(params.sourceTool === "image_generate" ? { generatedImage: true } : {}),
       idempotencyKey,
       mirror: {
         sessionKey: params.requesterSessionKey,

@@ -1011,6 +1011,7 @@ async function buildSendPayloadParts(params: {
       ...(asVoice ? { audioAsVoice: true } : {}),
       ...(presentation ? { presentation } : {}),
       ...(interactive ? { interactive } : {}),
+      ...(forceDocument ? { forceDocument: true } : {}),
       ...(delivery ? { delivery } : {}),
       ...(channelData ? { channelData } : {}),
     },

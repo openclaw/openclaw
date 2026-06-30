@@ -922,6 +922,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--pin` or `--delivery '{"pin":true}'` to request pinned delivery when the bot can pin in that chat
     - `--force-document` to send outbound images, GIFs, and videos as documents instead of compressed photo, animated-media, or video uploads
 
+    Set `channels.telegram.generatedImageAsDocument: true` (boolean, default `false`, per-account overridable) to deliver images produced by the `image_generate` tool as uncompressed documents/files instead of compressed photos. This is the opt-in form of automatic document delivery for generated images; the default `false` preserves the current compressed-photo behavior, and the per-account override works like `richMessages`.
+
     Action gating:
 
     - `channels.telegram.actions.sendMessage=false` disables outbound Telegram messages, including polls
@@ -1103,7 +1105,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
-- formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `generatedImageAsDocument`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

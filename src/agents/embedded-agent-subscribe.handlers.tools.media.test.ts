@@ -37,6 +37,7 @@ function createMockContext(overrides?: {
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
@@ -656,7 +657,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/canvas-output.png"]);
   });
 
-  it("queues structured details.media trust and voice metadata", async () => {
+  it("queues structured details.media trust, document, and voice metadata", async () => {
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
 
     await handleToolExecutionEnd(ctx, {
@@ -669,6 +670,7 @@ describe("handleToolExecutionEnd media emission", () => {
           media: {
             mediaUrl: "/tmp/reply.opus",
             audioAsVoice: true,
+            forceDocument: true,
             trustedLocalMedia: true,
           },
         },
@@ -677,6 +679,7 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolForceDocument).toBe(true);
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
 

@@ -75,6 +75,8 @@ type MessageSendParams = {
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  /** Channel-agnostic provenance: media produced by an image-generation tool. */
+  generatedImage?: boolean;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number;
@@ -385,6 +387,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
+      generatedImage: params.generatedImage,
       deps: params.deps,
       bestEffort: params.bestEffort,
       durability:

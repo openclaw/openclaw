@@ -207,6 +207,7 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  generatedImage?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
@@ -358,6 +359,7 @@ function createPluginHandler(
     replyToIdSource?: "explicit" | "implicit";
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    forceDocument?: boolean;
     formatting?: OutboundDeliveryFormattingOptions;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
@@ -368,6 +370,8 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    forceDocument:
+      overrides && "forceDocument" in overrides ? overrides.forceDocument : baseCtx.forceDocument,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
@@ -582,6 +586,7 @@ function createChannelOutboundContextBase(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
+    generatedImage: params.generatedImage,
     deps: params.deps,
     silent: params.silent,
     mediaAccess: params.mediaAccess,
@@ -647,6 +652,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  generatedImage?: boolean;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
@@ -1288,6 +1294,7 @@ export async function deliverOutboundPayloadsInternal(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
+        generatedImage: params.generatedImage,
         replyPayloadSendingHook: params.replyPayloadSendingHook,
         silent: params.silent,
         mirror: params.mirror,
@@ -1482,6 +1489,7 @@ async function deliverOutboundPayloadsCore(
       identity: params.identity,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
+      generatedImage: params.generatedImage,
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
@@ -1738,7 +1746,11 @@ async function deliverOutboundPayloadsCore(
         replyToIdSource: replyToResolution.source,
         ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
-        ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
+        ...(params.forceDocument !== undefined
+          ? { forceDocument: params.forceDocument }
+          : effectivePayload.forceDocument === true
+            ? { forceDocument: true }
+            : {}),
       };
       const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
         overrides: T,

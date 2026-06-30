@@ -22,6 +22,7 @@ export type MessagingToolSourceReplyPayload = Pick<
   | "interactive"
   | "mediaUrl"
   | "mediaUrls"
+  | "forceDocument"
   | "presentation"
   | "text"
 > & {

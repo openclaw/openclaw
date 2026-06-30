@@ -31,6 +31,7 @@ export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   presentation?: MessagePresentation;
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
@@ -45,6 +46,7 @@ export type OutboundPayloadJson = {
   mediaUrl: string | null;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   presentation?: MessagePresentation;
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
@@ -320,6 +322,7 @@ export function projectOutboundPayloadPlanForOutbound(
       text,
       mediaUrls: entry.parts.mediaUrls,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+      forceDocument: payload.forceDocument === true ? true : undefined,
       ...(entry.hasPresentation ? { presentation: payload.presentation } : {}),
       ...(payload.delivery ? { delivery: payload.delivery } : {}),
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
@@ -341,6 +344,7 @@ export function projectOutboundPayloadPlanForJson(
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: entry.parts.mediaUrls.length ? entry.parts.mediaUrls : undefined,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+      forceDocument: payload.forceDocument === true ? true : undefined,
       presentation: payload.presentation,
       delivery: payload.delivery,
       interactive: payload.interactive,
@@ -378,6 +382,7 @@ export function summarizeOutboundPayloadForTransport(
     text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+    forceDocument: payload.forceDocument === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,

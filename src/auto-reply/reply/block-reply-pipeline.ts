@@ -53,6 +53,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     statusNotice: isReplyPayloadStatusNotice(payload),
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
+    forceDocument: payload.forceDocument === true,
     presentation: payload.presentation ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
@@ -69,6 +70,7 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   return JSON.stringify({
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
+    forceDocument: payload.forceDocument === true,
     presentation: payload.presentation ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,

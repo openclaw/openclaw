@@ -650,6 +650,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
     };
 
@@ -661,6 +662,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       text: "done",
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       audioAsVoice: undefined,
+      forceDocument: undefined,
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
   });
@@ -669,6 +671,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/generated.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: true,
     };
 
@@ -690,6 +693,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: true,
     };
 
@@ -711,6 +715,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
     };
 
@@ -726,6 +731,29 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual(["/tmp/a.png"]);
     expect(state.pendingToolAudioAsVoice).toBe(true);
   });
+
+  it("preserves document delivery for queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolForceDocument: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/generated.png"],
+      audioAsVoice: undefined,
+      forceDocument: true,
+      trustedLocalMedia: undefined,
+    });
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolForceDocument).toBe(false);
+  });
 });
 
 describe("consumePendingToolMediaReply", () => {
@@ -733,12 +761,14 @@ describe("consumePendingToolMediaReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
     };
 
     expect(readPendingToolMediaReply(state)).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
+      forceDocument: undefined,
     });
     expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(state.pendingToolAudioAsVoice).toBe(true);
@@ -748,12 +778,14 @@ describe("consumePendingToolMediaReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolForceDocument: false,
       pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
+      forceDocument: undefined,
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);

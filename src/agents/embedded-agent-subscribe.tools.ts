@@ -532,6 +532,9 @@ export function extractMessagingToolSourceReplyPayload(
   if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
     payload.audioAsVoice = true;
   }
+  if (sourceReply.forceDocument === true || details.forceDocument === true) {
+    payload.forceDocument = true;
+  }
   const presentation = normalizeMessagePresentation(sourceReply.presentation);
   if (presentation) {
     payload.presentation = presentation;
@@ -686,6 +689,7 @@ export function filterToolResultMediaUrls(
 type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   trustedLocalMedia?: boolean;
 };
 
@@ -776,6 +780,7 @@ export function extractToolResultMediaArtifact(
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.forceDocument === true ? { forceDocument: true } : {}),
         ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };
     }

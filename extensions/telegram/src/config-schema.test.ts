@@ -179,6 +179,27 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts generatedImageAsDocument opt-in per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      generatedImageAsDocument: true,
+      accounts: { ops: { generatedImageAsDocument: false } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.generatedImageAsDocument).toBe(true);
+      expect(res.data.accounts?.ops?.generatedImageAsDocument).toBe(false);
+    }
+  });
+
+  it("rejects a non-boolean generatedImageAsDocument", () => {
+    const res = TelegramConfigSchema.safeParse({
+      generatedImageAsDocument: "yes",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
   it("normalizes custom commands", () => {
     const res = TelegramConfigSchema.safeParse({
       customCommands: [{ command: "/Backup", description: "  Git backup  " }],
