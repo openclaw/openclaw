@@ -9,7 +9,15 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
-export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 
 export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
 
@@ -31,6 +39,16 @@ const GPT_5_PRO_REASONING_EFFORTS = ["high"] as const;
 const GPT_51_CODEX_MAX_REASONING_EFFORTS = ["none", "medium", "high", "xhigh"] as const;
 const GPT_51_CODEX_MINI_REASONING_EFFORTS = ["medium"] as const;
 const GENERIC_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+
+/** Removes null/non-string entries from model/provider reasoning-effort maps. */
+export function normalizeOpenAIReasoningEffortMap(map: unknown): Record<string, string> {
+  if (!map || typeof map !== "object") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(map).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
 
 function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
@@ -144,7 +162,13 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if ((requested === "minimal" || requested === "low") && supported.includes("medium")) {
     return "medium";
   }
-  if (requested === "xhigh" && supported.includes("high")) {
+  if (requested === "ultra" && supported.includes("max")) {
+    return "max";
+  }
+  if ((requested === "ultra" || requested === "max") && supported.includes("xhigh")) {
+    return "xhigh";
+  }
+  if (["ultra", "max", "xhigh"].includes(requested) && supported.includes("high")) {
     return "high";
   }
   return supported.find((effort) => effort !== "none");

@@ -24,7 +24,8 @@ type StartupThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
@@ -86,7 +87,8 @@ function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefin
     value === "high" ||
     value === "xhigh" ||
     value === "adaptive" ||
-    value === "max"
+    value === "max" ||
+    value === "ultra"
     ? value
     : undefined;
 }

@@ -1,11 +1,18 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  normalizeOpenAIReasoningEffortMap,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it("drops null model effort mappings before transport resolution", () => {
+    expect(normalizeOpenAIReasoningEffortMap({ high: "high", ultra: null })).toEqual({
+      high: "high",
+    });
+  });
+
   it.each([
     { provider: "openai", id: "gpt-5.5" },
     { provider: "openai", id: "gpt-5.5" },
@@ -26,16 +33,51 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
   });
 
-  it("does not downgrade xhigh when model compat metadata declares it explicitly", () => {
+  it("does not downgrade xhigh/max/ultra when model compat metadata declares them explicitly", () => {
     const model = {
       provider: "openai",
-      id: "gpt-5.5",
+      id: "gpt-5.6-sol",
       compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
     };
 
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "max" })).toBe("max");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "ultra" })).toBe("ultra");
+  });
+
+  it("falls ultra back to the strongest declared compatible effort", () => {
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: {
+          provider: "openai",
+          id: "gpt-5.6-luna",
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+        },
+        effort: "ultra",
+      }),
+    ).toBe("max");
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: {
+          provider: "openai",
+          id: "gpt-5.5",
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        },
+        effort: "ultra",
+      }),
+    ).toBe("xhigh");
+    expect(
+      resolveOpenAIReasoningEffortForModel({
+        model: {
+          provider: "custom-openai",
+          id: "reasoner",
+          compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+        },
+        effort: "ultra",
+      }),
+    ).toBe("high");
   });
 
   it("allows provider-native compat values when explicitly declared", () => {

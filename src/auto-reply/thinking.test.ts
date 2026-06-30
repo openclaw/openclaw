@@ -78,6 +78,12 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("max")).toBe("max");
     expect(normalizeThinkLevel("MAX")).toBe("max");
   });
+
+  it("accepts explicit ultra without changing the legacy ultrathink alias", () => {
+    expect(normalizeThinkLevel("ultra")).toBe("ultra");
+    expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
+    expect(normalizeThinkLevel("ultrathink")).toBe("high");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -119,6 +125,22 @@ describe("listThinkingLevels", () => {
   it("does not include max without provider support", () => {
     expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
   });
+
+  it.each([
+    ["openai", "gpt-5.4"],
+    ["google", "gemini-3-pro-preview"],
+    ["anthropic", "claude-opus-4-7"],
+  ] as const)(
+    "does not advertise ultra on the embedded %s runtime and remaps stale state",
+    (provider, model) => {
+      const levels = listThinkingLevels(provider, model);
+      const resolved = resolveSupportedThinkingLevel({ provider, model, level: "ultra" });
+
+      expect(levels).not.toContain("ultra");
+      expect(resolved).not.toBe("ultra");
+      expect(levels).toContain(resolved);
+    },
+  );
 
   it("does not include adaptive without provider support", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
@@ -860,7 +882,9 @@ describe("resolveEffectiveResponseUsage", () => {
     // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
     expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
     expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
-    expect(resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord")).toBe("off");
+    expect(
+      resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord"),
+    ).toBe("off");
   });
 
   it("session explicit on value overrides config default", () => {
@@ -874,6 +898,6 @@ describe("resolveEffectiveResponseUsage", () => {
     // - "off"     = explicit off  → stays off
     const cfg = "tokens" as const;
     expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
-    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
   });
 });

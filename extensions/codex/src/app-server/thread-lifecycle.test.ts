@@ -929,6 +929,21 @@ describe("Codex app-server turn params", () => {
     });
   });
 
+  it("passes ultra unchanged to the native Codex app-server runtime", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.modelId = "gpt-5.6-sol";
+    params.thinkLevel = "ultra";
+
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-ultra",
+      cwd: "/tmp/workspace",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(turnParams.effort).toBe("ultra");
+    expect(turnParams.collaborationMode?.settings.reasoning_effort).toBe("ultra");
+  });
+
   it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
     const params = createAttemptParams({ provider: "codex" });
     params.modelId = "gpt-5.4-codex";
@@ -1382,9 +1397,9 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
     });
 
-    it("returns null for 'max' (non-effort enum value)", () => {
-      expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
+    it("passes native Codex ultra through without forwarding generic max", () => {
+      expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBeNull();
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBe("ultra");
     });
   });
 });

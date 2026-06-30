@@ -265,6 +265,7 @@ function resolveOpenRouterDeepSeekV4ReasoningEffort(
     case "xhigh":
       return thinkingLevel;
     case "max":
+    case "ultra":
       return "xhigh";
     case "adaptive":
       return "medium";

@@ -14,6 +14,7 @@ const ENABLED_THINKING_LEVELS = new Set<EnabledThinkingLevel>([
   "high",
   "xhigh",
   "max",
+  "ultra",
 ]);
 
 function isEnabledThinkingLevel(value: unknown): value is EnabledThinkingLevel {

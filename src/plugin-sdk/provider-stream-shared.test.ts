@@ -8,6 +8,8 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
+  resolveGoogleGemini3ThinkingLevel,
+  sanitizeGoogleThinkingPayload,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
@@ -106,6 +108,33 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
   expect(result.done).toBe(false);
   return result.value as StreamEvent;
 }
+
+describe("Google thinking helpers", () => {
+  it("maps ultra to HIGH for Gemini 3 thinking-level models", () => {
+    expect(
+      resolveGoogleGemini3ThinkingLevel({ modelId: "gemini-3-pro", thinkingLevel: "ultra" }),
+    ).toBe("HIGH");
+    expect(
+      resolveGoogleGemini3ThinkingLevel({ modelId: "gemini-3-flash", thinkingLevel: "ultra" }),
+    ).toBe("HIGH");
+  });
+
+  it("maps ultra to Gemma 4 HIGH without forwarding budgets", () => {
+    const payload = {
+      config: {
+        thinkingConfig: { thinkingBudget: 123 },
+      },
+    };
+
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemma-4-test",
+      thinkingLevel: "ultra",
+    });
+
+    expect(payload.config.thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
+  });
+});
 
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
@@ -222,6 +251,16 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
     expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
   });
 
+  it("maps ultra to max instead of emitting literal ultra", () => {
+    const payload: Record<string, unknown> = {
+      reasoning_effort: "high",
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "ultra");
+
+    expect(payload).toEqual({ reasoning: { effort: "max" } });
+  });
+
   it("removes only the legacy field when thinking is disabled", () => {
     const payload: Record<string, unknown> = {
       reasoning_effort: "high",
@@ -234,6 +273,18 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  it("downgrades profile-level ultra to max reasoning effort", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "ultra",
+      shouldPatchModel: () => true,
+    });
+    void wrapped?.({} as never, {} as never, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("max");
+  });
+
   it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
     const payload = {
       messages: [

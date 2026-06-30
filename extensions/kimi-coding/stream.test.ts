@@ -650,6 +650,7 @@ describe("kimi tool-call markup wrapper", () => {
       ["adaptive", 8192],
       ["xhigh", 8192],
       ["max", 8192],
+      ["ultra", 8192],
     ] as const;
 
     for (const [thinkingLevel, budgetTokens] of cases) {

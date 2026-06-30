@@ -35,7 +35,10 @@ export function buildBaseOptions(
 
 export function clampReasoning(
   effort: ThinkingLevel | undefined,
-): Exclude<ThinkingLevel, "xhigh"> | undefined {
+): Exclude<ThinkingLevel, "xhigh" | "ultra"> | undefined {
+  if (effort === "ultra") {
+    return "max";
+  }
   return effort === "xhigh" ? "high" : effort;
 }
 

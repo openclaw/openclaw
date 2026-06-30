@@ -14,7 +14,16 @@ import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
-type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max"
+  | "ultra";
 
 /** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
@@ -63,7 +72,8 @@ export function resolveThinkingDefault(params: {
     perModelThinking === "high" ||
     perModelThinking === "xhigh" ||
     perModelThinking === "adaptive" ||
-    perModelThinking === "max"
+    perModelThinking === "max" ||
+    perModelThinking === "ultra"
   ) {
     return perModelThinking;
   }

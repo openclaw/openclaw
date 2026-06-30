@@ -247,6 +247,23 @@ describe("Bedrock thinking effort mapping", () => {
     });
   });
 
+  it("maps ultra to the strongest supported Bedrock budget", () => {
+    const model = bedrockModel({
+      id: "anthropic.claude-3-7-sonnet-v1:0",
+      name: "Claude 3.7 Sonnet",
+      reasoning: true,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "ultra",
+      thinkingBudgets: { high: 24_000 },
+    });
+
+    expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+      thinking: { type: "enabled", budget_tokens: 24_000, display: "summarized" },
+      anthropic_beta: ["interleaved-thinking-2025-05-14"],
+    });
+  });
+
   it("clamps max effort for Claude models without native max support", () => {
     expect(
       testing.mapThinkingLevelToEffort(

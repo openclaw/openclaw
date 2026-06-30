@@ -44,7 +44,8 @@ export type CliBackendThinkingLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 

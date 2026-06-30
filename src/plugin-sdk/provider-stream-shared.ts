@@ -481,7 +481,9 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
 function resolveDeepSeekV4ReasoningEffort(
   thinkingLevel: DeepSeekV4ThinkingLevel,
 ): DeepSeekV4ReasoningEffort {
-  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" || thinkingLevel === "ultra"
+    ? "max"
+    : "high";
 }
 
 function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
@@ -688,7 +690,8 @@ export type GoogleThinkingInputLevel =
   | "adaptive"
   | "high"
   | "max"
-  | "xhigh";
+  | "xhigh"
+  | "ultra";
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."
@@ -741,6 +744,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "high":
       case "max":
       case "xhigh":
+      case "ultra":
         return "HIGH";
       case "adaptive":
         return undefined;
@@ -769,6 +773,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "high":
     case "max":
     case "xhigh":
+    case "ultra":
       return "HIGH";
     case "adaptive":
       return undefined;
@@ -830,6 +835,7 @@ function mapThinkLevelToGemma4ThinkingLevel(
     case "high":
     case "max":
     case "xhigh":
+    case "ultra":
       return "HIGH";
     default:
       return undefined;

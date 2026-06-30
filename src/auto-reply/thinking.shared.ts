@@ -18,7 +18,8 @@ export type ThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
@@ -48,6 +49,7 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   adaptive: 30,
   xhigh: 60,
   max: 70,
+  ultra: 80,
 };
 
 /** Normalizes user-provided thinking level strings to the canonical enum. */
@@ -62,6 +64,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   }
   if (collapsed === "max") {
     return "max";
+  }
+  if (collapsed === "ultra") {
+    return "ultra";
   }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
@@ -81,7 +86,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {

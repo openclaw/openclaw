@@ -178,6 +178,26 @@ function supportsAdaptiveThinking(model: AnthropicTransportModel): boolean {
   return supportsClaudeAdaptiveThinking(model);
 }
 
+function strongestAnthropicEffort(model: AnthropicTransportModel): AnthropicAdaptiveEffort {
+  if (supportsClaudeNativeMaxEffort(model)) {
+    return "max";
+  }
+  if (supportsNativeXhighEffort(model)) {
+    return "xhigh";
+  }
+  return "high";
+}
+
+function coerceAnthropicMappedEffort(
+  effort: string,
+  model: AnthropicTransportModel,
+): AnthropicAdaptiveEffort {
+  if (effort === "ultra") {
+    return strongestAnthropicEffort(model);
+  }
+  return effort as AnthropicAdaptiveEffort;
+}
+
 function mapThinkingLevelToEffort(
   level: ThinkingLevel | "off",
   model: AnthropicTransportModel,
@@ -191,7 +211,7 @@ function mapThinkingLevelToEffort(
   const resolvedLevel = clampThinkingLevel(clampModel, level);
   const mapped = thinkingLevelMap?.[resolvedLevel];
   if (typeof mapped === "string") {
-    return mapped as AnthropicAdaptiveEffort;
+    return coerceAnthropicMappedEffort(mapped, model);
   }
   switch (resolvedLevel) {
     case "off":
@@ -203,14 +223,15 @@ function mapThinkingLevelToEffort(
     case "xhigh":
       return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
-      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
+    case "ultra":
+      return strongestAnthropicEffort(model);
     default:
       return "high";
   }
 }
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
-  return level === "xhigh" || level === "max" ? "high" : level;
+  return level === "xhigh" || level === "max" || level === "ultra" ? "high" : level;
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {

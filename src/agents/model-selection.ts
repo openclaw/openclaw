@@ -66,7 +66,8 @@ export type ThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 export {
   buildConfiguredAllowlistKeys,

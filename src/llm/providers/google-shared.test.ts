@@ -6,6 +6,7 @@ import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
 } from "./google-shared.js";
 
@@ -229,6 +230,26 @@ describe("consumeGoogleGenerateContentStream", () => {
   });
 });
 
+describe("buildGoogleSimpleThinking", () => {
+  it("clamps ultra to high for Google thinking-level transports", () => {
+    const thinking = buildGoogleSimpleThinking(
+      { ...model, id: "gemini-3-pro", maxTokens: 65_536 },
+      { reasoning: "ultra" },
+    );
+
+    expect(thinking).toEqual({ enabled: true, level: "HIGH" });
+  });
+
+  it("uses a safe high budget when ultra reaches budget-based Google transports", () => {
+    const thinking = buildGoogleSimpleThinking(
+      { ...model, id: "gemini-2.5-flash", maxTokens: 65_536 },
+      { reasoning: "ultra" },
+    );
+
+    expect(thinking).toEqual({ enabled: true, budgetTokens: 24_576 });
+  });
+});
+
 describe("buildGoogleGenerateContentParams", () => {
   it("forwards stop sequences to Google generation config", () => {
     const params = buildGoogleGenerateContentParams(
@@ -238,6 +259,24 @@ describe("buildGoogleGenerateContentParams", () => {
     );
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
+  });
+
+  it("downgrades ultra to the strongest Google thinking level instead of emitting ultra", () => {
+    const params = buildGoogleGenerateContentParams(
+      { ...model, id: "gemini-3-pro", reasoning: true },
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        thinking: buildGoogleSimpleThinking(
+          { ...model, id: "gemini-3-pro" },
+          { reasoning: "ultra" },
+        ),
+      },
+    );
+
+    expect(params.config?.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
   });
 
   it("strips the internal cache boundary marker from systemInstruction", () => {

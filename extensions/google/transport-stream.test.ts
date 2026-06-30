@@ -2218,6 +2218,7 @@ describe("google transport stream", () => {
     ["gemini-2.5-pro", "low", 2048],
     ["gemini-2.5-flash", "medium", 8192],
     ["gemini-2.5-pro", "medium", 8192],
+    ["gemini-2.5-pro", "ultra", 32768],
   ] as const)("%s with reasoning=%s uses thinkingBudget %i", (id, reasoning, expectedBudget) => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel({ id }),

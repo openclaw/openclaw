@@ -84,7 +84,7 @@ export interface Settings {
   lastChangelogVersion?: string;
   defaultProvider?: string;
   defaultModel?: string;
-  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   transport?: TransportSetting; // default: "auto"
   steeringMode?: "all" | "one-at-a-time";
   followUpMode?: "all" | "one-at-a-time";
@@ -682,12 +682,13 @@ export class SettingsManager {
     | "high"
     | "xhigh"
     | "max"
+    | "ultra"
     | undefined {
     return this.settings.defaultThinkingLevel;
   }
 
   setDefaultThinkingLevel(
-    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
+    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
   ): void {
     this.globalSettings.defaultThinkingLevel = level;
     this.markModified("defaultThinkingLevel");

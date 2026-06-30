@@ -153,6 +153,28 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
 
+  it("maps ultra to max for direct ChatGPT Codex requests", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      reasoningEffort: "ultra",
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.reasoning).toEqual({ effort: "max", summary: "auto" });
+  });
+
   it("does not replay Responses item ids for store-disabled ChatGPT requests", async () => {
     let capturedPayload:
       | {

@@ -57,7 +57,7 @@ function formatAzureOpenAIError(error: unknown): string {
 
 // Azure OpenAI Responses-specific options
 export interface AzureOpenAIResponsesOptions extends StreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   azureApiVersion?: string;
   azureResourceName?: string;

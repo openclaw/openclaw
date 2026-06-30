@@ -667,6 +667,54 @@ describe("OpenAI-compatible completions params", () => {
   });
 });
 
+describe("OpenAI completions reasoning effort mapping", () => {
+  async function captureReasoningEffort(
+    targetModel: Model<"openai-completions">,
+  ): Promise<unknown> {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(targetModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "ultra",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    return capturedPayload?.reasoning_effort;
+  }
+
+  it("downgrades ultra to xhigh when no explicit support metadata is present", async () => {
+    await expect(captureReasoningEffort(reasoningModel)).resolves.toBe("xhigh");
+  });
+
+  it("prefers max when support metadata advertises max", async () => {
+    const maxModel = {
+      ...reasoningModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high", "xhigh", "max"],
+      },
+    } as unknown as Model<"openai-completions">;
+
+    await expect(captureReasoningEffort(maxModel)).resolves.toBe("max");
+  });
+
+  it("passes literal ultra only when support metadata advertises it", async () => {
+    const ultraModel = {
+      ...reasoningModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high", "ultra"],
+      },
+    } as unknown as Model<"openai-completions">;
+
+    await expect(captureReasoningEffort(ultraModel)).resolves.toBe("ultra");
+  });
+});
+
 describe("openai-completions stop-reason tool-call guard", () => {
   it("keeps literal reasoning tag examples visible when no reasoning field is mirrored", async () => {
     mockChunksRef.chunks = [

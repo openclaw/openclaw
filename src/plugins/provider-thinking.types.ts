@@ -40,7 +40,8 @@ export type ProviderThinkingLevelId =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 export type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;

@@ -352,6 +352,45 @@ describe("codex provider", () => {
     ).toBe(true);
   });
 
+  it("exposes ultra only when the native Codex catalog advertises it", () => {
+    const provider = buildCodexProvider();
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "codex",
+      modelId: "gpt-5.6-sol",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
+      },
+    } as never);
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "ultra",
+    ]);
+  });
+
+  it("does not expose ultra when native Codex discovery omits it", () => {
+    const provider = buildCodexProvider();
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "codex",
+      modelId: "gpt-5.5",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    } as never);
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
   it("declares synthetic auth because the harness owns Codex credentials", () => {
     const provider = buildCodexProvider();
 

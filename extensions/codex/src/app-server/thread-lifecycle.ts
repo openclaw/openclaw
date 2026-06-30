@@ -1795,7 +1795,7 @@ export function resolveCodexAppServerModelProvider(params: {
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
   modelId: string,
-): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+): "minimal" | "low" | "medium" | "high" | "xhigh" | "ultra" | null {
   if (thinkLevel === "minimal") {
     return isModernCodexModel(modelId) ? "low" : "minimal";
   }
@@ -1803,7 +1803,8 @@ export function resolveReasoningEffort(
     thinkLevel === "low" ||
     thinkLevel === "medium" ||
     thinkLevel === "high" ||
-    thinkLevel === "xhigh"
+    thinkLevel === "xhigh" ||
+    thinkLevel === "ultra"
   ) {
     return thinkLevel;
   }
