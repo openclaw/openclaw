@@ -1,5 +1,6 @@
 // Builds and validates channel pairing challenges for first-time setup.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 type PairingMeta = Record<string, string | undefined>;
@@ -62,10 +63,11 @@ export async function issuePairingChallenge(
     return { created: false };
   }
   params.onCreated?.({ code });
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   // Notification/audit hooks must not delay the pairing-code reply.
   void runPairingRequestedHook({
     channel: params.channel,
-    accountId: params.accountId,
+    accountId,
     senderId: params.senderId,
     code,
     meta: params.meta,

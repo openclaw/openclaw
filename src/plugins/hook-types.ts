@@ -182,7 +182,7 @@ export type PluginHookDeprecation = {
   removeAfter?: string;
 };
 
-export type PluginHookChannelPairingRequestedEvent = {
+type PluginHookChannelPairingRequestedEvent = {
   /** Channel that created the pending pairing request. */
   channel: string;
   /** Provider account ID for multi-account channel setups. */
@@ -195,7 +195,7 @@ export type PluginHookChannelPairingRequestedEvent = {
   metadata?: Record<string, string | undefined>;
 };
 
-export type PluginHookChannelPairingContext = {
+type PluginHookChannelPairingContext = {
   channelId: string;
   accountId?: string;
   senderId: string;
