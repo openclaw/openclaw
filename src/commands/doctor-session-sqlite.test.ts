@@ -297,8 +297,8 @@ describe("runDoctorSessionSqlite", () => {
     });
     const manifestPath = importReport.migrationRun?.manifestPath;
     const manifest = readMigrationManifest(manifestPath);
-    manifest.targets[0]!.completedMoves = [];
-    fs.writeFileSync(manifestPath!, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    manifest.targets[0].completedMoves = [];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 
     const restore = await runDoctorSessionSqlite({
       allAgents: true,
@@ -399,13 +399,13 @@ describe("runDoctorSessionSqlite", () => {
     const manifestPath = importReport.migrationRun?.manifestPath;
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    manifest.targets[0]!.issues = [
+    manifest.targets[0].issues = [
       {
         code: "startup_failure",
         message: "token=supersecret startup migration failed after archive",
       },
     ];
-    fs.writeFileSync(manifestPath!, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     writeFailedManifest(store, "older-failed.json", "2000-01-01T00:00:00.000Z");
 
     const recover = await runDoctorSessionSqlite({
@@ -439,7 +439,7 @@ describe("runDoctorSessionSqlite", () => {
     const manifestPath = importReport.migrationRun?.manifestPath;
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
-    manifest.targets[0]!.issues = [
+    manifest.targets[0].issues = [
       { code: "startup_failure", message: "selected store failed after archive" },
     ];
     manifest.targets.push({
@@ -451,7 +451,7 @@ describe("runDoctorSessionSqlite", () => {
       storePath: path.join(store.tempDir, "other", "sessions.json"),
       validationBeforeArchive: "failed",
     });
-    fs.writeFileSync(manifestPath!, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     writeFailedManifest(store, "newer-unselected.json", "2040-01-01T00:00:00.000Z", {
       agentId: "other",
       storePath: path.join(store.tempDir, "other", "sessions.json"),

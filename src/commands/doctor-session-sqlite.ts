@@ -28,8 +28,6 @@ import {
   writeSessionSqliteMigrationFailureReports,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
-  type DoctorSessionSqliteRestoreReport,
-  type SessionSqliteMigrationFailureIssue,
   type SessionSqliteMigrationMoveKind,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
@@ -44,78 +42,26 @@ import {
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
+import type {
+  DoctorSessionSqliteIssue,
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteOptions,
+  DoctorSessionSqliteReport,
+  DoctorSessionSqliteTargetReport,
+} from "./doctor-session-sqlite-types.js";
 export {
   restoreSessionSqliteMigrationRun,
   writeSessionSqliteMigrationFailureReports,
-  type DoctorSessionSqliteRestoreConflict,
-  type DoctorSessionSqliteRestoreReport,
 } from "./doctor-session-sqlite-migration-run.js";
-
-export type DoctorSessionSqliteMode =
-  | "dry-run"
-  | "import"
-  | "validate"
-  | "inspect"
-  | "restore"
-  | "recover";
-
-export type DoctorSessionSqliteOptions = {
-  allAgents?: boolean;
-  agent?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  mode: DoctorSessionSqliteMode;
-  store?: string;
-};
-
-export type DoctorSessionSqliteIssue = {
-  code: string;
-  message: string;
-  sessionKey?: string;
-};
-
-export type DoctorSessionSqliteTargetReport = {
-  agentId: string;
-  archivedTranscriptFiles: string[];
-  archivedUnreferencedJsonlFiles: string[];
-  importedEntries: number;
-  importedTranscriptEvents: number;
-  issues: DoctorSessionSqliteIssue[];
-  legacyEntries: number;
-  referencedTranscriptFiles: number;
-  sqliteEntries: number;
-  sqlitePath: string;
-  storePath: string;
-  unreferencedJsonlFiles: string[];
-  validatedEntries: number;
-  validatedTranscriptEvents: number;
-  restore?: DoctorSessionSqliteRestoreReport;
-};
-
-export type DoctorSessionSqliteReport = {
-  migrationRun?: {
-    failureReportJsonPath?: string;
-    failureReportMarkdownPath?: string;
-    manifestPath: string;
-    runId: string;
-  };
-  mode: DoctorSessionSqliteMode;
-  supportIssue?: SessionSqliteMigrationFailureIssue;
-  targets: DoctorSessionSqliteTargetReport[];
-  totals: {
-    archivedTranscriptFiles: number;
-    archivedUnreferencedJsonlFiles: number;
-    importedEntries: number;
-    importedTranscriptEvents: number;
-    issues: number;
-    legacyEntries: number;
-    sqliteEntries: number;
-    targets: number;
-    unreferencedJsonlFiles: number;
-    validatedEntries: number;
-    validatedTranscriptEvents: number;
-  };
-};
+export type {
+  DoctorSessionSqliteIssue,
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteOptions,
+  DoctorSessionSqliteReport,
+  DoctorSessionSqliteRestoreConflict,
+  DoctorSessionSqliteRestoreReport,
+  DoctorSessionSqliteTargetReport,
+} from "./doctor-session-sqlite-types.js";
 
 type LegacySessionRecord = {
   entry: SessionEntry;
@@ -867,7 +813,7 @@ function moveSessionJsonlToArchive(params: {
   sourcePathRaw: string;
   target: SessionStoreTarget;
 }): string {
-  const { archiveKey, baseNameRaw, sourcePathRaw, target } = params;
+  const { archiveKey, baseNameRaw, sourcePathRaw } = params;
   const sourcePath = path.resolve(sourcePathRaw);
   const stat = fs.statSync(sourcePath);
   if (!stat.isFile()) {

@@ -12,7 +12,7 @@ import type {
   DoctorSessionSqliteOptions,
   DoctorSessionSqliteReport,
   DoctorSessionSqliteTargetReport,
-} from "./doctor-session-sqlite.js";
+} from "./doctor-session-sqlite-types.js";
 
 export type SessionSqliteRecoverTargetValidator = (
   target: SessionStoreTarget,

@@ -9,7 +9,7 @@ import { readSqliteEntryCount, resolveTargetSqlitePath } from "./doctor-session-
 import type {
   DoctorSessionSqliteReport,
   DoctorSessionSqliteTargetReport,
-} from "./doctor-session-sqlite.js";
+} from "./doctor-session-sqlite-types.js";
 
 export async function restoreDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
