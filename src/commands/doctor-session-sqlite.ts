@@ -10,6 +10,7 @@ import {
   loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -336,6 +337,9 @@ function resolveLegacyTranscriptPath(
   target: SessionStoreTarget,
   entry: SessionEntry,
 ): string | undefined {
+  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+    return undefined;
+  }
   const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
     agentId: target.agentId,
     sessionsDir: path.dirname(target.storePath),
