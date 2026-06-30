@@ -579,6 +579,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalSlug: string;
   expiresAtMs?: number;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  ask?: string | null;
   host: "gateway" | "node";
   command: string;
   cwd?: string;
@@ -618,6 +619,7 @@ function readExecApprovalPendingDetails(result: unknown): {
     cwd: readStringValue(details.cwd),
     nodeId: readStringValue(details.nodeId),
     warningText: readStringValue(details.warningText),
+    ask: readStringValue(details.ask),
   };
 }
 
@@ -692,6 +694,7 @@ async function emitToolResultOutput(params: {
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
+          ask: approvalPending.ask,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,
