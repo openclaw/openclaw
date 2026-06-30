@@ -32,46 +32,30 @@ flow:
     - name: replies coherently in DM
       actions:
         - call: resetBus
-        - set: channelScenarios
-          value:
-            expr: await qaImport("./channel-behavior-scenario.js")
-        - set: channelScenario
-          value:
-            expr: |-
-              channelScenarios.defineChannelBehaviorScenario({
-                id: "dm-chat-baseline",
-                channel: { id: "alice", kind: "direct" },
-                steps: [
-                  {
-                    id: "dm-reply",
-                    name: "gets exact marker reply",
-                    inbound: {
-                      senderId: "alice",
-                      senderName: "Alice",
-                      text: config.prompt,
-                    },
-                    expect: {
-                      kind: "reply",
-                      textIncludes: [config.expectedMarker],
-                      timeoutMs: liveTurnTimeoutMs(env, 45000),
-                    },
-                  },
-                ],
-              })
-        - set: channelDriver
-          value:
-            expr: |-
-              channelScenarios.createQaFlowChannelScenarioDriver({
-                state,
-                sendInboundMessage: injectInboundMessage,
-                waitForOutboundMessage,
-                waitForNoOutbound,
-              })
-        - call: channelScenarios.runChannelBehaviorScenario
+        - call: runChannelBehaviorScenario
           saveAs: channelRun
           args:
-            - ref: channelScenario
-            - ref: channelDriver
+            - expr: |-
+                ({
+                  id: "dm-chat-baseline",
+                  channel: { id: "alice", kind: "direct" },
+                  steps: [
+                    {
+                      id: "dm-reply",
+                      name: "gets exact marker reply",
+                      inbound: {
+                        senderId: "alice",
+                        senderName: "Alice",
+                        text: config.prompt,
+                      },
+                      expect: {
+                        kind: "reply",
+                        textIncludes: [config.expectedMarker],
+                        timeoutMs: liveTurnTimeoutMs(env, 45000),
+                      },
+                    },
+                  ],
+                })
         - set: outbound
           value:
             ref: channelRun.lastOutbound

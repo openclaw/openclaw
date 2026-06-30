@@ -1,10 +1,34 @@
 // Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
+import {
+  createQaFlowChannelScenarioDriver,
+  defineChannelBehaviorScenario,
+  runChannelBehaviorScenario as runDefinedChannelBehaviorScenario,
+  type ChannelBehaviorScenarioDefinitionInput,
+  type ChannelBehaviorScenarioRunResult,
+} from "./channel-behavior-scenario.js";
+import type { QaBusMessage } from "./protocol.js";
 import type { QaTransportCapabilities, QaTransportState } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
+type ChannelBehaviorWaitForOutboundMessage = (
+  state: QaTransportState,
+  predicate: (message: QaBusMessage) => boolean,
+  timeoutMs?: number,
+  options?: { sinceIndex?: number },
+) => Promise<QaBusMessage> | QaBusMessage;
+type ChannelBehaviorWaitForNoOutbound = (
+  state: QaTransportState,
+  timeoutMs?: number,
+  options?: { sinceIndex?: number },
+) => Promise<void> | void;
+type ChannelBehaviorThreadCreateAction = (input: {
+  env: QaScenarioRuntimeEnv;
+  action: "thread-create";
+  args: Record<string, unknown>;
+}) => Promise<unknown> | unknown;
 
 export type QaScenarioRuntimeEnv<
   TLab = unknown,
@@ -197,6 +221,9 @@ type QaScenarioRuntimeApi<
   readTransportMessage: TEnv["transport"]["capabilities"]["readNormalizedMessage"];
   resetBus: () => Promise<void>;
   reset: () => Promise<void>;
+  runChannelBehaviorScenario: (
+    input: ChannelBehaviorScenarioDefinitionInput,
+  ) => Promise<ChannelBehaviorScenarioRunResult>;
 };
 
 export function createQaScenarioRuntimeApi<
@@ -211,6 +238,32 @@ export function createQaScenarioRuntimeApi<
   const resetTransportState = async () => {
     await params.env.transport.capabilities.resetNormalizedMessageState();
     await params.deps.sleep(100);
+  };
+  const runChannelBehaviorScenario = async (input: ChannelBehaviorScenarioDefinitionInput) => {
+    const waitForOutboundMessage = params.deps
+      .waitForOutboundMessage as unknown as ChannelBehaviorWaitForOutboundMessage;
+    const waitForNoOutbound = params.deps
+      .waitForNoOutbound as unknown as ChannelBehaviorWaitForNoOutbound;
+    const createThread = params.deps.handleQaAction as unknown as ChannelBehaviorThreadCreateAction;
+    const driver = createQaFlowChannelScenarioDriver({
+      state: params.env.transport.state,
+      sendInboundMessage: params.env.transport.capabilities.sendInboundMessage,
+      createThread: async ({ channelId, title }) =>
+        await createThread({
+          env: params.env,
+          action: "thread-create",
+          args: {
+            channelId,
+            ...(title ? { title } : {}),
+          },
+        }),
+      waitForNoOutbound: async (state, timeoutMs, options) => {
+        await waitForNoOutbound(state, timeoutMs, options);
+      },
+      waitForOutboundMessage: async (state, predicate, timeoutMs, options) =>
+        await waitForOutboundMessage(state, predicate, timeoutMs, options),
+    });
+    return await runDefinedChannelBehaviorScenario(defineChannelBehaviorScenario(input), driver);
   };
 
   return {
@@ -306,5 +359,6 @@ export function createQaScenarioRuntimeApi<
     readTransportMessage: params.env.transport.capabilities.readNormalizedMessage,
     resetBus: resetTransportState,
     reset: resetTransportState,
+    runChannelBehaviorScenario,
   };
 }

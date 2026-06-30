@@ -182,6 +182,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    expect(typeof api.runChannelBehaviorScenario).toBe("function");
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }
@@ -211,5 +212,114 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(readSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("runs channel behavior scenarios with the bound flow transport driver", async () => {
+    const state = createQaBusState();
+    const waitForCondition: QaTransportCapabilities["waitForCondition"] = async <T>(
+      check: () => T | Promise<T | null | undefined> | null | undefined,
+    ): Promise<T> => {
+      const value = await check();
+      if (value === null || value === undefined) {
+        throw new Error("waitForCondition test check did not return a value");
+      }
+      return value;
+    };
+    const waitForOutboundMessage = vi.fn(async (...args: unknown[]) => {
+      const [stateLocal, predicate, _timeoutMs, options] = args as [
+        typeof state,
+        (candidate: { direction: string }) => boolean,
+        number | undefined,
+        { sinceIndex?: number } | undefined,
+      ];
+      await stateLocal.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "dm:alice",
+        text: "QA-DM-BASELINE-OK",
+      });
+      const match = stateLocal
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound")
+        .slice(options?.sinceIndex ?? 0)
+        .find(predicate);
+      if (!match) {
+        throw new Error("missing expected outbound");
+      }
+      return match;
+    });
+    const env = {
+      lab: { baseUrl: "http://127.0.0.1:1234" },
+      transport: {
+        state,
+        capabilities: {
+          waitForCondition,
+          getNormalizedMessageState: state.getSnapshot.bind(state),
+          resetNormalizedMessageState: async () => {
+            state.reset();
+          },
+          sendInboundMessage: state.addInboundMessage.bind(state),
+          injectOutboundMessage: state.addOutboundMessage.bind(state),
+          waitForOutboundMessage: state.waitFor.bind(state),
+          readNormalizedMessage: state.readMessage.bind(state),
+          executeGenericAction: vi.fn(async () => undefined),
+          waitForReady: vi.fn(async () => undefined),
+          assertNoFailureReplies: vi.fn(),
+        },
+      },
+    };
+    const scenario = {
+      id: "channel-flow",
+      title: "Channel Flow",
+      surface: "test",
+      objective: "test",
+      successCriteria: ["works"],
+      sourcePath: "qa/scenarios/channel-flow.yaml",
+      execution: {
+        kind: "flow" as const,
+        config: {},
+        flow: {
+          steps: [{ name: "noop", actions: [{ assert: "true" }] }],
+        },
+      },
+    };
+
+    const api = createQaScenarioRuntimeApi({
+      env,
+      scenario,
+      deps: createDeps({ waitForOutboundMessage }),
+      constants,
+    });
+
+    const result = await api.runChannelBehaviorScenario({
+      id: "dm-chat-baseline",
+      channel: { id: "alice", kind: "direct" },
+      steps: [
+        {
+          id: "dm-reply",
+          name: "gets reply",
+          inbound: {
+            senderId: "alice",
+            text: "hello",
+          },
+          expect: {
+            kind: "reply",
+            textIncludes: ["QA-DM-BASELINE-OK"],
+          },
+        },
+      ],
+    });
+
+    expect(result.lastOutbound?.text).toBe("QA-DM-BASELINE-OK");
+    expect(
+      state
+        .getSnapshot()
+        .messages.some(
+          (message) =>
+            message.direction === "inbound" &&
+            message.conversation.id === "alice" &&
+            message.text === "hello",
+        ),
+    ).toBe(true);
+    expect(waitForOutboundMessage).toHaveBeenCalledTimes(1);
   });
 });

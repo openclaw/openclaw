@@ -1,5 +1,3 @@
-import type { QaTransportState } from "./qa-transport.js";
-// Qa Lab plugin module defines reusable channel behavior scenario contracts.
 import type {
   QaBusAttachment,
   QaBusConversation,
@@ -7,7 +5,9 @@ import type {
   QaBusMessage,
   QaBusThread,
   QaBusToolCall,
-} from "./runtime-api.js";
+} from "./protocol.js";
+// Qa Lab plugin module defines reusable channel behavior scenario contracts.
+import type { QaTransportState } from "./qa-transport.js";
 
 export type ChannelBehaviorScenarioChannel = {
   id: string;

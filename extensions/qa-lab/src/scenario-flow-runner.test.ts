@@ -1,6 +1,12 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import {
+  createQaFlowChannelScenarioDriver,
+  defineChannelBehaviorScenario,
+  runChannelBehaviorScenario as runDefinedChannelBehaviorScenario,
+} from "./channel-behavior-scenario.js";
+import type { QaTransportState } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
@@ -19,10 +25,7 @@ function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
 async function runLoadedScenarioFlow(
   scenarioId: string,
   params: {
-    onWaitForOutboundMessage?: (params: {
-      waitCount: number;
-      state: ReturnType<typeof createQaBusState>;
-    }) => void;
+    onWaitForOutboundMessage?: (params: { waitCount: number; state: QaTransportState }) => void;
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -70,6 +73,35 @@ async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
     },
+    runChannelBehaviorScenario: async (
+      input: Parameters<typeof defineChannelBehaviorScenario>[0],
+    ) =>
+      await runDefinedChannelBehaviorScenario(
+        defineChannelBehaviorScenario(input),
+        createQaFlowChannelScenarioDriver({
+          state,
+          sendInboundMessage: state.addInboundMessage.bind(state),
+          waitForNoOutbound: async () => undefined,
+          waitForOutboundMessage: async (
+            stateLocal: QaTransportState,
+            predicate,
+            timeoutMs,
+            options,
+          ) => {
+            waitCount += 1;
+            params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
+            const match = stateLocal
+              .getSnapshot()
+              .messages.filter((message) => message.direction === "outbound")
+              .slice(options?.sinceIndex ?? 0)
+              .find(predicate);
+            if (match) {
+              return match;
+            }
+            throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
+          },
+        }),
+      ),
     runScenario: async (_name: string, steps: QaFlowStep[]) => {
       const stepResults = [];
       for (const step of steps) {
