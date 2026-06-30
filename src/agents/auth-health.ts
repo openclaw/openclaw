@@ -366,9 +366,12 @@ export function buildAuthHealthSummary(params: {
     }
 
     if (explicitOrder) {
-      return explicitOrder
+      const explicitProfiles = explicitOrder
         .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
         .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+      if (explicitProfiles.length > 0) {
+        return explicitProfiles;
+      }
     }
 
     return provider.profiles;

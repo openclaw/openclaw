@@ -232,6 +232,30 @@ export function aggregateOAuthStatus(
   const oauth = profiles.filter((p) => p.type === "oauth");
   if (oauth.length === 0) {
     if (expectsOAuth) {
+      const tokens = profiles.filter((p) => p.type === "token");
+      if (tokens.length > 0) {
+        const tokenStatuses = new Set<AuthProfileHealthStatus>(tokens.map((p) => p.status));
+        let status: AuthProviderHealthStatus;
+        if (tokenStatuses.has("expired")) {
+          status = "expired";
+        } else if (tokenStatuses.has("missing")) {
+          status = "missing";
+        } else if (tokenStatuses.has("expiring")) {
+          status = "expiring";
+        } else if (tokenStatuses.has("ok")) {
+          status = "ok";
+        } else if (tokenStatuses.has("static")) {
+          status = "static";
+        } else {
+          status = "static";
+        }
+        const expirable = tokens
+          .map((p) => p.expiresAt)
+          .filter((v): v is number => asDateTimestampMs(v) !== undefined);
+        const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
+        const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
+        return { status, expiresAt, remainingMs };
+      }
       return { status: "missing" };
     }
     return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };

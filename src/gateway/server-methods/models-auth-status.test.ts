@@ -997,6 +997,19 @@ describe("aggregateOAuthStatus", () => {
     expect(result.remainingMs).toBe(1_000);
   });
 
+  it("aggregates token profiles when expectsOAuth and no OAuth profiles exist", () => {
+    const result = aggregateOAuthStatus(
+      {
+        provider: "claude-cli",
+        status: "ok",
+        profiles: [token("ok")],
+      },
+      NOW,
+      true,
+    );
+    expect(result.status).toBe("ok");
+  });
+
   it("ignores out-of-range OAuth expiry timestamps", () => {
     const valid = NOW + 5_000;
     const result = aggregateOAuthStatus(

@@ -519,6 +519,34 @@ describe("buildAuthHealthSummary", () => {
     expect(provider?.expiresAt).toBeUndefined();
   });
 
+  it("falls back to provider.profiles when explicitOrder references stale profile IDs", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "claude-cli:token": {
+          type: "token" as const,
+          provider: "claude-cli",
+          token: "fresh-setup-token",
+        },
+      },
+    };
+    const cfg = {
+      auth: {
+        order: {
+          "claude-cli": ["claude-cli:old-oauth"],
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({ cfg, store });
+
+    const provider = summary.providers.find((entry) => entry.provider === "claude-cli");
+    expect(provider?.status).not.toBe("missing");
+    expect(provider?.effectiveProfiles?.length).toBeGreaterThan(0);
+    expect(provider?.effectiveProfiles?.map((p) => p.profileId)).toContain("claude-cli:token");
+  });
+
   it("does not normalize provider aliases when filtering and grouping profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
