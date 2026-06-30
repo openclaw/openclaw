@@ -1,6 +1,7 @@
 // Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -388,7 +389,8 @@ describe("openrouter music generation provider", () => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(sseBody);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     const addr = server.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${addr.port}`;
 
