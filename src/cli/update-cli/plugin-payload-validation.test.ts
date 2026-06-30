@@ -3,8 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
+
+type BundleFormat = "codex" | "claude" | "cursor";
+type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
+  format: "bundle";
+  bundleFormat?: BundleFormat;
+};
 
 describe("runPluginPayloadSmokeCheck", () => {
   let tmpRoot: string;
@@ -32,7 +39,7 @@ describe("runPluginPayloadSmokeCheck", () => {
 
   async function writeBundle(params: {
     dir: string;
-    format: "codex" | "claude" | "cursor";
+    format: BundleFormat;
     manifest?: unknown;
     markerOnly?: boolean;
   }) {
@@ -54,6 +61,19 @@ describe("runPluginPayloadSmokeCheck", () => {
       "utf8",
     );
     await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
+  }
+
+  function formatMarkedBundleRecord(params: {
+    installPath: string;
+    bundleFormat?: BundleFormat;
+  }): PluginInstallRecord {
+    const record: FormatMarkedBundleInstallRecord = {
+      source: "marketplace",
+      format: "bundle",
+      ...(params.bundleFormat ? { bundleFormat: params.bundleFormat } : {}),
+      installPath: params.installPath,
+    };
+    return record;
   }
 
   function resolveTestHostRoot(): string {
@@ -141,12 +161,7 @@ describe("runPluginPayloadSmokeCheck", () => {
                   clawhubFamily: "bundle-plugin",
                   installPath: dir,
                 }
-              : {
-                  source: "marketplace",
-                  format: "bundle",
-                  bundleFormat,
-                  installPath: dir,
-                },
+              : formatMarkedBundleRecord({ installPath: dir, bundleFormat }),
         },
         env: {},
       });
@@ -160,11 +175,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     await writeBundle({ dir, format: "claude", markerOnly: true });
     const result = await runPluginPayloadSmokeCheck({
       records: {
-        "manifestless-claude-bundle": {
-          source: "marketplace",
-          format: "bundle",
-          installPath: dir,
-        } as const,
+        "manifestless-claude-bundle": formatMarkedBundleRecord({ installPath: dir }),
       },
       env: {},
     });
@@ -177,12 +188,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
     const result = await runPluginPayloadSmokeCheck({
       records: {
-        "broken-bundle": {
-          source: "marketplace",
-          format: "bundle",
-          bundleFormat: "codex",
-          installPath: dir,
-        } as const,
+        "broken-bundle": formatMarkedBundleRecord({ installPath: dir, bundleFormat: "codex" }),
       },
       env: {},
     });
@@ -215,6 +221,34 @@ describe("runPluginPayloadSmokeCheck", () => {
         installPath: dir,
         reason: "invalid-bundle-manifest",
         detail: "Bundle manifest validation failed: plugin manifest must be an object",
+      },
+    ]);
+  });
+
+  it("keeps dual-format bundle records on native package validation", async () => {
+    const dir = path.join(tmpRoot, "dual-format-bundle");
+    await writeBundle({ dir, format: "codex" });
+    await writePackage(dir, {
+      name: "dual-format-bundle",
+      openclaw: { extensions: ["./missing-extension.js"] },
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "dual-format-bundle": {
+          source: "clawhub",
+          clawhubFamily: "bundle-plugin",
+          installPath: dir,
+        },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "dual-format-bundle",
+        installPath: dir,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
       },
     ]);
   });

@@ -82,105 +82,164 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
+    const isBundleRecord = isBundleInstallRecord(record);
+    const packagePayload = await readPackagePayloadManifest(installPath);
+    if (packagePayload.status === "present") {
+      const usePackagePayload =
+        !isBundleRecord || hasNativePackageMetadata(packagePayload.manifest);
+      if (usePackagePayload) {
+        failures.push(
+          ...(await validatePackagePayload({
+            pluginId,
+            installPath,
+            manifest: packagePayload.manifest,
+          })),
+        );
+        continue;
+      }
+    } else {
+      if (!isBundleRecord) {
+        failures.push(formatPackagePayloadReadFailure({ pluginId, installPath, packagePayload }));
+        continue;
+      }
+    }
+
     const bundleFailure = validateBundleInstallRecordPayload({ pluginId, installPath, record });
     if (bundleFailure) {
       failures.push(bundleFailure);
-      continue;
-    }
-    if (isBundleInstallRecord(record)) {
-      continue;
-    }
-
-    const packageJsonPath = path.join(installPath, "package.json");
-    const packageJsonStat = await safeStat(packageJsonPath);
-    if (!packageJsonStat?.isFile()) {
-      failures.push({
-        pluginId,
-        installPath,
-        reason: "missing-package-json",
-        detail: `package.json is missing under ${installPath}`,
-      });
-      continue;
-    }
-
-    let manifest: PackageManifest & { main?: unknown; exports?: unknown };
-    try {
-      manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as typeof manifest;
-    } catch (err) {
-      failures.push({
-        pluginId,
-        installPath,
-        reason: "invalid-package-json",
-        detail: `Could not parse package.json: ${err instanceof Error ? err.message : String(err)}`,
-      });
-      continue;
-    }
-
-    if (manifestDeclaresOpenClawPeer(manifest)) {
-      const peerIssue = await auditOpenClawPeerDependencyLink({
-        packageDir: installPath,
-        packageName: manifest.name ?? pluginId,
-      });
-      if (peerIssue) {
-        failures.push({
-          pluginId,
-          installPath,
-          reason: "missing-openclaw-peer-link",
-          detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: ${peerIssue.reason}.`,
-        });
-      }
-    }
-
-    const extensionResolution = resolvePackageExtensionEntries(manifest);
-    if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
-      failures.push({
-        pluginId,
-        installPath,
-        reason: "missing-extension-entry",
-        detail: `Plugin extension entry validation failed: ${
-          extensionResolution.status === "invalid"
-            ? extensionResolution.error
-            : "package.json openclaw.extensions is empty"
-        }`,
-      });
-      continue;
-    } else if (extensionResolution.status === "ok") {
-      const extensionValidation = await validatePackageExtensionEntriesForInstall({
-        packageDir: installPath,
-        extensions: extensionResolution.entries,
-        manifest,
-      });
-      if (!extensionValidation.ok) {
-        failures.push({
-          pluginId,
-          installPath,
-          reason: "missing-extension-entry",
-          detail: `Plugin extension entry validation failed: ${extensionValidation.error}`,
-        });
-      }
-    }
-
-    // Only fail on `missing-main-entry` when `main` is *explicitly declared*
-    // and absent on disk. Fully resolving `exports` conditional sub-keys is
-    // out of scope for a static smoke check, so packages with only `exports`
-    // remain intentionally permissive.
-    if (typeof manifest.main !== "string" || !manifest.main.trim()) {
-      continue;
-    }
-    const mainRel = manifest.main.trim();
-    const mainPath = path.join(installPath, mainRel);
-    const mainStat = await safeStat(mainPath);
-    if (!mainStat?.isFile()) {
-      failures.push({
-        pluginId,
-        installPath,
-        reason: "missing-main-entry",
-        detail: `Plugin main entry "${mainRel}" not found at ${mainPath}`,
-      });
     }
   }
 
   return { checked, failures };
+}
+
+type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
+
+type PackagePayloadManifestReadResult =
+  | { status: "missing" }
+  | { status: "invalid"; error: string }
+  | { status: "present"; manifest: PackagePayloadManifest };
+
+async function readPackagePayloadManifest(
+  installPath: string,
+): Promise<PackagePayloadManifestReadResult> {
+  const packageJsonPath = path.join(installPath, "package.json");
+  const packageJsonStat = await safeStat(packageJsonPath);
+  if (!packageJsonStat?.isFile()) {
+    return { status: "missing" };
+  }
+  try {
+    return {
+      status: "present",
+      manifest: JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackagePayloadManifest,
+    };
+  } catch (err) {
+    return { status: "invalid", error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function formatPackagePayloadReadFailure(params: {
+  pluginId: string;
+  installPath: string;
+  packagePayload: Exclude<PackagePayloadManifestReadResult, { status: "present" }>;
+}): PluginPayloadSmokeFailure {
+  if (params.packagePayload.status === "invalid") {
+    return {
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "invalid-package-json",
+      detail: `Could not parse package.json: ${params.packagePayload.error}`,
+    };
+  }
+  return {
+    pluginId: params.pluginId,
+    installPath: params.installPath,
+    reason: "missing-package-json",
+    detail: `package.json is missing under ${params.installPath}`,
+  };
+}
+
+function hasNativePackageMetadata(manifest: PackageManifest): boolean {
+  return resolvePackageExtensionEntries(manifest).status !== "missing";
+}
+
+export async function hasNativePackageInstallPayload(installPath: string): Promise<boolean> {
+  const packagePayload = await readPackagePayloadManifest(installPath);
+  return (
+    packagePayload.status === "present" && hasNativePackageMetadata(packagePayload.manifest)
+  );
+}
+
+async function validatePackagePayload(params: {
+  pluginId: string;
+  installPath: string;
+  manifest: PackagePayloadManifest;
+}): Promise<PluginPayloadSmokeFailure[]> {
+  const failures: PluginPayloadSmokeFailure[] = [];
+
+  if (manifestDeclaresOpenClawPeer(params.manifest)) {
+    const peerIssue = await auditOpenClawPeerDependencyLink({
+      packageDir: params.installPath,
+      packageName: params.manifest.name ?? params.pluginId,
+    });
+    if (peerIssue) {
+      failures.push({
+        pluginId: params.pluginId,
+        installPath: params.installPath,
+        reason: "missing-openclaw-peer-link",
+        detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: ${peerIssue.reason}.`,
+      });
+    }
+  }
+
+  const extensionResolution = resolvePackageExtensionEntries(params.manifest);
+  if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
+    failures.push({
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "missing-extension-entry",
+      detail: `Plugin extension entry validation failed: ${
+        extensionResolution.status === "invalid"
+          ? extensionResolution.error
+          : "package.json openclaw.extensions is empty"
+      }`,
+    });
+    return failures;
+  } else if (extensionResolution.status === "ok") {
+    const extensionValidation = await validatePackageExtensionEntriesForInstall({
+      packageDir: params.installPath,
+      extensions: extensionResolution.entries,
+      manifest: params.manifest,
+    });
+    if (!extensionValidation.ok) {
+      failures.push({
+        pluginId: params.pluginId,
+        installPath: params.installPath,
+        reason: "missing-extension-entry",
+        detail: `Plugin extension entry validation failed: ${extensionValidation.error}`,
+      });
+    }
+  }
+
+  // Only fail on `missing-main-entry` when `main` is *explicitly declared*
+  // and absent on disk. Fully resolving `exports` conditional sub-keys is
+  // out of scope for a static smoke check, so packages with only `exports`
+  // remain intentionally permissive.
+  if (typeof params.manifest.main !== "string" || !params.manifest.main.trim()) {
+    return failures;
+  }
+  const mainRel = params.manifest.main.trim();
+  const mainPath = path.join(params.installPath, mainRel);
+  const mainStat = await safeStat(mainPath);
+  if (!mainStat?.isFile()) {
+    failures.push({
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "missing-main-entry",
+      detail: `Plugin main entry "${mainRel}" not found at ${mainPath}`,
+    });
+  }
+  return failures;
 }
 
 export function isBundleInstallRecord(record: PluginInstallRecord): boolean {
