@@ -309,6 +309,11 @@ function assertBaseSnapshotStillCurrent(
       retryable: false,
     });
   }
+  // Unreadable snapshots cannot be re-read for freshness; the write guard rejects
+  // them before commit unless the caller explicitly requests a destructive write.
+  if (snapshot.readError) {
+    return;
+  }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
   let currentRaw: string | null = null;
   let currentExists = true;
@@ -2128,7 +2133,7 @@ export function createConfigIO(
           valid: false,
           runtimeConfig: fallbackSourceConfig,
           hash: fallbackHash,
-          readError: { code: nodeErr?.code ?? null },
+          ...(fallbackRaw === null ? { readError: { code: nodeErr?.code ?? null } } : {}),
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],

@@ -2,8 +2,9 @@
 import fsNode from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createConfigIO } from "./io.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
+import { createConfigIO, resetConfigRuntimeState, writeConfigFile } from "./io.js";
 import type { ConfigWriteOptions } from "./io.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -147,6 +148,51 @@ describe("config write guard after unreadable config", () => {
         code: "CONFIG_WRITE_REJECTED",
         reasons: expect.arrayContaining(["unreadable-config-before-write"]),
       });
+      expect(fsNode.readFileSync(configPath, "utf-8")).toBe(liveBytes);
+      const rejectedArtifacts = fsNode
+        .readdirSync(stateDir)
+        .filter((name) => name.startsWith("openclaw.json.rejected."));
+      expect(rejectedArtifacts).toHaveLength(1);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects exported writes before re-reading an unreadable base snapshot",
+    async () => {
+      const home = fsNode.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreadable-"));
+      tempRoots.push(home);
+      const stateDir = path.join(home, ".openclaw");
+      fsNode.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      const configPath = path.join(stateDir, "openclaw.json");
+      const liveConfig = {
+        gateway: { mode: "local", port: 18789, auth: { mode: "token" } },
+        meta: { lastTouchedVersion: "2026.5.3-1" },
+      } satisfies OpenClawConfig;
+      const liveBytes = `${JSON.stringify(liveConfig, null, 2)}\n`;
+      fsNode.writeFileSync(configPath, liveBytes, { mode: 0o600 });
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        fsNode.chmodSync(configPath, 0o000);
+        await withEnvAsync(
+          { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
+          async () => {
+            await expect(
+              writeConfigFile({ channels: { telegram: { enabled: true } } }),
+            ).rejects.toMatchObject({
+              code: "CONFIG_WRITE_REJECTED",
+              reasons: expect.arrayContaining(["unreadable-config-before-write"]),
+            });
+          },
+        );
+      } finally {
+        resetConfigRuntimeState();
+        errorSpy.mockRestore();
+        warnSpy.mockRestore();
+        fsNode.chmodSync(configPath, 0o600);
+      }
+
       expect(fsNode.readFileSync(configPath, "utf-8")).toBe(liveBytes);
       const rejectedArtifacts = fsNode
         .readdirSync(stateDir)
