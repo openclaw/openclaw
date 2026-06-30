@@ -16,6 +16,7 @@ describe("extractToolResultText", () => {
         jwt: "jwt-value-1234567890",
         session: "session-value-1234567890",
         code: "code-value-1234567890",
+        error: { code: "ERR_ROOTOPAQUEPROVIDERCODE1234567890" },
         oauth: { code: "OPAQUEPROVIDERCODE1234567890" },
         providerError: { error: { code: "ERR_OPAQUEPROVIDERCODE1234567890" } },
         signature: "signature-value-1234567890",
@@ -46,6 +47,7 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("jwt-value-1234567890");
     expect(text).not.toContain("session-value-1234567890");
     expect(text).not.toContain("code-value-1234567890");
+    expect(text).not.toContain("ERR_ROOTOPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("OPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("ERR_OPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("signature-value-1234567890");

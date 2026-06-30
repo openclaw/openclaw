@@ -1142,9 +1142,6 @@ function isStructuredDiagnosticErrorCodePath(path: readonly string[]): boolean {
   if (!pathEndsWith(path, ["error", "code"])) {
     return false;
   }
-  if (path.length === 2) {
-    return true;
-  }
   const normalizedPath = path.map((part) => part.toLowerCase());
   if (normalizedPath.some((part) => part.includes("oauth") || part.includes("provider"))) {
     return false;
