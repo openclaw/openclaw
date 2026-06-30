@@ -582,15 +582,6 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
-/**
- * Tag a tool-using turn's leading visible text as commentary so it routes to the
- * narration lane and stays out of the final reply. Anthropic has no native
- * commentary channel — the only signal is that the text precedes a tool_use
- * block — so we infer it. Idempotent: only untagged non-empty text blocks are
- * touched and the index continues past already-tagged blocks, so the
- * tool-boundary caller (tags as soon as the first tool_use opens, exposing the
- * phase on that partial) and the finalize backstop can both run safely.
- */
 function tagPendingCommentaryText(content: TransportContentBlock[]): void {
   let commentaryTextIndex = content.filter(
     (block) => block.type === "text" && block.textSignature !== undefined,
@@ -1156,9 +1147,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const reasoningContentTextBlocks = new Map<number, number>();
         let sawMessageStop = false;
         const pendingTextEnds: Array<Parameters<typeof eventSink.push>[0]> = [];
-        // Anthropic reveals tool turns only after the leading text block stops,
-        // and stop_reason lands later; hold text_end so subscribers do not
-        // commit pre-tool narration before commentary tagging is known.
+        // Hold text_end until tool-boundary classification is known.
         const flushPendingTextEnds = () => {
           for (const event of pendingTextEnds) {
             eventSink.push(event);
@@ -1382,11 +1371,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (contentBlock?.type === "tool_use") {
-              // The turn is now known to be a tool turn: any preceding visible
-              // text is pre-tool narration. Tag it commentary BEFORE the
-              // toolcall_start push so its `partial` snapshot already carries the
-              // phase — lets the subscriber release withheld text to the 💬 lane
-              // at this boundary instead of guessing during the unphased deltas.
               tagPendingCommentaryText(output.content);
               flushPendingTextEnds();
               const block: TransportContentBlock = {

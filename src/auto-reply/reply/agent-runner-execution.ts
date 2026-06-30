@@ -2624,21 +2624,16 @@ export async function runAgentTurnWithFallback(params: {
                               text: payload.text,
                               mediaUrls: payload.mediaUrls,
                               isReasoningSnapshot: payload.isReasoningSnapshot,
-                              requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
+                              requiresReasoningProgressOptIn:
+                                payload.requiresReasoningProgressOptIn,
                             });
                           }
                         : undefined,
                     streamReasoningInNonStreamModes: params.opts?.streamReasoningInNonStreamModes,
                     onReasoningEnd: params.opts?.onReasoningEnd,
                     onAgentEvent: (() => {
-                      // Commentary arrives as snapshots (replace), deltas, or both
-                      // depending on the producer; accumulate per item so the
-                      // preamble progress payload always carries full text.
+                      // Normalize commentary deltas/snapshots into full preamble text.
                       const commentaryTextByItem = new Map<string, string>();
-                      // Anthropic commentary has no native item id, so each later
-                      // stream event re-emits the full text under an empty id; the
-                      // verbose standalone lane can't dedup that and posts a duplicate
-                      // persistent message per snapshot. Skip unchanged re-emissions.
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
                         lifecycleBackstop.note(evt);
@@ -2714,12 +2709,6 @@ export async function runAgentTurnWithFallback(params: {
                           messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
                           messageToolOnlyDeliveryCompleted = true;
                         }
-                        // Commentary rides the assistant lane per the I/O contract;
-                        // rebuild the preamble progress payload here so channel
-                        // rendering (draft commentary lines, verbose delivery, and
-                        // the collapse-bar 💬 count) sees it. Without this the
-                        // embedded commentary stream reaches the bus but never the
-                        // window/count — plain-mode 💬 was silently dropped.
                         if (
                           evt.stream === "assistant" &&
                           readStringValue(evt.data.phase) === "commentary" &&

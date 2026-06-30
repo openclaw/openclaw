@@ -710,15 +710,8 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isOpenAiResponsesAssistantMessage(partialAssistant);
-  // Anthropic tags pre-tool narration commentary only at the tool_use boundary
-  // (anthropic-transport-stream.ts), so during the unphased deltas the text block
-  // is unsigned (no deliveryPhase, no streamItemId) and we cannot yet tell
-  // narration from a final answer. Withhold the DURABLE block-reply append: a tool
-  // turn's deferred commentary-tagged text_end then suppresses it, and a non-tool
-  // answer is delivered in full from handleMessageEnd. Without this the buffered
-  // deltas leak via the text_end mid-drain and the pre-tool flushBlockReplyBuffer.
-  // Unlike the OpenAI guard this does NOT early-return — the live preview must keep
-  // streaming; only the durable append (below) is gated.
+  // Anthropic commentary is known only at the tool boundary; keep early
+  // unphased deltas out of durable block replies until that phase is known.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -733,12 +726,21 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (deliveryPhase === "commentary") {
-    // Emit-always: commentary deltas reach the bus/archive (raw stream already
-    // appended above); block-reply and final-text lanes never see them.
-    if (chunk) {
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: streamItemId }),
-      );
+    const commentaryText = chunk
+      ? undefined
+      : coerceChatContentText(extractAssistantCommentaryText(partialAssistant));
+    const commentaryData = chunk
+      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: streamItemId })
+      : commentaryText
+        ? buildAssistantStreamData({
+            text: commentaryText,
+            replace: true,
+            phase: "commentary",
+            itemId: streamItemId,
+          })
+        : undefined;
+    if (commentaryData) {
+      ctx.emitAssistantStreamData(commentaryData);
     }
     return;
   }

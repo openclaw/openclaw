@@ -604,14 +604,8 @@ async function processDiscordMessageInner(
     lines[0] = `🧠 ${lines[0]}`;
     return lines.map((line) => `> ${line}`).join("\n");
   };
-  // Reasoning lane gating follows the session /reasoning level (off|on|stream), not a
-  // streaming config flag: `on` delivers a durable 🧠 blockquote, `stream` renders the
-  // live window lane (counted in the summary bar), `off` shows nothing in either lane.
+  // Reasoning delivery follows the session /reasoning level, not streaming config.
   const reasoningLevel = ((): "on" | "stream" | "off" => {
-    // Config default mirrors core run selection (get-reply-directives.ts) and the
-    // Telegram resolver: the agent's own reasoningDefault wins over the global one,
-    // else "off". Without this, an agent-scoped default would run reasoning on but
-    // Discord would resolve delivery off and drop the durable 🧠 lane.
     const normalizedAgentId = (route.agentId ?? "").trim().toLowerCase() || "main";
     const agentEntryDefault = cfg.agents?.list?.find(
       (entry) => ((entry?.id ?? "").trim().toLowerCase() || "main") === normalizedAgentId,
@@ -625,7 +619,11 @@ async function processDiscordMessageInner(
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const level = getSessionEntry({ agentId: route.agentId, sessionKey, storePath })?.reasoningLevel;
+      const level = getSessionEntry({
+        agentId: route.agentId,
+        sessionKey,
+        storePath,
+      })?.reasoningLevel;
       if (level === "on" || level === "stream" || level === "off") {
         return level;
       }
@@ -640,12 +638,7 @@ async function processDiscordMessageInner(
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
-  // True once a durable 🧠 reasoning message has posted this turn (/reasoning on).
-  // Those post AFTER the early progress draft, so collapsing the draft in place
-  // strands the summary above them (at the top). When set, the collapse instead
-  // posts the summary fresh below the thoughts (timeline: thoughts → summary →
-  // answer). Durable 🧠 is never counted in the bar — the delivery site below
-  // intentionally omits the progressReasoningSteps bump.
+  // Durable reasoning posts after the draft; summary must land below it.
   let persistentReasoningDelivered = false;
   // Preamble updates can re-fire; count each item id or id-less text once.
   const seenCommentaryIds = new Set<string>();
@@ -840,10 +833,7 @@ async function processDiscordMessageInner(
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
       if (persistentReasoningDelivered) {
-        // /reasoning on: durable 🧠 messages posted AFTER the early draft, so an
-        // in-place edit strands the summary above them (at the top). Clear the
-        // early draft and post the summary fresh below the thoughts, so the order
-        // reads thoughts → summary → answer (the final posts fresh below this).
+        // Keep /reasoning on order as thoughts, summary, answer.
         await draftStream.clear();
         await deliverDiscordReply({
           cfg,
@@ -1236,9 +1226,7 @@ async function processDiscordMessageInner(
           if (shouldYieldDraftProgress()) {
             return;
           }
-          // Count only work-tool starts. message/react/typing are non-work tools
-          // the compositor rejects from the draft, so they must not inflate the
-          // collapse bar (same predicate the compositor gates rendering on).
+          // Match the compositor: message/react/typing are not work-tool lines.
           if (payload.phase === "start" && isChannelProgressDraftWorkToolName(payload.name)) {
             progressToolCalls += 1;
           }
