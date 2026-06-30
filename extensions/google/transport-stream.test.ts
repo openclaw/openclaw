@@ -2166,6 +2166,119 @@ describe("google transport stream", () => {
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
 
+  it("serializes structured-only Google tool results before fallback", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "json",
+              value: { city: "Paris", temperatureC: 21 },
+              apiToken: "secret-token-123",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toEqual({
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: "lookup",
+            response: {
+              output:
+                '{"type":"json","value":{"city":"Paris","temperatureC":21},"apiToken":"[REDACTED]"}',
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("keeps explicit Google tool-result text before structured fallback", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            { type: "json", value: { ignored: true } },
+            { type: "text", text: "explicit result" },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "explicit result" } } }],
+    });
+  });
+
+  it("redacts opaque and binary structured Google tool-result fields", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "resource",
+              mimeType: "image/png",
+              data: "abcdef",
+              encrypted_content: "opaque",
+              text: "data:image/png;base64,abcdef",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse.response.output).toContain('"data":"[binary data omitted: 6 chars]"');
+    expect(functionResponse.response.output).toContain(
+      '"encrypted_content":"[omitted encrypted_content]"',
+    );
+    expect(functionResponse.response.output).toContain('"text":"[inline data URI: 23 chars]"');
+  });
+
+  it("keeps Google media-only tool results on media placeholders", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [{ type: "audio", mimeType: "audio/wav", data: "wav-bytes" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "(see attached audio)" } } }],
+    });
+  });
+
   it.each([
     ["image first", ["screenshot", "weather"]],
     ["image last", ["weather", "screenshot"]],
