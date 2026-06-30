@@ -297,6 +297,46 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
+  it("does not report missing package.json for bundle-format plugins", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-bundle-payload-"));
+    const claudeBundleDir = path.join(tmpDir, "extensions", "claude-bundle");
+    const codexBundleDir = path.join(tmpDir, "extensions", "codex-bundle");
+    try {
+      await fs.mkdir(path.join(claudeBundleDir, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(claudeBundleDir, ".claude-plugin", "plugin.json"),
+        JSON.stringify({ name: "claude-bundle" }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(codexBundleDir, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(codexBundleDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "codex-bundle", skills: "skills" }),
+        "utf8",
+      );
+
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "claude-bundle": {
+              source: "npm",
+              spec: "claude-bundle@beta",
+              installPath: claudeBundleDir,
+            },
+            "codex-bundle": {
+              source: "npm",
+              spec: "codex-bundle@beta",
+              installPath: codexBundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips disabled tracked records when requested", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");

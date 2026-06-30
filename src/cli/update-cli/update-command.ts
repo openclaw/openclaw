@@ -140,6 +140,7 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
+import { resolvePluginInstallPayloadKind } from "./plugin-payload-kind.js";
 import {
   convergenceWarningsToOutcomes,
   runPostCorePluginConvergence,
@@ -572,6 +573,9 @@ export async function collectMissingPluginInstallPayloads(params: {
     const installPath = resolveUserPath(rawInstallPath, env);
     if (!(await pathExists(installPath))) {
       missing.push({ pluginId, installPath, reason: "missing-package-dir" });
+      continue;
+    }
+    if (resolvePluginInstallPayloadKind(installPath) === "bundle") {
       continue;
     }
     const packageJsonPath = path.join(installPath, "package.json");
