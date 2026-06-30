@@ -1249,6 +1249,9 @@ jobs:
           - check_name: check-session-transcript-reader-boundary
             group: session-transcript-reader-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-sqlite-session-schema-baseline
+            group: sqlite-session-schema-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-channels
             group: extension-channels
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -1372,6 +1375,13 @@ jobs:
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              fi
+              ;;
+            sqlite-session-schema-baseline)
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["sqlite:sessions-schema:check"] ? 0 : 1);'; then
+                echo "[skip] SQLite sessions/transcripts schema baseline script is not present in package.json"
+              else
+                run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
               ;;
             extension-channels)
