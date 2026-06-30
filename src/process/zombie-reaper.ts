@@ -2,25 +2,23 @@
  * Zombie process reaper for long-running gateway processes.
  *
  * Node.js internally tracks child processes and reaps them via libuv's
- * SIGCHLD handler (which calls waitpid(-1, WNOHANG) in a loop). However,
- * when grandchildren exit before their parent is killed (a race during
- * process-tree termination), the zombie grandchildren are reparented to
- * PID 1 (or the nearest subreaper) but no new SIGCHLD is sent — they
- * become permanent zombies.
+ * SIGCHLD handler.  libuv calls waitpid(process->pid, ...) for each
+ * tracked child, NOT waitpid(-1, WNOHANG).  This means:
  *
- * This module provides two safeguards:
+ * - Node.js's own child processes are reaped when they exit.
+ * - Grandchildren (spawned by those children) are NOT tracked and
+ *   libuv will never reap them.
  *
- * 1. After kill-tree operations, call `reapZombies()` to trigger an
- *    immediate libuv waitpid sweep by sending SIGCHLD to ourselves.
- *    This reaps any zombies that were reparented to us.
+ * During process-tree termination, a race can occur: grandchildren
+ * exit before their parent is killed.  The zombie grandchildren are
+ * reparented to PID 1 (tini in Docker, or systemd) but no new
+ * SIGCHLD fires — they become permanent zombies (#97616).
  *
- * 2. A periodic fallback timer (every 30s) that triggers the same sweep,
- *    catching any zombies that accumulated outside kill-tree paths.
- *
- * Note: `process.kill(process.pid, 'SIGCHLD')` is safe because it merely
- * triggers libuv's existing signal handler — libuv's waitpid(-1, WNOHANG)
- * loop silently ignores any PID it doesn't track, and the handler does
- * not recurse.
+ * This module is a best-effort mitigation, not a guaranteed fix: it
+ * nudges PID 1 (which DOES call waitpid(-1, WNOHANG) in its SIGCHLD
+ * handler) to reap any newly-reparented zombies.  A complete fix
+ * requires either subreaper registration + native waitpid binding
+ * or a bottom-up process-tree kill that avoids the race.
  *
  * See: https://github.com/openclaw/openclaw/issues/97616
  */
@@ -32,23 +30,33 @@ const REAP_INTERVAL_MS = 30_000;
 let reapTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Send SIGCHLD to the current process to trigger libuv's internal
- * waitpid(-1, WNOHANG) loop. This reaps any zombie children (including
- * reparented grandchildren if this process is a subreaper or PID 1).
+ * Nudge PID 1 (tini / init) to reap zombie children.
  *
- * Safe to call from any context — if we're on an unsupported platform
- * (Windows) or the signal is blocked by seccomp/SELinux, the call is
- * a silent no-op.
+ * When a process tree is killed, grandchildren that exit before their parent
+ * are reparented to PID 1 as zombies.  Unlike libuv, tini's SIGCHLD handler
+ * calls waitpid(-1, WNOHANG), so sending SIGCHLD to PID 1 triggers actual
+ * zombie reaping.
+ *
+ * Falls back to self-SIGCHLD on platforms where PID 1 cannot be signalled.
+ * On Windows this is a no-op.
  */
 export function reapZombies(): void {
   if (process.platform === "win32") {
     return;
   }
   try {
-    process.kill(process.pid, "SIGCHLD");
+    // Primary: nudge PID 1 (tini/init) which calls waitpid(-1, WNOHANG).
+    process.kill(1, "SIGCHLD");
   } catch {
-    // Signal delivery may fail in restricted environments
-    // (seccomp filters, hardened containers, etc.) — non-fatal.
+    // Fallback: self-SIGCHLD triggers libuv's per-pid wait loop, which
+    // reaps tracked direct children but not reparented grandchildren.
+    // Better than nothing; this is explicitly a mitigation.
+    try {
+      process.kill(process.pid, "SIGCHLD");
+    } catch {
+      // Signal delivery may fail in restricted environments
+      // (seccomp filters, hardened containers, etc.) — non-fatal.
+    }
   }
 }
 
