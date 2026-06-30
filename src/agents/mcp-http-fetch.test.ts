@@ -313,6 +313,42 @@ describe("MCP HTTP fetch helpers", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it.each(["1e3", "0x40"])(
+    "drops body-less OAuth error text with malformed content length %s before reading",
+    async (contentLength) => {
+      const text = vi.fn(async () => '{"error_description":"too large"}');
+      class MalformedLengthForeignResponse {
+        status = 400;
+        statusText = "Bad Request";
+        headers = new Headers({
+          "content-length": contentLength,
+          "content-type": "application/json",
+        });
+        body = null;
+        get ok() {
+          return false;
+        }
+        text = text;
+      }
+
+      testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: TestAgent,
+        EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+        ProxyAgent: TestProxyAgent,
+        fetch: async () => new MalformedLengthForeignResponse() as unknown as Response,
+      };
+      const fetch = buildMcpHttpFetch({
+        resourceUrl: "https://mcp.example.com/mcp",
+      });
+
+      const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops body-less text when declared content length is smaller than returned text", async () => {
     const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
     class LyingForeignResponse {
