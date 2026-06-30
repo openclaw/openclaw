@@ -1,5 +1,6 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readAssociativeContext } from "openclaw/plugin-sdk/memory-core-host-associative";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
@@ -20,6 +21,7 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { asRecord } from "./dreaming-shared.js";
+import { augmentMemoryResultsWithAssociativeContext } from "./memory/associative-ranking.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -587,6 +589,21 @@ export function createMemorySearchTool(options: {
                     rawResults = rawResults.filter((hit) => hit.source === "sessions");
                   } else if (requestedCorpus === "memory") {
                     rawResults = rawResults.filter((hit) => hit.source === "memory");
+                  }
+                  // Read-only associative re-ranking: gently surface hits that mention a known
+                  // topic/tag/entity. Best-effort — never fail a search over enrichment.
+                  if (options.agentSessionKey) {
+                    try {
+                      rawResults = augmentMemoryResultsWithAssociativeContext({
+                        results: rawResults,
+                        context: readAssociativeContext({
+                          agentId,
+                          sessionKey: options.agentSessionKey,
+                        }),
+                      });
+                    } catch {
+                      // Associative context is optional enrichment; ignore read failures.
+                    }
                   }
                   const status = activeMemory.manager.status();
                   const decorated = decorateCitations(rawResults, includeCitations);
