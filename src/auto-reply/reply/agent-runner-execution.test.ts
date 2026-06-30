@@ -47,6 +47,7 @@ const state = vi.hoisted(() => ({
   isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  getGlobalHookRunnerMock: vi.fn((): unknown => undefined),
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
 }));
@@ -138,6 +139,10 @@ vi.mock("../../agents/model-fallback.js", () => ({
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
     Array.isArray((err as { attempts?: unknown[] }).attempts),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => state.getGlobalHookRunnerMock(),
 }));
 
 vi.mock("../../agents/model-selection.js", async () => {
@@ -315,7 +320,12 @@ type FallbackRunnerParams = {
   model: string;
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string) => Promise<unknown>;
+  exposeNextCandidateToRun?: boolean;
+  run: (
+    provider: string,
+    model: string,
+    options?: { nextCandidate?: { provider: string; model: string } },
+  ) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -373,6 +383,7 @@ type EmbeddedAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => Promise<void> | void;
+  nextModelFallbackCandidate?: { provider: string; model: string };
 };
 
 function createMockTypingSignaler(): TypingSignaler {
@@ -1281,6 +1292,8 @@ describe("runAgentTurnWithFallback", () => {
     state.isContextOverflowErrorMock.mockReturnValue(false);
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.getGlobalHookRunnerMock.mockReset();
+    state.getGlobalHookRunnerMock.mockReturnValue(undefined);
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockImplementation(
@@ -1490,6 +1503,33 @@ describe("runAgentTurnWithFallback", () => {
 
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
       toolsAllow: ["message"],
+    });
+  });
+
+  it("passes the selected next fallback candidate into embedded auto-reply runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude", {
+        nextCandidate: { provider: "openai", model: "gpt-5.4" },
+      }),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "runWithModelFallback params",
+    );
+    expect(fallbackCall.exposeNextCandidateToRun).toBe(true);
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      nextModelFallbackCandidate: { provider: "openai", model: "gpt-5.4" },
     });
   });
 
@@ -5838,6 +5878,49 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
     }
+  });
+
+  it("emits model_failure_terminal with the delivered terminal failure copy", async () => {
+    const runModelFailureTerminal = vi.fn();
+    state.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "model_failure_terminal",
+      runModelFailureTerminal,
+    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 402 (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
+            { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
+          ],
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe("billing");
+    expect(runModelFailureTerminal).toHaveBeenCalledOnce();
+    const event = requireRecord(
+      requireMockCall(runModelFailureTerminal, 0, "model_failure_terminal")[0],
+      "model_failure_terminal event",
+    );
+    expect(event.finalMessage).toBe("billing");
+    expect(event.finalMessage).not.toContain("All models failed");
+    expect(event.kind).toBe("all_models_failed");
+    expect(event.attempts).toEqual([
+      { provider: "anthropic", model: "claude", reason: "rate_limit" },
+      { provider: "openai", model: "gpt-5.4", reason: "billing" },
+    ]);
   });
 
   it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {

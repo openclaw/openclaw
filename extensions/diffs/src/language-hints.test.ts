@@ -36,17 +36,7 @@ describe("normalizeSupportedLanguageHint", () => {
 
   it("keeps mainstream languages in the base viewer without the language pack", async () => {
     await expect(
-      normalizeHints([
-        "ruby",
-        "swift",
-        "kotlin",
-        "r",
-        "dart",
-        "lua",
-        "powershell",
-        "xml",
-        "toml",
-      ]),
+      normalizeHints(["ruby", "swift", "kotlin", "r", "dart", "lua", "powershell", "xml", "toml"]),
     ).resolves.toEqual([
       "ruby",
       "swift",

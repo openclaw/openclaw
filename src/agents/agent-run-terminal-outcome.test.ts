@@ -8,11 +8,12 @@ import {
 describe("agent run terminal outcome", () => {
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
     expect(
-      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map((timeoutPhase) =>
-        buildAgentRunTerminalOutcome({
-          status: "timeout",
-          timeoutPhase,
-        }).reason
+      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
+        (timeoutPhase) =>
+          buildAgentRunTerminalOutcome({
+            status: "timeout",
+            timeoutPhase,
+          }).reason,
       ),
     ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
   });

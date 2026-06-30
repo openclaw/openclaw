@@ -113,6 +113,8 @@ observation-only.
 **Conversation observation**
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
+- `model_failover` - observe embedded-runner failover decisions, including failed provider/model refs, current target, recoverability, and reason metadata
+- `model_failure_terminal` - observe terminal before-reply model failure summaries after all configured attempts are exhausted
 - `llm_input` - observe provider input (system prompt, prompt, history)
 - `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
 
@@ -389,6 +391,23 @@ effective token budget after model/config/agent caps, plus
 `contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
 applied.
 
+`model_failover` runs when the embedded runner resolves a failover decision for
+a prompt-submission or assistant-side model failure. It is observation-only and
+fire-and-forget: use it for telemetry, alerting, or operator state, not for
+synchronous context re-injection before the fallback model starts. The payload
+identifies the failed `sourceProvider`/`sourceModel`, the current
+`provider`/`model` target, the `stage`, `decision`,
+`failoverReason`, `profileFailureReason`, `fallbackConfigured`,
+`sourceRecoverable` (whether the failed source is worth probing again later),
+and optional `status`, `timedOut`, or `aborted` flags.
+
+`model_failure_terminal` runs when a before-reply model run fails after all
+configured attempts are exhausted, or when a run fails before producing any
+reply. It includes a user-facing `finalMessage`, a `kind`, and optional per-
+attempt provider/model/reason summaries. Because those summaries can reflect
+terminal provider error text, non-bundled plugins must opt into conversation
+access before registering this hook.
+
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
 run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
@@ -415,7 +434,7 @@ host will allow before continuing with the natural final answer.
 
 Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-`agent_end`, or `before_agent_run`) must set:
+`agent_end`, `model_failure_terminal`, or `before_agent_run`) must set:
 
 ```json
 {

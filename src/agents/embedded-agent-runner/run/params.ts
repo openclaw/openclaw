@@ -148,6 +148,8 @@ export type RunEmbeddedAgentParams = {
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Next model fallback target selected by the outer fallback loop, when one exists. */
+  nextModelFallbackCandidate?: { provider: string; model: string };
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */

@@ -30,9 +30,7 @@ describe("report-cli-helpers", () => {
     );
     expect(() => parseReportCliArgs(["--json", "-h"])).toThrow("Expected --json <value>.");
     expect(() => parseReportCliArgs(["--markdown", ""])).toThrow("Expected --markdown <value>.");
-    expect(() => parseReportCliArgs(["--markdown", "-h"])).toThrow(
-      "Expected --markdown <value>.",
-    );
+    expect(() => parseReportCliArgs(["--markdown", "-h"])).toThrow("Expected --markdown <value>.");
   });
 
   it("rejects duplicate report artifact options", () => {

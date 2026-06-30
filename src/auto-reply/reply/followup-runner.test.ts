@@ -526,7 +526,10 @@ beforeEach(() => {
       run: (
         provider: string,
         model: string,
-        options?: { allowTransientCooldownProbe?: boolean },
+        options?: {
+          allowTransientCooldownProbe?: boolean;
+          nextCandidate?: { provider: string; model: string };
+        },
       ) => Promise<unknown>;
     }) => ({
       result: await params.run(params.provider, params.model),
@@ -4741,6 +4744,56 @@ describe("createFollowupRunner agentDir forwarding", () => {
 });
 
 describe("createFollowupRunner queued user message idempotency across fallback", () => {
+  it("passes selected next fallback candidates to embedded follow-up runs", async () => {
+    runEmbeddedAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        exposeNextCandidateToRun?: boolean;
+        run: (
+          provider: string,
+          model: string,
+          options?: { nextCandidate?: { provider: string; model: string } },
+        ) => Promise<unknown>;
+      }) => {
+        expect(params.exposeNextCandidateToRun).toBe(true);
+        return {
+          result: await params.run("anthropic", "claude-opus-4-7", {
+            nextCandidate: { provider: "openai", model: "gpt-5.4" },
+          }),
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.nextModelFallbackCandidate).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
   it("suppresses queued user message persistence after first fallback candidate persists it", async () => {
     runEmbeddedAgentMock.mockClear();
     runWithModelFallbackMock.mockReset();
