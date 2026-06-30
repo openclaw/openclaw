@@ -312,4 +312,37 @@ describe("MCP HTTP fetch helpers", () => {
     expect(response.body).toBeNull();
     expect(text).not.toHaveBeenCalled();
   });
+
+  it("drops body-less text when declared content length is smaller than returned text", async () => {
+    const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
+    class LyingForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({
+        "content-length": "64",
+        "content-type": "application/json",
+      });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new LyingForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).toHaveBeenCalledOnce();
+  });
 });
