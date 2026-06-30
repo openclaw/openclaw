@@ -82,7 +82,9 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+function makeInboundRuntime(
+  onTurn?: (turn: Record<string, unknown>) => void,
+): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -100,7 +102,8 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown> };
+      )) as { runDispatch: () => Promise<unknown>; record?: Record<string, unknown> };
+      onTurn?.(turn as Record<string, unknown>);
       return { dispatchResult: await turn.runDispatch() };
     }),
   };
@@ -110,6 +113,7 @@ function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   skipFreshSettledDelivery?: boolean;
+  onTurn?: (turn: Record<string, unknown>) => void;
   onDispatch?: (dispatcherOptions: {
     deliver: (
       payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
@@ -188,7 +192,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(),
+      inbound: makeInboundRuntime(params.onTurn),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -763,5 +767,156 @@ describe("dispatchOutbound", () => {
         "| 17 | 100ms | Lin | daily cap |",
       ].join("\n"),
     ]);
+  });
+  describe("route persistence", () => {
+    it("includes updateLastRoute in record for group inbound", async () => {
+      let turn: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (t) => {
+          turn = t;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "group",
+            senderId: "user-openid",
+            messageId: "msg-2",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            groupOpenid: "group-1001",
+          },
+          isGroupChat: true,
+          peerId: "group-1001",
+          qualifiedTarget: "qqbot:group:group-1001",
+          route: { sessionKey: "agent:main:qqbot:group:group-1001", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(turn).toBeDefined();
+      const record = turn?.record as Record<string, unknown> | undefined;
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toBeDefined();
+      expect(record?.updateLastRoute).toEqual({
+        sessionKey: "agent:main:qqbot:group:group-1001",
+        channel: "qqbot",
+        to: "qqbot:group:group-1001",
+        accountId: "qq-main",
+      });
+    });
+
+    it("includes updateLastRoute in record for guild inbound", async () => {
+      let turn: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (t) => {
+          turn = t;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "guild",
+            senderId: "user-openid",
+            messageId: "msg-3",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            channelId: "channel-2001",
+          },
+          isGroupChat: true,
+          peerId: "channel-2001",
+          qualifiedTarget: "qqbot:guild:channel-2001",
+          route: { sessionKey: "agent:main:qqbot:guild:channel-2001", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(turn).toBeDefined();
+      const record = turn?.record as Record<string, unknown> | undefined;
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toBeDefined();
+      expect(record?.updateLastRoute).toEqual({
+        sessionKey: "agent:main:qqbot:guild:channel-2001",
+        channel: "qqbot",
+        to: "qqbot:guild:channel-2001",
+        accountId: "qq-main",
+      });
+    });
+
+    it("excludes updateLastRoute from record for c2c inbound", async () => {
+      let turn: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (t) => {
+          turn = t;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "c2c",
+            senderId: "user-openid",
+            messageId: "msg-4",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+          },
+          isGroupChat: false,
+          peerId: "user-openid",
+          qualifiedTarget: "qqbot:c2c:user-openid",
+          route: { sessionKey: "agent:main:qqbot:c2c:user-openid", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(turn).toBeDefined();
+      const record = turn?.record as Record<string, unknown> | undefined;
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toBeUndefined();
+    });
+
+    it("excludes updateLastRoute from record for dm inbound", async () => {
+      let turn: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (t) => {
+          turn = t;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "dm",
+            senderId: "user-openid",
+            messageId: "msg-5",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+          },
+          isGroupChat: false,
+          peerId: "user-openid",
+          qualifiedTarget: "qqbot:dm:user-openid",
+          route: { sessionKey: "agent:main:qqbot:dm:user-openid", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(turn).toBeDefined();
+      const record = turn?.record as Record<string, unknown> | undefined;
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toBeUndefined();
+    });
   });
 });

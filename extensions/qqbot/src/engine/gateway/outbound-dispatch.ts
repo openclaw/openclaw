@@ -441,6 +441,16 @@ export async function dispatchOutbound(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot",
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
         },
         runDispatch: () =>
           runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
