@@ -1,9 +1,9 @@
+import type { RouteHookOptions } from "@openclaw/uirouter";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { isMonitoredAuthProvider } from "../../lib/model-auth-helpers.ts";
-import type { RouteHookOptions } from "../../router/types.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,

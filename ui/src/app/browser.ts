@@ -1,4 +1,4 @@
-import type { RouteLocation, RouterHistory } from "../router/types.ts";
+import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 
 function readLocation(): RouteLocation {
   return {

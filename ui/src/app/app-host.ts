@@ -1,7 +1,7 @@
 import { consume, ContextProvider } from "@lit/context";
+import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import { searchForSession, type RouteId } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
@@ -9,13 +9,13 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
+import { searchForSession, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import type { RouteLocation, RouterState } from "../router/types.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,

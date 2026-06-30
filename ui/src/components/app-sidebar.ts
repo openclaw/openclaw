@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SessionsListResult } from "../api/types.ts";
@@ -12,16 +13,15 @@ import {
 import { pathForRoute, searchForSession, type RouteId } from "../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import type { ThemeMode } from "../app/theme.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
 import "./tooltip.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { resolveSessionNavigation } from "../lib/sessions/index.ts";
-import type { RouteLocation } from "../router/types.ts";
 import { icons } from "./icons.ts";
 
 type SidebarRecentSession = {

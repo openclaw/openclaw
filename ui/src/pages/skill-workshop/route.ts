@@ -1,5 +1,5 @@
+import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import { definePage } from "../../router/index.ts";
 import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,

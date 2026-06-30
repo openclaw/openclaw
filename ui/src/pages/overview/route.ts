@@ -1,8 +1,8 @@
+import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsHost } from "../../app/app-host.ts";
-import { definePage } from "../../router/index.ts";
 import { warnQueryToken } from "../../ui/app-settings.ts";
 import { loadOverview } from "./data.ts";
 import { renderOverview } from "./view.ts";

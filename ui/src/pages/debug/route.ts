@@ -1,9 +1,9 @@
+import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { definePage } from "../../router/index.ts";
 import { callDebugMethod, loadDebug } from "./data.ts";
 import { startDebugPolling, stopDebugPolling } from "./polling.ts";
 

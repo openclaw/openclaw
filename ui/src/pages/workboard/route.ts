@@ -1,8 +1,8 @@
+import { definePage } from "@openclaw/uirouter";
 import { searchForSession, type RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadAgents } from "../agents/data.ts";
 import { loadConfig } from "../config/data.ts";

@@ -160,6 +160,15 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   ];
 }
 
+export function resolveExternalPackageAliasesForVite(): ControlUiViteAlias[] {
+  return [
+    {
+      find: "@openclaw/uirouter",
+      replacement: path.join(repoRoot, "node_modules", "@openclaw", "uirouter", "dist", "index.js"),
+    },
+  ];
+}
+
 export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   const raw = fs.readFileSync(path.join(repoRoot, "tsconfig.json"), "utf8");
   const parsed = JSON.parse(raw) as {
@@ -248,6 +257,7 @@ export default function controlUiViteConfig(): UserConfig {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],

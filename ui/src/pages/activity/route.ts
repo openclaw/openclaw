@@ -1,4 +1,4 @@
-import { definePage } from "../../router/index.ts";
+import { definePage } from "@openclaw/uirouter";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 
 type ActivityRenderContext = { state: AppViewState };

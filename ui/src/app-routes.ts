@@ -1,5 +1,3 @@
-import type { ApplicationContext } from "./app/context.ts";
-import { page as chatPage } from "./pages/chat/route.ts";
 // import { page as activityPage } from "./pages/activity/route.ts";
 // import { page as agentsPage } from "./pages/agents/route.ts";
 // import { page as channelsPage } from "./pages/channels/route.ts";
@@ -14,8 +12,10 @@ import { page as chatPage } from "./pages/chat/route.ts";
 // import { page as skillsPage } from "./pages/skills/route.ts";
 // import { page as usagePage } from "./pages/usage/route.ts";
 // import { page as workboardPage } from "./pages/workboard/route.ts";
-import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/index.ts";
-import type { PageDefinition, RouteLocation, Router, RouterHistory } from "./router/index.ts";
+import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
+import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
+import type { ApplicationContext } from "./app/context.ts";
+import { page as chatPage } from "./pages/chat/route.ts";
 
 export type AppRouteModule = {
   render: (data: unknown) => unknown;

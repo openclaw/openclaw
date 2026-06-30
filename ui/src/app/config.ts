@@ -1,3 +1,4 @@
+import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
@@ -6,7 +7,6 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { setUiTimeFormatPreference } from "../lib/format.ts";
-import { normalizeRouteBasePath } from "../router/index.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {

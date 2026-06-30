@@ -1,8 +1,8 @@
+import type { RouteLocation } from "@openclaw/uirouter";
+import { definePage, notFound } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
-import type { RouteLocation } from "../../router/index.ts";
-import { definePage, notFound } from "../../router/index.ts";
 
 function sessionKeyFromLocation(location: RouteLocation): string | undefined {
   const sessionKey = new URLSearchParams(location.search).get("session")?.trim();

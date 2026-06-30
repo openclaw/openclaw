@@ -1,9 +1,9 @@
+import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
 import { html, LitElement, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { property } from "lit/decorators.js";
 import { directive } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
-import type { RouteMatch, Router, RouterState } from "../router/types.ts";
 
 const PENDING_UI_DELAY_MS = 1_000;
 

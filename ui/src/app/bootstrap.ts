@@ -1,3 +1,4 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import {
   GatewayBrowserClient,
   type GatewayEventListener,
@@ -18,7 +19,6 @@ import {
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import type { RouteLocation } from "../router/types.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { createBrowserHistory } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";

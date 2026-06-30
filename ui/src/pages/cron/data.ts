@@ -1,3 +1,4 @@
+import type { RouteHookOptions } from "@openclaw/uirouter";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -19,7 +20,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { toNumber } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
-import type { RouteHookOptions } from "../../router/types.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
