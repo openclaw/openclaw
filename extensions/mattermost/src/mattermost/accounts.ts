@@ -151,7 +151,9 @@ export function resolveMattermostReplyToMode(
   kind: MattermostChatTypeKey,
 ): MattermostReplyToMode {
   if (kind === "direct") {
-    return "off";
+    // Opt-in DM threading: governed by dmReplyToMode (default "off" = historical
+    // flat-DM behavior). #93203.
+    return account.config.dmReplyToMode ?? "off";
   }
   return account.config.replyToMode ?? "off";
 }
