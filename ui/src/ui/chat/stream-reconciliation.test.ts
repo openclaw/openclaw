@@ -11,6 +11,7 @@ import {
 const visibleStreamOptions = {
   isHiddenAssistantMessage: () => false,
   isHiddenStreamText: () => false,
+  persistCommentary: true,
 };
 
 function messageText(message: unknown): string | null {
@@ -204,8 +205,6 @@ describe("stream reconciliation", () => {
       persistCommentary: false,
     });
 
-    // Keyed commentary stays live during streaming but is never materialized,
-    // so only the user ask and the final reply remain.
     expect(next.map(messageText)).toEqual(["latest ask", "final reply"]);
   });
 
@@ -224,7 +223,6 @@ describe("stream reconciliation", () => {
       persistCommentary: false,
     });
 
-    // The keyed preamble is dropped, but the non-keyed current draft is preserved.
     expect(next.map(messageText)).toEqual(["latest ask", "draft answer"]);
   });
 

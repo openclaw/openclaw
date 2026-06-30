@@ -365,7 +365,7 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const persistCommentary = state.settings.chatPersistCommentary !== false;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const thinkingLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.thinkingToggle");
@@ -560,7 +560,7 @@ export function renderChatMobileToggle(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const persistCommentary = state.settings.chatPersistCommentary !== false;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const toolCallsIcon = html`

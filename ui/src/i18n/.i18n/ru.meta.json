@@ -3,11 +3,11 @@
     "chat.commentaryLabel",
     "chat.commentaryToggle"
   ],
-  "generatedAt": "2026-06-29T17:06:20.849Z",
+  "generatedAt": "2026-06-30T23:31:04.740Z",
   "locale": "ru",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "29f546ff372524aa64d09bd700f76899045da99552fa295a32eda9fad2a0407f",
+  "sourceHash": "2efa88c26ff88470a76b18ae218dd9c325165f98587f359ed51dbfb51a7d8428",
   "totalKeys": 1418,
   "translatedKeys": 1416,
   "workflow": 1
