@@ -82,7 +82,13 @@ struct OnboardingIntroStep: View {
 
 struct OnboardingWelcomeStep: View {
     let statusLine: String
+    let discoveredGateways: [GatewayDiscoveryModel.DiscoveredGateway]
+    let nearbyDiscoveryEnabled: Bool
+    let isRefreshingNearbyGateways: Bool
+    let discoveryStatusText: String
+    let onSetNearbyDiscoveryEnabled: (Bool) -> Void
     let onScanQRCode: () -> Void
+    let onSelectGateway: (GatewayDiscoveryModel.DiscoveredGateway) -> Void
     let onManualSetup: () -> Void
 
     var body: some View {
@@ -104,26 +110,19 @@ struct OnboardingWelcomeStep: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("How to pair")
-                    .font(.headline)
-                Text("In your OpenClaw chat, run")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("/pair qr")
-                    .font(.system(.footnote, design: .monospaced).weight(.semibold))
-                Text("Then scan the QR code here to connect this device.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
+            OnboardingPairingInstructionsSection()
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+
+            NearbyGatewaySetupSection(
+                isEnabled: self.nearbyDiscoveryEnabled,
+                discoveredGateways: self.discoveredGateways,
+                isRefreshing: self.isRefreshingNearbyGateways,
+                discoveryStatusText: self.discoveryStatusText,
+                onSetEnabled: self.onSetNearbyDiscoveryEnabled,
+                onSelectGateway: self.onSelectGateway)
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
 
             Spacer()
 
@@ -156,6 +155,131 @@ struct OnboardingWelcomeStep: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 48)
         }
+    }
+}
+
+private struct OnboardingPairingInstructionsSection: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("How to pair")
+                .font(.headline)
+            Text("In your OpenClaw chat, run")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("/pair qr")
+                .font(.system(.footnote, design: .monospaced).weight(.semibold))
+            Text("Then scan the QR code here to connect this device.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemBackground))
+        }
+    }
+}
+
+private struct NearbyGatewaySetupSection: View {
+    let isEnabled: Bool
+    let discoveredGateways: [GatewayDiscoveryModel.DiscoveredGateway]
+    let isRefreshing: Bool
+    let discoveryStatusText: String
+    let onSetEnabled: (Bool) -> Void
+    let onSelectGateway: (GatewayDiscoveryModel.DiscoveredGateway) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("NEARBY DISCOVERY")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if self.isRefreshing {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            VStack(alignment: .leading, spacing: 0) {
+                NearbyGatewayDiscoveryToggleRow(
+                    isEnabled: self.isEnabled,
+                    onSetEnabled: self.onSetEnabled)
+
+                if self.isEnabled {
+                    Divider()
+                        .padding(.leading, 16)
+
+                    if self.discoveredGateways.isEmpty {
+                        Text(self.discoveryStatusText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                    } else {
+                        ForEach(self.discoveredGateways) { gateway in
+                            NearbyGatewaySetupRow(
+                                name: gateway.name,
+                                host: gateway.lanHost ?? gateway.tailnetDns ?? "Local network")
+                            {
+                                self.onSelectGateway(gateway)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+        }
+    }
+}
+
+private struct NearbyGatewayDiscoveryToggleRow: View {
+    let isEnabled: Bool
+    let onSetEnabled: (Bool) -> Void
+
+    var body: some View {
+        Toggle(
+            "Enabled",
+            isOn: Binding(
+                get: { self.isEnabled },
+                set: self.onSetEnabled))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+    }
+}
+
+private struct NearbyGatewaySetupRow: View {
+    let name: String
+    let host: String
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: self.onSelect) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: self.name)
+                        .font(.subheadline.weight(.semibold))
+                    Text(verbatim: self.host)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
     }
 }
 

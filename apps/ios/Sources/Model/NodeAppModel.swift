@@ -242,6 +242,55 @@ final class NodeAppModel {
         self.isAppleReviewDemoModeEnabled || self.isScreenshotFixtureModeEnabled
     }
 
+    private static func gatewayAuthDebugDescription(_ error: Error) -> String {
+        guard let authError = error as? GatewayConnectAuthError else {
+            return error.localizedDescription
+        }
+        return [
+            "message=\(authError.message)",
+            "detail=\(authError.detailCode ?? "none")",
+            "reason=\(authError.detailsReason ?? "none")",
+            "next=\(authError.recommendedNextStepCode ?? "none")",
+            "retryDevice=\(authError.canRetryWithDeviceToken)",
+            "requestId=\(authError.requestId ?? "none")",
+        ].joined(separator: " ")
+    }
+
+    private func shouldStopReconnectAfterSharedAuthFailure(
+        _ error: Error,
+        token: String?,
+        bootstrapToken: String?,
+        password: String?) -> Bool
+    {
+        guard let authError = error as? GatewayConnectAuthError else { return false }
+        guard !authError.canRetryWithDeviceToken else { return false }
+        let hasToken = token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        guard hasToken, !hasBootstrapToken, !hasPassword else { return false }
+        return authError.detail == .authTokenMismatch
+    }
+
+    private func stopReconnectAfterSharedAuthFailure(stableID: String) async {
+        GatewayDiagnostics.log("gateway stale shared auth detected; disabling autoconnect stableID=\(stableID)")
+        self.gatewayAutoReconnectEnabled = false
+        self.gatewayPairingPaused = false
+        UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
+
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        if !instanceId.isEmpty {
+            GatewaySettingsStore.saveGatewayToken("", instanceId: instanceId)
+        }
+
+        self.activeGatewayConnectConfig = nil
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+        await self.nodeGateway.disconnect()
+    }
+
     var chatTransportModeID: String {
         if self.isScreenshotFixtureModeEnabled { return "screenshots" }
         if self.isAppleReviewDemoModeEnabled { return "apple-review-demo" }
@@ -2509,7 +2558,8 @@ extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 } catch {
                     attempt += 1
-                    GatewayDiagnostics.log("operator gateway connect error: \(error.localizedDescription)")
+                    GatewayDiagnostics.log(
+                        "operator gateway connect error: \(Self.gatewayAuthDebugDescription(error))")
                     let problem: GatewayConnectionProblem? = await MainActor.run {
                         let nextProblem = GatewayConnectionProblemMapper.map(error: error)
                         guard !self.isLocalGatewayFixtureEnabled else { return nil }
@@ -2527,6 +2577,15 @@ extension NodeAppModel {
                         self.operatorGatewayTask?.cancel()
                         self.operatorGatewayTask = nil
                         await self.operatorGateway.disconnect()
+                        break
+                    }
+                    if self.shouldStopReconnectAfterSharedAuthFailure(
+                        error,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password)
+                    {
+                        await self.stopReconnectAfterSharedAuthFailure(stableID: stableID)
                         break
                     }
                     if problem?.pauseReconnect == true {
@@ -2588,14 +2647,17 @@ extension NodeAppModel {
                         sessionKey: self.mainSessionKey)
                 }
 
+                let reconnectAuth = self.currentGatewayReconnectAuth(
+                    fallbackToken: token,
+                    fallbackBootstrapToken: bootstrapToken,
+                    fallbackPassword: password)
                 do {
                     let epochMs = Int(Date().timeIntervalSince1970 * 1000)
-                    let reconnectAuth = self.currentGatewayReconnectAuth(
-                        fallbackToken: token,
-                        fallbackBootstrapToken: bootstrapToken,
-                        fallbackPassword: password)
                     let connectedOptions = currentOptions
-                    GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(url.absoluteString)")
+                    GatewayDiagnostics.log(
+                        "connect attempt epochMs=\(epochMs) url=\(url.absoluteString) "
+                            + "token=\(reconnectAuth.token != nil) bootstrap=\(reconnectAuth.bootstrapToken != nil) "
+                            + "password=\(reconnectAuth.password != nil)")
                     try await self.nodeGateway.connect(
                         url: url,
                         token: reconnectAuth.token,
@@ -2728,7 +2790,8 @@ extension NodeAppModel {
                         }
                         return nextProblem
                     }
-                    GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
+                    GatewayDiagnostics.log(
+                        "gateway connect error: \(Self.gatewayAuthDebugDescription(error))")
 
                     if problem?.needsPairingApproval == true {
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
@@ -2738,6 +2801,16 @@ extension NodeAppModel {
                         self.operatorGatewayTask = nil
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
+                        break
+                    }
+
+                    if self.shouldStopReconnectAfterSharedAuthFailure(
+                        error,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password)
+                    {
+                        await self.stopReconnectAfterSharedAuthFailure(stableID: stableID)
                         break
                     }
 

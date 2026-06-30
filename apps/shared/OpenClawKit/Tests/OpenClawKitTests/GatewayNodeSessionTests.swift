@@ -306,9 +306,9 @@ struct GatewayNodeSessionTests {
 
         try await gateway.connect(
             url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
+            token: "stale-shared-token",
             bootstrapToken: "fresh-bootstrap-token",
-            password: nil,
+            password: "stale-password",
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -321,6 +321,7 @@ struct GatewayNodeSessionTests {
         #expect(auth["bootstrapToken"] as? String == "fresh-bootstrap-token")
         #expect(auth["token"] == nil)
         #expect(auth["deviceToken"] == nil)
+        #expect(auth["password"] == nil)
 
         await gateway.disconnect()
     }

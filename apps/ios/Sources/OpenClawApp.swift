@@ -646,7 +646,7 @@ struct OpenClawApp: App {
         _gatewayController = State(
             initialValue: GatewayConnectionController(
                 appModel: appModel,
-                startDiscovery: !Self.screenshotModeEnabled,
+                startDiscovery: false,
                 deferDiscoveryUntilLocalNetworkRequest: true))
     }
 
