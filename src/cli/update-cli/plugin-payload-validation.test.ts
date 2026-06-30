@@ -112,7 +112,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("accepts bundle-format plugin records without package.json when the bundle manifest is valid", async () => {
+  it("accepts bundle payloads without package.json when the install path contains a valid bundle manifest", async () => {
     const dir = path.join(tmpRoot, "claude-bundle");
     await writeClaudeBundle(dir);
     const result = await runPluginPayloadSmokeCheck({
@@ -120,9 +120,7 @@ describe("runPluginPayloadSmokeCheck", () => {
         "claude-bundle": {
           source: "marketplace",
           installPath: dir,
-          format: "bundle",
-          bundleFormat: "claude",
-        } as never,
+        },
       },
       env: {},
     });
@@ -130,25 +128,24 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("reports a bundle payload failure when a bundle-format record has no bundle manifest", async () => {
-    const dir = path.join(tmpRoot, "empty-bundle");
+  it("keeps reporting missing package.json for non-bundle payloads without package.json", async () => {
+    const dir = path.join(tmpRoot, "empty-package");
     await fs.mkdir(dir, { recursive: true });
     const result = await runPluginPayloadSmokeCheck({
       records: {
-        "empty-bundle": {
+        "empty-package": {
           source: "marketplace",
           installPath: dir,
-          format: "bundle",
-        } as never,
+        },
       },
       env: {},
     });
     expect(result.failures).toStrictEqual([
       {
-        pluginId: "empty-bundle",
+        pluginId: "empty-package",
         installPath: dir,
-        reason: "missing-bundle-manifest",
-        detail: `Bundle manifest is missing under ${dir}`,
+        reason: "missing-package-json",
+        detail: `package.json is missing under ${dir}`,
       },
     ]);
   });
@@ -186,9 +183,7 @@ describe("runPluginPayloadSmokeCheck", () => {
         "broken-bundle": {
           source: "marketplace",
           installPath: dir,
-          format: "bundle",
-          bundleFormat: "codex",
-        } as never,
+        },
       },
       env: {},
     });

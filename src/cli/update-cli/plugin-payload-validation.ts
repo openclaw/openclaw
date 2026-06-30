@@ -82,7 +82,8 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    if (isBundleInstallRecord(record)) {
+    const detectedBundleFormat = detectBundleManifestFormat(installPath);
+    if (detectedBundleFormat || isBundleInstallRecord(record)) {
       const bundleValidation = validateBundlePayload({ installPath, record });
       if (bundleValidation) {
         failures.push({
@@ -201,7 +202,7 @@ function validateBundlePayload(params: {
   record: PluginInstallRecord;
 }): Pick<PluginPayloadSmokeFailure, "reason" | "detail"> | null {
   const bundleFormat =
-    readBundleFormat(params.record) ?? detectBundleManifestFormat(params.installPath);
+    detectBundleManifestFormat(params.installPath) ?? readBundleFormat(params.record);
   if (!bundleFormat) {
     return {
       reason: "missing-bundle-manifest",
