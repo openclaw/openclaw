@@ -655,4 +655,107 @@ tasks:
       sentAtMs: nowMs,
     });
   });
+
+  it("keeps commitment fan-out prompts scoped to due commitments", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+              },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        await fs.writeFile(
+          path.join(tmpDir, "HEARTBEAT.md"),
+          `Run the global operations audit and surface any unrelated account drift.
+
+tasks:
+  - name: global-ops-audit
+    interval: 5m
+    prompt: Check every dashboard for unrelated account drift
+`,
+          "utf-8",
+        );
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: nowMs,
+              lastChannel: "telegram",
+              lastProvider: "telegram",
+              lastTo: "155462274",
+              heartbeatTaskState: { "global-ops-audit": nowMs },
+            },
+          }),
+        );
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegramLocal = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(
+          async (
+            ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
+            opts?: { disableTools?: boolean; skillFilter?: string[] },
+          ) => {
+            expect(ctx.Body).toContain("Due inferred follow-up commitments");
+            expect(ctx.Body).toContain("How did the interview go?");
+            expect(ctx.Body).not.toContain("global operations audit");
+            expect(ctx.Body).not.toContain("unrelated account drift");
+            expect(ctx.Body).not.toContain("Run the following periodic tasks");
+            expect(ctx.Body).not.toContain("Additional context from HEARTBEAT.md");
+            expect(ctx.Body).not.toContain("Read HEARTBEAT.md");
+            expect(ctx.OriginatingChannel).toBe("telegram");
+            expect(ctx.OriginatingTo).toBe("155462274");
+            expect(opts?.disableTools).toBe(true);
+            expect(opts?.skillFilter).toStrictEqual([]);
+            return { text: "How did the interview go?" };
+          },
+        );
+
+        const resultLocal = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          reason: "commitment",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegramLocal,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        return {
+          result: resultLocal,
+          sendTelegram: sendTelegramLocal,
+          store: await loadCommitmentStore(),
+        };
+      },
+    );
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
 });
