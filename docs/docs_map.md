@@ -3627,6 +3627,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Authentication
   - H2: When to use this endpoint
   - H2: Agent-first model contract
+
   - H2: Session behavior
   - H2: Request limits (config)
   - H2: Chat tool contract
@@ -10286,6 +10287,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Field reference
   - H2: Agent tool
   - H2: Gateway RPC
+  - H2: OpenAI-compatible HTTP endpoint
   - H2: Service links
   - H2: Related
 
