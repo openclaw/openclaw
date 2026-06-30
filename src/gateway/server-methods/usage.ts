@@ -69,6 +69,9 @@ const SESSIONS_USAGE_CACHE_READ_CONCURRENCY = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
+// Keep validation and parsed timestamps in one result so handlers cannot forward
+// an invalid or backwards window to the usage loaders.
+type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "specific"; utcOffsetMinutes: number };
@@ -172,14 +175,14 @@ const parseDateParts = (
 // undefined for both absent and invalid input, so an explicitly supplied but unparseable
 // date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
 // fall through to the default range and return a successful response for an unrelated range.
-// Return the offending field so handlers can reject it instead of querying the wrong window.
+// Return the offending field so range resolution can reject it instead of querying the wrong window.
 const findInvalidExplicitDate = (params: {
   startDate?: unknown;
   endDate?: unknown;
 }): "startDate" | "endDate" | undefined => {
   for (const field of ["startDate", "endDate"] as const) {
     const raw = params[field];
-    if (!hasExplicitDateValue(raw)) {
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
       continue;
     }
     if (parseDateParts(raw) === undefined) {
@@ -188,9 +191,6 @@ const findInvalidExplicitDate = (params: {
   }
   return undefined;
 };
-
-const hasExplicitDateValue = (raw: unknown): boolean =>
-  raw !== undefined && raw !== null && !(typeof raw === "string" && raw.trim() === "");
 
 /**
  * Parse a UTC offset string in the format UTC+H, UTC-H, UTC+HH, UTC-HH, UTC+H:MM, UTC-HH:MM.
@@ -262,21 +262,6 @@ const parseDateToMs = (
   return Number.isNaN(ms) ? undefined : ms;
 };
 
-const hasInvertedExplicitDateRange = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-  mode?: unknown;
-  utcOffset?: unknown;
-}): boolean => {
-  if (!hasExplicitDateValue(params.startDate) || !hasExplicitDateValue(params.endDate)) {
-    return false;
-  }
-  const interpretation = resolveDateInterpretation(params);
-  const startMs = parseDateToMs(params.startDate, interpretation);
-  const endMs = parseDateToMs(params.endDate, interpretation);
-  return startMs !== undefined && endMs !== undefined && startMs > endMs;
-};
-
 const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
   if (interpretation.mode === "gateway") {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -327,14 +312,22 @@ const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
  */
-const parseDateRange = (params: {
+const resolveDateRange = (params: {
   startDate?: unknown;
   endDate?: unknown;
   days?: unknown;
   range?: unknown;
   mode?: unknown;
   utcOffset?: unknown;
-}): DateRange => {
+}): DateRangeResolution => {
+  const invalidDate = findInvalidExplicitDate(params);
+  if (invalidDate) {
+    return {
+      ok: false,
+      error: `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+    };
+  }
+
   const now = new Date();
   const interpretation = resolveDateInterpretation(params);
   const todayStartMs = getTodayStartMs(now, interpretation);
@@ -344,29 +337,32 @@ const parseDateRange = (params: {
   const endMs = parseDateToMs(params.endDate, interpretation);
 
   if (startMs !== undefined && endMs !== undefined) {
+    if (startMs > endMs) {
+      return { ok: false, error: "startDate must not be after endDate" };
+    }
     // endMs should be end of day
-    return { startMs, endMs: endMs + DAY_MS - 1 };
+    return { ok: true, value: { startMs, endMs: endMs + DAY_MS - 1 } };
   }
 
   const rangeDays = resolveRangeDays(params.range);
   if (rangeDays === "all") {
-    return { startMs: 0, endMs: todayEndMs };
+    return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
   }
   if (rangeDays !== undefined) {
     const start = todayStartMs - (rangeDays - 1) * DAY_MS;
-    return { startMs: start, endMs: todayEndMs };
+    return { ok: true, value: { startMs: start, endMs: todayEndMs } };
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
     const start = todayStartMs - (clampedDays - 1) * DAY_MS;
-    return { startMs: start, endMs: todayEndMs };
+    return { ok: true, value: { startMs: start, endMs: todayEndMs } };
   }
 
   // Default to last 30 days
   const defaultStartMs = todayStartMs - 29 * DAY_MS;
-  return { startMs: defaultStartMs, endMs: todayEndMs };
+  return { ok: true, value: { startMs: defaultStartMs, endMs: todayEndMs } };
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -893,14 +889,12 @@ function mergeUsageCacheStatus(
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
   parseDateParts,
-  findInvalidExplicitDate,
-  hasInvertedExplicitDateRange,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
   getTodayStartMs,
   parseDays,
-  parseDateRange,
+  resolveDateRange,
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
@@ -915,38 +909,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
-    const invalidDate = findInvalidExplicitDate({
-      startDate: params?.startDate,
-      endDate: params?.endDate,
-    });
-    if (invalidDate) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-        ),
-      );
-      return;
-    }
-    if (
-      hasInvertedExplicitDateRange({
-        startDate: params?.startDate,
-        endDate: params?.endDate,
-        mode: params?.mode,
-        utcOffset: params?.utcOffset,
-      })
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "startDate must not be after endDate"),
-      );
-      return;
-    }
-    const config = context.getRuntimeConfig();
-    const { startMs, endMs } = parseDateRange({
+    const dateRange = resolveDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
       days: params?.days,
@@ -954,6 +917,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
+    if (!dateRange.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
+      return;
+    }
+    const config = context.getRuntimeConfig();
+    const { startMs, endMs } = dateRange.value;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
     const summary = await loadCostUsageSummaryCached({
@@ -979,41 +948,19 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const invalidDate = findInvalidExplicitDate({ startDate: p.startDate, endDate: p.endDate });
-    if (invalidDate) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-        ),
-      );
-      return;
-    }
-    if (
-      hasInvertedExplicitDateRange({
-        startDate: p.startDate,
-        endDate: p.endDate,
-        mode: p.mode,
-        utcOffset: p.utcOffset,
-      })
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "startDate must not be after endDate"),
-      );
-      return;
-    }
-    const config = context.getRuntimeConfig();
-    const { startMs, endMs } = parseDateRange({
+    const dateRange = resolveDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
       range: p.range,
       mode: p.mode,
       utcOffset: p.utcOffset,
     });
+    if (!dateRange.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
+      return;
+    }
+    const config = context.getRuntimeConfig();
+    const { startMs, endMs } = dateRange.value;
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
