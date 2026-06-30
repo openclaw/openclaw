@@ -1149,12 +1149,21 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
 
-  it("keeps diagnostic code fields while redacting opaque code values", () => {
+  it("keeps internal diagnostic fields while redacting opaque code values", () => {
     const output = redactSecrets({
+      manifest: {
+        sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
+        warnings: [{ code: "invalid-runtime-event" }, { code: "cyclic-session-branch" }],
+      },
       status: { code: "SYSTEM_RUN_DENIED" },
       oauth: { code: "oauth-code-value-1234567890" },
     });
 
+    expect(output.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+    expect(output.manifest.warnings).toEqual([
+      { code: "invalid-runtime-event" },
+      { code: "cyclic-session-branch" },
+    ]);
     expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
     expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
   });

@@ -92,6 +92,8 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   "i",
 );
 const STRUCTURED_STATUS_CODE_VALUE_RE = /^[A-Z][A-Z0-9_:-]{0,47}$/u;
+const STRUCTURED_INTERNAL_WARNING_CODE_VALUE_RE = /^(?:invalid|cyclic)-[a-z0-9-]{1,80}$/u;
+const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -1057,7 +1059,18 @@ function redactSensitiveFieldValueWithOptions(
   if (redacted !== value) {
     return redacted;
   }
-  if (key.toLowerCase() === "code" && STRUCTURED_STATUS_CODE_VALUE_RE.test(value)) {
+  const normalizedStructuredKey = key.toLowerCase();
+  if (
+    normalizedStructuredKey === "code" &&
+    (STRUCTURED_STATUS_CODE_VALUE_RE.test(value) ||
+      STRUCTURED_INTERNAL_WARNING_CODE_VALUE_RE.test(value))
+  ) {
+    return value;
+  }
+  if (
+    normalizedStructuredKey === "session" &&
+    STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(value)
+  ) {
     return value;
   }
   if (isSensitiveFieldKey(key)) {
