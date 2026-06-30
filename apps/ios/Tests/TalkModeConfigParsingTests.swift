@@ -4,8 +4,8 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
-@Suite struct TalkModeManagerTests {
-    @Test func parsesOpenAIRealtimeProviderModelAndVoice() {
+struct TalkModeManagerTests {
+    @Test func `parses open AI realtime provider model and voice`() {
         let config: [String: Any] = [
             "talk": [
                 "provider": "elevenlabs",
@@ -49,7 +49,7 @@ import Testing
         #expect(parsed.realtimeVoiceId == "marin")
     }
 
-    @Test func infersRealtimeProviderWhenProviderMapHasSingleEntry() {
+    @Test func `infers realtime provider when provider map has single entry`() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -71,12 +71,12 @@ import Testing
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.executionMode == .realtimeWebRTC)
         #expect(parsed.realtimeProvider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
     }
 
-    @Test func formatsGenericRealtimeVoiceModeWithoutNativeProviderFallback() {
+    @Test func `formats generic realtime voice mode without native provider fallback`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "realtime",
             providerLabel: "Realtime Voice",
@@ -89,7 +89,7 @@ import Testing
         #expect(descriptor.subtitle == "Native WebRTC • gpt-realtime-2")
     }
 
-    @Test func defaultsOpenAIRealtimeModelWhenProviderOmitsModel() {
+    @Test func `defaults open AI realtime model when provider omits model`() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -113,14 +113,14 @@ import Testing
         #expect(parsed.realtimeVoiceId == nil)
     }
 
-    @Test func resolvesRealtimeVoicePickerOverrides() {
+    @Test func `resolves realtime voice picker overrides`() {
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride(nil) == nil)
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride("") == nil)
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride(" Cedar ") == "cedar")
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride("unknown") == nil)
     }
 
-    @Test func formatsOpenAIRealtimeVoiceMode() {
+    @Test func `formats open AI realtime voice mode`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "openai",
             providerLabel: "OpenAI",
@@ -134,7 +134,7 @@ import Testing
         #expect(descriptor.accessibilityValue == "GPT Realtime 2.0, Native WebRTC • Marin")
     }
 
-    @Test func formatsGatewayRelayRealtimeVoiceMode() {
+    @Test func `formats gateway relay realtime voice mode`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "google",
             providerLabel: "Google Live Voice",
@@ -147,7 +147,7 @@ import Testing
         #expect(descriptor.subtitle == "Gateway Relay • gemini-live-2.5-flash-preview")
     }
 
-    @Test func formatsElevenLabsVoiceMode() {
+    @Test func `formats eleven labs voice mode`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "elevenlabs",
             providerLabel: "ElevenLabs",
@@ -160,7 +160,7 @@ import Testing
         #expect(descriptor.subtitle == "Native • eleven_v3 • voice-id")
     }
 
-    @Test func formatsSystemVoiceFallbackMode() {
+    @Test func `formats system voice fallback mode`() {
         let descriptor = TalkVoiceModeDescriptorBuilder.build(
             providerId: "system",
             providerLabel: "iOS System Voice",
@@ -173,18 +173,80 @@ import Testing
         #expect(descriptor.subtitle == "Native • en-US")
     }
 
-    @Test func openAIRealtimeSelectionFallbackKeepsGatewayRelayDefaults() {
+    @Test func `open AI realtime selection defaults to native web RTC`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
 
         manager._test_applyOpenAIRealtimeSelectionDefaults()
 
-        #expect(manager._test_executionMode() == .realtimeRelay)
+        #expect(manager._test_executionMode() == .realtimeWebRTC)
         #expect(manager._test_realtimeProvider() == "openai")
         #expect(manager._test_realtimeModelId() == "gpt-realtime-2")
-        #expect(manager._test_gatewayTalkUsesRealtimeRelay())
+        #expect(!manager._test_gatewayTalkUsesRealtimeRelay())
     }
 
-    @Test func buildsGenericRealtimeFallbackIssueForDisplay() {
+    @Test func `open AI realtime selection clears stale realtime config`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "model": "gemini-live-2.5-flash-preview",
+                    "voice": "puck",
+                    "mode": "realtime",
+                    "transport": "gateway-relay",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyOpenAIRealtimeSelectionDefaults()
+
+        #expect(manager._test_executionMode() == .realtimeWebRTC)
+        #expect(manager._test_realtimeProvider() == "openai")
+        #expect(manager._test_realtimeModelId() == "gpt-realtime-2")
+        #expect(manager.gatewayTalkRealtimeVoiceId == nil)
+        #expect(!manager._test_gatewayTalkUsesRealtimeRelay())
+    }
+
+    @Test func `open AI realtime selection keeps explicit open AI voice override`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let defaults = UserDefaults.standard
+        defaults.set(" Cedar ", forKey: TalkModeRealtimeVoiceSelection.storageKey)
+        defer { defaults.removeObject(forKey: TalkModeRealtimeVoiceSelection.storageKey) }
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "model": "gemini-live-2.5-flash-preview",
+                    "voice": "puck",
+                    "mode": "realtime",
+                    "transport": "gateway-relay",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .openAIRealtime)
+
+        #expect(manager._test_realtimeProvider() == "openai")
+        #expect(manager._test_realtimeModelId() == "gpt-realtime-2")
+        #expect(manager.gatewayTalkRealtimeVoiceId == "cedar")
+    }
+
+    @Test func `builds generic realtime fallback issue for display`() {
         let issue = TalkRuntimeIssue.realtimeUnavailable(
             message: "OpenAI API key rejected with 401",
             provider: "openai",
@@ -205,7 +267,7 @@ import Testing
         #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
     }
 
-    @Test func nativeFallbackKeepsRealtimeIssueVisible() {
+    @Test func `native fallback keeps realtime issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
             code: .realtimeUnavailable,
@@ -224,7 +286,7 @@ import Testing
         #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
     }
 
-    @Test func gatewayTalkIssueDetailsDriveRealtimeFailureDisplay() {
+    @Test func `gateway talk issue details drive realtime failure display`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let error = GatewayResponseError(
             method: "talk.session.create",
@@ -251,7 +313,7 @@ import Testing
         #expect(issue.phase == "request")
     }
 
-    @Test func relayStartupIssueSurvivesUntilReadyStatus() {
+    @Test func `relay startup issue survives until ready status`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
             code: .realtimeUnavailable,
@@ -274,7 +336,7 @@ import Testing
         #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
     }
 
-    @Test func relayCloseClearsActiveRealtimeMode() {
+    @Test func `relay close clears active realtime mode`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
@@ -288,7 +350,7 @@ import Testing
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
-    @Test func relayRetryClearsStaleFallbackTriggerButKeepsLastIssueVisible() {
+    @Test func `relay retry clears stale fallback trigger but keeps last issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
             code: .realtimeUnavailable,
@@ -310,7 +372,7 @@ import Testing
         #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
     }
 
-    @Test func mapsWebRTCRealtimeTransportToGatewayRelayOnIOS() {
+    @Test func `maps web RTC realtime transport to native web RTC on IOS`() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -328,10 +390,150 @@ import Testing
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
+        #expect(parsed.executionMode == .realtimeWebRTC)
+    }
+
+    @Test func `keeps provider web socket realtime transport on gateway relay`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "mode": "realtime",
+                    "transport": "provider-websocket",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
-    @Test func parsesRedactedGatewayRealtimeConfig() {
+    @Test func `leaves native mode for unsupported realtime brain`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "mode": "realtime",
+                    "transport": "gateway-relay",
+                    "brain": "direct-tools",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .native)
+    }
+
+    @Test func `keeps non open AI realtime default transport on gateway relay`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "mode": "realtime",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .realtimeRelay)
+    }
+
+    @Test func `keeps non open AI web RTC transport on gateway relay`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "model": "gemini-live-2.5-flash-preview",
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .realtimeRelay)
+    }
+
+    @Test func `open AI selection overrides non open AI realtime provider`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+        let routing = TalkModeRoutingResolver.resolve(
+            parsed: parsed,
+            providerSelection: .openAIRealtime,
+            defaultProvider: "elevenlabs",
+            defaultRealtimeModelId: "gpt-realtime-2")
+
+        #expect(routing.activeProvider == "openai")
+        #expect(routing.realtimeProvider == "openai")
+        #expect(routing.realtimeModelId == "gpt-realtime-2")
+        #expect(routing.executionMode == .realtimeWebRTC)
+        #expect(routing.route == .realtimeWebRTC)
+    }
+
+    @Test func `maps open AI realtime default transport to native web RTC`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "openai",
+                    "mode": "realtime",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .realtimeWebRTC)
+    }
+
+    @Test func `parses redacted gateway realtime config`() {
         let config: [String: Any] = [
             "talk": [
                 "providers": [
@@ -372,14 +574,14 @@ import Testing
             defaultSilenceTimeoutMs: 900)
 
         #expect(parsed.activeProvider == "elevenlabs")
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.executionMode == .realtimeWebRTC)
         #expect(parsed.realtimeProvider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
         #expect(parsed.realtimeVoiceId == "cedar")
         #expect(parsed.rawConfigApiKey == "__OPENCLAW_REDACTED__")
     }
 
-    @Test func leavesNativeModeForManagedRoomRealtimeTransport() {
+    @Test func `leaves native mode for managed room realtime transport`() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -400,7 +602,7 @@ import Testing
         #expect(parsed.executionMode == .native)
     }
 
-    @Test func detectsPCMFormatRejectionFromElevenLabsError() {
+    @Test func `detects PCM format rejection from eleven labs error`() {
         let error = NSError(
             domain: "ElevenLabsTTS",
             code: 403,
@@ -410,7 +612,7 @@ import Testing
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error))
     }
 
-    @Test func ignoresGenericPlaybackFailuresForPCMFormatRejection() {
+    @Test func `ignores generic playback failures for PCM format rejection`() {
         let error = NSError(
             domain: "StreamingAudio",
             code: -1,
