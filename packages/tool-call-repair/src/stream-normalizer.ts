@@ -1188,7 +1188,10 @@ function scrubReclassifiedMixedTextFromError(
   };
 }
 
-/** Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap. */
+/**
+ * Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap,
+ * or that ended at `done` while a buffered tool-call prefix was still unclosed (truncated stream).
+ */
 export function scrubOverCapPlainTextToolCallMessage(params: {
   candidateText: string | undefined;
   matcher: PlainTextToolCallNameMatcher;
@@ -1228,6 +1231,19 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
       };
     }
     return undefined;
+  }
+  if (bufferState === "possible") {
+    // An incomplete (unclosed) buffered tool-call prefix reached `done`: there is no complete
+    // block to promote, yet the whole buffer is leaked tool-call markup. stripSerializedToolCall-
+    // Prefixes returns null only when no complete prefix can be consumed, which separates this
+    // truncated-stream case from a complete block (returns the trailing remainder, "" when fully
+    // consumed) that must still fall through to promotion. Scrub it so the raw invoke/parameter
+    // XML is removed instead of flushed as visible text via the done branch.
+    if (stripSerializedToolCallPrefixes(candidateText, params.matcher) !== null) {
+      return undefined;
+    }
+    const scrubbed = scrubPlainTextToolCallContent(record.content, candidateText, params.matcher);
+    return scrubbed.changed ? { ...record, content: scrubbed.content } : undefined;
   }
   if (bufferState !== "over-cap") {
     return undefined;

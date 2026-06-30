@@ -586,6 +586,113 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
   });
 
+  // Streams an UNWRAPPED (no <function_calls> wrapper) attribute-dialect invoke prefix that
+  // never receives its closing </parameter>/</invoke> before the stream ends at `done`. The
+  // buffered prefix cannot be promoted (no complete block) and is entirely leaked tool-call
+  // markup, so the done-message visible text must be scrubbed instead of flushed as raw XML.
+  async function expectIncompleteInvokeScrubbedAtDone(params: {
+    ns: string;
+    withParameter: boolean;
+  }): Promise<void> {
+    const { ns, withParameter } = params;
+    const rawToolText = withParameter
+      ? [`<${ns}invoke name="read">`, `<${ns}parameter name="path">`, "src/index.ts"].join("\n")
+      : `<${ns}invoke name="read">`;
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    // No buffered invoke/parameter markup (or its arguments) may survive on any emitted event.
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("invoke");
+    expect(serialized).not.toContain("parameter");
+    expect(serialized).not.toContain("src/index.ts");
+
+    const done = events.at(-1) as { type?: string; message?: { content?: unknown } };
+    expect(done.type).toBe("done");
+    // The unclosed prefix is scrubbed to an empty assistant message, never the raw markup.
+    expect(done.message?.content).toEqual([]);
+  }
+
+  for (const ns of ["", "antml:", "mm:"]) {
+    for (const withParameter of [false, true]) {
+      const shape = withParameter ? "with an unclosed parameter" : "open only";
+      const label = ns || "bare";
+      it(`scrubs an incomplete unwrapped ${label} invoke (${shape}) that reaches done`, async () => {
+        await expectIncompleteInvokeScrubbedAtDone({ ns, withParameter });
+      });
+    }
+  }
+
+  it("promotes a complete unwrapped bare invoke into tool-call stream events", async () => {
+    const rawToolText = [
+      `<invoke name="read">`,
+      `<parameter name="path">`,
+      "src/index.ts",
+      `</parameter>`,
+      `</invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "src/index.ts" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<invoke");
+  });
+
   it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
