@@ -2635,6 +2635,11 @@ export async function runAgentTurnWithFallback(params: {
                       // depending on the producer; accumulate per item so the
                       // preamble progress payload always carries full text.
                       const commentaryTextByItem = new Map<string, string>();
+                      // Anthropic commentary has no native item id, so each later
+                      // stream event re-emits the full text under an empty id; the
+                      // verbose standalone lane can't dedup that and posts a duplicate
+                      // persistent message per snapshot. Skip unchanged re-emissions.
+                      const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
@@ -2731,7 +2736,11 @@ export async function runAgentTurnWithFallback(params: {
                                 : (snapshotText ?? "");
                           commentaryTextByItem.set(commentaryItemId, accumulated);
                           const commentaryText = accumulated.replace(/\s+/g, " ").trim();
-                          if (commentaryText) {
+                          if (
+                            commentaryText &&
+                            lastEmittedCommentaryByItem.get(commentaryItemId) !== commentaryText
+                          ) {
+                            lastEmittedCommentaryByItem.set(commentaryItemId, commentaryText);
                             await params.opts?.onItemEvent?.({
                               itemId: commentaryItemId || undefined,
                               kind: "preamble",
