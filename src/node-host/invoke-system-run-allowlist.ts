@@ -167,14 +167,10 @@ export async function resolveSystemRunExecArgv(params: {
     params.policy.allowlistSatisfied &&
     params.segments.length === 1
   ) {
-    // Bind execution to the path resolved during allowlist analysis. A bare
-    // executable would let Windows search cwd before PATH and run a shadow binary.
-    const segment = params.segments[0];
-    const resolvedExecutable =
-      segment.resolution?.execution.resolvedRealPath?.trim() ??
-      segment.resolution?.execution.resolvedPath?.trim();
-    const plannedArgv = resolvePlannedSegmentArgv(segment);
-    if (!resolvedExecutable || !plannedArgv) {
+    // Exact-path matches stay bound to the resolved executable, while the bare
+    // wildcard contract can still authorize unresolved Windows commands.
+    const plannedArgv = resolvePlannedSegmentArgv(params.segments[0]);
+    if (!plannedArgv) {
       return null;
     }
     execArgv = plannedArgv;

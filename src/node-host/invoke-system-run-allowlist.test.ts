@@ -95,11 +95,33 @@ describe("resolveSystemRunExecArgv", () => {
     expect(result).toEqual([trustedExecutable, "--version"]);
   });
 
-  it("fails closed when Windows shell execution has no resolved plan", async () => {
+  it("preserves unresolved Windows shell argv authorized by a bare wildcard", async () => {
     const result = await resolveWindowsShellExecArgv({
       raw: "safe --version",
       argv: ["safe", "--version"],
       resolution: null,
+    });
+
+    expect(result).toEqual(["safe", "--version"]);
+  });
+
+  it("fails closed when the Windows shell execution plan is blocked", async () => {
+    const result = await resolveWindowsShellExecArgv({
+      raw: "safe --version",
+      argv: ["safe", "--version"],
+      resolution: {
+        policyBlocked: true,
+        execution: {
+          rawExecutable: "safe",
+          resolvedPath: null,
+          executableName: "safe",
+        },
+        policy: {
+          rawExecutable: "safe",
+          resolvedPath: null,
+          executableName: "safe",
+        },
+      },
     });
 
     expect(result).toBeNull();
