@@ -2,7 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import {
+  CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+  detectBundleManifestFormat,
+  loadBundleManifest,
+} from "../../plugins/bundle-manifest.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
@@ -85,9 +91,9 @@ export async function runPluginPayloadSmokeCheck(params: {
     const packageJsonPath = path.join(installPath, "package.json");
     const packageJsonStat = await safeStat(packageJsonPath);
     if (!packageJsonStat?.isFile()) {
-      const detectedBundleFormat = detectBundleManifestFormat(installPath);
-      if (detectedBundleFormat || isBundleInstallRecord(record)) {
-        const bundleValidation = validateBundlePayload({ installPath, record });
+      const bundleFormat = await resolveBundlePayloadFormat({ installPath, record });
+      if (bundleFormat) {
+        const bundleValidation = validateBundlePayload({ installPath, bundleFormat });
         if (bundleValidation) {
           failures.push({
             pluginId,
@@ -96,6 +102,15 @@ export async function runPluginPayloadSmokeCheck(params: {
             detail: bundleValidation.detail,
           });
         }
+        continue;
+      }
+      if (isBundleInstallRecord(record)) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: "missing-bundle-manifest",
+          detail: `Bundle manifest is missing under ${installPath}`,
+        });
         continue;
       }
       failures.push({
@@ -188,7 +203,9 @@ export async function runPluginPayloadSmokeCheck(params: {
 }
 
 function isBundleInstallRecord(record: PluginInstallRecord): boolean {
-  return (record as { format?: unknown }).format === "bundle";
+  return (
+    (record as { format?: unknown }).format === "bundle" || record.clawhubFamily === "bundle-plugin"
+  );
 }
 
 function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | null {
@@ -196,21 +213,46 @@ function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | nul
   return raw === "codex" || raw === "claude" || raw === "cursor" ? raw : null;
 }
 
-function validateBundlePayload(params: {
+async function detectExplicitBundleManifestFormat(
+  installPath: string,
+): Promise<PluginBundleFormat | null> {
+  const codexManifest = await safeStat(path.join(installPath, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH));
+  if (codexManifest?.isFile()) {
+    return "codex";
+  }
+  const cursorManifest = await safeStat(
+    path.join(installPath, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH),
+  );
+  if (cursorManifest?.isFile()) {
+    return "cursor";
+  }
+  const claudeManifest = await safeStat(
+    path.join(installPath, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
+  );
+  return claudeManifest?.isFile() ? "claude" : null;
+}
+
+async function resolveBundlePayloadFormat(params: {
   installPath: string;
   record: PluginInstallRecord;
-}): Pick<PluginPayloadSmokeFailure, "reason" | "detail"> | null {
-  const bundleFormat =
-    detectBundleManifestFormat(params.installPath) ?? readBundleFormat(params.record);
-  if (!bundleFormat) {
-    return {
-      reason: "missing-bundle-manifest",
-      detail: `Bundle manifest is missing under ${params.installPath}`,
-    };
+}): Promise<PluginBundleFormat | null> {
+  const explicitManifestFormat = await detectExplicitBundleManifestFormat(params.installPath);
+  if (explicitManifestFormat) {
+    return explicitManifestFormat;
   }
+  if (!isBundleInstallRecord(params.record)) {
+    return null;
+  }
+  return detectBundleManifestFormat(params.installPath) ?? readBundleFormat(params.record);
+}
+
+function validateBundlePayload(params: {
+  installPath: string;
+  bundleFormat: PluginBundleFormat;
+}): Pick<PluginPayloadSmokeFailure, "reason" | "detail"> | null {
   const loaded = loadBundleManifest({
     rootDir: params.installPath,
-    bundleFormat,
+    bundleFormat: params.bundleFormat,
   });
   if (!loaded.ok) {
     return {
