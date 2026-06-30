@@ -1160,9 +1160,10 @@ describe("redactSecrets", () => {
         ],
       },
       status: { code: "SYSTEM_RUN_DENIED" },
-      error: { code: "ERR_TEST" },
       oauth: { code: "oauth-code-value-1234567890" },
+      oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
       provider: { code: "PROVIDEROPAQUECODE1234567890" },
+      providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
     });
 
     expect(output.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
@@ -1172,9 +1173,10 @@ describe("redactSecrets", () => {
       { code: "incomplete-session-branch" },
     ]);
     expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
-    expect(output.error.code).toBe("ERR_TEST");
     expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
+    expect(output.oauthNestedError.error.code).not.toBe("ERR_OPAQUEOAUTHCODE1234567890");
     expect(output.provider.code).not.toBe("PROVIDEROPAQUECODE1234567890");
+    expect(output.providerNestedError.error.code).not.toBe("ERR_PROVIDEROPAQUECODE1234567890");
   });
 });
 
