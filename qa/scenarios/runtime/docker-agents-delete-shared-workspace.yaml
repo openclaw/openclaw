@@ -21,7 +21,7 @@ scenario:
     - scripts/e2e/lib/fixture.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing agents-delete-shared-workspace Docker E2E lane for Docker-hosted agent workspace safety coverage.
     args:
       - --lane

@@ -24,7 +24,7 @@ scenario:
     - scripts/e2e/lib/upgrade-survivor/assertions.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing upgrade-survivor Docker E2E lane and records QA Lab evidence for update status/RPC survival coverage.
     args:
       - --lane

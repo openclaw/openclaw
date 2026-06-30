@@ -15,19 +15,6 @@ export {
   type LiveTransportScenarioDefinition,
   type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
-export {
-  assertQaTransportSupportsScenario,
-  defineQaTransportScenario,
-  filterQaTransportScenariosForTransport,
-  findUnsupportedQaTransportScenarioRequirements,
-  mergeQaTransportScenarioRequirements,
-  qaTransportRequirementsForStandardScenario,
-  type QaTransportCapabilityName,
-  type QaTransportScenarioDefinition,
-  type QaTransportScenarioDefinitionInput,
-  type QaTransportScenarioRequirements,
-  type QaTransportScenarioUnsupportedRequirements,
-} from "../../qa-transport-scenarios.js";
 
 export type LiveTransportCoverageMember = {
   scenarioId?: string;
