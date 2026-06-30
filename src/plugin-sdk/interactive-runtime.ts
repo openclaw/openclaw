@@ -34,6 +34,7 @@ export type {
 export {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
+  hasRenderedCommandAction,
   hasReplyChannelData,
   hasReplyContent,
   interactiveReplyToPresentation,

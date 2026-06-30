@@ -504,6 +504,35 @@ export function interactiveReplyToPresentation(
 }
 
 /**
+ * Check whether any presentation block contains a visible command action
+ * that would be rendered as copyable text in the fallback output.
+ *
+ * Excludes disabled buttons, URL/webApp buttons (where the URL overrides
+ * the command text), and buttons without a `command`-typed action.
+ *
+ * Channel adapters that add manual-command guidance should gate on this
+ * check so guidance only appears when a command is actually rendered.
+ */
+export function hasRenderedCommandAction(
+  blocks: readonly MessagePresentationBlock[] | undefined,
+): boolean {
+  return (
+    blocks?.some(
+      (block) =>
+        block.type === "buttons" &&
+        block.buttons.some(
+          (button) =>
+            !button.disabled &&
+            button.action?.type === "command" &&
+            !button.url &&
+            !button.webApp?.url &&
+            !button.web_app?.url,
+        ),
+    ) ?? false
+  );
+}
+
+/**
  * Render presentation blocks as plain-text fallback for channels that do not
  * support native interactive controls.
  *
