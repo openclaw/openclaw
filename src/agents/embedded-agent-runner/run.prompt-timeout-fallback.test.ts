@@ -58,6 +58,42 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("throws FailoverError for replay-safe provider aborts that only abort the prompt attempt", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        assistantTexts: [],
+        promptError: Object.assign(new Error("This operation was aborted"), {
+          name: "AbortError",
+        }),
+        promptErrorSource: "prompt",
+      }),
+    );
+
+    const promise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "amazon-bedrock",
+      model: "global.anthropic.claude-sonnet-4-6",
+      runId: "run-bedrock-prompt-abort-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("This operation was aborted");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces replay-invalid prompt timeouts instead of handing them to model fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

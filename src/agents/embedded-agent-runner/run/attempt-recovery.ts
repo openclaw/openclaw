@@ -4,6 +4,7 @@ import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
+import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
@@ -89,6 +90,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptError,
     promptErrorSource,
     timedOut,
+    idleTimedOut,
     timedOutDuringCompaction,
     timedOutDuringToolExecution,
     timedOutByRunBudget,
@@ -255,6 +257,19 @@ export async function recoverEmbeddedRunAttempt(input: {
   const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
   );
+  // Some provider SDK stream aborts mark the attempt aborted without an external stop.
+  // Only replay the model call when no timeout or side effect made the prompt unsafe.
+  const replaySafePromptAbortFallback =
+    aborted &&
+    !externalAbort &&
+    !timedOut &&
+    !idleTimedOut &&
+    !timedOutDuringCompaction &&
+    !timedOutDuringToolExecution &&
+    promptErrorSource === "prompt" &&
+    isRunnerAbortError(promptError) &&
+    attempt.replayMetadata.replaySafe &&
+    !attempt.replayMetadata.hadPotentialSideEffects;
   let shouldSurfaceCodexCompletionTimeout = false;
   if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
     const recoveryRetry = resolveCodexAppServerRecoveryRetry({
@@ -282,7 +297,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   }
   if (
     promptError &&
-    !terminalInterrupted &&
+    (!terminalInterrupted || replaySafePromptAbortFallback) &&
     promptErrorSource !== "compaction" &&
     !hasRecoverableCodexAppServerTimeoutOutcome &&
     !shouldSurfaceCodexCompletionTimeout
@@ -322,6 +337,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       fallbackConfigured: runInput.fallbackConfigured,
       aborted,
       externalAbort,
+      replaySafePromptAbortFallback,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
       resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
