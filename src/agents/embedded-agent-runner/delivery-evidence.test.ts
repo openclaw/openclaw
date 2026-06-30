@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { collectDeliveredMediaUrls, hasVisibleAgentPayload } from "./delivery-evidence.js";
+import {
+  collectDeliveredMediaUrls,
+  collectNestedVisibleText,
+  hasVisibleAgentPayload,
+} from "./delivery-evidence.js";
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {
   it("collects media URLs across nested attachments", () => {
@@ -84,5 +88,33 @@ describe("hasVisibleAgentPayload nested text", () => {
     expect(() =>
       hasVisibleAgentPayload({ payloads: [cyclic] }, { includeNestedText: true }),
     ).not.toThrow();
+  });
+});
+
+describe("collectNestedVisibleText", () => {
+  it("collects trimmed text from nested wrapper keys", () => {
+    expect(
+      collectNestedVisibleText({ result: { output: [{ content: "  nested answer  " }] } }),
+    ).toEqual(["nested answer"]);
+  });
+
+  it("skips error, reasoning, and thinking branches", () => {
+    expect(collectNestedVisibleText({ isError: true, content: "boom" })).toEqual([]);
+    expect(collectNestedVisibleText({ isReasoning: true, text: "scratch" })).toEqual([]);
+    expect(collectNestedVisibleText({ type: "thinking", text: "monologue" })).toEqual([]);
+  });
+
+  it("returns every visible string so callers can filter (e.g. silent tokens)", () => {
+    expect(collectNestedVisibleText({ content: ["NO_REPLY", { result: "real answer" }] })).toEqual([
+      "NO_REPLY",
+      "real answer",
+    ]);
+  });
+
+  it("does not overflow on a self-referential payload", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.content = cyclic;
+    expect(() => collectNestedVisibleText(cyclic)).not.toThrow();
+    expect(collectNestedVisibleText(cyclic)).toEqual([]);
   });
 });

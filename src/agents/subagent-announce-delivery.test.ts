@@ -4948,3 +4948,44 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 });
+
+describe("gateway agent payload visibility gates (nested reply text)", () => {
+  const wrap = (payload: unknown) => ({ result: { payloads: [payload] } });
+
+  it("treats nested reply text as visible (general gate)", () => {
+    expect(testing.hasVisibleGatewayAgentPayload(wrap({ content: "wrapped child reply" }))).toBe(
+      true,
+    );
+  });
+
+  it("treats nested reply text as a visible non-silent reply (sibling gate)", () => {
+    // Regression: a reply whose visible text is nested under content/result/output
+    // previously failed this gate and surfaced as visible_reply_missing.
+    expect(
+      testing.hasVisibleNonSilentGatewayAgentPayload(
+        wrap({ result: { output: [{ content: "deeply nested reply text" }] } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps suppressing a nested reply that only carries the silent token", () => {
+    expect(
+      testing.hasVisibleNonSilentGatewayAgentPayload(wrap({ content: "NO_REPLY" })),
+    ).toBe(false);
+  });
+
+  it("still detects a non-silent reply alongside a nested silent token", () => {
+    expect(
+      testing.hasVisibleNonSilentGatewayAgentPayload(
+        wrap({ content: ["NO_REPLY", { result: "actual visible answer" }] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves top-level non-silent text detection", () => {
+    expect(testing.hasVisibleNonSilentGatewayAgentPayload(wrap({ text: "plain reply" }))).toBe(
+      true,
+    );
+    expect(testing.hasVisibleNonSilentGatewayAgentPayload(wrap({ text: "NO_REPLY" }))).toBe(false);
+  });
+});

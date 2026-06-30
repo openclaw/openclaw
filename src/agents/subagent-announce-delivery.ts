@@ -40,6 +40,7 @@ import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
+  collectNestedVisibleText,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
   hasMessagingToolDeliveryEvidence,
@@ -702,10 +703,18 @@ function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
   ) {
     return true;
   }
-  return (
+  if (
     typeof record.text === "string" &&
     record.text.trim() !== "" &&
     !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  ) {
+    return true;
+  }
+  // Visible reply text may be wrapped under a nested payload field
+  // (content/result/output/message) rather than top-level text; treat it as
+  // visible when at least one nested string is not a silent-reply token.
+  return collectNestedVisibleText(record).some(
+    (text) => !isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN),
   );
 }
 
@@ -1787,5 +1796,7 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
+  hasVisibleGatewayAgentPayload,
+  hasVisibleNonSilentGatewayAgentPayload,
 };
 export { testing as __testing };

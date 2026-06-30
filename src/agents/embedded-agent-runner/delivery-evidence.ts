@@ -179,34 +179,40 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
 const NESTED_VISIBLE_TEXT_KEYS = ["text", "content", "message", "result", "output"] as const;
 
 /**
- * Recursively scans a payload for non-empty visible text nested under common wrapper
+ * Recursively collects trimmed, non-empty visible text nested under common wrapper
  * keys, skipping error, reasoning, and thinking branches that are never user-visible.
  *
- * Payloads arrive as in-process `unknown` objects, so a `seen` guard keeps a
- * malformed self-referential chain from overflowing the stack.
+ * Returning the text (rather than just a boolean) lets callers apply their own
+ * filtering — e.g. the subagent announce path drops silent-reply tokens. Payloads
+ * arrive as in-process `unknown` objects, so a `seen` guard keeps a malformed
+ * self-referential chain from overflowing the stack.
  */
-function hasNestedVisibleText(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
+export function collectNestedVisibleText(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): string[] {
   if (typeof value === "string") {
-    return value.trim().length > 0;
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
   }
   if (value === null || typeof value !== "object") {
-    return false;
+    return [];
   }
   if (seen.has(value)) {
-    return false;
+    return [];
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.some((entry) => hasNestedVisibleText(entry, seen));
+    return value.flatMap((entry) => collectNestedVisibleText(entry, seen));
   }
   const record = value as Record<string, unknown>;
   if (record.isError === true || record.isReasoning === true) {
-    return false;
+    return [];
   }
   if (typeof record.type === "string" && /^(?:thinking|reasoning)$/i.test(record.type)) {
-    return false;
+    return [];
   }
-  return NESTED_VISIBLE_TEXT_KEYS.some((key) => hasNestedVisibleText(record[key], seen));
+  return NESTED_VISIBLE_TEXT_KEYS.flatMap((key) => collectNestedVisibleText(record[key], seen));
 }
 
 /** Returns whether payload metadata contains visible text, media, presentation, or channel data. */
@@ -241,7 +247,7 @@ export function hasVisibleAgentPayload(
       record.presentation ||
       record.interactive ||
       record.channelData ||
-      (options.includeNestedText === true && hasNestedVisibleText(record)),
+      (options.includeNestedText === true && collectNestedVisibleText(record).length > 0),
     );
   });
 }
