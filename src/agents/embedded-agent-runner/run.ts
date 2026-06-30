@@ -209,6 +209,7 @@ import {
   stepIdleTimeoutBreaker,
 } from "./run/idle-timeout-breaker.js";
 import {
+  buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   hasAttemptTerminalState,
@@ -419,6 +420,20 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    // Per-attempt metadata re-derived from raw fields so the retry gate can
+    // distinguish "this model call had no tool side effects" from "cumulative
+    // session replayMetadata carries prior-turn history". Using raw.replayMetadata
+    // would give the already-accumulated value (attempt.ts merges with accumulated
+    // replay state before returning).
+    currentAttemptReplayMetadata: buildAttemptReplayMetadata({
+      toolMetas: raw.toolMetas ?? [],
+      didSendViaMessagingTool: raw.didSendViaMessagingTool ?? false,
+      messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
+      messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
+      messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+      successfulCronAdds: raw.successfulCronAdds ?? 0,
+      acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
+    }),
   };
 }
 
@@ -3170,7 +3185,7 @@ async function runEmbeddedAgentInternal(
               promptFailoverReason === "timeout" &&
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
-              attempt.replayMetadata.replaySafe;
+              resolveAttemptReplayMetadata(attempt).replaySafe;
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({

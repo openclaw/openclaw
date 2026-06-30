@@ -536,6 +536,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
     | "replayMetadata"
+    | "currentAttemptReplayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -545,7 +546,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+  // Prefer current-attempt metadata to decide whether this specific model
+  // call had side effects. Falls back to cumulative replayMetadata for
+  // harnesses that do not yet populate currentAttemptReplayMetadata.
+  const currentAttemptMeta =
+    params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata;
+  if (currentAttemptMeta?.hadPotentialSideEffects) {
     return false;
   }
 

@@ -6,6 +6,7 @@ import {
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedLog,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -81,6 +82,10 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
+    // Proof: [empty-error-retry] log fires in the real runner path
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[empty-error-retry]"),
+    );
   });
 
   it("retries when stopReason=error emitted only thinking blocks and output tokens", async () => {
@@ -275,8 +280,10 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {
-    // Resubmission would duplicate side effects when replay metadata cannot
-    // prove the failed turn is safe to replay.
+    // Resubmission would duplicate side effects when the current attempt's
+    // tool activity proves side effects — even if there's no prior session history.
+    // Uses per-attempt fields (toolMetas with an unsafe tool) that
+    // buildAttemptReplayMetadata picks up for currentAttemptReplayMetadata.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -288,10 +295,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        replayMetadata: {
-          hadPotentialSideEffects: true,
-          replaySafe: false,
-        },
+        toolMetas: [{ toolName: "browser", replaySafe: false }],
       }),
     );
 
@@ -304,6 +308,10 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
+    // Proof: no retry log when side effects detected
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("[empty-error-retry]"),
+    );
   });
 
   it.each([
@@ -358,6 +366,40 @@ describe("runEmbeddedAgent silent-error retry", () => {
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("retries when prior turns had side effects but current 5xx attempt ran no tools (#97877)", async () => {
+    // Regression for #97877: cumulative replayMetadata from prior-turn tool
+    // activity must not block retry of a later turn whose model call itself
+    // produced no tools. The mock sets replayMetadata dirty (simulating
+    // accumulated session history) but leaves per-attempt fields clean so
+    // currentAttemptReplayMetadata = clean → retry allowed.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        // Simulate cumulative prior-turn side effects — hadPotentialSideEffects
+        // is true from session accumulation even though this attempt was clean.
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("ollama", "glm-5.1:cloud"),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-prior-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+    // Proof: [empty-error-retry] fires in the real runner, even with
+    // cumulative replayMetadata dirty from prior-turn tool activity
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[empty-error-retry]"),
+    );
+  });
 
   it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
