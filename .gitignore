@@ -231,7 +231,6 @@ ui/.vitest-attachments
 # Generated docs baseline artifacts (locally generated, only hashes tracked)
 docs/.generated/*.json
 docs/.generated/*.jsonl
-docs/.generated/*.sql
 
 # Deprecated changelog fragment workflow
 changelog/fragments/

@@ -7,7 +7,7 @@ import {
   computeSqliteSessionSchemaBaselineHashFileContent,
   renderSqliteSessionSchemaBaseline,
   writeSqliteSessionSchemaBaselineArtifacts,
-} from "./sqlite-session-schema-baseline.js";
+} from "../../scripts/lib/sqlite-session-schema-baseline.ts";
 
 describe("SQLite sessions/transcripts schema baseline", () => {
   it("includes session and transcript DDL while excluding unrelated agent tables", async () => {

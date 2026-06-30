@@ -47,7 +47,7 @@ const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
-  /^(?:src\/state\/openclaw-agent-schema\.sql|src\/state\/sqlite-session-schema-baseline(?:\.test)?\.ts|scripts\/generate-sqlite-session-schema-baseline\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
+  /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";

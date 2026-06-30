@@ -22,7 +22,7 @@ export type SqliteSessionSchemaBaselineWriteResult = {
 };
 
 const DEFAULT_SCHEMA_INPUT = "src/state/openclaw-agent-schema.sql";
-const DEFAULT_SQL_OUTPUT = "docs/.generated/sqlite-session-transcript-schema-baseline.sql";
+const DEFAULT_SQL_OUTPUT = ".artifacts/sqlite-session-transcript-schema-baseline.sql";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/sqlite-session-transcript-schema-baseline.sha256";
 
 const TARGET_TABLES = new Set([

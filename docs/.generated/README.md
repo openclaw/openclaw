@@ -1,7 +1,7 @@
 # Generated Docs Artifacts
 
-SHA-256 hash files are the tracked drift-detection artifacts. The full JSON
-baselines are generated locally (gitignored) for inspection only.
+SHA-256 hash files are the tracked drift-detection artifacts. Full baselines are
+generated locally for inspection only.
 
 **Tracked (committed to git):**
 
@@ -13,7 +13,7 @@ baselines are generated locally (gitignored) for inspection only.
 
 - `config-baseline.json`, `config-baseline.core.json`, `config-baseline.channel.json`, `config-baseline.plugin.json`
 - `plugin-sdk-api-baseline.json`, `plugin-sdk-api-baseline.jsonl`
-- `sqlite-session-transcript-schema-baseline.sql`
+- `.artifacts/sqlite-session-transcript-schema-baseline.sql`
 
 Do not edit any of these files by hand.
 

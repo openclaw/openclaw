@@ -1464,9 +1464,9 @@ describe("scripts/changed-lanes", () => {
     expect(
       shouldRunSqliteSessionSchemaBaselineCheck([
         "src/state/openclaw-agent-schema.sql",
-        "src/state/sqlite-session-schema-baseline.ts",
-        "src/state/sqlite-session-schema-baseline.test.ts",
         "scripts/generate-sqlite-session-schema-baseline.ts",
+        "scripts/lib/sqlite-session-schema-baseline.ts",
+        "test/scripts/sqlite-session-schema-baseline.test.ts",
         "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
       ]),
     ).toBe(true);

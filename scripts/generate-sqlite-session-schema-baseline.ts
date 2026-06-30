@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Generate Sqlite Session Schema Baseline script supports OpenClaw repository automation.
+// Generate SQLite Session Schema Baseline script supports OpenClaw repository automation.
 import path from "node:path";
-import { writeSqliteSessionSchemaBaselineArtifacts } from "../src/state/sqlite-session-schema-baseline.ts";
+import { writeSqliteSessionSchemaBaselineArtifacts } from "./lib/sqlite-session-schema-baseline.ts";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
