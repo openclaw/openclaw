@@ -175,13 +175,31 @@ async function summarizeChunks(params: {
           maxDelayMs: 5000,
           jitter: 0.2,
           label: "compaction/generateSummary",
-          shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
+          shouldRetry: (err) => {
+            // Stop retrying when the caller explicitly cancelled.
+            if (params.signal.aborted) {
+              return false;
+            }
+            // Preserve existing non-retry policy for real network/transport
+            // timeouts (e.g. "fetch failed", ETIMEDOUT) that are not AbortErrors.
+            if (!isAbortError(err) && isTimeoutError(err)) {
+              return false;
+            }
+            // Provider-side AbortErrors with signal not yet aborted are
+            // transient disconnects — retrying is correct.
+            return true;
+          },
         },
       );
       hasGeneratedChunk = true;
     } catch (err) {
-      // Abort and timeout errors always propagate immediately.
-      if (isAbortError(err) || isTimeoutError(err)) {
+      // Propagate only when the caller explicitly cancelled. Provider-side
+      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
+      if (params.signal.aborted) {
+        throw err;
+      }
+      // Real non-abort transport timeouts still propagate immediately.
+      if (!isAbortError(err) && isTimeoutError(err)) {
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
@@ -270,6 +288,9 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
+    if (params.signal.aborted) {
+      throw fullError;
+    }
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
     partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
   }
@@ -292,6 +313,9 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
+      if (params.signal.aborted) {
+        throw partialError;
+      }
       log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes

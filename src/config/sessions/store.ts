@@ -57,6 +57,7 @@ import {
   normalizeSessionStore,
   readSessionEntries,
   readSessionEntry,
+  stripPersistedSkillsCache,
 } from "./store-load.js";
 import {
   applyFileBackedSessionStoreMaintenance,
@@ -204,6 +205,8 @@ type SaveSessionStoreOptions = {
 };
 
 type UpdateSessionStoreOptions<T> = SaveSessionStoreOptions & {
+  /** Allow a nested mutation only when the caller already owns this store writer lane. */
+  reentrant?: boolean;
   /**
    * Specialized callers can prove their mutator made no changes through its result.
    * When true, the writer-owned object cache is restored and sessions.json is untouched.
@@ -343,6 +346,18 @@ export type DeletedAgentSessionEntryPurgeParams = {
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return cloneSessionStoreRecord({ entry }).entry;
+}
+
+export function projectSessionEntryForPersistenceRevision(params: {
+  storePath: string;
+  entry: SessionEntry;
+}): SessionEntry {
+  const stripped = stripPersistedSkillsCache(params.entry);
+  const projected = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: { entry: stripped },
+  });
+  return projected.store.entry ?? stripped;
 }
 
 function resolveSessionWorkflowStorePath(
@@ -1019,19 +1034,23 @@ export async function updateSessionStore<T>(
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
   opts?: UpdateSessionStoreOptions<T>,
 ): Promise<T> {
-  return await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
-    const result = await mutator(store);
-    if (opts?.skipSaveWhenResult?.(result)) {
-      restoreUnchangedSessionStoreCache(storePath, store);
+  return await runExclusiveSessionStoreWrite(
+    storePath,
+    async () => {
+      const store = loadMutableSessionStoreForWriter(storePath);
+      const result = await mutator(store);
+      if (opts?.skipSaveWhenResult?.(result)) {
+        restoreUnchangedSessionStoreCache(storePath, store);
+        return result;
+      }
+      await saveSessionStoreUnlocked(storePath, store, {
+        ...opts,
+        singleEntryPersistence: opts?.resolveSingleEntryPersistence?.(result) ?? undefined,
+      });
       return result;
-    }
-    await saveSessionStoreUnlocked(storePath, store, {
-      ...opts,
-      singleEntryPersistence: opts?.resolveSingleEntryPersistence?.(result) ?? undefined,
-    });
-    return result;
-  });
+    },
+    { reentrant: opts?.reentrant },
+  );
 }
 
 function cloneSessionEntryProjectionSnapshot(

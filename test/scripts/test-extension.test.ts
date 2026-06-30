@@ -479,7 +479,7 @@ describe("scripts/test-extension.mjs", () => {
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
-    expect(batch.testFileCount).toBe(1);
+    expect(batch.testFileCount).toBe(2);
     expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
   });
 
@@ -835,7 +835,12 @@ describe("scripts/test-extension.mjs", () => {
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+        vitestArgs: [
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+        ],
       },
     );
 
@@ -849,7 +854,12 @@ describe("scripts/test-extension.mjs", () => {
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: ["--exclude", "firecrawl/src/firecrawl-tools.test.ts"],
+        vitestArgs: [
+          "--exclude",
+          "firecrawl/src/firecrawl-tools.test.ts",
+          "--exclude",
+          "firecrawl/src/firecrawl-client.test.ts",
+        ],
       },
     );
 
@@ -864,7 +874,12 @@ describe("scripts/test-extension.mjs", () => {
       {
         allowEmptyAfterExclude: true,
         runGroup,
-        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+        vitestArgs: [
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
+          "--exclude",
+          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
+        ],
       },
     );
 

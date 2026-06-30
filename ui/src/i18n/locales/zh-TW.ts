@@ -1405,6 +1405,7 @@ export const zh_TW: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية（阿拉伯文）",
     it: "Italiano（義大利文）",
     tr: "Türkçe（Turkish）",
@@ -1415,6 +1416,7 @@ export const zh_TW: TranslationMap = {
     vi: "Tiếng Việt（越南文）",
     nl: "Nederlands（荷蘭文）",
     fa: "فارسی（波斯文）",
+    ru: "Русский (Russian)",
   },
   cron: {
     quickCreate: {

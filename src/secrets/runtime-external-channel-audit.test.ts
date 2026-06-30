@@ -416,7 +416,9 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             enabled: true,
             tts: {
               providers: {
-                openai: { apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY") },
+                openai: {
+                  apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY"),
+                },
               },
             },
           },
@@ -540,5 +542,37 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.zalo.accounts.disabled.webhookSecret",
     ]);
     expectMetadataBackedContractsWereUsed();
+  });
+
+  it("resolves Feishu top-level appSecret SecretRef for the implicit default account", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: ref("FEISHU_APP_SECRET"),
+            accounts: {
+              "resource-shrimp": {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "inline-secret-here", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: { FEISHU_APP_SECRET: "default-secret" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.appSecret": "default-secret",
+      "channels.feishu.accounts.resource-shrimp.appSecret": "inline-secret-here",
+    });
+    expect(snapshot.warnings).toStrictEqual([]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
   });
 });

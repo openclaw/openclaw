@@ -639,6 +639,15 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
   return detectedVersion;
 }
 
+export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
+    )
+  );
+}
+
 function buildCodexAppServerRuntimeIdentity(
   response: CodexInitializeResponse,
   serverVersion: string,
