@@ -144,6 +144,47 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
+function describeGoogleToolResultMediaPlaceholder(parts: readonly unknown[]): string | undefined {
+  let hasImage = false;
+  let hasAudio = false;
+
+  for (const part of parts) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const record = part as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    const mimeType =
+      typeof record.mimeType === "string"
+        ? record.mimeType
+        : typeof record.mime_type === "string"
+          ? record.mime_type
+          : typeof record.mediaType === "string"
+            ? record.mediaType
+            : typeof record.contentType === "string"
+              ? record.contentType
+              : "";
+    const normalizedMime = mimeType.toLowerCase();
+    if (type.includes("image") || normalizedMime.startsWith("image/")) {
+      hasImage = true;
+    }
+    if (type.includes("audio") || normalizedMime.startsWith("audio/")) {
+      hasAudio = true;
+    }
+  }
+
+  if (hasImage && hasAudio) {
+    return "(see attached media)";
+  }
+  if (hasAudio) {
+    return "(see attached audio)";
+  }
+  if (hasImage) {
+    return "(see attached image)";
+  }
+  return undefined;
+}
+
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
 function requiresToolCallId(modelId: string): boolean {
