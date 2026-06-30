@@ -155,6 +155,8 @@ export type GetReplyOptions = {
   }) => Promise<void> | void;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
+  reasoningPayloadsEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;
