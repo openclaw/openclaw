@@ -264,9 +264,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
-    defaultRuntime.log(
-      warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
-    );
+    // The RPC probe failed while the service is loaded and running. Only the case where
+    // the gateway process is up and owns the listening port (health.healthy === true,
+    // deep status only) is an unambiguous "not warm-up" signal, so it gets recovery
+    // guidance. Every health.healthy === false sub-case — a just-started gateway that has
+    // not bound the port yet, a foreign process holding the port, or a stale gateway PID —
+    // is either a normal warm-up window or is already covered by the dedicated stale-PID /
+    // port-not-listening / port-conflict diagnostics below, so it keeps the warm-up hint
+    // (as does unknown health from shallow status). A wedged gateway that owns the port is
+    // reported as healthy === true, so it is steered by the first branch.
+    if (status.health?.healthy === true) {
+      defaultRuntime.log(
+        warnText(
+          "Gateway process is running and owns the gateway port, so this is not a warm-up delay. Check the probe credentials/config, or restart the gateway and inspect its logs if it stays unresponsive.",
+        ),
+      );
+    } else {
+      defaultRuntime.log(
+        warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
+      );
+    }
   }
   if (rpc) {
     const probeLabel = formatProbeKindLabel(rpc.kind);
