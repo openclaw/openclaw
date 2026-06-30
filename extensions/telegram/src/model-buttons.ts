@@ -2,21 +2,21 @@
  * Telegram inline button utilities for model selection.
  *
  * Callback data patterns (max 64 bytes for Telegram):
- * - mdl_prov              - show providers list
- * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
- * - mdl_sel_{provider/id} - select model (standard)
- * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
- * - mdl_back              - back to providers list
+ * - mdl_prov                    - show providers list
+ * - mdl_list_{prov}_{pg}        - show models for provider (page N, 1-indexed)
+ * - mdl_sel_idx_{prov}_{p}_{i}  - select model by page+index (always under limit)
+ * - mdl_sel_{provider/id}       - select model (legacy standard, kept for backward compat)
+ * - mdl_sel/{model}             - select model (legacy compact, kept for backward compat)
+ * - mdl_back                    - back to providers list
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider?: string; model: string }
+  | { type: "select"; provider?: string; model?: string; page?: number; index?: number }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -45,6 +45,8 @@ const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
   list: "mdl_list_",
+  selectIdx: "mdl_sel_idx_",
+  // Legacy prefixes — kept for parsing backward compatibility
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
 } as const;
@@ -73,7 +75,18 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (compact fallback)
+  // mdl_sel_idx_{provider}_{page}_{index}  (current index-based format)
+  const idxSelMatch = trimmed.match(/^mdl_sel_idx_([a-z0-9_.-]+)_(\d+)_(\d+)$/i);
+  if (idxSelMatch) {
+    const [, provider, pageStr, indexStr] = idxSelMatch;
+    const page = parseStrictPositiveInteger(pageStr);
+    const index = parseStrictPositiveInteger(indexStr);
+    if (provider && page !== undefined && index !== undefined) {
+      return { type: "select", provider, page, index };
+    }
+  }
+
+  // mdl_sel/{model} (legacy compact fallback — backward compat)
   const compactSelMatch = trimmed.match(/^mdl_sel\/(.+)$/);
   if (compactSelMatch) {
     const modelRef = compactSelMatch[1];
@@ -85,7 +98,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel_{provider/model}
+  // mdl_sel_{provider/model} (legacy standard — backward compat)
   const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
   if (selMatch) {
     const modelRef = selMatch[1];
@@ -106,14 +119,13 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 
 export function buildModelSelectionCallbackData(params: {
   provider: string;
-  model: string;
-}): string | null {
-  const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (fitsTelegramCallbackData(fullCallbackData)) {
-    return fullCallbackData;
-  }
-  const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  page: number;
+  index: number;
+}): string {
+  // Index-based callback data — always fits within Telegram's 64-byte limit
+  // since the format is `mdl_sel_idx_{provider}_{page}_{index}` which caps at
+  // ~40 bytes even for the longest provider names.
+  return `${CALLBACK_PREFIX.selectIdx}${params.provider}_${params.page}_${params.index}`;
 }
 
 export function resolveModelSelection(params: {
@@ -121,26 +133,55 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
+  // Index-based selection: resolve model by page + index from the provider's model list.
+  if (
+    params.callback.page !== undefined &&
+    params.callback.index !== undefined &&
+    params.callback.provider
+  ) {
+    const modelSet = params.byProvider.get(params.callback.provider);
+    if (modelSet && modelSet.size > 0) {
+      const sortedModels = [...modelSet].toSorted((left, right) => left.localeCompare(right));
+      const pageSize = getModelsPageSize();
+      // Index is 1-based in callback data, convert to 0-based for array lookup.
+      const globalIndex = (params.callback.page - 1) * pageSize + (params.callback.index - 1);
+      const model = sortedModels[globalIndex];
+      if (model) {
+        return {
+          kind: "resolved",
+          provider: params.callback.provider,
+          model,
+        };
+      }
+    }
+    return {
+      kind: "ambiguous",
+      model: `${params.callback.provider} page=${params.callback.page} idx=${params.callback.index}`,
+      matchingProviders: [],
+    };
+  }
+
+  // Legacy name-based selection (backward compat)
   if (params.callback.provider) {
     return {
       kind: "resolved",
       provider: params.callback.provider,
-      model: params.callback.model,
+      model: params.callback.model!,
     };
   }
   const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
+    params.byProvider.get(id)?.has(params.callback.model!),
   );
   if (matchingProviders.length === 1) {
     return {
       kind: "resolved",
       provider: matchingProviders[0],
-      model: params.callback.model,
+      model: params.callback.model!,
     };
   }
   return {
     kind: "ambiguous",
-    model: params.callback.model,
+    model: params.callback.model!,
     matchingProviders,
   };
 }
@@ -210,12 +251,14 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
-    if (!callbackData) {
-      continue;
-    }
+  for (let idx = 0; idx < pageModels.length; idx++) {
+    const model = pageModels[idx];
+    // Use 1-based index since parseStrictPositiveInteger rejects 0.
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      page: currentPage,
+      index: idx + 1,
+    });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;

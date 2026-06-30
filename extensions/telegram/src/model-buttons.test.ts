@@ -20,11 +20,23 @@ describe("parseModelCallbackData", () => {
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
+      // New index-based select format (1-based index in callback data)
+      ["mdl_sel_idx_anthropic_1_1", { type: "select", provider: "anthropic", page: 1, index: 1 }],
+      [
+        "mdl_sel_idx_amazon-bedrock_3_6",
+        { type: "select", provider: "amazon-bedrock", page: 3, index: 6 },
+      ],
+      [
+        "mdl_sel_idx_openrouter_99_8",
+        { type: "select", provider: "openrouter", page: 99, index: 8 },
+      ],
+      // Legacy standard format (backward compat)
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
       ],
       ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
+      // Legacy compact format (backward compat)
       [
         "mdl_sel/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         { type: "select", model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0" },
@@ -50,6 +62,8 @@ describe("parseModelCallbackData", () => {
       "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
+      "mdl_sel_idx_", // incomplete index format
+      "mdl_sel_idx_only", // no separators
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -68,6 +82,41 @@ describe("resolveModelSelection", () => {
       ]),
     });
     expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-4.1" });
+  });
+
+  it("resolves index-based selection by looking up the model in the provider's list", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, index: 2 },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["gpt-4.1", "gpt-5.4", "gpt-5.3-codex-spark"])],
+        ["anthropic", new Set(["claude-sonnet-4-5"])],
+      ]),
+    });
+    // Sorted: gpt-4.1 (idx 0), gpt-5.3-codex-spark (idx 1), gpt-5.4 (idx 2)
+    // Page 1, index 2 (1-based) = global idx 1 = gpt-5.3-codex-spark
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-5.3-codex-spark" });
+  });
+
+  it("resolves index across page boundaries", () => {
+    const models = Array.from({ length: 20 }, (_, i) => `model-${i}`);
+    // Page 2, index 2 (1-based) → global index = (2-1)*8 + (2-1) = 9
+    // localeCompare sort: model-17 is the 10th element (index 9)
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 2, index: 2 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(models)]]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "model-17" });
+  });
+
+  it("returns ambiguous when index is out of bounds", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 9, index: 1 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result.kind).toBe("ambiguous");
   });
 
   it("resolves compact callbacks when exactly one provider matches", () => {
@@ -114,19 +163,29 @@ describe("resolveModelSelection", () => {
 });
 
 describe("buildModelSelectionCallbackData", () => {
-  it("uses standard callback when under limit and compact callback when needed", () => {
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
-      "mdl_sel_openai/gpt-4.1",
+  it("returns index-based callback data in expected format", () => {
+    expect(buildModelSelectionCallbackData({ provider: "openai", page: 1, index: 1 })).toBe(
+      "mdl_sel_idx_openai_1_1",
     );
-    const longModel = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
-    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", model: longModel })).toBe(
-      `mdl_sel/${longModel}`,
+    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", page: 3, index: 6 })).toBe(
+      "mdl_sel_idx_amazon-bedrock_3_6",
+    );
+    expect(buildModelSelectionCallbackData({ provider: "openrouter", page: 12, index: 8 })).toBe(
+      "mdl_sel_idx_openrouter_12_8",
     );
   });
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
-    const tooLongModel = "x".repeat(80);
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  it("always returns a valid callback data under 64 bytes regardless of model name length", () => {
+    // Even with the longest provider name and high page/index values, the
+    // callback data stays well within Telegram's 64-byte limit.
+    const cb = buildModelSelectionCallbackData({
+      provider: "amazon-bedrock",
+      page: 99,
+      index: 7,
+    });
+    expect(Buffer.byteLength(cb, "utf8")).toBeLessThanOrEqual(64);
+    // The format is consistent: mdl_sel_idx_{provider}_{page}_{index}
+    expect(cb).toMatch(/^mdl_sel_idx_/);
   });
 });
 
@@ -225,8 +284,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
+      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_1");
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
+      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_2");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
   });
@@ -247,10 +307,9 @@ describe("buildModelsKeyboard", () => {
     expect(result).toHaveLength(3);
     expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
     expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
-    // callback_data still uses the raw model ID, not the display name
-    expect(result[0]?.[0]?.callback_data).toBe(
-      "mdl_sel_nexos/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    );
+    // callback_data uses index-based format
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_1");
+    expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_2");
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {
@@ -397,7 +456,7 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
-  it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
+  it("uses index-based callback data regardless of model name length", () => {
     const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const result = buildModelsKeyboard({
       provider: "amazon-bedrock",
@@ -406,7 +465,8 @@ describe("buildModelsKeyboard", () => {
       totalPages: 1,
     });
 
-    expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel/${model}`);
+    // Index-based format always used, regardless of model name length
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_amazon-bedrock_1_1");
   });
 });
 
@@ -495,7 +555,9 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("renders all models regardless of name length (no silent drops)", () => {
+    // This test verifies the fix for Issue #98221: previously, models with
+    // callback_data > 64 bytes were silently dropped.
     const models = [
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
@@ -508,10 +570,11 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // All 3 models should be rendered (3 model rows + back)
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[1]?.[0]?.text).toBe("…ely-exceeds-the-sixty-four-byte-limit");
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
   });
 });
