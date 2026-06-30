@@ -12,8 +12,8 @@ import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extens
 import type { AgentMessage } from "../runtime/index.js";
 import type { ContextEvent, ExtensionAPI } from "../sessions/index.js";
 import { FOLDED_MARKER } from "./accordion-seq-walk.js";
-import { captureConversationTurns } from "./turns-capture.js";
-import { setBoxState, upsertBox, upsertSpan } from "./turns-store.js";
+import { buildCapturedTurns } from "./turns-capture.js";
+import { appendTurns, setBoxState, upsertBox, upsertSpan } from "./turns-store.js";
 
 const AGENT = "main";
 const SESSION_KEY = "agent:main:main";
@@ -98,7 +98,15 @@ describe("accordion context extension (02-02 collapse/expand)", () => {
   const messages = [user(1, "voice question"), assistant("r1", "voice answer")];
 
   function seedBox(state: "live" | "collapsed"): void {
-    captureConversationTurns({ agentId: AGENT, sessionKey: SESSION_KEY, messages }); // turns seq 1,2
+    // Seed the turns directly rather than via captureConversationTurns: since Phase 3,
+    // capture also runs auto-segmentation, which would create its own competing spans/boxes
+    // over these seqs. This test pins one explicit span→box to prove the context-fold path
+    // in isolation, so it must be the only span covering seq 1,2.
+    appendTurns({
+      agentId: AGENT,
+      sessionKey: SESSION_KEY,
+      turns: buildCapturedTurns(SESSION_KEY, messages),
+    }); // turns seq 1,2
     upsertSpan({
       agentId: AGENT,
       span: { spanId: "s1", sessionKey: SESSION_KEY, startSeq: 1, endSeq: 2, boxId: "box-voice" },
