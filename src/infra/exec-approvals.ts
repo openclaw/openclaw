@@ -1835,7 +1835,13 @@ export function resolveExecApprovalUnavailableDecisions(params?: {
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
 }
 
-/** Returns the user-facing reason why Allow Always is not available, or null if it is. */
+/**
+ * Returns the user-facing reason why Allow Always is not available.
+ *
+ * When ask=always → policy requires every-time approval.
+ * When allowAlwaysPersistenceKind=one-shot → command cannot be saved.
+ * Otherwise safe-defaults to the policy message. (#97069)
+ */
 export function getAllowAlwaysUnavailableReason(params?: {
   ask?: string | null;
   allowAlwaysPersistenceKind?: "one-shot" | null;
