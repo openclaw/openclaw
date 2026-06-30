@@ -28,13 +28,6 @@ export type ResurfacingSpanLike = {
 /** Minimal box shape. */
 export type ResurfacingBoxLike = { box_id: string };
 
-/**
- * One entity reappearance: the box that owns the entity (because the entity was extracted from
- * one of its spans) and a seq at which that entity occurs anywhere in history. Resolved by the
- * harness from memory_entities + memory_associations so this module stays store-agnostic.
- */
-export type EntityOccurrence = { boxId: string; seq: number };
-
 export type ResurfacingReference = {
   /** Per box: sorted non-noise seqs at which the box is still needed (own topic OR owned entity). */
   neededSeqsByBox: Map<string, number[]>;
@@ -52,7 +45,8 @@ export function buildResurfacingReference(input: {
   turns: readonly ResurfacingTurnLike[];
   spans: readonly ResurfacingSpanLike[];
   boxes: readonly ResurfacingBoxLike[];
-  entities?: readonly EntityOccurrence[];
+  /** Per box: seqs at which an owned entity reappears anywhere in history (cross-box aware). */
+  entitySeqsByBox?: ReadonlyMap<string, ReadonlySet<number>>;
 }): ResurfacingReference {
   const nonNoiseSeqs = new Set<number>();
   for (const turn of input.turns) {
@@ -92,11 +86,12 @@ export function buildResurfacingReference(input: {
 
   // Entity reappearance: an owned entity surfacing later (even under a different topic/box) keeps
   // the owning box "needed". Only count occurrences at real non-noise turns.
-  for (const occurrence of input.entities ?? []) {
-    if (!nonNoiseSeqs.has(occurrence.seq)) {
-      continue;
+  for (const [boxId, seqs] of input.entitySeqsByBox ?? new Map<string, ReadonlySet<number>>()) {
+    for (const seq of seqs) {
+      if (nonNoiseSeqs.has(seq)) {
+        ensure(neededByBox, boxId).add(seq);
+      }
     }
-    ensure(neededByBox, occurrence.boxId).add(occurrence.seq);
   }
 
   const neededSeqsByBox = new Map<string, number[]>();

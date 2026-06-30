@@ -111,7 +111,30 @@ describe("runBackfillSeed", () => {
     const second = runBackfillSeed({ agentId: AGENT_ID, env: env(stateDir), transcriptsDir });
     expect(second.inserted).toBe(0);
     expect(second.filesSkipped).toBe(2);
+    expect(second.warnings).toEqual([]);
     const after = getTurns({ agentId: AGENT_ID, sessionKey: SESSION_KEY, env: env(stateDir) });
     expect(after).toHaveLength(3);
+  });
+
+  it("warns when a later run seeds content older than already-backfilled history", () => {
+    const transcriptsDir = tempDir("openclaw-seed-order-src-");
+    const stateDir = tempDir("openclaw-seed-order-state-");
+    // First run seeds a newer transcript; no warning.
+    writeTranscript(transcriptsDir, "newer.jsonl", [
+      headerLine("newer"),
+      messageLine({ id: "n1", role: "user", text: "newer", msgTs: 500 }),
+    ]);
+    const first = runBackfillSeed({ agentId: AGENT_ID, env: env(stateDir), transcriptsDir });
+    expect(first.warnings).toEqual([]);
+
+    // An OLDER transcript dropped in later appends after existing turns (higher seqs) — surfaced.
+    writeTranscript(transcriptsDir, "older.jsonl", [
+      headerLine("older"),
+      messageLine({ id: "o1", role: "user", text: "older", msgTs: 100 }),
+    ]);
+    const second = runBackfillSeed({ agentId: AGENT_ID, env: env(stateDir), transcriptsDir });
+    expect(second.inserted).toBe(1);
+    expect(second.warnings.length).toBeGreaterThan(0);
+    expect(second.warnings[0]).toContain("older");
   });
 });

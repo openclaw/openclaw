@@ -10,20 +10,18 @@
  * Dreaming is OPTIONAL/secondary (A2) and intentionally NOT wired here: the memory-core
  * dreaming sweep + retrieval indexing (RETR-01) lives in the `extensions/memory-core` plugin,
  * and core code must not import plugin internals (root AGENTS "Core/tests: no deep plugin
- * internals"). The organize cursor still carries a `dreamed` flag so that step can be driven
- * independently from the memory-core tier without re-seeding; here it stays false. Core
- * segmentation + association alone makes history immediately navigable, which is all SC1 needs.
+ * internals"). When that tier lands it owns its own checkpoint; this driver carries no flag
+ * for it. Core segmentation + association alone makes history immediately navigable (SC1).
  */
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { associateConversationEntities } from "./associate-entities.js";
 import { associateSegmentationTopics } from "./associate-topics.js";
-import { readOrganizeCursor, writeOrganizeCursor } from "./backfill-cursor.js";
+import { withEnv, writeOrganizeCursor } from "./backfill-cursor.js";
 import { segmentConversationTurns } from "./segment-spans.js";
 
 export type BackfillOrganizeResult = {
   sessionKey: string;
   segmented: boolean;
-  dreamed: boolean;
   spans: number;
   boxes: number;
 };
@@ -38,28 +36,17 @@ export function runBackfillOrganize(options: {
 }): BackfillOrganizeResult {
   const agentId = normalizeAgentId(options.agentId);
   const sessionKey = `agent:${agentId}:main`;
-  const env = options.env;
-  const producerOpts = { agentId, sessionKey, ...(env ? { env } : {}) };
+  const producerOpts = { agentId, sessionKey, ...withEnv(options.env) };
 
   const segmentation = segmentConversationTurns(producerOpts);
   associateSegmentationTopics({ ...producerOpts, segmentation });
   associateConversationEntities({ ...producerOpts, segmentation });
 
-  // Dreaming stays where the cursor left it (false until the memory-core tier drives it);
-  // segmentation success never resets the optional dreaming gate.
-  const dreamed =
-    readOrganizeCursor({ agentId, sessionKey, ...(env ? { env } : {}) })?.dreamed ?? false;
-  writeOrganizeCursor({
-    agentId,
-    sessionKey,
-    ...(env ? { env } : {}),
-    value: { segmented: true, dreamed },
-  });
+  writeOrganizeCursor({ agentId, sessionKey, ...withEnv(options.env), value: { segmented: true } });
 
   return {
     sessionKey,
     segmented: true,
-    dreamed,
     spans: segmentation.spans.length,
     boxes: segmentation.boxes.length,
   };

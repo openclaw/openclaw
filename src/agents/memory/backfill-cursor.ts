@@ -4,36 +4,46 @@
  * `memory-backfill` scope — NO sidecar/JSONL file, no schema bump (root AGENTS storage
  * rule: SQLite-first runtime state). The cursor is what makes an interrupted run
  * resumable: seed skips already-finished transcript files; organize skips the
- * already-run segmentation/dreaming step.
+ * already-run segmentation step.
  */
 import {
   readSqliteAgentCacheEntry,
   writeSqliteAgentCacheEntry,
 } from "../cache/agent-cache-store.sqlite.js";
 
+/**
+ * Spread-friendly optional `env`. Under exactOptionalPropertyTypes we must never pass
+ * `env: undefined`, so every per-agent DB call sites omits the key when env is absent;
+ * this is the single shared spelling of that spread.
+ */
+export function withEnv(env?: NodeJS.ProcessEnv): { env?: NodeJS.ProcessEnv } {
+  return env ? { env } : {};
+}
+
 /** KV scope shared by both stages; keeps backfill checkpoints isolated from other caches. */
 const BACKFILL_SCOPE = "memory-backfill";
 
 /**
- * Seed progress: the transcript file basenames already replayed into `turns`, plus the
- * last idempotency key appended. `completedFiles` lets a resumed run skip finished files;
- * re-appending is harmless anyway (idempotency_key dedup), so this is purely an optimization
- * and a progress marker — never a correctness gate.
+ * Seed progress: the transcript file basenames already replayed into `turns`, the last
+ * idempotency key appended, and the highest message-order key seeded so far. `completedFiles`
+ * lets a resumed run skip finished files; re-appending is harmless anyway (idempotency_key
+ * dedup), so it is purely an optimization. `lastSeededTs` lets a later run detect when it is
+ * about to append content OLDER than what was already seeded (out-of-order seq assignment).
  */
 export type SeedCursor = {
   completedFiles: string[];
   lastIdempotencyKey: string | null;
+  lastSeededTs: number | null;
 };
 
 /**
  * Organize progress per session: `segmented` once core segmentation + association has run
- * (this is what satisfies SC1 "searchable"); `dreamed` is the independent gate for the
- * OPTIONAL memory-core dreaming sweep / retrieval indexing (RETR-01), so it can be
- * skipped or resumed without forcing a re-seed.
+ * (this is what satisfies SC1 "searchable"). The optional memory-core dreaming sweep /
+ * retrieval indexing (RETR-01) is not wired here, so the cursor carries no flag for it; the
+ * dreaming tier will own its own checkpoint when it lands.
  */
 export type OrganizeCursor = {
   segmented: boolean;
-  dreamed: boolean;
 };
 
 type CursorOptions = {
@@ -50,7 +60,7 @@ function scopeOptions(options: CursorOptions): {
   return {
     agentId: options.agentId,
     scope: BACKFILL_SCOPE,
-    ...(options.env ? { env: options.env } : {}),
+    ...withEnv(options.env),
   };
 }
 

@@ -37,7 +37,7 @@ describe("buildResurfacingReference", () => {
       turns: nonNoiseTurns(10),
       spans: [span("box-B", "beta", 3, 4)],
       boxes: [{ box_id: "box-B" }],
-      entities: [{ boxId: "box-B", seq: 9 }],
+      entitySeqsByBox: new Map([["box-B", new Set([9])]]),
     });
     expect(reference.ownedSeqsByBox.get("box-B")).toEqual([3, 4]); // owns only its turns
     expect(reference.neededSeqsByBox.get("box-B")).toEqual([3, 4, 9]); // but needed at 9 too
@@ -61,7 +61,7 @@ describe("scoreCandidate", () => {
       turns: nonNoiseTurns(10),
       spans: [span("box-1", "alpha", 1, 2), span("box-2", "beta", 3, 4)],
       boxes: [{ box_id: "box-1" }, { box_id: "box-2" }],
-      entities: [{ boxId: "box-2", seq: 9 }],
+      entitySeqsByBox: new Map([["box-2", new Set([9])]]),
     });
     // Both collapse at seq 6 and hide exactly 2 owned turns → identical savings.
     const safe = scoreCandidate({ events: [{ boxId: "box-1", collapseSeq: 6 }] }, reference);

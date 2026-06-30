@@ -53,7 +53,6 @@ describe("runBackfillOrganize", () => {
     const result = runBackfillOrganize({ agentId: AGENT_ID, env: env(stateDir) });
     expect(result.sessionKey).toBe(SESSION_KEY);
     expect(result.segmented).toBe(true);
-    expect(result.dreamed).toBe(false); // dreaming/RETR-01 deferred to the memory-core tier
 
     const dbOpts = { agentId: AGENT_ID, sessionKey: SESSION_KEY, env: env(stateDir) };
     expect(listSpans(dbOpts).length).toBeGreaterThan(0);
@@ -63,10 +62,7 @@ describe("runBackfillOrganize", () => {
 
     expect(
       readOrganizeCursor({ agentId: AGENT_ID, sessionKey: SESSION_KEY, env: env(stateDir) }),
-    ).toEqual({
-      segmented: true,
-      dreamed: false,
-    });
+    ).toEqual({ segmented: true });
   });
 
   it("is idempotent: re-running organize adds no duplicate spans/boxes", () => {

@@ -20,8 +20,9 @@ import {
   type CollapseParams,
 } from "./active-tag-set.js";
 import { listMemoryAssociations } from "./associative-store.js";
+import { withEnv } from "./backfill-cursor.js";
 import { scoreCandidate, type CandidateScore, type CollapseEvent } from "./tuning-objective.js";
-import { buildResurfacingReference, type EntityOccurrence } from "./tuning-resurfacing.js";
+import { buildResurfacingReference } from "./tuning-resurfacing.js";
 import { getTurns, listBoxes, listSpans } from "./turns-store.js";
 
 export type CandidateSpec = { name: string; params: CollapseParams };
@@ -162,11 +163,15 @@ function replayCollapseSeqs(rows: StoreRows, params: CollapseParams): Map<string
   return collapseSeqByBox;
 }
 
-/** Resolve entity reappearances per owning box from memory_associations (cross-box aware). */
-function resolveEntityOccurrences(
+/**
+ * Resolve entity reappearances into per-box seq sets from memory_associations (cross-box aware):
+ * each entity's occurrence seqs are folded into every box that owns it, directly into per-box
+ * sets — no intermediate (boxId, seq) cartesian array (buildResurfacingReference consumes the map).
+ */
+function resolveEntityReappearances(
   spans: CollapseInput["spans"],
   associations: ReturnType<typeof listMemoryAssociations>,
-): EntityOccurrence[] {
+): Map<string, Set<number>> {
   const spanById = new Map(
     spans.map((span) => [(span as { span_id?: string }).span_id ?? "", span]),
   );
@@ -189,16 +194,21 @@ function resolveEntityOccurrences(
     boxes.add(span.box_id);
     boxesByEntity.set(assoc.entity_id, boxes);
   }
-  const occurrences: EntityOccurrence[] = [];
+  const seqsByBox = new Map<string, Set<number>>();
   for (const [entityId, boxes] of boxesByEntity) {
-    const seqs = seqsByEntity.get(entityId) ?? new Set<number>();
+    const seqs = seqsByEntity.get(entityId);
+    if (!seqs) {
+      continue;
+    }
     for (const boxId of boxes) {
+      const target = seqsByBox.get(boxId) ?? new Set<number>();
       for (const seq of seqs) {
-        occurrences.push({ boxId, seq });
+        target.add(seq);
       }
+      seqsByBox.set(boxId, target);
     }
   }
-  return occurrences;
+  return seqsByBox;
 }
 
 function eventsFromMap(collapseSeqByBox: Map<string, number>): CollapseEvent[] {
@@ -228,7 +238,7 @@ export function runTuningHarness(options: {
 }): TuningHarnessResult {
   const agentId = normalizeAgentId(options.agentId);
   const sessionKey = `agent:${agentId}:main`;
-  const dbOpts = { agentId, sessionKey, ...(options.env ? { env: options.env } : {}) };
+  const dbOpts = { agentId, sessionKey, ...withEnv(options.env) };
 
   const turns = getTurns(dbOpts);
   const spans = listSpans(dbOpts);
@@ -239,7 +249,7 @@ export function runTuningHarness(options: {
     turns,
     spans,
     boxes,
-    entities: resolveEntityOccurrences(spans, associations),
+    entitySeqsByBox: resolveEntityReappearances(spans, associations),
   });
 
   const candidates = options.candidates ?? defaultCandidates();

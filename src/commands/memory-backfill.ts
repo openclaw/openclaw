@@ -8,6 +8,7 @@
  * only via this explicit CLI entry — never wired into any automatic/background flow, so the
  * heavy batch stays off the hot path (D-01/D-04).
  */
+import { withEnv } from "../agents/memory/backfill-cursor.js";
 import { runBackfillOrganize } from "../agents/memory/backfill-organize.js";
 import { runBackfillSeed } from "../agents/memory/backfill-seed.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
@@ -61,17 +62,20 @@ export async function runMemoryBackfillCommand(
   // Stage 1: seed (resumes from its file cursor).
   const seed = runBackfillSeed({
     agentId,
-    ...(env ? { env } : {}),
+    ...withEnv(env),
     ...(options.transcriptsDir ? { transcriptsDir: options.transcriptsDir } : {}),
   });
   if (!options.json) {
     runtime.log(
       `Seed: ${seed.filesProcessed} file(s) processed, ${seed.filesSkipped} skipped, ${seed.inserted} new turn(s).`,
     );
+    for (const warning of seed.warnings) {
+      runtime.log(`Warning: ${warning}`);
+    }
   }
 
   // Stage 2: organize (resumes from its own cursor; idempotent upserts).
-  const organize = runBackfillOrganize({ agentId, ...(env ? { env } : {}) });
+  const organize = runBackfillOrganize({ agentId, ...withEnv(env) });
   if (!options.json) {
     runtime.log(`Organize: ${organize.boxes} box(es), ${organize.spans} span(s).`);
     runtime.log("Backfill complete.");
