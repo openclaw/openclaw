@@ -421,4 +421,78 @@ describe("toWikiPageSummary", () => {
       },
     ]);
   });
+
+  // FIX #97945: extractWikiLinks should skip fenced code blocks and inline code spans
+  it("does not extract wikilinks from fenced code blocks (fix #97945)", () => {
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/entities/code-sample.md",
+      relativePath: "entities/code-sample.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.code-sample",
+          title: "Code Sample",
+        },
+        body: [
+          "# Code Sample",
+          "",
+          "A real [[target-page]] link in prose.",
+          "",
+          "```scala",
+          "val userId: String, request: Request[A]",
+          "val result: Future[Option[User]]",
+          "```",
+          "",
+          "```bash",
+          "if [[ \"$name\" == \"Alice\" ]]; then",
+          "  echo \"hello\"",
+          "fi",
+          "```",
+          "",
+          "Also an `[[inline-code-link]]` span.",
+        ].join("\n"),
+      }),
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    // Only the real prose wikilink should be extracted
+    expect(summary.linkTargets).toContain("target-page");
+    // Fenced code block contents must not produce link targets
+    expect(summary.linkTargets).not.toContain("User");
+    expect(summary.linkTargets).not.toContain("request");
+    expect(summary.linkTargets.filter((t) => t.includes("Alice")).length).toBe(0);
+    // Inline code span contents must not produce link targets
+    expect(summary.linkTargets).not.toContain("inline-code-link");
+  });
+
+  // FIX #97945: regression — prose wikilinks still work after code filtering
+  it("still extracts prose wikilinks after code filtering (fix #97945 regression)", () => {
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/entities/regression.md",
+      relativePath: "entities/regression.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.regression",
+          title: "Regression Test",
+        },
+        body: [
+          "# Regression Test",
+          "",
+          "Links to [[alpha]] and [[beta-page]] in prose.",
+          "",
+          "A [markdown link](./gamma.md) too.",
+        ].join("\n"),
+      }),
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    expect(summary.linkTargets).toContain("alpha");
+    expect(summary.linkTargets).toContain("beta-page");
+    expect(summary.linkTargets).toContain("entities/gamma.md");
+  });
 });

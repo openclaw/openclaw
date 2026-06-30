@@ -112,6 +112,8 @@ export type WikiPageSummary = {
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
+const FENCED_CODE_PATTERN = /(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g;
+const INLINE_CODE_PATTERN = /`[^`\n]+`/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
@@ -387,7 +389,10 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 }
 
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = markdown
+    .replace(FENCED_CODE_PATTERN, "\n")
+    .replace(INLINE_CODE_PATTERN, "``")
+    .replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
