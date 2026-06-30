@@ -116,7 +116,12 @@ function buildTlsResult(
 function isOpenClawGeneratedCnOnlyCert(certPem: string): boolean {
   try {
     const x509 = new X509Certificate(certPem);
-    return x509.subject.includes("CN=openclaw-gateway") && !x509.subjectAltName;
+    // Match CN field exactly: the subject must contain
+    // CN=openclaw-gateway as a complete field value, not merely
+    // contain the substring (e.g. "CN=my-openclaw-gateway-proxy"
+    // should NOT match).
+    const cnMatch = x509.subject.match(/(?:^|[/,\s])CN=([^/,\s]+)/);
+    return cnMatch?.[1] === "openclaw-gateway" && !x509.subjectAltName;
   } catch {
     return false;
   }
