@@ -223,7 +223,7 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 
 `braveisrael, cashtronics, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper + kycbot deleted; a `main` agent dir exists with no running container)
 
-### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.27.1` (full per-user stack + deterministic memory recall: `app_profile` injection #68 + first-turn #71 + `load_skill` #74 + app-prompt slim v2026.06.20.3 + **memory-recall injection #90**, 2026-06-27; rollback `v2026.06.20.3` via `docker.env.bak.pre-v2026.06.27.1`)
+### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.30.1` (full per-user stack + deterministic memory recall: `app_profile` injection #68 + first-turn #71 + `load_skill` #74 + app-prompt slim v2026.06.20.3 + **memory-recall injection #90**, 2026-06-30; rollback `v2026.06.20.3` via `docker.env.bak.pre-v2026.06.30.1`). ⚠️ `v2026.06.27.1` was a DEFECTIVE build (corrupted/inconsistent dist → gateway `chat.send` rejected the app's `appUserId` param → app chat 502, Telegram unaffected); rolled back, re-built clean with `docker build --no-cache` → `v2026.06.30.1` (same source `999c4aee9`). **Lesson: build-and-push.sh layer cache can emit a bad image from good source — smoke MUST include an `appUserId` payload, and verify a clean rebuild on any unexplained chat.send rejection.**
 
 `agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 
