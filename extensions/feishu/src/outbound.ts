@@ -337,6 +337,11 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
+  // Preserve a rendered-command marker in channelData so the downstream
+  // comment-target branch in sendPayload can detect that a command was
+  // rendered even after core renderPresentationForDelivery strips the
+  // presentation field before calling sendPayload.
+  const hasCmd = hasRenderedCommandAction(presentation?.blocks);
   return {
     ...payload,
     text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
@@ -345,6 +350,7 @@ function renderFeishuPresentationPayload({
       feishu: {
         ...existingFeishuData,
         card,
+        ...(hasCmd ? { hasRenderedCommandAction: true } : {}),
       },
     },
   };
@@ -516,7 +522,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text: ctx.payload.text,
         presentation: normalizedPresentation,
       });
-      const hasCmd = hasRenderedCommandAction(normalizedPresentation?.blocks);
+      const hasCmd =
+        hasRenderedCommandAction(normalizedPresentation?.blocks) ||
+        // When core delivery strips presentation via renderPresentationForDelivery
+        // before calling sendPayload, the blocks check above returns false.  Fall
+        // back to the marker set by renderFeishuPresentationPayload.
+        Boolean(ctx.payload.channelData?.feishu?.hasRenderedCommandAction);
       const text = hasCmd
         ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
         : presentationFallbackText;
