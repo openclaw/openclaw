@@ -134,61 +134,66 @@ class CameraCaptureManager(
       val selector = resolveCameraSelector(provider, facing, deviceId)
 
       provider.unbindAll()
-      // Bind only the still capture use case; CameraX owns camera open/close through the lifecycle owner.
-      provider.bindToLifecycle(owner, selector, capture)
-
-      val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
-      val decoded =
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-          ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
-      val rotated = rotateBitmapByExif(decoded, orientation)
-      val scaled =
-        if (maxWidth > 0 && rotated.width > maxWidth) {
-          val h =
-            (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
-              .toInt()
-              .coerceAtLeast(1)
-          val s = rotated.scale(maxWidth, h)
-          if (s !== rotated) rotated.recycle()
-          s
-        } else {
-          rotated
-        }
-
       try {
-        val maxPayloadBytes = 5 * 1024 * 1024
-        // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
-        val maxEncodedBytes = (maxPayloadBytes / 4) * 3
-        val result =
-          JpegSizeLimiter.compressToLimit(
-            initialWidth = scaled.width,
-            initialHeight = scaled.height,
-            startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
-            maxBytes = maxEncodedBytes,
-            encode = { width, height, q ->
-              val bitmap =
-                if (width == scaled.width && height == scaled.height) {
-                  scaled
-                } else {
-                  scaled.scale(width, height)
+        // Bind only the still capture use case for this invocation, then release
+        // it immediately so the camera is not left active after a one-shot snap.
+        provider.bindToLifecycle(owner, selector, capture)
+
+        val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
+        val decoded =
+          BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
+        val rotated = rotateBitmapByExif(decoded, orientation)
+        val scaled =
+          if (maxWidth > 0 && rotated.width > maxWidth) {
+            val h =
+              (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
+                .toInt()
+                .coerceAtLeast(1)
+            val s = rotated.scale(maxWidth, h)
+            if (s !== rotated) rotated.recycle()
+            s
+          } else {
+            rotated
+          }
+
+        try {
+          val maxPayloadBytes = 5 * 1024 * 1024
+          // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
+          val maxEncodedBytes = (maxPayloadBytes / 4) * 3
+          val result =
+            JpegSizeLimiter.compressToLimit(
+              initialWidth = scaled.width,
+              initialHeight = scaled.height,
+              startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
+              maxBytes = maxEncodedBytes,
+              encode = { width, height, q ->
+                val bitmap =
+                  if (width == scaled.width && height == scaled.height) {
+                    scaled
+                  } else {
+                    scaled.scale(width, height)
+                  }
+                val out = ByteArrayOutputStream()
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
+                  if (bitmap !== scaled) bitmap.recycle()
+                  throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
                 }
-              val out = ByteArrayOutputStream()
-              if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
-                if (bitmap !== scaled) bitmap.recycle()
-                throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
-              }
-              if (bitmap !== scaled) {
-                bitmap.recycle()
-              }
-              out.toByteArray()
-            },
+                if (bitmap !== scaled) {
+                  bitmap.recycle()
+                }
+                out.toByteArray()
+              },
+            )
+          val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
+          Payload(
+            """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
           )
-        val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
-        Payload(
-          """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
-        )
+        } finally {
+          scaled.recycle()
+        }
       } finally {
-        scaled.recycle()
+        provider.unbind(capture)
       }
     }
 
