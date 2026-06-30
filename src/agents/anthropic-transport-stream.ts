@@ -1603,7 +1603,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheRead +
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
-            if (output.stopReason === "toolUse") {
+            // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
+            // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
+            // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
+            if (
+              output.stopReason === "toolUse" ||
+              output.content.some((block) => block.type === "toolCall")
+            ) {
               tagPendingCommentaryText(output.content);
             }
             flushPendingTextEnds();
@@ -1621,8 +1627,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         refusalBuffer?.flush();
         // Backstop: streaming tags commentary at the tool-boundary above, but
         // replay/non-streaming assembly may reach here with tool calls untagged.
-        // Idempotent, so it never double-tags the streaming path.
-        if (output.stopReason === "toolUse") {
+        // Idempotent, so it never double-tags the streaming path. Gate on the turn
+        // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
+        // that mislabel tool turns as "end_turn" still tag their narration.
+        if (
+          output.stopReason === "toolUse" ||
+          output.content.some((block) => block.type === "toolCall")
+        ) {
           tagPendingCommentaryText(output.content);
         }
         flushPendingTextEnds();
