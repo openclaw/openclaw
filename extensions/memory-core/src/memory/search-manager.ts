@@ -60,6 +60,8 @@ type MemorySearchManagerCacheState =
   | "fallback-builtin"
   | "recent-failure-cooldown";
 
+const QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS = 60_000;
+
 export type MemorySearchManagerDebug = {
   backend?: "builtin" | "qmd" | "mem0" | "hybrid";
   purpose?: MemorySearchManagerPurpose;
@@ -137,6 +139,42 @@ export type MemorySearchManagerResult = {
 };
 
 export type MemorySearchManagerPurpose = "cli" | "default" | "status";
+
+function getActiveQmdManagerOpenFailure(
+  scopeKey: string,
+  identityKey: string,
+  nowMs = Date.now(),
+): QmdManagerOpenFailure | null {
+  const failure = QMD_MANAGER_OPEN_FAILURES.get(scopeKey);
+  if (!failure) {
+    return null;
+  }
+  if (failure.identityKey !== identityKey || failure.retryAfterMs <= nowMs) {
+    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
+    return null;
+  }
+  return failure;
+}
+
+function recordQmdManagerOpenFailure(
+  scopeKey: string,
+  identityKey: string,
+  reason: string,
+  nowMs = Date.now(),
+): void {
+  QMD_MANAGER_OPEN_FAILURES.set(scopeKey, {
+    identityKey,
+    reason,
+    retryAfterMs: nowMs + QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS,
+  });
+}
+
+function clearQmdManagerOpenFailure(scopeKey: string, identityKey: string): void {
+  const failure = QMD_MANAGER_OPEN_FAILURES.get(scopeKey);
+  if (failure?.identityKey === identityKey) {
+    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
+  }
+}
 
 async function getOrCreateMem0Manager(params: {
   cfg: OpenClawConfig;
@@ -582,8 +620,12 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
-  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  const pendingCreates = Array.from(PENDING_QMD_MANAGER_CREATES.values(), (entry) => entry.promise);
+  await Promise.allSettled(pendingCreates);
+  const managers = Array.from(QMD_MANAGER_CACHE.values(), (entry) => entry.manager);
+  PENDING_QMD_MANAGER_CREATES.clear();
   QMD_MANAGER_CACHE.clear();
+  QMD_MANAGER_OPEN_FAILURES.clear();
   for (const manager of managers) {
     try {
       await manager.close?.();
