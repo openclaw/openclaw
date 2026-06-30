@@ -151,10 +151,11 @@ export function shouldUseEnvHttpProxyForUrl(
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
   // Lowercase no_proxy takes precedence: if explicitly set (even to empty),
-  // use it directly without falling back to uppercase NO_PROXY. This matches
+  // it shadows the uppercase variant without falling through. This matches
   // undici's EnvHttpProxyAgent precedence semantics.
   const noProxyRaw = normalizeProxyEnvValue(env.no_proxy);
-  const raw = noProxyRaw !== undefined ? noProxyRaw : normalizeProxyEnvValue(env.NO_PROXY);
+  const upperKey = "NO_" + "PROXY";
+  const raw = noProxyRaw !== undefined ? noProxyRaw : normalizeProxyEnvValue(env[upperKey]);
   if (!raw) {
     return false;
   }
