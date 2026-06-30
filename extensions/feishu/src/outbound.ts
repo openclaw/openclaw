@@ -521,6 +521,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             block.type === "buttons" &&
             block.buttons.some(
               (button) =>
+                !button.disabled &&
                 button.action?.type === "command" &&
                 !button.url &&
                 !button.webApp?.url &&

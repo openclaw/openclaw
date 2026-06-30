@@ -510,8 +510,11 @@ export function interactiveReplyToPresentation(
  * Text and context blocks are rendered as-is. Buttons with a `command`-typed
  * action render as `label: \`command\`` so the value is copyable. Buttons with
  * a `callback` action, legacy `value`, or `select` options render as label-only
- * to keep opaque callback values private — downstream consumers should not
- * claim a manual command is available unless they verify one was actually rendered.
+ * to keep opaque callback values private. Disabled buttons render as label-only
+ * regardless of action type, since they are not actionable.
+ *
+ * Downstream consumers should not claim a manual command is available unless
+ * they verify one was actually rendered.
  *
  * Exported through the plugin SDK for channel adapters.
  */
@@ -548,7 +551,7 @@ export function renderMessagePresentationFallbackText(params: {
             button.action?.type === "command"
               ? resolveMessagePresentationControlValue(button)
               : undefined;
-          if (controlValue) {
+          if (controlValue && !button.disabled) {
             return `${button.label}: \`${controlValue}\``;
           }
           return button.label;
