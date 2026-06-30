@@ -1370,7 +1370,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("errors on oversized SSE body without event boundary in sanitizer", async () => {
-    const oversized = "x".repeat(65 * 1024);
+    const oversized = "x".repeat(16 * 1024 * 1024 + 1024);
     const encoder = new TextEncoder();
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
