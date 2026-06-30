@@ -18,7 +18,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { resolveOpenClawPackageRootsSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -35,22 +35,22 @@ export function resolveSandboxScript(
   scriptRel: string,
   options: { argv1?: string; cwd?: string } = {},
 ): SandboxScriptInfo | null {
-  // Locate the openclaw package root via the shared resolver. It already follows a symlinked
-  // launcher (npm/pnpm global bin → repo checkout) through realpath and handles node_modules/.bin
-  // and version-manager links, so scripts/ is found in the real checkout instead of next to the
-  // launcher symlink. Duplicating that discovery here would drift from the canonical resolver.
-  const packageRoot = resolveOpenClawPackageRootSync({
+  // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
+  // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
+  // global bins and version-manager links, but a published package root can resolve first and ship
+  // without scripts/sandbox-setup.sh (the npm files allowlist drops scripts/); stopping at the
+  // first root would then skip a valid source-checkout cwd that still has it.
+  const roots = resolveOpenClawPackageRootsSync({
     cwd: options.cwd ?? process.cwd(),
     argv1: options.argv1 ?? process.argv[1],
   });
-  if (!packageRoot) {
-    return null;
+  for (const root of roots) {
+    const scriptPath = path.join(root, scriptRel);
+    if (fs.existsSync(scriptPath)) {
+      return { scriptPath, cwd: root };
+    }
   }
-  const scriptPath = path.join(packageRoot, scriptRel);
-  if (!fs.existsSync(scriptPath)) {
-    return null;
-  }
-  return { scriptPath, cwd: packageRoot };
+  return null;
 }
 
 async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
