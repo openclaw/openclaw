@@ -1328,6 +1328,9 @@ export const pl: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Rozłączono z Gateway.",
     refreshTitle: "Odśwież dane czatu",

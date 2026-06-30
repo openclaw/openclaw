@@ -1314,6 +1314,9 @@ export const ko: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
     refreshTitle: "채팅 데이터 새로고침",

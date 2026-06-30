@@ -1325,6 +1325,9 @@ export const pt_BR: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",

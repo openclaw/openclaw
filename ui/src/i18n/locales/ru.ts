@@ -1333,6 +1333,9 @@ export const ru: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "Новый сеанс",
+  },
   chat: {
     disconnected: "Отключено от gateway.",
     refreshTitle: "Обновить данные чата",

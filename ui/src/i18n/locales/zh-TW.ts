@@ -1288,6 +1288,9 @@ export const zh_TW: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "已斷開與網關的連接。",
     refreshTitle: "刷新聊天數據",

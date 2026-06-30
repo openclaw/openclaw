@@ -281,6 +281,13 @@ describe("parseSessionKey", () => {
       fallbackName: "something-unknown",
     });
   });
+
+  it("identifies dashboard sessions", () => {
+    expect(parseSessionKey("agent:main:dashboard:93a9f0e2-1234-5678-9abc-def012345678")).toEqual({
+      prefix: "",
+      fallbackName: "New Session",
+    });
+  });
 });
 
 describe("resolveAssistantAttachmentAuthToken", () => {
@@ -360,6 +367,12 @@ describe("resolveSessionDisplayName", () => {
 
   it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
+  });
+
+  it("returns localized new-session fallback for dashboard keys", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:93a9f0e2-1234-5678-9abc-def012345678"),
+    ).toBe("New Session");
   });
 
   // ── With row data (label / displayName) ──────────

@@ -1315,6 +1315,9 @@ export const vi: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Đã ngắt kết nối khỏi gateway.",
     refreshTitle: "Làm mới dữ liệu trò chuyện",

@@ -1329,6 +1329,9 @@ export const tr: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     refreshTitle: "Sohbet verilerini yenile",

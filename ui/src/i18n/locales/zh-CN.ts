@@ -1286,6 +1286,9 @@ export const zh_CN: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "新会话",
+  },
   chat: {
     disconnected: "已断开与网关的连接。",
     refreshTitle: "刷新聊天数据",

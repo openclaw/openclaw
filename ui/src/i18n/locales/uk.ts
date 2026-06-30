@@ -1327,6 +1327,9 @@ export const uk: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Відключено від шлюзу.",
     refreshTitle: "Оновити дані чату",

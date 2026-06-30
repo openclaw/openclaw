@@ -1,6 +1,9 @@
 // Control UI module implements session display behavior.
+import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { SessionsListResult } from "./types.ts";
+
+export const DASHBOARD_SESSION_FALLBACK_NAME = "New Session";
 
 const CHANNEL_LABELS: Record<string, string> = {
   imessage: "iMessage",
@@ -26,6 +29,10 @@ export type SessionKeyInfo = {
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export function isDashboardSessionKey(key: string): boolean {
+  return /^agent:[^:]+:dashboard:[^:]+$/.test(key);
 }
 
 /**
@@ -74,6 +81,11 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     }
   }
 
+  // Control UI dashboard sessions minted via sessions.create.
+  if (isDashboardSessionKey(key)) {
+    return { prefix: "", fallbackName: DASHBOARD_SESSION_FALLBACK_NAME };
+  }
+
   // Unknown: return key as-is.
   return { prefix: "", fallbackName: key };
 }
@@ -99,6 +111,9 @@ export function resolveSessionDisplayName(
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
+  }
+  if (isDashboardSessionKey(key)) {
+    return t("session.newSession");
   }
   return fallbackName;
 }
