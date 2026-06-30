@@ -603,6 +603,30 @@ async function processDiscordMessageInner(
     lines[0] = `🧠 ${lines[0]}`;
     return lines.map((line) => `> ${line}`).join("\n");
   };
+  // Reasoning lane gating follows the session /reasoning level (off|on|stream), not a
+  // streaming config flag: `on` delivers a durable 🧠 blockquote, `stream` renders the
+  // live window lane (counted in the summary bar), `off` shows nothing in either lane.
+  const reasoningLevel = ((): "on" | "stream" | "off" => {
+    const cfgDefault = cfg.agents?.defaults?.reasoningDefault;
+    const configDefault: "on" | "stream" | "off" =
+      cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";
+    const sessionKey = ctxPayload.SessionKey;
+    if (!sessionKey) {
+      return configDefault;
+    }
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const level = getSessionEntry({ agentId: route.agentId, sessionKey, storePath })?.reasoningLevel;
+      if (level === "on" || level === "stream" || level === "off") {
+        return level;
+      }
+    } catch {
+      return "off";
+    }
+    return configDefault;
+  })();
+  const reasoningDurableEnabled = reasoningLevel === "on";
+  const reasoningWindowEnabled = reasoningLevel === "stream";
   const progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
@@ -741,7 +765,7 @@ async function processDiscordMessageInner(
         kind: "block",
       });
       replyReference.markSent();
-      progressReasoningSteps += 1;
+      // Durable 🧠 (/reasoning on) is persisted, not streamed — never count it in the bar.
       return { visibleReplySent: true };
     }
     if (
@@ -1136,15 +1160,12 @@ async function processDiscordMessageInner(
         commentaryPayloadsEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
-        reasoningPayloadsEnabled: true,
+        reasoningPayloadsEnabled: reasoningDurableEnabled,
         onVerboseProgressVisibility: (isActive) => {
           shouldYieldDraftProgress = isActive;
         },
         onReasoningStream: async (payload) => {
-          if (
-            payload?.requiresReasoningProgressOptIn === true &&
-            !draftPreview.nonStreamReasoningProgressEnabled
-          ) {
+          if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
             return;
           }
           if (payload?.text) {
@@ -1155,7 +1176,7 @@ async function processDiscordMessageInner(
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
-        streamReasoningInNonStreamModes: draftPreview.nonStreamReasoningProgressEnabled,
+        streamReasoningInNonStreamModes: reasoningWindowEnabled,
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;
@@ -1164,10 +1185,13 @@ async function processDiscordMessageInner(
           await statusReactions.setTool(payload.name);
           if (payload.phase === "start") {
             closePendingWindowThought();
-            progressToolCalls += 1;
           }
           if (shouldYieldDraftProgress()) {
             return;
+          }
+          // Count only what actually streams to the window draft (post-yield).
+          if (payload.phase === "start") {
+            progressToolCalls += 1;
           }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLineForEntry(
@@ -1187,11 +1211,12 @@ async function processDiscordMessageInner(
         },
         onItemEvent: async (payload) => {
           if (payload.kind === "preamble") {
-            noteWindowCommentary(payload.itemId, payload.progressText);
             if (shouldYieldDraftProgress()) {
               return;
             }
             if (draftPreview.commentaryProgressEnabled && payload.progressText) {
+              // Count only commentary that actually streams to the window draft.
+              noteWindowCommentary(payload.itemId, payload.progressText);
               await draftPreview.pushCommentaryProgress(payload.progressText, {
                 itemId: payload.itemId,
               });

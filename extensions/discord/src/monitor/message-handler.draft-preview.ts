@@ -5,7 +5,6 @@ import {
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
-  resolveChannelStreamingProgressThinking,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -87,9 +86,6 @@ export function createDiscordDraftPreviewController(params: {
       previewToolProgressEnabled,
     });
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
-  const nonStreamReasoningProgressEnabled = resolveChannelStreamingProgressThinking(
-    params.discordConfig,
-  );
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
     mode: discordStreamMode,
@@ -137,7 +133,6 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
-    nonStreamReasoningProgressEnabled,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
