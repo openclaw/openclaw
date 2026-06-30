@@ -14,7 +14,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { hasTrackedActiveSessionRun } from "./server-methods/session-active-runs.js";
+import { hasVisibleActiveSessionRun } from "./server-methods/session-active-runs.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
@@ -167,10 +167,11 @@ async function handleTranscriptUpdateBroadcast(
     transcriptUsageMaxBytes: 64 * 1024,
   });
   const hasActiveRun = sessionRow
-    ? hasTrackedActiveSessionRun({
+    ? hasVisibleActiveSessionRun({
         context: params,
         requestedKey: sessionKey,
         canonicalKey: sessionRow.key,
+        sessionId: sessionRow.sessionId,
         ...(sessionRow.key === "global" && visibleAgentId ? { agentId: visibleAgentId } : {}),
         defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
       })

@@ -194,7 +194,7 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -3042,10 +3042,11 @@ async function handleChatHistoryRequest({
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-  sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
+  sessionInfo.hasActiveRun = hasVisibleActiveSessionRun({
     context,
     requestedKey: sessionKey,
     canonicalKey,
+    sessionId: entry?.sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId,
   });
