@@ -1,4 +1,5 @@
 // Verifies flushPendingToolResultsAfterIdle defer behavior.
+import { setImmediate } from "node:timers";
 import { describe, expect, it, vi } from "vitest";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
@@ -33,9 +34,13 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(flush).toHaveBeenCalledOnce();
   });
 
-  it("allows real tool result to clear pending before flush", async () => {
+  it("allows real tool result to clear pending before flush (#84134 regression)", async () => {
     // Simulates #84134: pending tool call exists at cleanup time,
-    // real result arrives during the setImmediate gap, no synthetic.
+    // real result arrives in the next event-loop tick (as Feishu
+    // HTTP responses do). On main (no defer), flush fires
+    // synchronously after idle → synthetic injected before the
+    // real result arrives. On this branch, the setImmediate defer
+    // lets the real result clear the pending map first.
     const pending = new Set(["tc_msg"]);
     let syntheticInjected = false;
 
@@ -47,12 +52,17 @@ describe("flushPendingToolResultsAfterIdle", () => {
       }),
     } as const;
 
-    const promise = flushPendingToolResultsAfterIdle({ agent: null, sessionManager });
+    // Schedule the "real result" to arrive asynchronously — this
+    // represents the Feishu HTTP response arriving in a subsequent
+    // event-loop phase (I/O poll or check).  On main the flush
+    // fires before this callback; on the PR branch the setImmediate
+    // defer drains the event loop first.
+    setImmediate(() => {
+      pending.delete("tc_msg");
+    });
 
-    // Real result arrives during the setImmediate gap
-    pending.delete("tc_msg");
+    await flushPendingToolResultsAfterIdle({ agent: null, sessionManager });
 
-    await promise;
     expect(sessionManager.flushPendingToolResults).toHaveBeenCalledOnce();
     expect(syntheticInjected).toBe(false);
   });
