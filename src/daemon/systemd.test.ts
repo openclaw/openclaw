@@ -740,10 +740,15 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
   it("restartSystemdService restarts the system unit directly when running as root", async () => {
     mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
     mockEffectiveUid(0);
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      expect(args).toEqual(["restart", GATEWAY_SERVICE]);
-      cb(null, "", "");
-    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["reset-failed", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      });
     const { stdout, write } = createWritableStreamMock();
     const result = await restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } });
     expect(result).toEqual({ outcome: "completed" });
@@ -804,6 +809,31 @@ describe("systemd runtime parsing", () => {
     });
   });
 
+  it("parses Result and the restart counter for crash-loop give-up detection", () => {
+    // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
+    // (start-limit-hit never overwrites an exec failure), so the counter reaching
+    // StartLimitBurst is what flags the give-up.
+    const output = [
+      "ActiveState=failed",
+      "SubState=failed",
+      "Result=exit-code",
+      "NRestarts=5",
+      "StartLimitBurst=5",
+      "MainPID=0",
+      "ExecMainStatus=1",
+      "ExecMainCode=exited",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "failed",
+      subState: "failed",
+      result: "exit-code",
+      nRestarts: 5,
+      startLimitBurst: 5,
+      execMainStatus: 1,
+      execMainCode: "exited",
+    });
+  });
+
   it("rejects pid and exit status values with junk suffixes", () => {
     const output = [
       "ActiveState=inactive",
@@ -855,7 +885,7 @@ describe("readSystemdServiceRuntime", () => {
           GATEWAY_SERVICE,
           "--no-page",
           "--property",
-          "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+          "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
         );
         cb(
           null,
@@ -887,6 +917,41 @@ describe("readSystemdServiceRuntime", () => {
         tasksCurrent: 807,
         memoryCurrent: 11_918_534_246,
       },
+    });
+  });
+
+  it("carries the supervision counters through a crash-looped failed unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        cb(
+          null,
+          [
+            "Id=openclaw-gateway.service",
+            "ActiveState=failed",
+            "SubState=failed",
+            "Result=exit-code",
+            "NRestarts=5",
+            "StartLimitBurst=5",
+            "MainPID=0",
+            "ExecMainStatus=1",
+            "ExecMainCode=exited",
+          ].join("\n"),
+          "",
+        );
+      });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    // ActiveState=failed collapses to the generic "stopped" status, so the raw
+    // state + restart counters are what let callers detect the crash-loop give-up.
+    expect(runtime.status).toBe("stopped");
+    expect(runtime.state).toBe("failed");
+    expect(runtime.systemd).toMatchObject({
+      result: "exit-code",
+      nRestarts: 5,
+      startLimitBurst: 5,
     });
   });
 });
@@ -2008,14 +2073,25 @@ describe("systemd service control", () => {
     });
   });
 
-  it("restarts a profile-specific user unit", async () => {
+  it("runs reset-failed before restarting a profile-specific user unit", async () => {
+    const restartSequence: string[] = [];
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", "openclaw-gateway-work.service");
+        // args[0] is the "--user" scope flag; the systemctl verb is args[1].
+        restartSequence.push(args[1] ?? "");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "restart", "openclaw-gateway-work.service");
+        restartSequence.push(args[1] ?? "");
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+    // reset-failed must clear any start-limit-hit latch before the restart so a
+    // crash-looped unit can recover.
+    expect(restartSequence).toEqual(["reset-failed", "restart"]);
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
@@ -2063,6 +2139,10 @@ describe("systemd service control", () => {
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineRestartArgs(args);
         cb(null, "", "");
       });
@@ -2074,6 +2154,10 @@ describe("systemd service control", () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -2097,6 +2181,10 @@ describe("systemd service control", () => {
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
         cb(null, "", "");
       });
@@ -2115,6 +2203,17 @@ describe("systemd service control", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineUserSystemctlArgs(args, "debian", "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        const err = createExecFileError("Failed to connect to user scope bus", {
+          stderr: "Failed to connect to user scope bus",
+        });
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "reset-failed", GATEWAY_SERVICE);
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {

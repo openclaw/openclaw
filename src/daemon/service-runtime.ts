@@ -1,12 +1,18 @@
 /** Shared daemon runtime status types and systemd cgroup hygiene helpers. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/** systemd cgroup fields used to spot unhealthy gateway service supervision. */
+/** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 export type GatewayServiceSystemdRuntime = {
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;
   memoryCurrent?: number;
+  // systemd `Result` (e.g. success, exit-code, start-limit-hit) plus the restart
+  // counter and configured StartLimitBurst. Together they detect a crash-loop
+  // give-up that the collapsed `status` string and `Result` alone cannot.
+  result?: string;
+  nRestarts?: number;
+  startLimitBurst?: number;
 };
 
 export type GatewayServiceRuntime = {
@@ -82,4 +88,37 @@ export function getSystemdCgroupHygieneSummary(
 
 export function isSystemdCgroupHygieneRisk(runtime?: GatewayServiceSystemdRuntime): boolean {
   return getSystemdCgroupHygieneSummary(runtime) !== null;
+}
+
+/**
+ * True when systemd has stopped auto-restarting the gateway because it crashed
+ * faster than StartLimitBurst/StartLimitIntervalSec allows. Unlike an ordinary
+ * stopped/exited unit, this terminal latch needs an explicit `reset-failed` +
+ * restart to recover, so status/doctor must surface it instead of the generic
+ * "exited immediately" message.
+ *
+ * Detection: the unit is `failed` and either systemd reported the give-up
+ * directly (Result=start-limit-hit, the start-was-refused-before-exec case) or
+ * the restart counter reached the configured burst. The counter path is the
+ * common one: once the gateway process has actually run and exited non-zero,
+ * systemd keeps Result=exit-code and never overwrites it with start-limit-hit
+ * (verified against systemd 249), so Result alone misses real crash loops.
+ */
+export function isSystemdStartLimitHit(runtime?: GatewayServiceRuntime): boolean {
+  if (!runtime || normalizeLowercaseStringOrEmpty(runtime.state) !== "failed") {
+    return false;
+  }
+  const systemd = runtime.systemd;
+  if (!systemd) {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(systemd.result) === "start-limit-hit") {
+    return true;
+  }
+  return (
+    typeof systemd.startLimitBurst === "number" &&
+    systemd.startLimitBurst > 0 &&
+    typeof systemd.nRestarts === "number" &&
+    systemd.nRestarts >= systemd.startLimitBurst
+  );
 }
