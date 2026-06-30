@@ -1961,7 +1961,7 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: "allow"; updatedInput: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.type).toBe("control_response");
@@ -2332,7 +2332,7 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: "allow"; updatedInput: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.response.response.updatedInput).toEqual({ command: "echo hi" });
@@ -2769,7 +2769,7 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; updatedInput?: Record<string, unknown>; toolUseID?: string };
+        response: { behavior: "allow"; updatedInput: Record<string, unknown>; toolUseID?: string };
       };
     };
     expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
