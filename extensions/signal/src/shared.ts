@@ -15,7 +15,7 @@ import {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
-import { resolveSignalAliasTarget } from "./aliases.js";
+import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
@@ -56,7 +56,11 @@ export const signalConfigAdapter = {
     if (typeof raw !== "string" || !raw.trim()) {
       return undefined;
     }
-    return resolveSignalAliasTarget({ cfg, accountId, input: raw })?.to ?? raw.trim();
+    try {
+      return resolveSignalTarget({ cfg, accountId, input: raw })?.to ?? raw.trim();
+    } catch {
+      return raw.trim();
+    }
   },
 };
 

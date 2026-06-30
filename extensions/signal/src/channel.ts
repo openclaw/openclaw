@@ -73,6 +73,20 @@ async function resolveSignalSendContext(params: {
   return { send, maxBytes };
 }
 
+function resolveSignalSendTarget(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string;
+  to: string;
+}) {
+  return (
+    resolveSignalTarget({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      input: params.to,
+    })?.to ?? params.to.trim()
+  );
+}
+
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
@@ -84,7 +98,8 @@ async function sendSignalOutbound(params: {
   deps?: { [channelId: string]: unknown };
 }) {
   const { send, maxBytes } = await resolveSignalSendContext(params);
-  return await send(params.to, params.text, {
+  const to = resolveSignalSendTarget(params);
+  return await send(to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
@@ -213,6 +228,11 @@ async function sendFormattedSignalText(ctx: {
   const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
     fallbackLimit: 4000,
   });
+  const to = resolveSignalSendTarget({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    to: ctx.to,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",
@@ -228,7 +248,7 @@ async function sendFormattedSignalText(ctx: {
   const results = [];
   for (const chunk of chunks) {
     ctx.abortSignal?.throwIfAborted();
-    const result = await send(ctx.to, chunk.text, {
+    const result = await send(to, chunk.text, {
       cfg: ctx.cfg,
       maxBytes,
       accountId: ctx.accountId ?? undefined,
@@ -257,6 +277,11 @@ async function sendFormattedSignalMedia(ctx: {
     accountId: ctx.accountId ?? undefined,
     deps: ctx.deps,
   });
+  const to = resolveSignalSendTarget({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    to: ctx.to,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",
@@ -268,7 +293,7 @@ async function sendFormattedSignalMedia(ctx: {
     text: ctx.text,
     styles: [],
   };
-  const result = await send(ctx.to, formatted.text, {
+  const result = await send(to, formatted.text, {
     cfg: ctx.cfg,
     mediaUrl: ctx.mediaUrl,
     mediaLocalRoots: ctx.mediaLocalRoots,

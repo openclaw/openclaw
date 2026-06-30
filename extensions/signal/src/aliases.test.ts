@@ -86,6 +86,25 @@ describe("resolveSignalAliasTarget", () => {
       'Signal alias "jane" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.',
     );
   });
+
+  it("treats target-looking alias values as terminal targets before alias chaining", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            home: "+15551230000",
+            "+15551230000": "+15559990000",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalAliasTarget({ cfg, input: "home" })).toEqual({
+      kind: "user",
+      to: "+15551230000",
+      alias: "home",
+    });
+  });
 });
 
 describe("resolveSignalTarget", () => {
@@ -95,6 +114,7 @@ describe("resolveSignalTarget", () => {
         signal: {
           aliases: {
             me: "uuid:123E4567-E89B-12D3-A456-426614174000",
+            "+15551230000": "+15559990000",
           },
         },
       },
@@ -111,6 +131,11 @@ describe("resolveSignalTarget", () => {
     ).toEqual({
       kind: "user",
       to: "123e4567-e89b-12d3-a456-426614174000",
+      source: "raw",
+    });
+    expect(resolveSignalTarget({ cfg, input: "+15551230000" })).toEqual({
+      kind: "user",
+      to: "+15551230000",
       source: "raw",
     });
   });
@@ -141,6 +166,63 @@ describe("listSignalAliasDirectoryEntries", () => {
         id: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
         name: "ops",
       },
+    ]);
+  });
+
+  it("lists aliases that resolve through another alias", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            me: "+15551234567",
+            home: "signal:me",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user" })).toEqual([
+      { kind: "user", id: "+15551234567", name: "me" },
+      { kind: "user", id: "+15551234567", name: "home" },
+    ]);
+  });
+
+  it("does not let fuzzy peer matches shadow exact group aliases", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+            "ops-dm": "+15551234567",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "ops" })).toEqual([]);
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "group", query: "ops" })).toEqual([
+      {
+        kind: "group",
+        id: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+        name: "ops",
+      },
+    ]);
+  });
+
+  it("lets invalid exact aliases fall through to valid fuzzy matches", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            ops: "not-a-signal-target",
+            "ops-dm": "+15551234567",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "ops" })).toEqual([
+      { kind: "user", id: "+15551234567", name: "ops-dm" },
     ]);
   });
 });

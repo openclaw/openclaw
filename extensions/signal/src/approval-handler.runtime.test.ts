@@ -74,6 +74,56 @@ describe("Signal approval native runtime", () => {
     });
   });
 
+  it("resolves aliases before delivering native approval prompts", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+          aliases: {
+            me: "+15551230000",
+          },
+        },
+      },
+    };
+    const prepared = await signalApprovalNativeRuntime.transport.prepareTarget({
+      cfg,
+      plannedTarget: { target: { to: "signal:me" } },
+      accountId: "default",
+      context: { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" },
+    } as never);
+
+    expect(prepared?.target).toMatchObject({
+      to: "+15551230000",
+      accountId: "default",
+      baseUrl: "http://127.0.0.1:18080",
+      account: "+15550001111",
+    });
+
+    const entry = await signalApprovalNativeRuntime.transport.deliverPending({
+      cfg,
+      preparedTarget: prepared!.target,
+      pendingPayload: buildPendingContent({ manualText: "approval" }),
+    } as never);
+
+    expect(entry).toMatchObject({
+      to: "+15551230000",
+      conversationKey: "+15551230000",
+    });
+    expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith("+15551230000", {
+      cfg,
+      accountId: "default",
+      baseUrl: "http://127.0.0.1:18080",
+      account: "+15550001111",
+    });
+    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith("+15551230000", "approval", {
+      cfg,
+      accountId: "default",
+      baseUrl: "http://127.0.0.1:18080",
+      account: "+15550001111",
+      textMode: "plain",
+    });
+  });
+
   it("only renders reaction hints when the Signal target author can be bound", async () => {
     const cfg = { channels: { signal: { allowFrom: ["+15551230000"] } } };
     const unbound = await signalApprovalNativeRuntime.transport.prepareTarget({

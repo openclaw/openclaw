@@ -56,15 +56,12 @@ function resolveTargetKind(target: string): SignalResolvedTargetKind {
   return normalizeLowercaseStringOrEmpty(target).startsWith("group:") ? "group" : "user";
 }
 
-function normalizeAliasTarget(params: { alias: string; value: string }): {
-  to: string;
-  kind: SignalResolvedTargetKind;
-} {
-  const normalized = normalizeSignalMessagingTarget(params.value);
-  if (!normalized || !looksLikeSignalTargetId(params.value, normalized)) {
-    throw new Error(
-      `Signal alias "${params.alias}" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.`,
-    );
+function resolveRawSignalTarget(
+  input: string,
+): { to: string; kind: SignalResolvedTargetKind } | null {
+  const normalized = normalizeSignalMessagingTarget(input);
+  if (!normalized || !looksLikeSignalTargetId(input, normalized)) {
+    return null;
   }
   return {
     to: normalized,
@@ -96,16 +93,23 @@ export function resolveSignalAliasTarget(params: {
       throw new Error(`Signal alias "${alias}" must point to a non-empty Signal target.`);
     }
 
+    const rawTarget = resolveRawSignalTarget(rawValue);
+    if (rawTarget) {
+      return {
+        ...rawTarget,
+        alias: initialAlias,
+      };
+    }
+
     const nextAlias = normalizeAliasKey(rawValue);
     if (nextAlias && nextAlias in aliases) {
       alias = nextAlias;
       continue;
     }
 
-    return {
-      ...normalizeAliasTarget({ alias: initialAlias, value: rawValue }),
-      alias: initialAlias,
-    };
+    throw new Error(
+      `Signal alias "${initialAlias}" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.`,
+    );
   }
 }
 
@@ -114,19 +118,18 @@ export function resolveSignalTarget(params: {
   accountId?: string | null;
   input: string;
 }): ResolvedSignalTarget | null {
+  const rawTarget = resolveRawSignalTarget(params.input);
+  if (rawTarget) {
+    return {
+      ...rawTarget,
+      source: "raw",
+    };
+  }
   const aliasTarget = resolveSignalAliasTarget(params);
   if (aliasTarget) {
     return { ...aliasTarget, source: "alias" };
   }
-  const normalized = normalizeSignalMessagingTarget(params.input);
-  if (!normalized || !looksLikeSignalTargetId(params.input, normalized)) {
-    return null;
-  }
-  return {
-    to: normalized,
-    kind: resolveTargetKind(normalized),
-    source: "raw",
-  };
+  return null;
 }
 
 export function listSignalAliasDirectoryEntries(params: {
@@ -139,12 +142,30 @@ export function listSignalAliasDirectoryEntries(params: {
   const aliases = resolveAliasMap(params);
   const query = normalizeLowercaseStringOrEmpty(params.query);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
-  const entries: ChannelDirectoryEntry[] = [];
-  for (const [alias, value] of Object.entries(aliases)) {
-    let target: ReturnType<typeof normalizeAliasTarget>;
+  const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
+  if (exactAlias && exactAlias in aliases) {
+    let target: ResolvedSignalAliasTarget | null;
     try {
-      target = normalizeAliasTarget({ alias, value });
+      target = resolveSignalAliasTarget({ ...params, input: exactAlias });
     } catch {
+      target = null;
+    }
+    if (target?.kind === params.kind) {
+      return [{ kind: params.kind, id: target.to, name: target.alias }];
+    }
+    if (target) {
+      return [];
+    }
+  }
+  const entries: ChannelDirectoryEntry[] = [];
+  for (const alias of Object.keys(aliases)) {
+    let target: ResolvedSignalAliasTarget | null;
+    try {
+      target = resolveSignalAliasTarget({ ...params, input: alias });
+    } catch {
+      continue;
+    }
+    if (!target) {
       continue;
     }
     if (target.kind !== params.kind) {
