@@ -365,6 +365,10 @@ import {
   resetSubagentSessionCleanupForTests,
 } from "../../agents/subagent-session-cleanup.js";
 import { getReplyFromConfig } from "../reply/get-reply.js";
+import {
+  DEFAULT_NO_OP_REARM_THRESHOLD,
+  recordNoOpRearmOutcome,
+} from "../reply/no-op-rearm-guard.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
@@ -1071,6 +1075,45 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toHaveLength(0);
     expect([...mockFlows.values()][0]?.status).toBe("queued");
+  });
+
+  it("terminal-parks a continuation work row without a provider call once the no-op replay streak is tripped (#1138/#1142)", async () => {
+    const sessionKey = "agent:main:noop-rearm";
+    mockSessionStore[sessionKey] = { sessionKey };
+
+    // Seed the per-session no-op streak to the threshold via self-rearm no-op
+    // outcomes, as repeated low-value continuation turns would in production.
+    for (let i = 0; i < DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+
+    enqueuePendingWork({
+      sessionKey,
+      hop: 12,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 200,
+      reason: "Holding off-board and standing by.",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    // The guard blocks before getReplyFromConfig: no provider turn is bought.
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ dispatched: 0, failed: 1, reaped: 0 });
+    // The row is superseded (clean terminal: finishFlow), not requeued or failed,
+    // so it stops re-arming and emits no re-waking system warning.
+    const flow = [...mockFlows.values()][0];
+    expect(flow?.status).toBe("succeeded");
+    expect(flow?.endedAt).toBeDefined();
+    expect(String(flow?.currentStep)).toContain("superseded");
+    expect(systemEvents).toHaveLength(0);
   });
 
   it("does not let a busy slow hedge delay another continuation due sooner", async () => {

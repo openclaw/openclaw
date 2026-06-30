@@ -719,11 +719,11 @@ export function createFollowupRunner(params: {
       };
       let noOpRearmWakeClass: NoOpRearmWakeClass | undefined;
       if (noOpRearmWake.sessionKey) {
-        const admission = evaluateNoOpRearmAdmission(noOpRearmWake);
-        noOpRearmWakeClass = admission.wake;
-        if (!admission.admit) {
-          if (admission.diagnostic) {
-            defaultRuntime.log(admission.diagnostic.message);
+        const noOpRearmAdmission = evaluateNoOpRearmAdmission(noOpRearmWake);
+        noOpRearmWakeClass = noOpRearmAdmission.wake;
+        if (!noOpRearmAdmission.admit) {
+          if (noOpRearmAdmission.diagnostic) {
+            defaultRuntime.log(noOpRearmAdmission.diagnostic.message);
           }
           clearAgentRunContext(runId, lifecycleGeneration);
           return;

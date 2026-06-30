@@ -3,7 +3,6 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import {
   classifyNoOpRearmTurnOutcome,
   classifyNoOpRearmWake,
-  DEFAULT_NO_OP_REARM_THRESHOLD,
   NoOpRearmGuard,
   type NoOpRearmWakeClass,
   type NoOpRearmWakeInput,
@@ -126,7 +125,7 @@ describe("classifyNoOpRearmWake", () => {
     const withParent = classifyNoOpRearmWake({ ...base, parentRunId: "run-parent" });
     const withoutParent = classifyNoOpRearmWake(base);
     expect(withParent).toEqual(withoutParent);
-    expect(resolveNoOpRearmKey({ ...base, parentRunId: "run-parent" })).toBe(base.sessionKey);
+    expect(resolveNoOpRearmKey({ sessionKey: base.sessionKey })).toBe(base.sessionKey);
   });
 
   it("treats an explicitly stale human edge as backlog when a staleness bound is set", () => {
@@ -228,7 +227,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   }
 
   it("blocks a self-rearm wake after the streak crosses the threshold", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
 
@@ -248,7 +247,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("emits exactly one diagnostic per episode even if many gates evaluate it", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
@@ -267,7 +266,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("resets and admits on a fresh human message id", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
@@ -281,7 +280,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("does not reset on stale human backlog (room_event external_user)", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
@@ -294,7 +293,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("resets on a structured inter-session completion wake", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
@@ -308,7 +307,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("resets the streak when a self-rearm turn produces a substantive outcome", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "continuation" };
@@ -320,7 +319,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("does not double-increment the streak for the same runId", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "room_event_backlog" };
@@ -330,7 +329,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("does not accrue a streak for no-op outcomes on fresh-edge or heartbeat wakes", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     guard.record({
@@ -349,7 +348,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("does not accrue or block neutral (unmarked) wakes even when repeated", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     for (let i = 0; i < 10; i += 1) {
@@ -379,7 +378,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("downgrades a replayed (already-seen) human message id to self-rearm", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     // First delivery of msg id resets/admits and is remembered.
@@ -397,7 +396,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   });
 
   it("admits same-turn fanout and concrete awaited completion", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
@@ -408,7 +407,7 @@ describe("NoOpRearmGuard admission + recording", () => {
 
 describe("defensive backstop", () => {
   it("flags a room-event provider run with no prior admission, once", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = new NoOpRearmGuard({ now: () => t });
     const first = guard.assertEvaluatedBeforeProvider({
       sessionKey: "s",
@@ -425,7 +424,7 @@ describe("defensive backstop", () => {
   });
 
   it("stays silent when admission was evaluated just before the provider run", () => {
-    let t = 1_000;
+    const t = 1_000;
     const guard = new NoOpRearmGuard({ now: () => t });
     guard.evaluate(roomEventWake({ sessionKey: "s" }));
     const diag = guard.assertEvaluatedBeforeProvider({
