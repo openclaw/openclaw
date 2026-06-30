@@ -1754,6 +1754,8 @@
     "release:prep": "node scripts/release-preflight.mjs --fix",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
+    "sqlite:sessions-schema:check": "node --import tsx scripts/generate-sqlite-session-schema-baseline.ts --check",
+    "sqlite:sessions-schema:gen": "node --import tsx scripts/generate-sqlite-session-schema-baseline.ts --write",
     "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
