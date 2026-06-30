@@ -619,4 +619,53 @@ describe("gateway/node-registry", () => {
       (client.connect as { permissions?: Record<string, boolean> }).permissions,
     ).toBeUndefined();
   });
+
+  it("rejects invoke for commands the node did not advertise", async () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["system.run", "system.run.prepare", "system.which"],
+    });
+    registry.register(client, {});
+
+    // The node above does NOT advertise system.execApprovals.get. Without the
+    // capability check the invoke would block waiting for a node-side response
+    // that never comes (or surfaces an unstructured error).
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        command: "system.execApprovals.get",
+        params: {},
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      payload: undefined,
+      payloadJSON: null,
+      error: {
+        code: "UNSUPPORTED_CAPABILITY",
+        message: 'node does not support command "system.execApprovals.get"',
+      },
+    });
+  });
+
+  it("still invokes when the node did not declare a commands list", async () => {
+    // Nodes that never declared commands (empty list) keep legacy behavior:
+    // the invoke is sent and the node-side dispatch decides whether to handle it.
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const client = makeClient("conn-1", "node-1", frames, { commands: [] });
+    registry.register(client, {});
+
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.execApprovals.get",
+      params: {},
+      timeoutMs: 1_000,
+    });
+    // The first frame should be the invoke request, proving we did not short-circuit.
+    await Promise.resolve();
+    expect(frames.length).toBe(1);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
 });

@@ -432,6 +432,21 @@ export class NodeRegistry {
         error: { code: "NOT_CONNECTED", message: "node not connected" },
       };
     }
+    // Nodes that explicitly advertise a command list must include the requested
+    // command. Without this check, a node that omits e.g. system.execApprovals.*
+    // still receives the invoke and the gateway surfaces whatever unstructured
+    // error the node-side dispatch produces (observed as a TypeError reading
+    // 'socket' in the CLI). Returning UNSUPPORTED_CAPABILITY lets callers show
+    // an actionable message instead.
+    if (node.commands.length > 0 && !node.commands.includes(params.command)) {
+      return {
+        ok: false,
+        error: {
+          code: "UNSUPPORTED_CAPABILITY",
+          message: `node does not support command "${params.command}"`,
+        },
+      };
+    }
     const requestId = randomUUID();
     const invokeParams = withSystemRunEventRunId({
       command: params.command,
