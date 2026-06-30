@@ -1237,6 +1237,19 @@ export async function runPreparedReply(
     inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
+  const replyRoute = resolveEffectiveReplyRoute({
+    ctx: {
+      Provider: ctx.Provider ?? sessionCtx.Provider,
+      Surface: ctx.Surface ?? sessionCtx.Surface,
+      OriginatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+      OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
+      AccountId: ctx.AccountId ?? sessionCtx.AccountId,
+      InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      ChatType: ctx.ChatType ?? sessionCtx.ChatType,
+    },
+    entry: preparedSessionState.sessionEntry,
+  });
+  const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
@@ -1260,6 +1273,14 @@ export async function runPreparedReply(
           // is identical whether this turn is sent as the current turn or
           // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
           ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
+          // Direct transcripts keep their existing identity-storage boundary.
+          sender: persistGroupSender
+            ? {
+                id: normalizeOptionalString(sessionCtx.SenderId),
+                name: normalizeOptionalString(sessionCtx.SenderName),
+                username: normalizeOptionalString(sessionCtx.SenderUsername),
+              }
+            : undefined,
         }
       : undefined;
   const userTurnTranscriptRecorder =
@@ -1281,18 +1302,6 @@ export async function runPreparedReply(
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         })
       : undefined);
-  const replyRoute = resolveEffectiveReplyRoute({
-    ctx: {
-      Provider: ctx.Provider ?? sessionCtx.Provider,
-      Surface: ctx.Surface ?? sessionCtx.Surface,
-      OriginatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-      OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
-      AccountId: ctx.AccountId ?? sessionCtx.AccountId,
-      InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
-      ChatType: ctx.ChatType ?? sessionCtx.ChatType,
-    },
-    entry: preparedSessionState.sessionEntry,
-  });
   const messageProvider = resolveOriginMessageProvider({
     originatingChannel: replyRoute.channel,
     // Prefer Provider over Surface for fallback channel identity.

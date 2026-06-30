@@ -226,6 +226,92 @@ function buildPersistedUserTurnMediaFields(
   };
 }
 
+function buildUserTurnSenderMeta(
+  sender: UserTurnInput["sender"],
+): Record<string, string> | undefined {
+  const senderId = normalizeOptionalText(sender?.id);
+  const senderName = normalizeOptionalText(sender?.name);
+  const senderUsername = normalizeOptionalText(sender?.username);
+  if (!senderId && !senderName && !senderUsername) {
+    return undefined;
+  }
+  return {
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+  };
+}
+
+function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
+  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : undefined;
+}
+
+const RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT = Symbol.for(
+  "openclaw.runtimeUserTurnTranscriptContext",
+);
+const RUNTIME_USER_TURN_TRANSCRIPT_RECORDER = Symbol.for(
+  "openclaw.runtimeUserTurnTranscriptRecorder",
+);
+
+type RuntimeUserTurnTranscriptContext = {
+  message: PersistedUserTurnMessage;
+  recorder: UserTurnTranscriptRecorder;
+};
+
+/** Carries transcript-only fields with a queued runtime message without exposing them to the model. */
+export function attachRuntimeUserTurnTranscriptContext(
+  runtimeMessage: PersistedUserTurnMessage,
+  context: RuntimeUserTurnTranscriptContext,
+): PersistedUserTurnMessage {
+  Object.defineProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT, {
+    configurable: true,
+    value: context,
+  });
+  return runtimeMessage;
+}
+
+/** Consumes the transient queued-turn context before the message is serialized. */
+export function takeRuntimeUserTurnTranscriptContext(
+  runtimeMessage: AgentMessage,
+): RuntimeUserTurnTranscriptContext | undefined {
+  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
+  const context = record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT] as
+    | RuntimeUserTurnTranscriptContext
+    | undefined;
+  if (context) {
+    delete record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT];
+  }
+  return context;
+}
+
+/** Keeps the queued recorder attached to the exact final message until persistence succeeds. */
+export function attachRuntimeUserTurnTranscriptRecorder(
+  runtimeMessage: AgentMessage,
+  recorder: UserTurnTranscriptRecorder,
+): AgentMessage {
+  Object.defineProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER, {
+    configurable: true,
+    value: recorder,
+  });
+  return runtimeMessage;
+}
+
+export function takeRuntimeUserTurnTranscriptRecorder(
+  runtimeMessage: AgentMessage,
+): UserTurnTranscriptRecorder | undefined {
+  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
+  const recorder = record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER] as
+    | UserTurnTranscriptRecorder
+    | undefined;
+  if (recorder) {
+    delete record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER];
+  }
+  return recorder;
+}
+
 function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
@@ -237,13 +323,14 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
-
+  const senderMeta = buildUserTurnSenderMeta(params.sender);
   const message = {
     role: "user",
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
+    ...(senderMeta ? { __openclaw: senderMeta } : {}),
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
 }
@@ -283,9 +370,32 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
+  const runtimeMessage = params.runtimeMessage as unknown as Record<string, unknown>;
+  const preparedMessage = params.preparedMessage as unknown as Record<string, unknown>;
+  const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  return {
+    ...runtimeMessage,
+    ...preparedMessage,
+    ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
+  } as unknown as AgentMessage;
+}
+
+/** Restores runtime-owned OpenClaw metadata after a write hook replaces the user message. */
+export function mergePreparedUserTurnOpenClawMetaForRuntime(params: {
+  runtimeMessage: AgentMessage;
+  preparedMessage?: PersistedUserTurnMessage;
+}): AgentMessage {
+  if (!params.preparedMessage || !isUserMessage(params.runtimeMessage)) {
+    return params.runtimeMessage;
+  }
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  if (!preparedMeta) {
+    return params.runtimeMessage;
+  }
   return {
     ...(params.runtimeMessage as unknown as Record<string, unknown>),
-    ...(params.preparedMessage as unknown as Record<string, unknown>),
+    __openclaw: { ...readOpenClawMessageMeta(params.runtimeMessage), ...preparedMeta },
   } as unknown as AgentMessage;
 }
 
@@ -306,6 +416,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
+  const originalMeta = readOpenClawMessageMeta(message);
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -317,12 +428,19 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  return idempotencyKey
+  const nextMessageMeta = readOpenClawMessageMeta(nextUserMessage);
+  const nextUserMessageWithMetadata = originalMeta
     ? ({
         ...(nextUserMessage as unknown as Record<string, unknown>),
-        idempotencyKey,
+        __openclaw: { ...nextMessageMeta, ...originalMeta },
       } as unknown as PersistedUserTurnMessage)
     : nextUserMessage;
+  return idempotencyKey
+    ? ({
+        ...(nextUserMessageWithMetadata as unknown as Record<string, unknown>),
+        idempotencyKey,
+      } as unknown as PersistedUserTurnMessage)
+    : nextUserMessageWithMetadata;
 }
 
 export async function appendUserTurnTranscriptMessage(

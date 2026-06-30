@@ -369,7 +369,7 @@ function prepareEmbeddedAgentQueueMessage(
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
-    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
+    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
       return {

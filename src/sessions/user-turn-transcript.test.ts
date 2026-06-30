@@ -201,6 +201,33 @@ describe("user turn transcript persistence", () => {
       });
     });
 
+    it("preserves runtime metadata when adding prepared sender attribution", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "group prompt",
+          sender: { id: "user-42", name: "Ada" },
+        },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: "runtime prompt",
+            __openclaw: { mirrorIdentity: "run-1:prompt" },
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        __openclaw: {
+          mirrorIdentity: "run-1:prompt",
+          senderId: "user-42",
+          senderName: "Ada",
+        },
+      });
+    });
+
     it("does not replace blocked before_agent_run user markers", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "raw prompt" },
@@ -293,6 +320,67 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("persists sender metadata as __openclaw envelope", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-sender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from group",
+          sender: {
+            id: "8489979671",
+            name: "Ram Shenoy",
+            username: "ram_s",
+          },
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from group",
+        __openclaw: {
+          senderId: "8489979671",
+          senderName: "Ram Shenoy",
+          senderUsername: "ram_s",
+        },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from group",
+          __openclaw: {
+            senderId: "8489979671",
+            senderName: "Ram Shenoy",
+            senderUsername: "ram_s",
+          },
+        }),
+      ]);
+    });
+
+    it("omits __openclaw when no sender metadata is provided", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-nosender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello without sender",
+          sender: { id: "", name: null },
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).not.toHaveProperty("__openclaw");
+    });
+
     it("uses inline update mode by default", async () => {
       const dir = createTempDir("openclaw-user-turn-append-inline-");
       const transcriptPath = path.join(dir, "session.jsonl");
@@ -367,7 +455,7 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
+    it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
       let hookCalls = 0;
       const provenance = {
         kind: "inter_session" as const,
@@ -384,6 +472,7 @@ describe("user turn transcript persistence", () => {
                 message: castAgentMessage({
                   role: "user",
                   content: "[redacted by hook]",
+                  __openclaw: { hookOwned: true },
                 }),
               };
             },
@@ -399,6 +488,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -408,6 +498,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -418,6 +509,7 @@ describe("user turn transcript persistence", () => {
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          __openclaw: { hookOwned: true, senderId: "user-42", senderName: "Ada" },
         }),
       ]);
       expect(hookCalls).toBe(1);

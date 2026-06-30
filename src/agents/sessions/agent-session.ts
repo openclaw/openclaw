@@ -32,6 +32,11 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import {
+  attachRuntimeUserTurnTranscriptContext,
+  type PersistedUserTurnMessage,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import type {
   Agent,
   AgentEvent,
@@ -1354,9 +1359,14 @@ export class AgentSession {
    * before the next LLM call.
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
+   * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
    * @throws Error if text is an extension command
    */
-  async steer(text: string, images?: ImageContent[]): Promise<void> {
+  async steer(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -1366,7 +1376,14 @@ export class AgentSession {
     let expandedText = this.expandSkillCommand(text);
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-    await this.queueSteer(expandedText, images);
+    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    await this.queueSteer(
+      expandedText,
+      images,
+      preparedMessage && userTurnTranscriptRecorder
+        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
+        : undefined,
+    );
   }
 
   /**
@@ -1392,18 +1409,30 @@ export class AgentSession {
   /**
    * Internal: Queue a steering message (already expanded, no extension command check).
    */
-  private async queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+  private async queueSteer(
+    text: string,
+    images?: ImageContent[],
+    transcriptContext?: {
+      message: PersistedUserTurnMessage;
+      recorder: UserTurnTranscriptRecorder;
+    },
+  ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
     const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
     if (images) {
       content.push(...images);
     }
-    this.agent.steer({
+    const runtimeMessage = {
       role: "user",
       content,
       timestamp: Date.now(),
-    });
+    } satisfies PersistedUserTurnMessage;
+    this.agent.steer(
+      transcriptContext
+        ? attachRuntimeUserTurnTranscriptContext(runtimeMessage, transcriptContext)
+        : runtimeMessage,
+    );
   }
 
   /**
