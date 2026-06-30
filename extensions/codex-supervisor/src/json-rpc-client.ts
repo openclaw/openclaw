@@ -10,6 +10,12 @@ import * as path from "node:path";
 import WebSocket from "ws";
 import type { CodexJsonRpcConnection, CodexSupervisorEndpoint } from "./types.js";
 
+// Bound inbound app-server JSON-RPC frames so a hostile or misbehaving Codex
+// app-server cannot OOM the supervisor worker by streaming an unbounded frame.
+// 16 MiB matches the headroom for tool responses / file reads while capping
+// worst-case memory exposure well below the `ws` library's 100 MiB default.
+const MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES = 16 * 1024 * 1024;
+
 type PendingRequest = {
   reject: (error: Error) => void;
   resolve: (value: unknown) => void;
@@ -289,8 +295,9 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       ? new WebSocket("ws://localhost/", {
           headers,
           createConnection: () => connectCodexSupervisorUnixSocket(endpoint.url),
+          maxPayload: MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES,
         })
-      : new WebSocket(endpoint.url, { headers });
+      : new WebSocket(endpoint.url, { headers, maxPayload: MAX_CODEX_SUPERVISOR_WS_INBOUND_BYTES });
     this.openPromise = new Promise((resolve, reject) => {
       this.ws.once("open", resolve);
       this.ws.once("error", reject);
