@@ -6,10 +6,15 @@
  */
 
 import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -27,6 +32,8 @@ import type {
 import { generatePKCE } from "./openai-chatgpt-pkce.runtime.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const OPENAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const OPENAI_OAUTH_DIAGNOSTIC_MAX_BYTES = 4 * 1024;
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CALLBACK_PORT = 1455;
@@ -178,8 +185,24 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
-    const responseBody = await response.arrayBuffer();
-    return new Response(responseBody, {
+    // Read the original response body under a byte cap *before* release(),
+    // so a hostile or buggy token endpoint cannot exhaust memory via the
+    // unbounded arrayBuffer() path.
+    const responseBody = await readResponseWithLimit(response, OPENAI_OAUTH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI Codex token response exceeds ${maxBytes} bytes`),
+    });
+    // `readResponseWithLimit` returns a `Buffer` (Node Uint8Array view). The
+    // global `Response` constructor accepts `BufferSource` (Uint8Array /
+    // ArrayBuffer) as a body; cast through `BodyInit` because `Buffer.buffer`
+    // is typed as `ArrayBufferLike`. Same wrap-shape as
+    // extensions/google/oauth.http.ts:454.
+    const bodyBytes = new Uint8Array(
+      responseBody.buffer,
+      responseBody.byteOffset,
+      responseBody.byteLength,
+    );
+    return new Response(bodyBytes as unknown as BodyInit, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -216,7 +239,9 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const text = await readResponseTextLimited(response, OPENAI_OAUTH_DIAGNOSTIC_MAX_BYTES).catch(
+      () => "",
+    );
     return {
       type: "failed",
       status: response.status,
@@ -224,7 +249,10 @@ async function exchangeAuthorizationCode(
     };
   }
 
-  const json = (await response.json()) as TokenResponseJson;
+  const json = await readProviderJsonResponse<TokenResponseJson>(
+    response,
+    "openai-codex-token-exchange",
+  );
 
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
@@ -258,7 +286,9 @@ async function refreshAccessToken(
     );
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseTextLimited(response, OPENAI_OAUTH_DIAGNOSTIC_MAX_BYTES).catch(
+        () => "",
+      );
       return {
         type: "failed",
         status: response.status,
@@ -266,7 +296,10 @@ async function refreshAccessToken(
       };
     }
 
-    const json = (await response.json()) as TokenResponseJson;
+    const json = await readProviderJsonResponse<TokenResponseJson>(
+      response,
+      "openai-codex-token-refresh",
+    );
 
     const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {

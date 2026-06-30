@@ -174,4 +174,111 @@ describe("OpenAI Codex OAuth flow", () => {
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
   });
+
+  describe("bounded OAuth JSON and text reads", () => {
+    function makeOversizedResponse(): Response {
+      const chunkSize = 1024 * 1024;
+      const maxChunks = 20; // 20 MiB — over 16 MiB cap
+      let chunksSent = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (chunksSent >= maxChunks) {
+              controller.close();
+              return;
+            }
+            chunksSent += 1;
+            controller.enqueue(new Uint8Array(chunkSize));
+          },
+          cancel() {
+            // stream canceled — bounding fired
+          },
+        }),
+      );
+    }
+
+    it("caps oversized token exchange response at postTokenForm level", async () => {
+      ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: makeOversizedResponse(),
+        release: vi.fn(async () => undefined),
+      });
+
+      // readResponseWithLimit throws in postTokenForm; exchangeAuthorizationCode
+      // catches it and returns a failed result.
+      const result = await testing.exchangeAuthorizationCode(
+        "code",
+        "verifier",
+        testing.resolveRedirectUri("localhost"),
+      );
+
+      expect(result).toMatchObject({
+        type: "failed",
+      });
+    });
+
+    it("caps oversized token refresh response at postTokenForm level", async () => {
+      ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: makeOversizedResponse(),
+        release: vi.fn(async () => undefined),
+      });
+
+      // readResponseWithLimit throws in postTokenForm; refreshAccessToken's
+      // outer catch handler returns a failed result.
+      const result = await testing.refreshAccessToken("old-refresh-token");
+
+      expect(result).toMatchObject({
+        type: "failed",
+      });
+    });
+
+    it("rejects malformed token exchange JSON response", async () => {
+      mockTokenResponseText("not-json");
+
+      await expect(
+        testing.exchangeAuthorizationCode(
+          "code",
+          "verifier",
+          testing.resolveRedirectUri("localhost"),
+        ),
+      ).rejects.toThrow(/openai-codex-token-exchange: malformed JSON response/);
+    });
+
+    it("caps oversized error body on failed token exchange", async () => {
+      const errorBody = "x".repeat(8 * 1024); // 8 KB — over 4 KB diagnostic cap
+      ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response(errorBody, { status: 400 }),
+        release: vi.fn(async () => undefined),
+      });
+
+      const result = await testing.exchangeAuthorizationCode(
+        "code",
+        "verifier",
+        testing.resolveRedirectUri("localhost"),
+      );
+
+      expect(result).toMatchObject({
+        type: "failed",
+        status: 400,
+      });
+      // The message should include the truncated text (up to diagnostic cap)
+      // and not the full 8 KB body.
+      expect((result as { message?: string }).message?.length).toBeLessThan(6 * 1024);
+    });
+
+    it("caps oversized error body on failed token refresh", async () => {
+      const errorBody = "y".repeat(8 * 1024); // 8 KB — over 4 KB diagnostic cap
+      ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response(errorBody, { status: 400 }),
+        release: vi.fn(async () => undefined),
+      });
+
+      const result = await testing.refreshAccessToken("old-refresh-token");
+
+      expect(result).toMatchObject({
+        type: "failed",
+        status: 400,
+      });
+      expect((result as { message?: string }).message?.length).toBeLessThan(6 * 1024);
+    });
+  });
 });
