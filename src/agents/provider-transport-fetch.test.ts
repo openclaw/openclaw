@@ -1268,6 +1268,48 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("preserves already-SSE-framed bodies when synthesizing streaming fallbacks", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        'data: {"id":"068B33628193CE8053B9400D777ED001","created":1782317155,"choices":[{"index":0,"delta":{"content":"hello"}}]}\n\n',
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "MiniMax-M3",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "MiniMax-M3", stream: true }),
+      },
+    );
+
+    const text = await response.clone().text();
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(text).toContain('data: {"id":"068B33628193CE8053B9400D777ED001"');
+    expect(text).not.toContain("data: data:");
+    expect(items).toEqual([
+      {
+        id: "068B33628193CE8053B9400D777ED001",
+        created: 1782317155,
+        choices: [{ index: 0, delta: { content: "hello" } }],
+      },
+    ]);
+  });
+
   it("preserves JSON bodies when the request is not streaming", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('{"ok": true}', {

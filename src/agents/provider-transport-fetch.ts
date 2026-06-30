@@ -96,6 +96,10 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
+function looksLikeSsePayload(text: string): boolean {
+  return hasReadableSseData(text) || /^\s*(?:event|id|retry|:)\s*:?/m.test(text);
+}
+
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
   const source = response.body;
   if (!source) {
@@ -156,7 +160,11 @@ function sanitizeOpenAISdkSseResponse(
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                if (looksLikeSsePayload(data)) {
+                  controller.enqueue(encoder.encode(data.endsWith("\n\n") ? data : `${data}\n\n`));
+                } else {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();
