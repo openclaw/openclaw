@@ -141,12 +141,18 @@ export type EmbeddedRunAttemptResult = {
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled?: false;
       };
   sessionIdUsed: string;
