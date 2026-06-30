@@ -387,7 +387,11 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 }
 
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = markdown
+    .replace(/(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
+    .replace(/(^|\n)(~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
+    .replace(/`[^`]+`/g, "``")
+    .replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

@@ -421,4 +421,48 @@ describe("toWikiPageSummary", () => {
       },
     ]);
   });
+
+  it("excludes wikilinks and markdown links inside fenced code blocks and inline code", () => {
+    const page = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/fenced-code.md",
+      relativePath: "concepts/fenced-code.md",
+      raw: [
+        "---",
+        "pageType: concept",
+        "id: concept.fenced-code",
+        "title: Fenced Code Test",
+        "---",
+        "",
+        "# Fenced Code Test",
+        "",
+        "A real link to [[real-target]] and [real-md](./real-md.md).",
+        "",
+        "```scala",
+        "val x: Future[Option[User]] = ???",
+        "```",
+        "",
+        "```bash",
+        'if [[ "$name" == "Alice" ]]; then',
+        "  echo hello",
+        "fi",
+        "```",
+        "",
+        "Some `inline [[fake-inline]] code` here.",
+        "",
+        "~~~python",
+        "x = [[1, 2, 3]]",
+        "~~~",
+        "",
+        "Another real link to [[also-real]].",
+      ].join("\n"),
+    });
+
+    expect(page.linkTargets).toContain("real-target");
+    expect(page.linkTargets).toContain("also-real");
+    expect(page.linkTargets).toContain("concepts/real-md.md");
+    expect(page.linkTargets).not.toContain("Option[User]");
+    expect(page.linkTargets).not.toContain('"$name" == "Alice"');
+    expect(page.linkTargets).not.toContain("fake-inline");
+    expect(page.linkTargets).not.toContain("1, 2, 3");
+  });
 });
