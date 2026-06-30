@@ -426,6 +426,11 @@ upgrades the bundled `@openai/codex` version or when a deployment points
 account-scoped. Use `/codex models` on a running gateway to see the live catalog
 for that harness and account.
 
+When the app-server reports model context metadata, OpenClaw treats Codex's
+native context window as the model `contextWindow` and Codex's effective usable
+window as `contextTokens`. That keeps OpenClaw's display and budgeting aligned
+with the native Codex runtime instead of any stale local override.
+
 If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 
 - GPT-5.5

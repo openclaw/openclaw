@@ -47,8 +47,18 @@ export function buildCodexModelDefinition(model: {
   displayName?: string;
   inputModalities: string[];
   supportedReasoningEfforts: string[];
+  contextWindow?: number;
+  maxContextWindow?: number;
+  effectiveContextWindowPercent?: number;
+  effectiveContextWindow?: number;
 }): ModelDefinitionConfig {
   const id = model.id.trim() || model.model.trim();
+  const contextWindow = model.contextWindow ?? model.maxContextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const effectiveContextWindow =
+    model.effectiveContextWindow ??
+    (model.effectiveContextWindowPercent
+      ? Math.floor((contextWindow * model.effectiveContextWindowPercent) / 100)
+      : undefined);
   return {
     id,
     name: model.displayName?.trim() || id,
@@ -56,7 +66,10 @@ export function buildCodexModelDefinition(model: {
     reasoning: model.supportedReasoningEfforts.length > 0 || shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
+    ...(effectiveContextWindow && effectiveContextWindow < contextWindow
+      ? { contextTokens: effectiveContextWindow }
+      : {}),
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: {
       supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,

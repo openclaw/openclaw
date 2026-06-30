@@ -20,6 +20,11 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   defaultReasoningEffort?: string;
+  contextWindow?: number;
+  maxContextWindow?: number;
+  effectiveContextWindowPercent?: number;
+  effectiveContextWindow?: number;
+  autoCompactTokenLimit?: number;
 };
 
 /** One page of Codex app-server model metadata plus optional pagination state. */
@@ -149,6 +154,11 @@ function readCodexModel(value: CodexModel): CodexAppServerModel | undefined {
   if (!id || !model) {
     return undefined;
   }
+  const contextWindow = readPositiveInt(value.contextWindow);
+  const maxContextWindow = readPositiveInt(value.maxContextWindow);
+  const effectiveContextWindowPercent = readPositiveInt(value.effectiveContextWindowPercent);
+  const effectiveContextWindow = readPositiveInt(value.effectiveContextWindow);
+  const autoCompactTokenLimit = readPositiveInt(value.autoCompactTokenLimit);
   return {
     id,
     model,
@@ -165,6 +175,11 @@ function readCodexModel(value: CodexModel): CodexAppServerModel | undefined {
     ...(readNonEmptyString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: readNonEmptyString(value.defaultReasoningEffort) }
       : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxContextWindow ? { maxContextWindow } : {}),
+    ...(effectiveContextWindowPercent ? { effectiveContextWindowPercent } : {}),
+    ...(effectiveContextWindow ? { effectiveContextWindow } : {}),
+    ...(autoCompactTokenLimit ? { autoCompactTokenLimit } : {}),
   };
 }
 
@@ -181,6 +196,12 @@ function readNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function readPositiveInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function normalizeMaxPages(value: unknown): number {
