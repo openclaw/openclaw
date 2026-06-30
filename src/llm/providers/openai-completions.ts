@@ -53,6 +53,10 @@ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
+import {
+  isEphemeralToolName,
+  summarizeEphemeralToolResult,
+} from "../utils/ephemeral-tool-results.js";
 
 /**
  * Check if conversation messages contain tool calls or tool results.
@@ -1144,11 +1148,18 @@ export function convertMessages(
           .join("\n");
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
-        // Always send tool result with text (or placeholder if only images)
-        const content = sanitizeToolResultText(
+        // For ephemeral / repetitive tools (e.g. heartbeat_respond), replace
+        // the full output with a fixed-length summary.  This keeps the
+        // tool-call pairing intact while preventing variable-length tool
+        // output from breaking DeepSeek prefix-cache continuity.
+        const isEphemeral = isEphemeralToolName(toolMsg.toolName);
+        const rawContent = sanitizeToolResultText(
           textResult,
           hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
         );
+        const content = isEphemeral
+          ? summarizeEphemeralToolResult(toolMsg.toolName, rawContent)
+          : rawContent;
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",

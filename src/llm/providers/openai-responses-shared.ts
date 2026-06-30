@@ -46,6 +46,10 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
 import { transformMessages } from "./transform-messages.js";
+import {
+  isEphemeralToolName,
+  summarizeEphemeralToolResult,
+} from "../utils/ephemeral-tool-results.js";
 
 // =============================================================================
 // Utilities
@@ -389,6 +393,15 @@ export function convertResponsesMessages<TApi extends Api>(
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
 
+      // For ephemeral / repetitive tools (e.g. heartbeat_respond), replace
+      // the full output with a fixed-length summary.  This keeps the
+      // tool-call pairing intact while preventing variable-length tool
+      // output from breaking DeepSeek prefix-cache continuity.
+      const isEphemeral = isEphemeralToolName(msg.toolName);
+      const summarizedTextResult = isEphemeral
+        ? summarizeEphemeralToolResult(msg.toolName, sanitizedTextResult)
+        : sanitizedTextResult;
+
       let output: string | ResponseFunctionCallOutputItemList;
       if (hasImages && model.input.includes("image")) {
         const contentParts: ResponseFunctionCallOutputItemList = [];
@@ -396,7 +409,7 @@ export function convertResponsesMessages<TApi extends Api>(
         if (hasText) {
           contentParts.push({
             type: "input_text",
-            text: sanitizedTextResult,
+            text: isEphemeral ? summarizedTextResult : sanitizedTextResult,
           });
         }
 
@@ -412,10 +425,13 @@ export function convertResponsesMessages<TApi extends Api>(
 
         output = contentParts;
       } else {
-        output = sanitizeToolResultText(
+        const rawOutput = sanitizeToolResultText(
           textResult,
           hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
         );
+        output = isEphemeral
+          ? summarizeEphemeralToolResult(msg.toolName, rawOutput)
+          : rawOutput;
       }
 
       messages.push({
