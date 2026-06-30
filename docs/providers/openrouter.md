@@ -380,7 +380,7 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
     replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
     required follow-up shape. OpenClaw sends OpenRouter-supported
-    `reasoning_effort` values for these routes; `xhigh` is the highest advertised
+    `reasoning.effort` values for these routes; `xhigh` is the highest advertised
     level, and stale `max` overrides are mapped to `xhigh`.
   </Accordion>
 
