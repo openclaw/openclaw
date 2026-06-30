@@ -1213,11 +1213,9 @@ internal fun recoveryGatewayDetail(
   nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
-  remoteAddress
-    ?.takeIf { it.isNotBlank() }
-    ?: if (ready) {
-      "Ready for chat and voice"
-    } else if (
+  if (ready) {
+    remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
+  } else if (
       nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
@@ -1238,7 +1236,7 @@ internal fun recoveryGatewayDetail(
     } else if (gatewayStatusLooksLikePairing(statusText)) {
       "Gateway approval is in progress. OpenClaw will retry automatically."
     } else {
-      "Gateway unreachable"
+      remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
     }
 
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =

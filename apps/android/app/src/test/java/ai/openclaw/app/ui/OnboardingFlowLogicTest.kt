@@ -226,6 +226,29 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayDetailPrefersAuthProblemOverStaleAddressWhenNotReady() {
+    assertEquals(
+      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+      recoveryGatewayDetail(
+        ready = false,
+        remoteAddress = "wss://gateway.example.test",
+        statusText = "Connected (node offline)",
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "AUTH_DEVICE_TOKEN_MISMATCH",
+            message = "authentication needed",
+            reason = null,
+            requestId = null,
+            recommendedNextStep = "update_auth_credentials",
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
     val cases =
       listOf(
