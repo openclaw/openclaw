@@ -8,6 +8,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { testing } from "./index.js";
 
@@ -119,7 +120,7 @@ describe("active-memory plugin", () => {
       agent: {
         runEmbeddedAgent,
         session: {
-          resolveStorePath: vi.fn(() => "/tmp/openclaw-session-store.json"),
+          resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
           saveSessionStore: vi.fn(async () => {}),
           getSessionEntry: vi.fn(
@@ -139,7 +140,7 @@ describe("active-memory plugin", () => {
             }) => {
               let result: Record<string, unknown> | null = null;
               await hoisted.updateSessionStore(
-                "/tmp/openclaw-session-store.json",
+                path.join(stateDir, "sessions.json"),
                 (store: Record<string, Record<string, unknown>>) => {
                   const existing = store[params.sessionKey] ?? params.fallbackEntry;
                   if (!existing) {
@@ -2941,6 +2942,72 @@ describe("active-memory plugin", () => {
     expectLinesToContain(
       lines,
       "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
+    );
+  });
+
+  it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      maxSummaryChars: 80,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-partial-sqlite-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-partial-sqlite-transcript",
+      updatedAt: 0,
+    };
+    let artifactSessionFile = "";
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        abortSignal?: AbortSignal;
+        sessionFile?: string;
+        sessionTarget?: {
+          agentId: string;
+          sessionId: string;
+          sessionKey: string;
+          storePath?: string;
+        };
+      }) => {
+        artifactSessionFile = params.sessionFile ?? "";
+        const target = params.sessionTarget;
+        if (!target) {
+          throw new Error("expected active-memory runtime session target");
+        }
+        await appendSessionTranscriptMessageByIdentity({
+          ...target,
+          message: {
+            role: "assistant",
+            content: "sqlite partial recall summary",
+          },
+        });
+        await waitForAbort(params.abortSignal);
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout partial sqlite", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "sqlite partial recall summary");
+    if (artifactSessionFile) {
+      await expectPathMissing(artifactSessionFile);
+    }
+    const runParams = lastEmbeddedRunParams();
+    expect(runParams.sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionKey: expect.stringMatching(/^agent:main:timeout-partial-sqlite-transcript:/),
+    });
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
+    expectLinesToContain(
+      lines,
+      "🔎 Active Memory Debug: timeout_partial: 29 chars recovered (not persisted)",
     );
   });
 
