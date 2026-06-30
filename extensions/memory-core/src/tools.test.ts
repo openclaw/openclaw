@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getMemoryCloseMockArgs,
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
@@ -268,7 +267,7 @@ describe("memory_search unavailable payloads", () => {
       let searchSignal: AbortSignal | undefined;
       setMemorySearchImpl(async (opts) => {
         searchSignal = opts?.signal;
-        return await new Promise(() => undefined);
+        return await new Promise<unknown[]>(() => {});
       });
       const tool = createMemorySearchToolOrThrow({
         config: asOpenClawConfig({
@@ -335,7 +334,6 @@ describe("memory_search unavailable payloads", () => {
       });
       expect(searchSignal?.aborted).toBe(true);
       expect(getMemoryCloseMockCalls()).toBe(1);
-      expect(getMemoryCloseMockArgs()).toEqual([{ timeoutMs: 5_000 }]);
     } finally {
       vi.useRealTimers();
     }
@@ -516,7 +514,6 @@ describe("memory_search unavailable payloads", () => {
       expect.objectContaining({ purpose: "cli" }),
     ]);
     expect(getMemoryCloseMockCalls()).toBe(1);
-    expect(getMemoryCloseMockArgs()).toEqual([{ timeoutMs: 5_000 }]);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {

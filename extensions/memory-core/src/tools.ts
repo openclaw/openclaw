@@ -47,7 +47,6 @@ type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unkno
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 
 const DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
-const ONE_SHOT_CLI_MEMORY_MANAGER_CLOSE_TIMEOUT_MS = 5_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -136,7 +135,7 @@ async function closeMemoryManagers(
 ): Promise<void> {
   for (const manager of managers) {
     try {
-      await manager.close?.(ONE_SHOT_CLI_MEMORY_MANAGER_CLOSE_TIMEOUT_MS);
+      await manager.close?.();
     } catch {
       // Search results should not be hidden by best-effort transient cleanup.
     }

@@ -58,7 +58,7 @@ const stubManager = {
   }),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn((_timeoutMs?: number) => Promise.resolve()),
+  close: vi.fn(async () => {}),
 };
 
 const getMemorySearchManagerMock = vi.fn(
@@ -149,10 +149,6 @@ export function getMemorySyncMockCalls(): number {
 
 export function getMemoryCloseMockCalls(): number {
   return stubManager.close.mock.calls.length;
-}
-
-export function getMemoryCloseMockArgs(): Array<{ timeoutMs?: number }> {
-  return stubManager.close.mock.calls.map(([timeoutMs]) => ({ timeoutMs }));
 }
 
 export function getMemorySearchManagerMockConfigs(): unknown[] {

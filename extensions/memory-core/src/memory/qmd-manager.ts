@@ -119,6 +119,7 @@ function asAbortError(signal: AbortSignal): Error {
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const QMD_CLI_CLOSE_PENDING_UPDATE_TIMEOUT_MS = 5_000;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -1921,7 +1922,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  async close(timeoutMs?: number): Promise<void> {
+  async close(): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -1952,9 +1953,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     if (pendingUpdates.length > 0) {
       const cleanupTimeoutMs =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-          ? Math.floor(timeoutMs)
-          : undefined;
+        this.mode === "cli" ? QMD_CLI_CLOSE_PENDING_UPDATE_TIMEOUT_MS : undefined;
       const updatesDone = Promise.all(
         pendingUpdates.map(async ({ promise }) => await promise.catch(() => undefined)),
       ).then(() => undefined);

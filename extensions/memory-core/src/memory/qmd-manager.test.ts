@@ -293,6 +293,7 @@ describe("QmdMemoryManager", () => {
   }
 
   function createClosableQmdManagerForTest(params?: {
+    mode?: "full" | "status" | "cli";
     pendingUpdate?: Promise<void> | null;
     queuedForcedUpdate?: Promise<void> | null;
   }): QmdMemoryManager {
@@ -307,6 +308,7 @@ describe("QmdMemoryManager", () => {
       queuedForcedRuns: number;
       pendingUpdate: Promise<void> | null;
       queuedForcedUpdate: Promise<void> | null;
+      mode: "full" | "status" | "cli";
       db: { close: () => void } | null;
     };
     mutable.closed = false;
@@ -318,11 +320,12 @@ describe("QmdMemoryManager", () => {
     mutable.queuedForcedRuns = 0;
     mutable.pendingUpdate = params?.pendingUpdate ?? null;
     mutable.queuedForcedUpdate = params?.queuedForcedUpdate ?? null;
+    mutable.mode = params?.mode ?? "cli";
     mutable.db = null;
     return manager;
   }
 
-  it("clears qmd close timeout timers when update waits settle first", async () => {
+  it("clears qmd CLI close timeout timers when update waits settle first", async () => {
     vi.useFakeTimers();
     try {
       const manager = createClosableQmdManagerForTest({
@@ -330,7 +333,7 @@ describe("QmdMemoryManager", () => {
         queuedForcedUpdate: Promise.resolve(),
       });
 
-      await manager.close(5_000);
+      await manager.close();
       await vi.advanceTimersByTimeAsync(5_000);
 
       expectMockMessageNotContains(logWarnMock, "qmd close timed out");
@@ -340,7 +343,7 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("uses one qmd close timeout across pending and queued update waits", async () => {
+  it("uses one qmd CLI close timeout across pending and queued update waits", async () => {
     vi.useFakeTimers();
     try {
       const manager = createClosableQmdManagerForTest({
@@ -349,7 +352,7 @@ describe("QmdMemoryManager", () => {
       });
       let closed = false;
 
-      const closePromise = manager.close(5_000).then(() => {
+      const closePromise = manager.close().then(() => {
         closed = true;
       });
 
@@ -365,6 +368,36 @@ describe("QmdMemoryManager", () => {
         logWarnMock,
         "qmd close timed out waiting for pending update and queued forced update after 5000ms",
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for pending update cleanup without timeout for full qmd managers", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolvePending!: () => void;
+      const manager = createClosableQmdManagerForTest({
+        mode: "full",
+        pendingUpdate: new Promise<void>((resolve) => {
+          resolvePending = resolve;
+        }),
+      });
+      let closed = false;
+
+      const closePromise = manager.close().then(() => {
+        closed = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await Promise.resolve();
+      expect(closed).toBe(false);
+
+      resolvePending();
+      await closePromise;
+
+      expect(closed).toBe(true);
+      expectMockMessageNotContains(logWarnMock, "qmd close timed out");
     } finally {
       vi.useRealTimers();
     }
