@@ -4628,6 +4628,71 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
   });
 
+  it("rejects completed output when a rotated SQLite transcript reports unavailable memory", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-rotated-sqlite-memory-unavailable",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        sessionTarget?: {
+          agentId: string;
+          sessionId: string;
+          sessionKey: string;
+          storePath?: string;
+        };
+      }) => {
+        const target = params.sessionTarget;
+        if (!target?.storePath) {
+          throw new Error("expected active-memory SQLite runtime target");
+        }
+        const rotatedTarget = {
+          ...target,
+          sessionId: "s-rotated-sqlite-memory-unavailable-next",
+        };
+        await appendSessionTranscriptMessageByIdentity({
+          ...rotatedTarget,
+          message: {
+            role: "toolResult",
+            toolCallId: "memory-search-1",
+            toolName: "memory_search",
+            isError: true,
+            content: [],
+            details: {
+              disabled: true,
+              warning: "Memory search is disabled for this session.",
+            },
+          },
+        });
+        return {
+          payloads: [{ text: "This arbitrary output must not become recalled context." }],
+          meta: {
+            agentMeta: {
+              sessionFile: `sqlite:${rotatedTarget.agentId}:${rotatedTarget.sessionId}:${rotatedTarget.storePath}`,
+            },
+          },
+        };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? rotated sqlite unavailable", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
+  });
+
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
