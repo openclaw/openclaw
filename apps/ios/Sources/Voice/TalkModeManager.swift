@@ -1733,6 +1733,7 @@ final class TalkModeManager: NSObject {
         if let outputFormat = self.defaultOutputFormat, !outputFormat.isEmpty {
             payload["outputFormat"] = outputFormat
         }
+        if !language.isEmpty { payload["language"] = language }
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
         let json = String(data: jsonData, encoding: .utf8)
 
@@ -1749,13 +1750,20 @@ final class TalkModeManager: NSObject {
                 userInfo: [NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio"])
         }
 
-        // Play returned audio as stream via MP3 player (most providers return MP3)
+        // Play returned audio in the format returned by the provider
         let stream = AsyncThrowingStream<Data, Error> { continuation in
             continuation.yield(audioData)
             continuation.finish()
         }
-        self.lastPlaybackWasPCM = false
-        let playback = await self.mp3Player.play(stream: stream)
+        let sampleRate = result.outputformat.flatMap { TalkTTSValidation.pcmSampleRate(from: $0) }
+        let playback: StreamingPlaybackResult
+        if let sampleRate {
+            self.lastPlaybackWasPCM = true
+            playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
+        } else {
+            self.lastPlaybackWasPCM = false
+            playback = await self.mp3Player.play(stream: stream)
+        }
         if !playback.finished, playback.interruptedAt == nil {
             throw NSError(
                 domain: "TalkModeManager",
@@ -2266,9 +2274,20 @@ final class TalkModeManager: NSObject {
         }
 
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {
-            try? await TalkSystemSpeechSynthesizer.shared.speak(
-                text: text,
-                language: self.incrementalSpeechLanguage)
+            // FIX #98153: Route incremental playback through Gateway TTS for non-ElevenLabs providers
+            if self.activeTalkProvider != Self.defaultTalkProvider {
+                let resolvedVoice = self.currentVoiceId ?? self.defaultVoiceId
+                try? await self.playGatewayTalkSpeak(
+                    text: text,
+                    directive: self.incrementalSpeechDirective,
+                    voiceId: resolvedVoice,
+                    modelId: self.currentModelId ?? self.defaultModelId,
+                    language: self.incrementalSpeechLanguage)
+            } else {
+                try? await TalkSystemSpeechSynthesizer.shared.speak(
+                    text: text,
+                    language: self.incrementalSpeechLanguage)
+            }
             return
         }
 
