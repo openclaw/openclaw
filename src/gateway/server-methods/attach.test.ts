@@ -37,7 +37,6 @@ describe("attach gateway methods", () => {
     expect(body.mcpConfig).toBeTruthy();
     expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
     expect(body.env.OPENCLAW_MCP_SESSION_KEY).toBe("agent:main:attach-method");
-    // the minted token resolves to the bound session in the shared store
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
@@ -78,12 +77,12 @@ describe("attach gateway methods", () => {
 
     const r2 = vi.fn();
     await attachHandlers["attach.grant"]({
-      params: { sessionKey: "agent:main:ttl2", ttlMs: -5 }, // non-positive → default ttl
+      params: { sessionKey: "agent:main:ttl2", ttlMs: -5 },
       respond: r2,
       context: { getRuntimeConfig: () => ({}) },
     } as unknown as GatewayRequestHandlerOptions);
     const b2 = r2.mock.calls[0][1] as { expiresAtMs: number };
-    expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000); // ~1h default window
+    expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000);
   });
 
   it("attach.revoke treats non-object params as a missing token (INVALID_REQUEST)", async () => {

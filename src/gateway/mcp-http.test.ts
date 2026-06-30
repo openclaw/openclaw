@@ -738,7 +738,6 @@ describe("mcp loopback server", () => {
       port: serverPort,
       token: grant.token,
       headers: jsonHeaders({
-        // spoof the full delivery/action context, not just the session key
         "x-session-key": "agent:main:SPOOFED-other-session",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-account-id": "victim-account",
@@ -752,12 +751,9 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
-    // session is grant-bound, NOT the spoofed header
     expect(call.sessionKey).toBe("agent:main:attach-host");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
-    // a grant is a lower-trust boundary: every other caller-supplied context header is ignored
-    // (fail-closed), so a grant holder cannot spoof delivery/action context into scoped tools.
     expect(call.messageProvider).toBeUndefined();
     expect(call.accountId).toBeUndefined();
     expect(call.currentChannelId).toBeUndefined();

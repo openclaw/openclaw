@@ -120,9 +120,6 @@ function resolveMcpSender(params: {
   if (ownerTokenMatched || nonOwnerTokenMatched) {
     return { senderIsOwner: ownerTokenMatched };
   }
-  // Attach grant: an external/interactive harness presents a per-session grant token (mcp-grant-store).
-  // Always non-owner, and its scope is bound to the grant's sessionKey so a grant holder cannot widen
-  // scope via the x-session-key header — resolveMcpRequestContext honors boundSessionKey instead.
   const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
   if (grant) {
@@ -368,12 +365,8 @@ export function resolveMcpRequestContext(
   cfg: OpenClawConfig,
   auth: { senderIsOwner: boolean; boundSessionKey?: string },
 ): McpRequestContext {
-  // An attach grant is a lower-trust boundary: bind the session server-side AND ignore every
-  // caller-supplied delivery/action context header (message channel, account, current channel/
-  // thread/message, inbound-audio, event-kind, source-reply mode, explicit-target). Those headers
-  // feed scoped tools and the message tool, so a grant holder must not be able to spoof them —
-  // only the grant's pinned sessionKey is trusted. Owner/non-owner (the cooperative, gateway-
-  // launched cli-backend) keep header-driven context.
+  // Grant-authenticated callers get only their server-bound session; spoofable
+  // delivery/action headers stay reserved for the gateway-launched loopback client.
   if (auth.boundSessionKey) {
     return {
       sessionKey: auth.boundSessionKey,
