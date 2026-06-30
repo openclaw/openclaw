@@ -976,6 +976,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Provider Dynamic\n\nDynamic guidance.");
     expect(prompt).toContain("## Tool Call Style\nProvider-specific tool call guidance.");
     expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
+    // The relocated exec-approval guidance stays suppressed when tool_call_style is
+    // provider-overridden, preserving the "override replaces the whole section" contract.
+    expect(prompt).not.toContain("If exec returns approval-pending");
   });
 
   it("includes inline button style guidance when runtime supports inline buttons", () => {

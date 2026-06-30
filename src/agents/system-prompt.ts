@@ -1288,11 +1288,17 @@ export function buildAgentSystemPrompt(params: {
     // Exec-approval guidance varies by channel (CLI /approve vs native approval UI)
     // and Authorized Senders varies by owner/identity (and is dropped when minimal),
     // so both must sit below the boundary to keep the static prefix byte-identical.
-    buildExecApprovalPromptGuidance({
-      runtimeChannel: params.runtimeInfo?.channel,
-      inlineButtonsEnabled,
-      runtimeCapabilities,
-    }),
+    // Still suppressed when `tool_call_style` is provider-overridden, preserving the
+    // original contract where that override replaces the whole section (incl. this line).
+    ...(providerSectionOverrides.tool_call_style
+      ? []
+      : [
+          buildExecApprovalPromptGuidance({
+            runtimeChannel: params.runtimeInfo?.channel,
+            inlineButtonsEnabled,
+            runtimeCapabilities,
+          }),
+        ]),
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildWebchatCanvasSection({
       isMinimal,
