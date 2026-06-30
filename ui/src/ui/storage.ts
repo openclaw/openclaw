@@ -1,5 +1,6 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
+const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -256,15 +257,21 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw = storage?.getItem(scopedKey) ?? storage?.getItem(SETTINGS_KEY_PREFIX + "default");
+    const raw =
+      storage?.getItem(scopedKey) ??
+      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
+      storage?.getItem(LEGACY_SETTINGS_KEY);
     if (!raw) {
       return defaults;
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    // Block stale cross-base-path gatewayUrl values. The unscoped legacy
+    // key can carry a gatewayUrl from a sibling reverse-proxy path on the
+    // same origin. When the stored URL doesn't match the current page,
+    // use the current gateway's effective URL instead (#97636).
+    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : defaultUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
