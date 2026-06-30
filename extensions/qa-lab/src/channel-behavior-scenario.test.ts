@@ -586,8 +586,8 @@ describe("channel behavior scenarios", () => {
   it("uses qa-channel transport defaults for channel scenario primitives", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
-    transport.handleAction = async ({ args }) => ({
-      details: {
+    transport.handleAction = async ({ args }) => {
+      const details = {
         thread: {
           accountId: "default",
           conversationId: String(args.channelId),
@@ -596,8 +596,12 @@ describe("channel behavior scenarios", () => {
           id: "thread-1",
           title: typeof args.title === "string" ? args.title : "QA thread",
         },
-      },
-    });
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(details) }],
+        details,
+      };
+    };
     state.addOutboundMessage({
       to: "dm:alice",
       text: "old reply",
