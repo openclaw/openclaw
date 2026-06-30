@@ -96,6 +96,18 @@ const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 
+/** Matches a trailing standalone `notify=false` delivery marker.
+ *  Only consumed when it appears on its own line at the end of the message.
+ *  Inline mentions like "use notify=false" are left unchanged. */
+const TRAILING_NOTIFY_FALSE_RE = /(?:^|\n)\s*notify=false\s*$/;
+
+function consumeTrailingNotifyFalseMarker(text: string): { text: string } | null {
+  if (!text) return null;
+  const match = TRAILING_NOTIFY_FALSE_RE.exec(text);
+  if (!match) return null;
+  return { text: text.slice(0, match.index).trimEnd() };
+}
+
 type TelegramSendOpts = {
   cfg: OpenClawConfig;
   token?: string;
@@ -693,6 +705,15 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
+  // Consume trailing standalone `notify=false` delivery marker.
+  // The agent may append this marker to request silent delivery. Strip it
+  // from the visible text and map it to Telegram's disable_notification.
+  const notifyFalseResult = consumeTrailingNotifyFalseMarker(text);
+  if (notifyFalseResult) {
+    text = notifyFalseResult.text;
+    opts = { ...opts, silent: true };
+  }
+
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
