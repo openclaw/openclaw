@@ -99,6 +99,74 @@ describe("UrbitSSEClient", () => {
     });
   });
 
+  describe("sendSubscription bounded errorText read", () => {
+    // Mirrors the bounded read at extensions/tlon/src/urbit/sse-client.ts
+    // (sendSubscription's non-OK subscribe PUT response path). The helper-
+    // only test (sse-client.errortext.test.ts) was deleted because reverting
+    // the production line back to `response.text()` did not fail it.
+    //
+    // Mocks use real `Response` objects so both `response.body` (the stream
+    // readResponseWithLimit reads) and `response.text()` (the path a revert
+    // would take) resolve against the same payload. Tests fail on body size
+    // when the bounded read is reverted, not on mock shape.
+    it("absorbs the overflow throw when a hostile subscribe response body exceeds the 8 KiB cap", async () => {
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      const hostileBytes = new Uint8Array(32 * 1024).fill(0x78); // 32 KiB of 'x'
+      mockUrbitFetch.mockResolvedValueOnce({
+        response: new Response(hostileBytes, { status: 400 }),
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      // Drive the connected-state subscribe path so sendSubscription runs.
+      (client as { isConnected: boolean }).isConnected = true;
+
+      let capturedError: unknown;
+      await client.subscribe({
+        app: "chat",
+        path: "/dm/~zod",
+        event: () => {},
+        err: (e) => {
+          capturedError = e;
+        },
+      });
+
+      // The catch swallowed the overflow throw; errorText is "" → status-only message.
+      expect(capturedError).toBeInstanceOf(Error);
+      expect((capturedError as Error).message).toBe("Subscribe failed: 400");
+      expect((capturedError as Error).message.length).toBeLessThan(100);
+      expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes a short Urbit error verbatim through the bounded read", async () => {
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValueOnce({
+        response: new Response("not authenticated", { status: 400 }),
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      (client as { isConnected: boolean }).isConnected = true;
+
+      let capturedError: unknown;
+      await client.subscribe({
+        app: "chat",
+        path: "/dm/~zod",
+        event: () => {},
+        err: (e) => {
+          capturedError = e;
+        },
+      });
+
+      expect(capturedError).toBeInstanceOf(Error);
+      expect((capturedError as Error).message).toBe(
+        "Subscribe failed: 400 - not authenticated",
+      );
+    });
+  });
+
   describe("updateCookie", () => {
     it("normalizes cookie when updating", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
