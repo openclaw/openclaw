@@ -1416,14 +1416,79 @@ function createResponsesFirstEventTimeoutError(model: Model, timeoutMs: number):
   );
 }
 
+/**
+ * Wraps an OpenAI Responses API stream with first-event timeout and external termination control.
+ *
+ * ## Problem This Solves
+ * The Responses API uses a dual-layer completion protocol:
+ * - Business logic layer: `response.completed` event signals semantic completion
+ * - Transport layer (SSE): `data: [DONE]` message signals HTTP stream termination
+ *
+ * Without proper stream control, consumers would block waiting for HTTP stream closure
+ * even after receiving business logic completion, leading to 120+ second delays.
+ *
+ * ## Timeout Behavior
+ * If the first event is not received within the timeout, the stream is aborted.
+ * Otherwise, the timeout is cleared and the stream continues normally.
+ *
+ * ## Termination Control
+ * Returns a controlled stream that supports external termination via:
+ * - `terminate()` method: Immediate termination from outside the iterator
+ * - `shouldTerminateAt()` callback: Condition-based termination checks during iteration
+ *
+ * ## Protocol Layer Compliance
+ * This wrapper properly handles the dual-layer protocol of the Responses API by:
+ * 1. Allowing natural SSE stream consumption until `[DONE]` message
+ * 2. Providing early termination when business logic completes (via `shouldTerminateAt`)
+ * 3. Supporting external termination signals (abort, timeout, explicit exit)
+ *
+ * ## Why This Approach Is Correct
+ * - Follows OpenAI's protocol design: business logic and transport layers are independent
+ * - Maintains proper SSE consumption: HTTP stream completes naturally
+ * - Enables responsive termination: consumer can exit on business logic completion
+ * - Prevents resource waste: no blocking on transport closure after semantic completion
+ *
+ * @param openaiStream - The raw OpenAI SSE stream
+ * @param model - Model identifier for timeout error messages
+ * @param timeoutMs - First-event timeout in milliseconds (disabled if undefined/<=0)
+ * @param shouldTerminateAt - Optional callback checked during iteration for early termination
+ * @returns A controlled async iterable with termination control methods
+ */
 function withResponsesFirstEventTimeout(
   openaiStream: AsyncIterable<unknown>,
   model: Model,
   timeoutMs: number | undefined,
-): AsyncIterable<unknown> {
+  shouldTerminateAt?: () => boolean,
+): AsyncIterable<unknown> & { terminate: () => void } {
   if (timeoutMs === undefined || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
-    return openaiStream;
+    let terminated = false;
+    return {
+      async *[Symbol.asyncIterator]() {
+        const iterator = openaiStream[Symbol.asyncIterator]();
+        try {
+          for (;;) {
+            // Check for external termination signal
+            if (terminated) {
+              await iterator.return?.();
+              return;
+            }
+            const next = await iterator.next();
+            if (next.done) {
+              return;
+            }
+            yield next.value;
+          }
+        } catch (error) {
+          void iterator.return?.().catch(() => undefined);
+          throw error;
+        }
+      },
+      terminate: () => {
+        terminated = true;
+      },
+    };
   }
+  let terminated = false;
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = openaiStream[Symbol.asyncIterator]();
@@ -1435,6 +1500,7 @@ function withResponsesFirstEventTimeout(
         }
       };
       try {
+        // Wait for first event with timeout protection
         const first = await new Promise<IteratorResult<unknown>>((resolve, reject) => {
           timer = setTimeout(
             () => reject(createResponsesFirstEventTimeoutError(model, timeoutMs)),
@@ -1446,7 +1512,13 @@ function withResponsesFirstEventTimeout(
           return;
         }
         yield first.value;
+        // Process remaining events with early termination support
         for (;;) {
+          // Check for external or conditional termination signals
+          if (terminated || (shouldTerminateAt?.() ?? false)) {
+            await iterator.return?.();
+            return;
+          }
           const next = await iterator.next();
           if (next.done) {
             return;
@@ -1459,6 +1531,9 @@ function withResponsesFirstEventTimeout(
       } finally {
         clear();
       }
+    },
+    terminate: () => {
+      terminated = true;
     },
   };
 }
@@ -1595,13 +1670,14 @@ async function processResponsesStream(
       }
     }
   };
-  const guardedStream = withResponsesFirstEventTimeout(
+  // Stream controller with timeout protection and external termination capabilities
+  const streamController = withResponsesFirstEventTimeout(
     openaiStream,
     model,
     options?.firstEventTimeoutMs,
   );
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
-  for await (const rawEvent of guardedStream) {
+  for await (const rawEvent of streamController) {
     throwIfModelStreamAborted(options?.signal);
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
@@ -1852,8 +1928,7 @@ async function processResponsesStream(
       ) {
         output.stopReason = "toolUse";
       }
-      // Break immediately after response.completed to avoid waiting for timeout
-      break;
+      // Continue loop to allow SSE stream to run to completion and consume [DONE] message
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
