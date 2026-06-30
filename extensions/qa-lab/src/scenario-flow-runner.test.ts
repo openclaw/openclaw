@@ -50,6 +50,7 @@ async function runLoadedScenarioFlow(
     resetBus: async () => {
       state.reset();
     },
+    injectInboundMessage: state.addInboundMessage.bind(state),
     runAgentPrompt: async () => undefined,
     formatTransportTranscript: formatTestTranscript,
     waitForOutboundMessage: async (
@@ -226,6 +227,16 @@ describe("scenario-flow-runner", () => {
               {
                 assert: {
                   expr: 'typeof channelScenarios.defineChannelBehaviorScenario === "function"',
+                },
+              },
+              {
+                assert: {
+                  expr: 'typeof channelScenarios.runChannelBehaviorScenario === "function"',
+                },
+              },
+              {
+                assert: {
+                  expr: 'typeof channelScenarios.createQaFlowChannelScenarioDriver === "function"',
                 },
               },
             ],

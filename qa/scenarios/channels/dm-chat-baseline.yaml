@@ -32,23 +32,49 @@ flow:
     - name: replies coherently in DM
       actions:
         - call: resetBus
-        - call: state.addInboundMessage
+        - set: channelScenarios
+          value:
+            expr: await qaImport("./channel-behavior-scenario.js")
+        - set: channelScenario
+          value:
+            expr: |-
+              channelScenarios.defineChannelBehaviorScenario({
+                id: "dm-chat-baseline",
+                channel: { id: "alice", kind: "direct" },
+                steps: [
+                  {
+                    id: "dm-reply",
+                    name: "gets exact marker reply",
+                    inbound: {
+                      senderId: "alice",
+                      senderName: "Alice",
+                      text: config.prompt,
+                    },
+                    expect: {
+                      kind: "reply",
+                      textIncludes: [config.expectedMarker],
+                      timeoutMs: liveTurnTimeoutMs(env, 45000),
+                    },
+                  },
+                ],
+              })
+        - set: channelDriver
+          value:
+            expr: |-
+              channelScenarios.createQaFlowChannelScenarioDriver({
+                state,
+                sendInboundMessage: injectInboundMessage,
+                waitForOutboundMessage,
+                waitForNoOutbound,
+              })
+        - call: channelScenarios.runChannelBehaviorScenario
+          saveAs: channelRun
           args:
-            - conversation:
-                id: alice
-                kind: direct
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.prompt
-        - call: waitForOutboundMessage
-          saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
-            - expr: liveTurnTimeoutMs(env, 45000)
+            - ref: channelScenario
+            - ref: channelDriver
+        - set: outbound
+          value:
+            ref: channelRun.lastOutbound
         - set: matchingOutbound
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker))"

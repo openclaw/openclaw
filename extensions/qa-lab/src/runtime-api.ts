@@ -10,8 +10,10 @@ export {
   channelBehaviorInboundMessage,
   channelBehaviorTarget,
   collectChannelBehaviorScenarioRequirements,
+  createQaFlowChannelScenarioDriver,
   defineChannelBehaviorScenario,
   matchesChannelBehaviorOutbound,
+  runChannelBehaviorScenario,
 } from "./channel-behavior-scenario.js";
 export type {
   ChannelBehaviorScenarioChannel,
@@ -22,10 +24,12 @@ export type {
   ChannelBehaviorScenarioNoReplyExpectation,
   ChannelBehaviorScenarioReplyExpectation,
   ChannelBehaviorScenarioReplyRequirement,
+  ChannelBehaviorScenarioRunResult,
   ChannelBehaviorScenarioRequirements,
   ChannelBehaviorScenarioRestartHooks,
   ChannelBehaviorScenarioStep,
   ChannelBehaviorScenarioStepInput,
+  ChannelBehaviorScenarioStepResult,
   ChannelBehaviorScenarioThreadRequirement,
   ChannelScenarioCreateThreadInput,
   ChannelScenarioDriver,
@@ -34,6 +38,7 @@ export type {
   ChannelScenarioSendReplyInput,
   ChannelScenarioWaitForNoOutboundInput,
   ChannelScenarioWaitForOutboundInput,
+  QaFlowChannelScenarioDriverParams,
 } from "./channel-behavior-scenario.js";
 export {
   buildQaTarget,
