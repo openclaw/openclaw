@@ -208,7 +208,17 @@ describe("plugin text transforms", () => {
         stream.push({
           type: "done",
           reason: "stop",
-          message: makeAssistantMessage("final"),
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "done." },
+              {
+                type: "toolCall",
+                name: "send_msg",
+                arguments: { text: "[MASKED]" },
+              },
+            ],
+          },
         } as never);
         stream.end();
       });
