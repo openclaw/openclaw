@@ -1,4 +1,7 @@
 // Stuck session recovery integration tests cover end-to-end recovery diagnostics.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
@@ -10,6 +13,7 @@ import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { loadSessionStore } from "../config/sessions.js";
 import {
   enqueueCommandInLane,
   getQueueSize,
@@ -203,6 +207,67 @@ describe("stuck session recovery integration", () => {
       warnAfterMs: Number.MAX_SAFE_INTEGER,
     });
     await expect(Promise.race([queued, delay(100)])).resolves.toBe("drained");
+  });
+
+  it("marks a recovered Telegram topic session non-running after aborting a stalled embedded run", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-stuck-session-"));
+    try {
+      const sessionKey = "agent:openclaw:telegram:group:-1003789377335:topic:25537";
+      const sessionId = "telegram-topic-stalled-session";
+      const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+      const storePath = path.join(tempDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            sessionFile,
+            updatedAt: Date.now() - 60_000,
+            status: "running",
+            startedAt: Date.now() - 120_000,
+          },
+        }),
+      );
+
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => queueMicrotask(() => operation.complete()),
+        isStreaming: () => false,
+      });
+      void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        sessionFile,
+        ageMs: 720_000,
+        queueDepth: 1,
+        allowActiveAbort: true,
+      });
+
+      expect(outcome.status).toBe("aborted");
+      expect(getQueueSize(lane)).toBe(0);
+      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(stored?.status).toBe("failed");
+      expect(stored?.recoveredFromStaleRunning).toBe(true);
+      expect(stored?.staleRunningRecoveryReason).toBe("stuck_recovery_abort_embedded_run");
+      expect(stored?.endedAt).toEqual(expect.any(Number));
+      const next = enqueueCommandInLane(lane, async () => "next-turn", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      await expect(Promise.race([next, delay(100)])).resolves.toBe("next-turn");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("does not reset a lane that unwedged and started a queued turn during the abort (#91700)", async () => {

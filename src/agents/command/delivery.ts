@@ -94,6 +94,7 @@ type AgentCommandDeliveryStatus = {
   errorMessage?: string;
   /** Free-form lowercase_snake reason from durable delivery or preflight validation. */
   reason?: string;
+  safeFallbackDelivered?: boolean;
   resultCount?: number;
   sentBeforeError?: true;
   payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
@@ -109,9 +110,11 @@ type AgentCommandDeliveryResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
+  safeFallbackDelivered?: boolean;
 };
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+const SAFETY_HOOK_BLOCKED_FALLBACK_TEXT = "I couldn't send that reply safely. Please try again.";
 
 type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
 
@@ -218,6 +221,7 @@ function buildDeliveryResult(params: {
   result: RunResult;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
+  safeFallbackDelivered?: boolean;
 }): AgentCommandDeliveryResult {
   return {
     payloads: params.payloads,
@@ -236,7 +240,45 @@ function buildDeliveryResult(params: {
       ? { deliverySucceeded: params.deliverySucceeded }
       : {}),
     ...(params.deliveryStatus ? { deliveryStatus: params.deliveryStatus } : {}),
+    ...(params.safeFallbackDelivered !== undefined
+      ? { safeFallbackDelivered: params.safeFallbackDelivered }
+      : {}),
   };
+}
+
+function stringifyHookMetadata(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function isSafetyHookSuppression(send: DurableSendResult): boolean {
+  if (send.status !== "suppressed" || send.reason !== "cancelled_by_message_sending_hook") {
+    return false;
+  }
+  const haystack = [
+    send.reason,
+    ...(send.payloadOutcomes ?? []).map((outcome) =>
+      [
+        outcome.status === "suppressed" ? outcome.reason : "",
+        outcome.status === "suppressed" ? outcome.hookEffect?.cancelReason : "",
+        outcome.status === "suppressed" ? stringifyHookMetadata(outcome.hookEffect?.metadata) : "",
+      ].join(" "),
+    ),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return /\b(presend|guard|leak|secret|token|filesystem|runtime|unsafe|internal_path)\b/.test(
+    haystack,
+  );
 }
 
 function serializeDeliveryPayloadOutcomes(
@@ -720,6 +762,7 @@ export async function deliverAgentCommandResult(
   }
 
   let deliverySucceeded = false;
+  let safeFallbackDelivered = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -770,7 +813,60 @@ export async function deliverAgentCommandResult(
       if (restartAbort.signal?.aborted && send.status === "failed") {
         throw restartAbort.signal.reason;
       }
+      if (isSafetyHookSuppression(send)) {
+        const fallbackPlan = createOutboundPayloadPlan([
+          { text: SAFETY_HOOK_BLOCKED_FALLBACK_TEXT } as ReplyPayload,
+        ]);
+        const fallbackPayloads = projectOutboundPayloadPlanForOutbound(fallbackPlan);
+        if (fallbackPayloads.length > 0) {
+          params.assertDeliveryCurrent?.();
+          let fallbackSend: DurableSendResult;
+          try {
+            fallbackSend = await sendDurableMessageBatch({
+              cfg,
+              channel: deliveryChannel,
+              to: deliveryTarget,
+              accountId: resolvedAccountId,
+              payloads: fallbackPayloads,
+              session: outboundSession,
+              replyToId: resolvedReplyToId ?? null,
+              threadId: resolvedThreadTarget ?? null,
+              bestEffort: true,
+              durability: "best_effort",
+              signal: restartAbort.signal,
+              onDeliveryIntent: restartAbort.dispose,
+              onError: logDeliveryError,
+              onPayload: logPayload,
+              deps: createOutboundSendDeps(deps),
+            });
+          } catch (error) {
+            fallbackSend = {
+              status: "failed",
+              error,
+              stage: "platform_send",
+            };
+          }
+          safeFallbackDelivered = fallbackSend.status === "sent";
+          if (safeFallbackDelivered) {
+            send = fallbackSend;
+          } else if (send.status === "suppressed") {
+            send = {
+              status: "failed",
+              error: new Error("Safety hook blocked final reply and fallback was not delivered."),
+              stage: fallbackSend.status === "suppressed" ? "unknown" : "platform_send",
+              payloadOutcomes: fallbackSend.payloadOutcomes,
+            };
+          }
+        }
+      }
       deliveryStatus = deliveryStatusFromDurableSend(send);
+      if (safeFallbackDelivered && deliveryStatus) {
+        deliveryStatus = {
+          ...deliveryStatus,
+          reason: "safety_hook_blocked_fallback_delivered",
+          safeFallbackDelivered: true,
+        };
+      }
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
         emitJsonEnvelope(deliveryStatus);
         throw send.error;
@@ -800,5 +896,6 @@ export async function deliverAgentCommandResult(
     result,
     deliverySucceeded,
     deliveryStatus,
+    safeFallbackDelivered,
   });
 }
