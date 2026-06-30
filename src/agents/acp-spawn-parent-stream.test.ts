@@ -314,6 +314,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         fallbackStepFromModel: "proof-fail/fail-model",
         fallbackStepToModel: "proof-mid/mid-model",
         fallbackStepFromFailureReason: "timeout",
+        fallbackStepChainPosition: 1,
         fallbackStepFinalOutcome: "next_fallback",
       },
     });
@@ -326,13 +327,26 @@ describe("startAcpSpawnParentStreamRelay", () => {
         fallbackStepFromModel: "proof-mid/mid-model",
         fallbackStepToModel: "proof-ok/ok-model",
         fallbackStepFromFailureReason: "overloaded",
+        fallbackStepChainPosition: 2,
         fallbackStepFinalOutcome: "succeeded",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback",
+        selectedProvider: "proof-fail",
+        selectedModel: "fail-model",
+        activeProvider: "proof-ok",
+        activeModel: "ok-model",
+        reasonSummary: "timeout (+1 more attempts)",
       },
     });
 
     const fallbackNotices = collectedTexts().filter((text) => text.includes("Model Fallback:"));
     expect(fallbackNotices).toEqual([
-      "codex: ↪️ Model Fallback: proof-ok/ok-model (selected proof-mid/mid-model; overloaded)",
+      "codex: ↪️ Model Fallback: proof-ok/ok-model (selected proof-fail/fail-model; timeout (+1 more attempts))",
     ]);
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(2);
     relay.dispose();
