@@ -1,0 +1,110 @@
+title: message_tool_only cascade regression (#96827)
+
+scenario:
+  id: message-tool-cascade-regression
+  surface: channel
+  coverage:
+    primary:
+      - channels.group-visible-replies
+    secondary:
+      - channels.qa-channel
+      - tools.message
+  objective: Reproduce #96827 — under message_tool_only mode the mock returns message.send twice; verify the cascade stops at 2 outbound messages and no third send occurs.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - Mock provider returns message(action=send) twice (markers QA-CASCADE-1, QA-CASCADE-2).
+    - Exactly 2 outbound messages arrive in the group conversation.
+    - No third outbound message appears within a settle window.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/channels/groups.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/message-tool-terminal.ts
+    - packages/agent-core/src/agent-loop.ts
+  execution:
+    kind: flow
+    summary: Send a mentioned group message that triggers two mock message.send calls, and verify the cascade stops at 2 deliveries with no third outbound.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cascade-room
+      promptSnippet: qa message tool cascade check
+      prompt: "@openclaw qa message tool cascade check. exact marker: `QA-CASCADE-1`"
+      expectedMarker1: QA-CASCADE-1
+      expectedMarker2: QA-CASCADE-2
+      unterminatedMarker: QA-CASCADE-UNTERMINATED
+
+flow:
+  steps:
+    - name: stops message_tool_only cascade at 2 visible sends
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCountBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+        - call: state.addInboundMessage
+          args:
+            - conversation:
+                id:
+                  expr: config.conversationId
+                kind: group
+                title: QA Cascade Room
+              senderId: alice
+              senderName: Alice
+              text:
+                expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: firstOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && (candidate.text ?? '').includes(config.expectedMarker1)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForOutboundMessage
+          saveAs: secondOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && (candidate.text ?? '').includes(config.expectedMarker2)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForNoOutbound
+          args:
+            - ref: state
+            - 15000
+        - set: allOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group')"
+        - assert:
+            expr: allOutbound.length === 2
+            message:
+              expr: "`expected exactly 2 visible group replies (cascade stopped), saw ${allOutbound.length}`"
+        - set: hasUnterminatedMarker
+          value:
+            expr: "allOutbound.some((message) => (message.text ?? '').includes(config.unterminatedMarker))"
+        - assert:
+            expr: "!hasUnterminatedMarker"
+            message:
+              expr: "`cascade was NOT terminated — third send marker ${config.unterminatedMarker} appeared in outbound`"
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - assert:
+            expr: "!env.mock || scenarioRequests.every((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send')"
+            message:
+              expr: "`all mock requests should plan message.send; saw ${JSON.stringify(scenarioRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null })))}`"
+      detailsExpr: "`first=${firstOutbound.text}; second=${secondOutbound.text}; total-outbound=${allOutbound.length}; unterminated=${hasUnterminatedMarker}`"
