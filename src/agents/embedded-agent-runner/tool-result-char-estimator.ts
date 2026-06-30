@@ -1,7 +1,7 @@
 /**
  * Estimates message and tool-result character costs for context guards.
  */
-import type { AgentMessage } from "../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
@@ -146,34 +146,33 @@ function estimateMessageChars(msg: AgentMessage): number {
     return Math.max(chars, weightedChars);
   }
 
-  const record = msg as unknown as Record<string, unknown>;
-
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
+  if (msg.role === "bashExecution") {
+    // convertToLlm drops bash records flagged excludeFromContext before the
+    // provider sees them, so they contribute zero chars to the rendered prompt.
+    if ((msg as { excludeFromContext?: unknown }).excludeFromContext === true) {
       return 0;
     }
-    return bashExecutionToText(msg as unknown as Parameters<typeof bashExecutionToText>[0]).length;
+    return bashExecutionToText(msg as unknown as BashExecutionMessage).length;
   }
 
-  if (record.role === "branchSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (msg.role === "branchSummary") {
+    const summary = typeof msg.summary === "string" ? msg.summary : "";
     return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (msg.role === "compactionSummary") {
+    const summary = typeof msg.summary === "string" ? msg.summary : "";
     return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "custom") {
-    const content = record.content;
+  if (msg.role === "custom") {
+    // convertToLlm renders custom messages as their `content` field, so the
+    // raw content length is the rendered prompt length.
+    const content = (msg as { content?: unknown }).content;
     if (typeof content === "string") {
       return content.length;
     }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateUnknownChars(content);
   }
 
   return 256;

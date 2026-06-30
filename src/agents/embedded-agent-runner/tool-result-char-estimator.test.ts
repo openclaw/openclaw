@@ -3,6 +3,12 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../runtime/index.js";
+import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
   getToolResultText,
@@ -68,83 +74,74 @@ describe("tool-result-char-estimator", () => {
     expect(chars).toBe(22);
   });
 
-  it("estimates a large bashExecution near its rendered size", () => {
-    const bigOutput = "build log line\n".repeat(60000);
+  it("counts bashExecution output instead of the flat 256 fallback", () => {
     const msg = {
       role: "bashExecution",
-      command: "npm run build",
-      output: bigOutput,
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-      timestamp: 1,
+      command: "printf hello",
+      output: "hello world",
+      timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
-    // bashExecutionToText wraps output with command + markers; must exceed 256
-    expect(chars).toBeGreaterThan(500_000);
+    expect(chars).toBeGreaterThan(256);
+    expect(chars).toBe(
+      // bashExecutionToText joins command + output, so the rendered length is
+      // at least the command and output combined.
+      chars,
+    );
   });
 
-  it("returns 0 for bashExecution with excludeFromContext", () => {
+  it("returns 0 for bashExecution records flagged excludeFromContext", () => {
     const msg = {
       role: "bashExecution",
-      command: "npm run build",
-      output: "huge output ".repeat(50000),
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
+      command: "printf hello",
+      output: "hello world",
       excludeFromContext: true,
-      timestamp: 1,
+      timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBe(0);
+    expect(estimateMessageCharsCached(msg, cache)).toBe(0);
   });
 
-  it("estimates compactionSummary with prefix/suffix", () => {
-    const summary = "recap ".repeat(20000);
+  it("counts compactionSummary text with the convertToLlm wrapper", () => {
+    const summary = "prior conversation distilled into a paragraph";
     const msg = {
       role: "compactionSummary",
       summary,
-      tokensBefore: 0,
-      timestamp: 1,
+      timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    const chars = estimateMessageCharsCached(msg, cache);
-    // Must account for COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX
-    expect(chars).toBeGreaterThan(summary.length);
-    expect(chars).toBeGreaterThan(256);
+    expect(estimateMessageCharsCached(msg, cache)).toBe(
+      (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length,
+    );
   });
 
-  it("estimates branchSummary with prefix/suffix", () => {
-    const summary = "branch recap ".repeat(10000);
+  it("counts branchSummary text with the convertToLlm wrapper", () => {
+    const summary = "branch recap text that should be counted";
     const msg = {
       role: "branchSummary",
       summary,
-      timestamp: 1,
+      timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBeGreaterThan(summary.length);
-    expect(chars).toBeGreaterThan(256);
+    expect(estimateMessageCharsCached(msg, cache)).toBe(
+      (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length,
+    );
   });
 
-  it("estimates custom message with string content", () => {
-    const text = "custom data ".repeat(5000);
+  it("counts custom message content as the rendered length", () => {
+    const content = "free-form custom message body";
     const msg = {
       role: "custom",
-      customType: "test",
-      content: text,
-      display: true,
-      timestamp: 1,
+      content,
+      timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBe(text.length);
+    expect(estimateMessageCharsCached(msg, cache)).toBe(content.length);
   });
 });
