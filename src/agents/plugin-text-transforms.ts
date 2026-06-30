@@ -95,27 +95,12 @@ function transformToolCallArgumentText(
   if (!isRecord(value)) {
     return value;
   }
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    next[key] = transformToolCallArgumentText(entry, replacements);
-  }
-  return next;
-}
-
-function transformToolCallText(
-  toolCall: Record<string, unknown>,
-  replacements?: PluginTextReplacement[],
-): Record<string, unknown> {
-  if (!replacements || replacements.length === 0) {
-    return toolCall;
-  }
-  const next = { ...toolCall };
-  // Only transform arguments, not the tool name — renaming a tool can
-  // break execution by routing to an unknown or unintended tool.
-  if (Object.hasOwn(next, "arguments")) {
-    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
-  }
-  return next;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      transformToolCallArgumentText(entry, replacements),
+    ]),
+  );
 }
 
 /** Apply input text replacements to a stream context. */
@@ -153,8 +138,16 @@ function transformAssistantEventText(
   if (next.type === "text_end" && typeof next.content === "string") {
     next.content = applyPluginTextReplacements(next.content, replacements);
   }
-  if (next.type === "toolcall_end" && isRecord(next.toolCall)) {
-    next.toolCall = transformToolCallText(next.toolCall, replacements);
+  if (
+    next.type === "toolcall_end" &&
+    isRecord(next.toolCall) &&
+    Object.hasOwn(next.toolCall, "arguments")
+  ) {
+    // Tool names are routing identifiers; only argument values are text.
+    next.toolCall = {
+      ...next.toolCall,
+      arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
+    };
   }
   if (Object.hasOwn(next, "partial")) {
     next.partial = transformMessageText(next.partial, replacements);
