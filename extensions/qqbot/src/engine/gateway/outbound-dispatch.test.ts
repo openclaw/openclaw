@@ -351,6 +351,32 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("keeps metadata-prefixed silent direct block replies suppressed", async () => {
+    const echoedSilentReply = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"qqbot:c2c:user-openid","inbound_event_kind":"user_request"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Alice","id":"user-openid"}',
+      "```",
+      "",
+      "NO_REPLY",
+    ].join("\n");
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: echoedSilentReply }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
+
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("delivers text-only tool progress immediately in recommended C2C streaming mode", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {

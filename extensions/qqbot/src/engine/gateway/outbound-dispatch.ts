@@ -109,13 +109,17 @@ function isSilentBlockReplyText(text: string): boolean {
   return !text || text === "[SKIP]" || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
 }
 
+function visibleBlockReplyText(payload: ReplyDeliverPayload): string {
+  return sanitizeQQBotVisibleText(payload.text ?? "");
+}
+
 function blockReplyTextForDelivery(payload: ReplyDeliverPayload): string {
-  const text = payload.text ?? "";
-  return isSilentBlockReplyText(text.trim()) ? "" : sanitizeQQBotVisibleText(text);
+  const text = visibleBlockReplyText(payload);
+  return isSilentBlockReplyText(text.trim()) ? "" : text;
 }
 
 function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
-  return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+  return !hasReplyMedia(payload) && isSilentBlockReplyText(visibleBlockReplyText(payload).trim());
 }
 
 // ============ dispatchOutbound ============
