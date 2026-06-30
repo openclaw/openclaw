@@ -114,7 +114,10 @@ overrides:
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
   qs: 6.15.2
-  node-domexception: 2.0.2
+  # node-domexception@2.0.2 ESM may not provide the default export fetch-blob expects.
+  # v1.0.0 uses CJS (module.exports = DOMException) which Node's CJS-ESM interop
+  # correctly translates to a default export.  See #95927.
+  node-domexception: 1.0.0
   typebox: 1.1.39
   tar: 7.5.16
   tough-cookie: 4.1.3
