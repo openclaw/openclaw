@@ -221,6 +221,30 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
+  it("does not reclassify persisted Codex bundles as manifestless Claude bundles when their manifest is missing", async () => {
+    const dir = path.join(tmpRoot, "codex-bundle-missing-manifest");
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(path.join(dir, "skills", "SKILL.md"), "# Skill\n", "utf8");
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        codex: {
+          source: "marketplace",
+          installPath: dir,
+          format: "bundle",
+          bundleFormat: "codex",
+        } as never,
+      },
+      env: {},
+    });
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "codex",
+      installPath: dir,
+      reason: "invalid-bundle-manifest",
+    });
+    expect(result.failures[0]?.detail).toContain(".codex-plugin/plugin.json");
+  });
+
   it("reports a bundle payload failure when the bundle manifest is invalid", async () => {
     const dir = path.join(tmpRoot, "broken-bundle");
     await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });

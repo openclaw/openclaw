@@ -250,7 +250,7 @@ async function resolveBundlePayloadFormat(params: {
   if (!isBundleInstallRecord(params.record)) {
     return null;
   }
-  return detectBundleManifestFormat(params.installPath) ?? readBundleFormat(params.record);
+  return readBundleFormat(params.record) ?? detectBundleManifestFormat(params.installPath);
 }
 
 function validateBundlePayload(params: {
