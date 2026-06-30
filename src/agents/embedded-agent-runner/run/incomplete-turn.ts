@@ -545,11 +545,9 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  // Current-attempt sync tools with declared side effects (replaySafe !== true)
-  // make a retry unsafe — resubmitting would duplicate the tool's effects even
-  // though the attempt produced no visible assistant output. Mirrors
-  // buildAttemptReplayMetadata's hadUnsafeTools gate. Prior-session side effects
-  // already live in replayMetadata and do not block retry of a clean turn (#97877).
+  // Current-attempt sync tools with declared side effects make a retry unsafe:
+  // resubmitting could duplicate those effects even when no visible assistant
+  // output was produced. Prior-session effects are already committed context.
   if ((params.attempt.toolMetas ?? []).some((entry) => entry.replaySafe !== true)) {
     return false;
   }
