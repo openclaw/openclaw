@@ -441,7 +441,7 @@ export async function dispatchOutbound(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           },
-          ...(event.type !== "c2c"
+          ...(event.type === "group" || event.type === "guild"
             ? {
                 updateLastRoute: {
                   sessionKey: inbound.route.sessionKey,

@@ -82,7 +82,9 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+function makeInboundRuntime(opts?: {
+  onResolvedTurn?: (turn: { runDispatch: () => Promise<unknown>; record?: unknown }) => void;
+}): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -100,7 +102,11 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown> };
+      )) as {
+        runDispatch: () => Promise<unknown>;
+        record?: unknown;
+      };
+      opts?.onResolvedTurn?.(turn);
       return { dispatchResult: await turn.runDispatch() };
     }),
   };
@@ -128,6 +134,7 @@ function makeRuntime(params: {
       info: { kind: string },
     ) => Promise<void>,
   ) => Promise<void>;
+  onResolvedTurn?: (turn: { runDispatch: () => Promise<unknown>; record?: unknown }) => void;
 }): GatewayPluginRuntime {
   return {
     channel: {
@@ -188,7 +195,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(),
+      inbound: makeInboundRuntime({ onResolvedTurn: params.onResolvedTurn }),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -763,5 +770,57 @@ describe("dispatchOutbound", () => {
         "| 17 | 100ms | Lin | daily cap |",
       ].join("\n"),
     ]);
+  });
+
+  it("skips updateLastRoute for c2c events", async () => {
+    let record: unknown;
+    const runtime = makeRuntime({
+      onResolvedTurn: (turn) => {
+        record = turn.record;
+      },
+    });
+    await dispatchOutbound(makeInbound({ event: { type: "c2c" } }), { runtime, cfg: {}, account });
+    expect(record).not.toHaveProperty("updateLastRoute");
+  });
+
+  it("skips updateLastRoute for dm events", async () => {
+    let record: unknown;
+    const runtime = makeRuntime({
+      onResolvedTurn: (turn) => {
+        record = turn.record;
+      },
+    });
+    await dispatchOutbound(makeInbound({ event: { type: "dm" } }), { runtime, cfg: {}, account });
+    expect(record).not.toHaveProperty("updateLastRoute");
+  });
+
+  it("persists updateLastRoute for group events", async () => {
+    let record: unknown;
+    const runtime = makeRuntime({
+      onResolvedTurn: (turn) => {
+        record = turn.record;
+      },
+    });
+    await dispatchOutbound(makeInbound({ event: { type: "group" } }), {
+      runtime,
+      cfg: {},
+      account,
+    });
+    expect(record).toHaveProperty("updateLastRoute");
+  });
+
+  it("persists updateLastRoute for guild events", async () => {
+    let record: unknown;
+    const runtime = makeRuntime({
+      onResolvedTurn: (turn) => {
+        record = turn.record;
+      },
+    });
+    await dispatchOutbound(makeInbound({ event: { type: "guild" } }), {
+      runtime,
+      cfg: {},
+      account,
+    });
+    expect(record).toHaveProperty("updateLastRoute");
   });
 });
