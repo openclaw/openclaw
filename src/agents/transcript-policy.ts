@@ -196,6 +196,7 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.5",
   "mimo-v2.5-pro",
   "mimo-v2.6-pro",
+  "minimax-m3",
 ]);
 
 function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {

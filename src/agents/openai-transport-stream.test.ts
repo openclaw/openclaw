@@ -11299,6 +11299,13 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     name: "Grok 4.3",
   } satisfies Model<"openai-completions">;
 
+  const customMinimaxM3Model = {
+    ...openRouterModel,
+    id: "openrouter/minimax/minimax-m3",
+    name: "MiniMax M3 (custom)", provider: "my-provider", baseUrl: "https://api.my-provider.com/v1",
+    reasoning: false,
+  } satisfies Model<"openai-completions">;
+
   const openAIModel = {
     id: "gpt-5.4-mini",
     name: "GPT-5.4 Mini",
@@ -11592,6 +11599,28 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");
     expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for MiniMax M3 via custom provider route", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMinimaxM3Model, "reasoning"),
+    );
+
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning_content");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_details replay for MiniMax M3 via custom provider route", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMinimaxM3Model, "reasoning_details"),
+    );
+
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning_content");
     expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
