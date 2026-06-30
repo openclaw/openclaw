@@ -9,7 +9,31 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
   resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
+import type { GatewaySshTunnelConnection } from "../gateway/ssh-transport.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+
+type StartGatewayRemoteSshTunnelMock = () => Promise<GatewaySshTunnelConnection | null>;
+
+const sshTransportMocks = vi.hoisted(() => ({
+  startGatewayRemoteSshTunnel: vi.fn<StartGatewayRemoteSshTunnelMock>(async () => null),
+}));
+
+function mockSshTunnel(
+  stop: () => Promise<void> = vi.fn(async () => undefined),
+): GatewaySshTunnelConnection["tunnel"] {
+  return {
+    parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+    localPort: 41001,
+    remotePort: 18789,
+    pid: 12345,
+    stderr: [],
+    stop,
+  };
+}
+
+vi.mock("../gateway/ssh-transport.js", () => ({
+  startGatewayRemoteSshTunnel: sshTransportMocks.startGatewayRemoteSshTunnel,
+}));
 
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
@@ -119,6 +143,8 @@ describe("resolveGatewayConnection", () => {
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockReset();
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValue(null);
     resolveStateDir.mockImplementation(
       (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",
     );
@@ -350,6 +376,59 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("starts the configured SSH tunnel before returning a remote TUI Gateway URL", async () => {
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: mockSshTunnel(),
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(sshTransportMocks.startGatewayRemoteSshTunnel).toHaveBeenCalledWith({
+      config,
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    expect(result.url).toBe("ws://127.0.0.1:41001");
+    expect(result.token).toBe("remote-token");
+    expect(result.allowInsecureLocalOperatorUi).toBe(false);
+  });
+
+  it("stops the configured SSH tunnel when remote TUI auth resolution fails", async () => {
+    const stopTunnel = vi.fn(async () => undefined);
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+    sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+      url: "ws://127.0.0.1:41001",
+      urlSource: "ssh tunnel",
+      tunnel: mockSshTunnel(stopTunnel),
+    });
+
+    await expect(resolveGatewayConnection({})).rejects.toThrow();
+
+    expect(stopTunnel).toHaveBeenCalledTimes(1);
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves file-backed SecretRef token for local mode",
     async () => {
@@ -552,6 +631,45 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         deviceIdentity: null,
       });
+    } finally {
+      vi.doUnmock("../gateway/client.js");
+      vi.resetModules();
+    }
+  });
+
+  it("stops the configured SSH tunnel when GatewayClient construction fails", async () => {
+    const stopTunnel = vi.fn(async () => undefined);
+    const config = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("../gateway/client.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../gateway/client.js")>();
+      function ThrowingGatewayClient() {
+        throw new Error("device identity failed");
+      }
+      return { ...actual, GatewayClient: ThrowingGatewayClient };
+    });
+
+    try {
+      loadConfig.mockReturnValue(config);
+      sshTransportMocks.startGatewayRemoteSshTunnel.mockResolvedValueOnce({
+        url: "ws://127.0.0.1:41001",
+        urlSource: "ssh tunnel",
+        tunnel: mockSshTunnel(stopTunnel),
+      });
+      const { GatewayChatClient: ThrowingGatewayChatClient } = await import("./gateway-chat.js");
+
+      await expect(ThrowingGatewayChatClient.connect({})).rejects.toThrow("device identity failed");
+      expect(stopTunnel).toHaveBeenCalledTimes(1);
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();

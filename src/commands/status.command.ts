@@ -248,13 +248,10 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    // Verbose status prints the raw gateway target resolution before the report tables.
-    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
-    const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
       info,
-      message: details.message,
+      message: scan.gatewayConnection.message,
       trailingBlankLine: true,
     });
   }

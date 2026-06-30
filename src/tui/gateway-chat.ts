@@ -27,6 +27,10 @@ import {
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import {
+  startGatewayRemoteSshTunnel,
+  type GatewaySshTunnelConnection,
+} from "../gateway/ssh-transport.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
@@ -59,6 +63,7 @@ type ResolvedGatewayConnection = {
   password?: string;
   preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi: boolean;
+  sshTunnel?: GatewaySshTunnelConnection["tunnel"];
 };
 
 function throwGatewayAuthResolutionError(reason: string): never {
@@ -170,7 +175,12 @@ export class GatewayChatClient implements TuiBackend {
 
   static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
-    return new GatewayChatClient(connection);
+    try {
+      return new GatewayChatClient(connection);
+    } catch (err) {
+      await connection.sshTunnel?.stop().catch(() => undefined);
+      throw err;
+    }
   }
 
   start() {
@@ -189,6 +199,7 @@ export class GatewayChatClient implements TuiBackend {
 
   stop() {
     this.client.stop();
+    void this.connection.sshTunnel?.stop().catch(() => undefined);
   }
 
   async subscribeSessionEvents() {
@@ -302,37 +313,91 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url = buildGatewayConnectionDetails({
+  const connectionDetails = buildGatewayConnectionDetails({
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
-  }).url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
+    allowConfiguredSshTransport: true,
+  });
+  const ssh = urlOverride
+    ? null
+    : await startGatewayRemoteSshTunnel({
+        config,
+        url: connectionDetails.url,
+        urlSource: connectionDetails.urlSource,
+      });
+  try {
+    const url = ssh?.url ?? connectionDetails.url;
+    const allowInsecureLocalOperatorUi = (() => {
+      if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
+        return false;
+      }
+      try {
+        return isLoopbackHost(new URL(url).hostname);
+      } catch {
+        return false;
+      }
+    })();
+
+    if (urlOverride) {
+      return {
+        url,
+        token: explicitAuth.token,
+        password: explicitAuth.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi,
+      };
     }
+
+    if (isRemoteMode) {
+      const resolved = await resolveGatewayInteractiveSurfaceAuth({
+        config,
+        env,
+        explicitAuth,
+        surface: "remote",
+      });
+      if (resolved.failureReason) {
+        throwGatewayAuthResolutionError(resolved.failureReason);
+      }
+      return {
+        url,
+        token: resolved.token,
+        password: resolved.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi: false,
+      };
+    }
+
+    if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
+      const resolved = await resolveGatewayInteractiveSurfaceAuth({
+        config,
+        env,
+        explicitAuth,
+        surface: "local",
+      });
+      return {
+        url,
+        token: resolved.token,
+        password: resolved.password,
+        preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
+        sshTunnel: ssh?.tunnel,
+        allowInsecureLocalOperatorUi,
+      };
+    }
+
     try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
+      assertExplicitGatewayAuthModeWhenBothConfigured(config);
+    } catch (err) {
+      throwGatewayAuthResolutionError(formatErrorMessage(err));
     }
-  })();
 
-  if (urlOverride) {
-    return {
-      url,
-      token: explicitAuth.token,
-      password: explicitAuth.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-      allowInsecureLocalOperatorUi,
-    };
-  }
-
-  if (isRemoteMode) {
     const resolved = await resolveGatewayInteractiveSurfaceAuth({
       config,
       env,
       explicitAuth,
-      surface: "remote",
+      suppressEnvAuthFallback: preferConfiguredAuth,
+      surface: "local",
     });
     if (resolved.failureReason) {
       throwGatewayAuthResolutionError(resolved.failureReason);
@@ -342,47 +407,10 @@ export async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-      allowInsecureLocalOperatorUi: false,
-    };
-  }
-
-  if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
-    const resolved = await resolveGatewayInteractiveSurfaceAuth({
-      config,
-      env,
-      explicitAuth,
-      surface: "local",
-    });
-    return {
-      url,
-      token: resolved.token,
-      password: resolved.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
-  }
-
-  try {
-    assertExplicitGatewayAuthModeWhenBothConfigured(config);
   } catch (err) {
-    throwGatewayAuthResolutionError(formatErrorMessage(err));
+    await ssh?.tunnel.stop().catch(() => undefined);
+    throw err;
   }
-
-  const resolved = await resolveGatewayInteractiveSurfaceAuth({
-    config,
-    env,
-    explicitAuth,
-    suppressEnvAuthFallback: preferConfiguredAuth,
-    surface: "local",
-  });
-  if (resolved.failureReason) {
-    throwGatewayAuthResolutionError(resolved.failureReason);
-  }
-  return {
-    url,
-    token: resolved.token,
-    password: resolved.password,
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
-    allowInsecureLocalOperatorUi,
-  };
 }

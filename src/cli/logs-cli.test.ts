@@ -41,18 +41,29 @@ const callGatewayFromCli = vi.fn();
 const readConfiguredLogTail = vi.fn();
 const readSystemdServiceRuntime = vi.fn();
 const execFileUtf8Tail = vi.fn();
-const buildGatewayConnectionDetails = vi.fn(
-  (_options?: {
-    configPath?: string;
-    config?: unknown;
-    url?: string;
-    urlSource?: "cli" | "env";
-  }) => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "",
-  }),
-);
+type BuildGatewayConnectionDetailsOptions = {
+  configPath?: string;
+  config?: unknown;
+  url?: string;
+  urlSource?: "cli" | "env";
+  allowConfiguredSshTransport?: boolean;
+};
+
+const buildGatewayConnectionDetails = vi.fn((_options?: BuildGatewayConnectionDetailsOptions) => ({
+  url: "ws://127.0.0.1:18789",
+  urlSource: "local loopback",
+  message: "",
+}));
+
+function mockDefaultGatewayConnectionDetails() {
+  buildGatewayConnectionDetails.mockImplementation(
+    (_options?: BuildGatewayConnectionDetailsOptions) => ({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "",
+    }),
+  );
+}
 
 vi.mock("../gateway/call.js", () => ({
   GatewayTransportError: MockGatewayTransportError,
@@ -137,6 +148,7 @@ async function withTimeZone<T>(timeZone: string, run: () => Promise<T> | T): Pro
 
 describe("logs cli", () => {
   beforeEach(() => {
+    mockDefaultGatewayConnectionDetails();
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
     execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
   });
@@ -221,6 +233,75 @@ describe("logs cli", () => {
       { cursor: undefined, limit: 200, maxBytes: 250_000 },
       { progress: true },
     );
+  });
+
+  it("keeps configured SSH remotes on the normal CLI client identity", async () => {
+    buildGatewayConnectionDetails.mockImplementation((options) => {
+      if (options?.allowConfiguredSshTransport === true) {
+        return {
+          url: "ws://remote.example.com:18789",
+          urlSource: "config gateway.remote.url",
+          message: "Gateway target: ws://remote.example.com:18789",
+        };
+      }
+      throw new Error("SECURITY ERROR: plaintext remote Gateway URL rejected");
+    });
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: ["remote line"],
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(buildGatewayConnectionDetails).toHaveBeenCalledWith({
+      allowConfiguredSshTransport: true,
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "logs.tail",
+      expect.any(Object),
+      { cursor: undefined, limit: 200, maxBytes: 250_000 },
+      { progress: true },
+    );
+    expect(stdoutWrites.join("")).toContain("remote line");
+  });
+
+  it("uses Gateway transport connection details when configured SSH logs fail", async () => {
+    const connectionDetails = {
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      message:
+        "Gateway target: ws://127.0.0.1:19091\nSource: config gateway.remote.url via ssh tunnel",
+    };
+    buildGatewayConnectionDetails.mockImplementation((options) => {
+      if (options?.allowConfiguredSshTransport === true) {
+        return {
+          url: "ws://remote.example.com:18789",
+          urlSource: "config gateway.remote.url",
+          message: "Gateway target: ws://remote.example.com:18789",
+        };
+      }
+      throw new Error("SECURITY ERROR: plaintext remote Gateway URL rejected");
+    });
+    callGatewayFromCli.mockRejectedValueOnce(
+      new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "ssh tunnel closed",
+        connectionDetails,
+        message: "gateway closed (1006 abnormal closure): ssh tunnel closed",
+      }),
+    );
+
+    const stderrWrites = captureStderrWrites();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+    await runLogsCli(["logs"]);
+
+    expect(stderrWrites.join("")).toContain("Gateway target: ws://127.0.0.1:19091");
+    expect(stderrWrites.join("")).toContain("Source: config gateway.remote.url via ssh tunnel");
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("emits local timestamps by default", async () => {

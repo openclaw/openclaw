@@ -147,6 +147,7 @@ const mocks = vi.hoisted(() => {
 
 const {
   readBestEffortConfig,
+  resolveGatewayPort,
   discoverGatewayBeacons,
   pickPrimaryTailnetIPv4,
   sshStop,
@@ -853,6 +854,50 @@ describe("gateway-status command", () => {
     const targets = parsed.targets as Array<Record<string, unknown>>;
     const targetKinds = targets.map((target) => target.kind);
     expect(targetKinds).toContain("sshTunnel");
+  });
+
+  it("uses configured remote SSH port separately from the local tunnel port", async () => {
+    const { runtime } = createRuntimeCapture();
+    const defaultResolveGatewayPort = resolveGatewayPort.getMockImplementation();
+    resolveGatewayPort.mockImplementation(() => 19089);
+    try {
+      readBestEffortConfig.mockResolvedValueOnce({
+        gateway: {
+          mode: "remote",
+          port: 19089,
+          remote: {
+            url: "ws://127.0.0.1:19089",
+            transport: "ssh",
+            sshTarget: "me@studio",
+            remotePort: 18789,
+            token: "rtok",
+          },
+          auth: { token: "ltok" },
+        },
+      } as never);
+      startSshPortForward.mockResolvedValueOnce({
+        parsedTarget: { user: "me", host: "studio", port: 22 },
+        localPort: 19089,
+        remotePort: 18789,
+        pid: 123,
+        stderr: [],
+        stop: sshStop,
+      });
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+      expect(startSshPortForward).toHaveBeenCalledWith({
+        target: "me@studio",
+        identity: undefined,
+        localPortPreferred: 19089,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
+    } finally {
+      if (defaultResolveGatewayPort) {
+        resolveGatewayPort.mockImplementation(defaultResolveGatewayPort);
+      }
+    }
   });
 
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {

@@ -3,6 +3,8 @@ import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -37,6 +39,19 @@ function loadGatewayTlsModule() {
   return gatewayTlsModuleLoader.load();
 }
 
+function resolveGatewayStatusSshRemotePort(
+  config: OpenClawConfig,
+  portOverride: number | undefined,
+) {
+  if (portOverride !== undefined) {
+    return portOverride;
+  }
+  const remotePort = config.gateway?.remote?.remotePort;
+  return typeof remotePort === "number" && Number.isInteger(remotePort) && remotePort > 0
+    ? remotePort
+    : DEFAULT_GATEWAY_PORT;
+}
+
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
@@ -63,7 +78,8 @@ export async function gatewayStatusCommand(
   });
   const baseTargets = resolveTargets(cfg, opts.url, portOverride);
   const network = buildNetworkHints(cfg, portOverride);
-  const remotePort = portOverride ?? resolveGatewayPort(cfg);
+  const localPortPreferred = portOverride ?? resolveGatewayPort(cfg);
+  const remotePort = resolveGatewayStatusSshRemotePort(cfg, portOverride);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
   const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
   const useConfiguredRemoteTargets = portOverride === undefined || hasExplicitUrl;
@@ -118,6 +134,7 @@ export async function gatewayStatusCommand(
         discoveryTimeoutMs,
         wideAreaDomain,
         baseTargets,
+        localPortPreferred,
         remotePort,
         sshTarget,
         sshIdentity,

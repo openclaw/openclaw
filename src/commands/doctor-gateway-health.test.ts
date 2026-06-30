@@ -7,22 +7,27 @@ import {
 } from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
+const buildGatewayConnectionDetails = vi.hoisted(() =>
+  vi.fn(() => ({
+    message: "Gateway target: ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18789",
+  })),
+);
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
 const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
+const stopGatewayProbeTunnel = vi.hoisted(() => vi.fn(async () => undefined));
 const note = vi.hoisted(() => vi.fn());
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
 const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
 const TEST_TLS_FINGERPRINT = "sha256:test-doctor-gateway-fingerprint";
 
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: vi.fn(() => ({
-    message: `Gateway target: ${TEST_GATEWAY_URL}`,
-    url: TEST_GATEWAY_URL,
-  })),
+  buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails: vi.fn(() => ({
     preauthHandshakeTimeoutMs: 4321,
+    sshTunnel: { stop: stopGatewayProbeTunnel },
     tlsFingerprint: TEST_TLS_FINGERPRINT,
     url: TEST_GATEWAY_URL,
   })),
@@ -54,6 +59,11 @@ describe("checkGatewayHealth", () => {
 
   beforeEach(() => {
     callGateway.mockReset();
+    buildGatewayConnectionDetails.mockReset();
+    buildGatewayConnectionDetails.mockReturnValue({
+      message: `Gateway target: ${TEST_GATEWAY_URL}`,
+      url: TEST_GATEWAY_URL,
+    });
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
     isGatewayTransportError.mockReset();
@@ -61,6 +71,7 @@ describe("checkGatewayHealth", () => {
     isGatewaySecretRefUnavailableError.mockReset();
     isGatewaySecretRefUnavailableError.mockReturnValue(false);
     probeGatewayStatus.mockReset();
+    stopGatewayProbeTunnel.mockReset().mockResolvedValue(undefined);
     note.mockReset();
   });
 
@@ -142,6 +153,12 @@ describe("checkGatewayHealth", () => {
       "Gateway connect failed: gateway closed (1008): protocol version mismatch",
       "Gateway",
     );
+    expect(buildGatewayConnectionDetails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowConfiguredSshTransport: true,
+        config: cfg,
+      }),
+    );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
   });
 
@@ -168,6 +185,7 @@ describe("checkGatewayHealth", () => {
       json: true,
     });
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(stopGatewayProbeTunnel).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -200,6 +218,7 @@ describe("checkGatewayHealth", () => {
       json: true,
     });
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(stopGatewayProbeTunnel).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,

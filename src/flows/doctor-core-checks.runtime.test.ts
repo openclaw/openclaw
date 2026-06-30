@@ -604,6 +604,20 @@ describe("doctor gateway runtime checks", () => {
     expect(JSON.stringify(findings)).not.toContain("token=secret");
   });
 
+  it("stops managed SSH tunnels after gateway health probes", async () => {
+    const stop = vi.fn(async () => undefined);
+    mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
+      url: "ws://127.0.0.1:41001",
+      sshTunnel: { stop },
+    });
+
+    await collectGatewayHealthFindings({
+      cfg: { gateway: { mode: "remote", remote: { url: "ws://remote.example.test:18789" } } },
+    });
+
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("reports missing local gateway daemon service", async () => {
     mocks.readGatewayServiceState.mockResolvedValueOnce({
       installed: false,

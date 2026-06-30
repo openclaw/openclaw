@@ -17,6 +17,11 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
+import {
+  applyGatewaySshTunnelConnectionDetails,
+  startGatewayRemoteSshTunnel,
+} from "../gateway/ssh-transport.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   MEMORY_INDEX_CHUNKS_TABLE,
@@ -188,6 +193,22 @@ function shouldTryLocalStatusRpcFallback(params: {
   return error.includes("timeout") || params.gatewayProbe.auth?.capability === "unknown";
 }
 
+function makeGatewayProbeFailure(params: { url: string; error: string }): GatewayProbeResult {
+  return {
+    ok: false,
+    url: params.url,
+    connectLatencyMs: null,
+    error: params.error,
+    close: null,
+    auth: { role: null, scopes: [], capability: "unknown" },
+    server: { version: null, connId: null },
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  };
+}
+
 async function applyLocalStatusRpcFallback(params: {
   cfg: OpenClawConfig;
   gatewayMode: "local" | "remote";
@@ -281,7 +302,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
   const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
@@ -289,6 +309,10 @@ export async function resolveGatewayProbeSnapshot(params: {
   const shouldProbe =
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
+  let gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+    config: params.cfg,
+    allowConfiguredSshTransport: true,
+  });
   const gatewayProbeAuthResolution = shouldResolveAuth
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
         resolveGatewayProbeAuthResolution(params.cfg),
@@ -301,63 +325,88 @@ export async function resolveGatewayProbeSnapshot(params: {
   );
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
-  const initialGatewayProbe = shouldProbe
-    ? await loadProbeGatewayModule()
-        .then(({ probeGateway }) =>
-          probeGateway({
-            url: gatewayConnection.url,
-            auth: gatewayProbeAuthResolution.auth,
-            preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
-            timeoutMs: probeTimeoutMs,
-            detailLevel: params.opts.detailLevel ?? "presence",
-          }),
-        )
-        .catch(() => null)
-    : null;
-  const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
-    gatewayMode,
-    gatewayUrl: gatewayConnection.url,
-    gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    timeoutMs: probeTimeoutMs,
-    timeoutMsExplicit,
-    enabled: params.opts.localStatusRpcFallback !== false,
-  });
-  if (
-    (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
-    gatewayProbeAuthWarning &&
-    gatewayProbe?.ok === false
-  ) {
-    gatewayProbe.error = gatewayProbe.error
-      ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
-      : gatewayProbeAuthWarning;
-    gatewayProbeAuthWarning = undefined;
+  let ssh: Awaited<ReturnType<typeof startGatewayRemoteSshTunnel>> = null;
+  let sshTunnelError: string | null = null;
+  if (shouldProbe) {
+    try {
+      ssh = await startGatewayRemoteSshTunnel({
+        config: params.cfg,
+        url: gatewayConnection.url,
+        urlSource: gatewayConnection.urlSource,
+      });
+    } catch (error) {
+      sshTunnelError = `ssh tunnel failed: ${formatErrorMessage(error)}`;
+    }
   }
-  const gatewayReachable = gatewayProbe ? isProbeReachable(gatewayProbe) : false;
-  const gatewaySelf = gatewayProbe?.presence
-    ? pickGatewaySelfPresence(gatewayProbe.presence)
-    : null;
-  return {
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-    gatewayReachable,
-    gatewaySelf,
-    ...(remoteUrlMissing
-      ? {
-          // Remote-url-missing reports use local fallback URL for follow-up diagnostic calls.
-          gatewayCallOverrides: {
-            url: gatewayConnection.url,
-            token: gatewayProbeAuthResolution.auth.token,
-            password: gatewayProbeAuthResolution.auth.password,
-          },
-        }
-      : {}),
-  };
+  try {
+    if (ssh) {
+      gatewayConnection = applyGatewaySshTunnelConnectionDetails({
+        details: gatewayConnection,
+        ssh,
+      });
+    }
+    const initialGatewayProbe = shouldProbe
+      ? sshTunnelError
+        ? makeGatewayProbeFailure({ url: gatewayConnection.url, error: sshTunnelError })
+        : await loadProbeGatewayModule()
+            .then(({ probeGateway }) =>
+              probeGateway({
+                url: gatewayConnection.url,
+                auth: gatewayProbeAuthResolution.auth,
+                preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
+                timeoutMs: probeTimeoutMs,
+                detailLevel: params.opts.detailLevel ?? "presence",
+              }),
+            )
+            .catch(() => null)
+      : null;
+    const gatewayProbe = await applyLocalStatusRpcFallback({
+      cfg: params.cfg,
+      gatewayMode,
+      gatewayUrl: gatewayConnection.url,
+      gatewayProbe: initialGatewayProbe,
+      gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+      timeoutMs: probeTimeoutMs,
+      timeoutMsExplicit,
+      enabled: params.opts.localStatusRpcFallback !== false,
+    });
+    if (
+      (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
+      gatewayProbeAuthWarning &&
+      gatewayProbe?.ok === false
+    ) {
+      gatewayProbe.error = gatewayProbe.error
+        ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
+        : gatewayProbeAuthWarning;
+      gatewayProbeAuthWarning = undefined;
+    }
+    const gatewayReachable = gatewayProbe ? isProbeReachable(gatewayProbe) : false;
+    const gatewaySelf = gatewayProbe?.presence
+      ? pickGatewaySelfPresence(gatewayProbe.presence)
+      : null;
+    return {
+      gatewayConnection,
+      remoteUrlMissing,
+      gatewayMode,
+      gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+      gatewayProbeAuthWarning,
+      gatewayProbe,
+      gatewayReachable,
+      gatewaySelf,
+      ...(remoteUrlMissing
+        ? {
+            // Remote-url-missing reports use local fallback URL for follow-up diagnostic calls.
+            gatewayCallOverrides: {
+              url: gatewayConnection.url,
+              token: gatewayProbeAuthResolution.auth.token,
+              password: gatewayProbeAuthResolution.auth.password,
+            },
+          }
+        : {}),
+    };
+  } finally {
+    await ssh?.tunnel.stop();
+  }
 }
 
 /** Builds the published Tailscale HTTPS Control UI URL when exposure is enabled. */

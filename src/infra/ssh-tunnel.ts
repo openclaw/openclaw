@@ -3,8 +3,15 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { resolveExecutable } from "./executable-path.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
+
+const POSIX_SSH_BINARY = "/usr/bin/ssh";
+
+function resolveSshExecutable(): string {
+  return process.platform === "win32" ? resolveExecutable("ssh") : POSIX_SSH_BINARY;
+}
 
 export type SshParsedTarget = {
   user?: string;
@@ -162,7 +169,7 @@ export async function startSshPortForward(opts: {
   args.push("--", userHost);
 
   const stderr: string[] = [];
-  const child = spawn("/usr/bin/ssh", args, {
+  const child = spawn(resolveSshExecutable(), args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr?.setEncoding("utf8");
@@ -172,10 +179,18 @@ export async function startSshPortForward(opts: {
   });
 
   const stop = async () => {
-    if (child.killed) {
+    if (child.killed || typeof child.pid !== "number") {
       return;
     }
-    child.kill("SIGTERM");
+    let signaled: boolean;
+    try {
+      signaled = child.kill("SIGTERM");
+    } catch {
+      return;
+    }
+    if (!signaled) {
+      return;
+    }
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
         try {
@@ -195,6 +210,7 @@ export async function startSshPortForward(opts: {
     await Promise.race([
       waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
       new Promise<void>((_, reject) => {
+        child.once("error", reject);
         child.once("exit", (code, signal) => {
           reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
         });

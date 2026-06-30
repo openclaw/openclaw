@@ -120,6 +120,20 @@ const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
+function usesConfiguredGatewaySshRemote(
+  config: OpenClawConfig,
+  connection: { urlSource: string },
+): boolean {
+  const remote = config.gateway?.remote;
+  return (
+    connection.urlSource === "config gateway.remote.url" &&
+    config.gateway?.mode === "remote" &&
+    typeof remote?.sshTarget === "string" &&
+    remote.sshTarget.trim() !== "" &&
+    remote.transport !== "direct"
+  );
+}
+
 type CapabilityMetadata = {
   id: string;
   description: string;
@@ -1424,8 +1438,10 @@ async function runTtsConvert(params: {
   transport: CapabilityTransport;
 }) {
   if (params.transport === "gateway") {
+    const runtimeConfig = getRuntimeConfig();
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
-      config: getRuntimeConfig(),
+      config: runtimeConfig,
+      allowConfiguredSshTransport: true,
     });
     const result: {
       audioPath?: string;
@@ -1446,7 +1462,10 @@ async function runTtsConvert(params: {
     let outputPath = result.audioPath;
     if (params.output && result.audioPath) {
       const gatewayHost = new URL(gatewayConnection.url).hostname;
-      if (!isLoopbackHost(gatewayHost)) {
+      if (
+        usesConfiguredGatewaySshRemote(runtimeConfig, gatewayConnection) ||
+        !isLoopbackHost(gatewayHost)
+      ) {
         throw new Error(
           `--output is not supported for remote gateway TTS yet (gateway target: ${gatewayConnection.url}).`,
         );

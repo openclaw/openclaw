@@ -58,6 +58,11 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import {
+  applyGatewaySshTunnelConnectionDetails,
+  startGatewayRemoteSshTunnel,
+  type GatewaySshTunnelConnection,
+} from "./ssh-transport.js";
 export type { GatewayConnectionDetails };
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
@@ -219,6 +224,7 @@ export type GatewayClientRequestErrorJson = {
 export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
+  sshTunnel?: GatewaySshTunnelConnection["tunnel"];
 };
 
 function firstGatewayErrorLine(message: string): string {
@@ -429,6 +435,7 @@ export function buildGatewayConnectionDetails(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    allowConfiguredSshTransport?: boolean;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -1141,84 +1148,100 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     configPath: context.configPath,
   });
   ensureRemoteModeUrlConfigured(context);
-  const connectionDetails = buildGatewayConnectionDetails({
+  let connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+    allowConfiguredSshTransport: true,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
-  const url = connectionDetails.url;
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
-  const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
-  const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
-    opts,
-    url,
-    token,
-    password,
-    allowAuthNone,
+  const ssh = await startGatewayRemoteSshTunnel({
+    config: context.config,
+    url: connectionDetails.url,
+    urlSource: connectionDetails.urlSource,
   });
-  if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
-    throw new GatewayLocalBackendSharedAuthUnavailableError(
-      "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
-    );
-  }
-  const deviceIdentity =
-    opts.deviceIdentity === undefined
-      ? omitDeviceIdentity
-        ? null
-        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
-      : opts.deviceIdentity;
-  if (useStoredDeviceAuth) {
-    const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
-    if (!storedAuth?.token) {
-      throw new GatewayCredentialsRequiredError({
-        method: opts.method,
-        configPath: context.configPath,
+  try {
+    if (ssh) {
+      connectionDetails = applyGatewaySshTunnelConnectionDetails({
+        details: connectionDetails,
+        ssh,
       });
     }
-    if (
-      Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: opts.requiredStoredDeviceAuthScopes,
-        allowedScopes: storedAuth.scopes,
-      })
-    ) {
-      throw new GatewayStoredDeviceAuthUnavailableError(
-        "stored device auth does not grant the required operator scopes",
+    const url = connectionDetails.url;
+    const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
+    const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
+    const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
+    const allowAuthNone =
+      opts.requireLocalBackendSharedAuth === true &&
+      resolveGatewayCallAuth(context.config).mode === "none";
+    const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
+      opts,
+      url,
+      token,
+      password,
+      allowAuthNone,
+    });
+    if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
+      throw new GatewayLocalBackendSharedAuthUnavailableError(
+        "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
       );
     }
+    const deviceIdentity =
+      opts.deviceIdentity === undefined
+        ? omitDeviceIdentity
+          ? null
+          : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+        : opts.deviceIdentity;
+    if (useStoredDeviceAuth) {
+      const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
+      if (!storedAuth?.token) {
+        throw new GatewayCredentialsRequiredError({
+          method: opts.method,
+          configPath: context.configPath,
+        });
+      }
+      if (
+        Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: opts.requiredStoredDeviceAuthScopes,
+          allowedScopes: storedAuth.scopes,
+        })
+      ) {
+        throw new GatewayStoredDeviceAuthUnavailableError(
+          "stored device auth does not grant the required operator scopes",
+        );
+      }
+    }
+    ensureGatewayCallCanAuthenticate({
+      opts,
+      context,
+      token,
+      password,
+      deviceIdentity,
+    });
+    return await executeGatewayRequestWithScopes<T>({
+      opts,
+      scopes: useStoredDeviceAuth ? undefined : scopes,
+      url,
+      token,
+      password,
+      tlsFingerprint,
+      preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
+      timeoutMs,
+      safeTimerTimeoutMs,
+      connectionDetails,
+      deviceIdentity,
+      surfaceGatewayClientRequestErrors:
+        useStoredDeviceAuth ||
+        opts.requireLocalBackendSharedAuth === true ||
+        Boolean(opts.agentRuntimeIdentityToken),
+    });
+  } finally {
+    await ssh?.tunnel.stop();
   }
-  ensureGatewayCallCanAuthenticate({
-    opts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-  });
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes: useStoredDeviceAuth ? undefined : scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
-    preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
-    timeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-    deviceIdentity,
-    surfaceGatewayClientRequestErrors:
-      useStoredDeviceAuth ||
-      opts.requireLocalBackendSharedAuth === true ||
-      Boolean(opts.agentRuntimeIdentityToken),
-  });
 }
 
 export async function buildGatewayProbeConnectionDetails(
@@ -1233,26 +1256,44 @@ export async function buildGatewayProbeConnectionDetails(
   } satisfies CallGatewayBaseOptions;
   const context = await resolveGatewayCallContext(callOpts);
   ensureRemoteModeUrlConfigured(context);
-  const connectionDetails = buildGatewayConnectionDetails({
+  let connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+    allowConfiguredSshTransport: true,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({
-    opts: callOpts,
-    context,
+  const ssh = await startGatewayRemoteSshTunnel({
+    config: context.config,
     url: connectionDetails.url,
+    urlSource: connectionDetails.urlSource,
   });
-  return {
-    ...connectionDetails,
-    ...(tlsFingerprint ? { tlsFingerprint } : {}),
-    ...(context.config.gateway?.handshakeTimeoutMs
-      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
-      : {}),
-  };
+  try {
+    if (ssh) {
+      connectionDetails = applyGatewaySshTunnelConnectionDetails({
+        details: connectionDetails,
+        ssh,
+      });
+    }
+    const tlsFingerprint = await resolveGatewayTlsFingerprint({
+      opts: callOpts,
+      context,
+      url: connectionDetails.url,
+    });
+    return {
+      ...connectionDetails,
+      ...(tlsFingerprint ? { tlsFingerprint } : {}),
+      ...(context.config.gateway?.handshakeTimeoutMs
+        ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
+        : {}),
+      ...(ssh ? { sshTunnel: ssh.tunnel } : {}),
+    };
+  } catch (error) {
+    await ssh?.tunnel.stop();
+    throw error;
+  }
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(
