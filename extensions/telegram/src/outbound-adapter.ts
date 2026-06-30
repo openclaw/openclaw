@@ -121,6 +121,16 @@ export type CreateTelegramOutboundAdapterOptions = {
   preferFinalAssistantVisibleText?: boolean;
 };
 
+/** Matches a trailing standalone `notify=false` delivery marker. */
+const TRAILING_NOTIFY_FALSE_RE = /(?:^|\n)\s*notify=false\s*$/;
+
+function consumeTrailingNotifyFalseMarker(text: string): { text: string } | null {
+  if (!text) return null;
+  const match = TRAILING_NOTIFY_FALSE_RE.exec(text);
+  if (!match) return null;
+  return { text: text.slice(0, match.index).trimEnd() };
+}
+
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
   react: TelegramReactionFn;
@@ -146,6 +156,13 @@ export async function sendTelegramPayloadMessages(params: {
       interactive: params.payload.interactive,
       presentation,
     }) ?? "";
+
+  // Consume trailing standalone notify=false marker at the shared entry point
+  // so it applies to all delivery paths (media, native reply, sendMessage).
+  const notifyFalseResult = consumeTrailingNotifyFalseMarker(text);
+  const silent = notifyFalseResult ? true : undefined;
+  if (notifyFalseResult) text = notifyFalseResult.text;
+
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
@@ -156,6 +173,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    ...(silent ? { silent } : {}),
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =
