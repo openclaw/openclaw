@@ -2821,3 +2821,74 @@ describe("short-term dreaming trigger", () => {
     );
   });
 });
+
+describe("isLegacyPhaseDreamingJob", () => {
+  const { isLegacyPhaseDreamingJob } = testing;
+
+  it("detects legacy light sleep job with systemEvent payload.text", () => {
+    const job = {
+      id: "job-1",
+      name: "Memory Light Dreaming",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(true);
+  });
+
+  it("detects legacy REM sleep job with systemEvent payload.text", () => {
+    const job = {
+      id: "job-2",
+      name: "Memory REM Dreaming",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(true);
+  });
+
+  it("detects legacy light sleep job with agentTurn payload.message (#97475)", () => {
+    const job = {
+      id: "job-3",
+      name: "Memory Light Dreaming",
+      payload: { kind: "agentTurn", message: "__openclaw_memory_core_light_sleep__" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(true);
+  });
+
+  it("detects legacy REM sleep job with agentTurn payload.message (#97475)", () => {
+    const job = {
+      id: "job-4",
+      name: "Memory REM Dreaming",
+      payload: { kind: "agentTurn", message: "__openclaw_memory_core_rem_sleep__" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(true);
+  });
+
+  it("detects legacy job by description tag", () => {
+    const job = {
+      id: "job-5",
+      name: "some-custom-name",
+      description: "[managed-by=memory-core.dreaming.light] legacy job",
+      payload: { kind: "agentTurn", message: "unrelated" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(true);
+  });
+
+  it("rejects managed dreaming job (not legacy)", () => {
+    const job = {
+      id: "job-6",
+      name: "Memory Dreaming",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(false);
+  });
+
+  it("rejects unrelated job", () => {
+    const job = {
+      id: "job-7",
+      name: "cleanup-task",
+      payload: { kind: "agentTurn", message: "clean up files" },
+    };
+    expect(isLegacyPhaseDreamingJob(job)).toBe(false);
+  });
+});

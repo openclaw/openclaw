@@ -1005,6 +1005,7 @@ export const testing = {
   buildManagedDreamingCronJob,
   buildManagedDreamingPatch,
   isManagedDreamingJob,
+  isLegacyPhaseDreamingJob,
   resolveCronServiceFromGatewayContext,
   constants: {
     MANAGED_DREAMING_CRON_NAME,
