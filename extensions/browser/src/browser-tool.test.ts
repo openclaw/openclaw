@@ -443,6 +443,7 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   };
+  extra?: { scopes?: string[] };
 } {
   const toolName = mockCallArg<string>(gatewayMocks.callGatewayTool, callIndex, 0);
   const options = mockCallArg<{ timeoutMs?: number }>(gatewayMocks.callGatewayTool, callIndex, 1);
@@ -458,8 +459,13 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   }>(gatewayMocks.callGatewayTool, callIndex, 2);
+  const extra = mockCallArg<{ scopes?: string[] } | undefined>(
+    gatewayMocks.callGatewayTool,
+    callIndex,
+    3,
+  );
   expect(toolName).toBe("node.invoke");
-  return { options, request };
+  return { options, request, extra };
 }
 
 function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
@@ -747,6 +753,7 @@ describe("browser tool snapshot maxChars", () => {
           timeoutMs: 7777,
         }),
       }),
+      { scopes: ["operator.admin"] },
     );
   });
 
@@ -855,11 +862,27 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
-    const { options, request } = lastNodeInvokeCall();
+    const { options, request, extra } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(25_000);
+    expect(extra?.scopes).toEqual(["operator.admin"]);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["target=node", { target: "node" }],
+    ["an explicit node pin", { node: "node-1" }],
+    ["automatic node routing", {}],
+  ])("blocks %s when host control is disabled", async (_label, route) => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool({ allowHostControl: false });
+
+    await expect(tool.execute?.("call-1", { action: "status", ...route })).rejects.toThrow(
+      /browser control is disabled by sandbox policy/i,
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -1239,7 +1262,7 @@ describe("browser tool snapshot maxChars", () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
-    const tool = createBrowserTool();
+    const tool = createBrowserTool({ allowHostControl: true });
     await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
