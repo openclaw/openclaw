@@ -1160,6 +1160,7 @@ describe("redactSecrets", () => {
         ],
       },
       status: { code: "SYSTEM_RUN_DENIED" },
+      details: { error: { code: "SYSTEM_RUN_DENIED" } },
       error: { code: "ERR_ROOTOPAQUECODE1234567890" },
       diagnostic: { error: { code: "ERR_DIAGNOSTIC_TEST" } },
       stabilityBundle: { error: { code: "ERR_STABILITY_TEST" } },
@@ -1167,6 +1168,7 @@ describe("redactSecrets", () => {
       oauth: { code: "oauth-code-value-1234567890" },
       oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
       provider: { code: "PROVIDEROPAQUECODE1234567890" },
+      providerDetails: { error: { code: "SYSTEM_RUN_DENIED" } },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
     });
 
@@ -1177,6 +1179,7 @@ describe("redactSecrets", () => {
       { code: "incomplete-session-branch" },
     ]);
     expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.details.error.code).toBe("SYSTEM_RUN_DENIED");
     expect(output.error.code).not.toBe("ERR_ROOTOPAQUECODE1234567890");
     expect(output.diagnostic.error.code).toBe("ERR_DIAGNOSTIC_TEST");
     expect(output.stabilityBundle.error.code).toBe("ERR_STABILITY_TEST");
@@ -1184,6 +1187,7 @@ describe("redactSecrets", () => {
     expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
     expect(output.oauthNestedError.error.code).not.toBe("ERR_OPAQUEOAUTHCODE1234567890");
     expect(output.provider.code).not.toBe("PROVIDEROPAQUECODE1234567890");
+    expect(output.providerDetails.error.code).not.toBe("SYSTEM_RUN_DENIED");
     expect(output.providerNestedError.error.code).not.toBe("ERR_PROVIDEROPAQUECODE1234567890");
   });
 });

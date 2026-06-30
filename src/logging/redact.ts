@@ -1123,6 +1123,13 @@ function shouldPreserveStructuredDiagnosticCode(
   if (normalizedKey !== "code") {
     return false;
   }
+  const normalizedPath = path.map((part) => part.toLowerCase());
+  if (normalizedPath.some((part) => part.includes("oauth") || part.includes("provider"))) {
+    return false;
+  }
+  if (STRUCTURED_DIAGNOSTIC_STATUS_CODE_VALUES.has(value)) {
+    return true;
+  }
   if (
     pathEndsWith(path, ["warnings", "code"]) &&
     STRUCTURED_INTERNAL_WARNING_CODE_VALUES.has(value)
@@ -1143,9 +1150,6 @@ function isStructuredDiagnosticErrorCodePath(path: readonly string[]): boolean {
     return false;
   }
   const normalizedPath = path.map((part) => part.toLowerCase());
-  if (normalizedPath.some((part) => part.includes("oauth") || part.includes("provider"))) {
-    return false;
-  }
   return normalizedPath.some(
     (part) =>
       part.includes("diagnostic") || part.includes("stability") || part.includes("trajectory"),

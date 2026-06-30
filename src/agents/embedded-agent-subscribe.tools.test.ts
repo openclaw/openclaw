@@ -94,6 +94,21 @@ describe("extractToolErrorMessage", () => {
     ).toBe("INVALID_REQUEST");
   });
 
+  it("preserves structured diagnostic tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        error: {
+          code: "SYSTEM_RUN_DENIED",
+          message: "approval required",
+        },
+      },
+    }) as { details: { error: { code: string; message: string } } };
+
+    expect(sanitized.details.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorCode(sanitized)).toBe("SYSTEM_RUN_DENIED");
+  });
+
   it("does not extract error codes from prose-only tool output", () => {
     expect(
       extractToolErrorCode({

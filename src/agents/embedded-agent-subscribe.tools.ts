@@ -14,7 +14,11 @@ import type { ChannelMessageActionName } from "../channels/plugins/types.public.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
+import {
+  redactSecrets,
+  redactSensitiveFieldValue,
+  redactToolPayloadText,
+} from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
@@ -234,7 +238,7 @@ export function sanitizeToolResult(result: unknown): unknown {
     return redactToolPayloadText(result);
   }
   if (Array.isArray(result)) {
-    return redactStringsDeep(result);
+    return redactSecrets(result);
   }
   if (!result || typeof result !== "object") {
     return result;
@@ -262,7 +266,7 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactStringsDeep(preCleaned) as Record<string, unknown>;
+  const baseline = redactSecrets(preCleaned) as Record<string, unknown>;
   const out: Record<string, unknown> = { ...baseline };
   const content = Array.isArray(baseline.content) ? baseline.content : null;
   if (content) {
