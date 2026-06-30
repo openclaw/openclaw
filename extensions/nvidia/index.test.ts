@@ -7,7 +7,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { clearNvidiaFeaturedModelCacheForTests } from "./provider-catalog.js";
+import {
+  clearNvidiaFeaturedModelCacheForTests,
+  NVIDIA_FEATURED_MODELS_URL,
+} from "./provider-catalog.js";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -44,6 +47,7 @@ afterEach(() => {
 function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
+    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release: vi.fn(),
   });
 }
@@ -237,9 +241,9 @@ describe("nvidia provider hooks", () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
-          model: "minimaxai/minimax-m2.7",
-          "model-name": "Minimax M2.7",
-          context: 196608,
+          model: "nemotron-3-super-120b-a12b",
+          "model-name": "Nemotron 3 Super 120B",
+          context: 262144,
           "max-output": 8192,
         },
       ],
@@ -248,7 +252,12 @@ describe("nvidia provider hooks", () => {
 
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
 
-    expect(entries?.map((entry) => entry.id)).toEqual(["minimaxai/minimax-m2.7"]);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        contextWindow: 1_048_576,
+      }),
+    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -298,7 +307,6 @@ describe("nvidia provider hooks", () => {
       "static:nvidia/minimaxai/minimax-m2.5",
       "static:nvidia/z-ai/glm5",
     ]);
-
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
 
     const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));

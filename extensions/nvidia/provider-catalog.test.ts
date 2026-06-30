@@ -28,6 +28,7 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   const release = vi.fn();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
+    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release,
   });
   return release;
@@ -62,6 +63,10 @@ describe("nvidia provider catalog", () => {
         },
       },
     });
+    expect(provider.models[1]).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      contextWindow: 1_048_576,
+    });
   });
 
   it("promotes ranked models from NVIDIA's featured catalog", async () => {
@@ -93,6 +98,11 @@ describe("nvidia provider catalog", () => {
       contextWindow: 202752,
       maxTokens: 8192,
       compat: { requiresStringContent: true },
+    });
+    expect(provider.models[1]).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
     });
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       auditContext: "nvidia-featured-model-catalog",
