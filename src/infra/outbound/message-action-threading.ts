@@ -211,7 +211,6 @@ export async function prepareOutboundMirrorRoute(params: {
           currentSessionKey: params.currentSessionKey,
           resolvedTarget: params.resolvedTarget,
           replyToId,
-          replyToIsExplicit: params.replyToIsExplicit,
           threadId: resolvedThreadId,
         })
       : null;

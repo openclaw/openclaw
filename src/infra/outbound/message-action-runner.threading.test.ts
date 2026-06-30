@@ -123,14 +123,12 @@ describe("message action threading helpers", () => {
         threadId: threadId ?? null,
       }),
       resolveOutboundSessionRoute,
-      replyToIsExplicit: true,
       ensureOutboundSessionEntry,
     });
 
     expect(resolveOutboundSessionRoute).toHaveBeenCalledOnce();
     expect(firstMockArg(resolveOutboundSessionRoute)).toMatchObject({
       replyToId: "root-42",
-      replyToIsExplicit: true,
       threadId: "root-42",
     });
   });

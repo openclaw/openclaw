@@ -313,7 +313,6 @@ async function resolveSlackOutboundSessionRoute(params: {
   accountId?: string | null;
   target: string;
   replyToId?: string | null;
-  replyToIsExplicit?: boolean;
   threadId?: string | number | null;
   currentSessionKey?: string | null;
 }) {
@@ -375,16 +374,6 @@ async function resolveSlackOutboundSessionRoute(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,
-    // Inherited Slack child-reply timestamps should not create new
-    // delivery-mirror sessions; prefer the recovered thread session
-    // when the reply target was explicitly marked as inherited.
-    // Omitted (undefined) explicitness preserves the old reply-first
-    // default for callers that haven't opted into the tri-state signal
-    // (e.g. gateway send with an explicit request replyToId).
-    precedence:
-      params.replyToIsExplicit === false
-        ? ["currentSession", "threadId", "replyToId"]
-        : ["replyToId", "threadId", "currentSession"],
     canRecoverCurrentThread: () =>
       shouldRecoverSlackThreadFromCurrentSession({
         cfg: params.cfg,
@@ -829,10 +818,14 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
+      // Slack's thread_ts identifies the root. Only known inherited replies may let
+      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
+      const preferThreadId = replyToIsExplicit === false;
       const resolvedReplyToId = resolveSlackThreadTsValue({
-        replyToId: replyDelivery?.replyToMode === "off" ? undefined : replyToId,
-        threadId,
+        replyToId: preferThreadId ? threadId : allowedReplyToId,
+        threadId: preferThreadId ? allowedReplyToId : threadId,
       });
       return {
         replyToId:

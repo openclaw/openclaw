@@ -475,77 +475,6 @@ describe("slackPlugin status", () => {
     });
   });
 
-  it("prefers the current Slack thread session when reply is inherited (replyToIsExplicit=false)", async () => {
-    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
-    if (!resolveRoute) {
-      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
-    }
-
-    const route = await resolveRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      target: "channel:C1",
-      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
-      replyToId: "1712345688.654321",
-      replyToIsExplicit: false,
-    });
-
-    // Inherited child reply timestamp should not create a new session;
-    // it should route into the existing thread session.
-    expectRecordFields(route, "Slack route (inherited reply)", {
-      sessionKey: "agent:main:slack:channel:c1:thread:1712345678.123456",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      threadId: "1712345678.123456",
-    });
-  });
-
-  it("keeps explicit reply-to precedence when replyToIsExplicit=true", async () => {
-    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
-    if (!resolveRoute) {
-      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
-    }
-
-    const route = await resolveRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      target: "channel:C1",
-      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
-      replyToId: "1712345688.654321",
-      replyToIsExplicit: true,
-    });
-
-    // Explicit reply targets should keep the current reply-first behavior.
-    expectRecordFields(route, "Slack route (explicit reply)", {
-      sessionKey: "agent:main:slack:channel:c1:thread:1712345688.654321",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      threadId: "1712345688.654321",
-    });
-  });
-
-  it("preserves reply-first routing when replyToIsExplicit is omitted (backward compat)", async () => {
-    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
-    if (!resolveRoute) {
-      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
-    }
-
-    const route = await resolveRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      target: "channel:C1",
-      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
-      replyToId: "1712345688.654321",
-      // replyToIsExplicit intentionally omitted
-    });
-
-    // Callers that haven't opted into the tri-state signal (e.g. gateway
-    // send with an explicit replyToId) must keep reply-first routing.
-    expectRecordFields(route, "Slack route (omitted explicitness)", {
-      sessionKey: "agent:main:slack:channel:c1:thread:1712345688.654321",
-      baseSessionKey: "agent:main:slack:channel:c1",
-      threadId: "1712345688.654321",
-    });
-  });
-
   it("canonicalizes bare Slack IM channel targets to direct user session routes", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {
@@ -944,6 +873,33 @@ describe("slackPlugin outbound", () => {
       threadId: null,
     });
   });
+
+  it.each([
+    {
+      name: "inherited",
+      replyToIsExplicit: false,
+      expectedReplyToId: "1712345678.123456",
+    },
+    { name: "explicit", replyToIsExplicit: true, expectedReplyToId: "1712345688.654321" },
+    { name: "unknown", replyToIsExplicit: undefined, expectedReplyToId: "1712345688.654321" },
+  ])(
+    "routes $name child replies to $expectedReplyToId",
+    ({ replyToIsExplicit, expectedReplyToId }) => {
+      const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("slack threading.resolveReplyTransport unavailable");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg,
+          replyToId: "1712345688.654321",
+          threadId: "1712345678.123456",
+          replyToIsExplicit,
+        }),
+      ).toEqual({ replyToId: expectedReplyToId, threadId: null });
+    },
+  );
 
   it("ignores explicit reply targets for off-mode final delivery", () => {
     const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
