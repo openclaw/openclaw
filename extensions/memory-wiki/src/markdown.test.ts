@@ -74,6 +74,13 @@ describe("toWikiPageSummary", () => {
           "fi",
           "```",
           "",
+          "```md",
+          "```ts",
+          "const nestedFenceFake = '[[nested-fence-fake]]';",
+          "```",
+          "",
+          "After the code block, links count again: [[after-code]].",
+          "",
           "```scala",
           "val maybeUser: Future[Option[User]] = loadUser()",
           "```",
@@ -82,7 +89,7 @@ describe("toWikiPageSummary", () => {
       }),
     });
 
-    expect(summary?.linkTargets).toEqual(["real-target", "sources/guide.md"]);
+    expect(summary?.linkTargets).toEqual(["real-target", "after-code", "sources/guide.md"]);
   });
 
   it("marks raw and generated source body metadata", () => {

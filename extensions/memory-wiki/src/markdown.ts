@@ -116,7 +116,7 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
-const FENCED_CODE_START_PATTERN = /^(?: {0,3})(`{3,}|~{3,})/;
+const FENCED_CODE_LINE_PATTERN = /^(?: {0,3})(`{3,}|~{3,})(.*)$/;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -420,10 +420,15 @@ function maskMarkdownCode(markdown: string): string {
   let fence: { marker: "`" | "~"; length: number } | null = null;
 
   for (const line of lines) {
-    const fenceMatch = FENCED_CODE_START_PATTERN.exec(line);
+    const fenceMatch = FENCED_CODE_LINE_PATTERN.exec(line);
     const fenceDelimiter = fenceMatch?.[1];
+    const fenceRest = fenceMatch?.[2] ?? "";
     if (fence) {
-      if (fenceDelimiter?.startsWith(fence.marker) && fenceDelimiter.length >= fence.length) {
+      if (
+        fenceDelimiter?.startsWith(fence.marker) &&
+        fenceDelimiter.length >= fence.length &&
+        fenceRest.trim().length === 0
+      ) {
         fence = null;
       }
       maskedLines.push("");
