@@ -631,6 +631,13 @@ async function processDiscordMessageInner(
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
+  // True once a durable 🧠 reasoning message has posted this turn (/reasoning on).
+  // Those post AFTER the early progress draft, so collapsing the draft in place
+  // strands the summary above them (at the top). When set, the collapse instead
+  // posts the summary fresh below the thoughts (timeline: thoughts → summary →
+  // answer). Durable 🧠 is never counted in the bar — the delivery site below
+  // intentionally omits the progressReasoningSteps bump.
+  let persistentReasoningDelivered = false;
   // Preamble updates can re-fire; count each item id or id-less text once.
   const seenCommentaryIds = new Set<string>();
   let lastCommentaryNoteText = "";
@@ -765,7 +772,9 @@ async function processDiscordMessageInner(
         kind: "block",
       });
       replyReference.markSent();
-      // Durable 🧠 (/reasoning on) is persisted, not streamed — never count it in the bar.
+      // Durable 🧠 (/reasoning on) is persisted, not streamed — never count it in the
+      // bar. Mark that durable reasoning posted so the collapse anchors below it.
+      persistentReasoningDelivered = true;
       return { visibleReplySent: true };
     }
     if (
@@ -821,25 +830,54 @@ async function processDiscordMessageInner(
       !deliverablePayload.isError;
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
-      const draftId = draftStream.messageId();
-      if (draftId !== undefined) {
-        await draftStream.seal();
-        try {
-          await editMessageDiscord(
-            deliverChannelId,
-            draftId,
-            {
-              content: buildProgressSummaryLine(),
-              ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
-            },
-            { cfg, accountId, rest: deliveryRest },
-          );
-          draftPreview.markPreviewFinalized();
-        } catch (err) {
-          logVerbose(
-            `discord: progress draft summary edit failed; clearing draft (${String(err)})`,
-          );
-          await draftStream.clear();
+      if (persistentReasoningDelivered) {
+        // /reasoning on: durable 🧠 messages posted AFTER the early draft, so an
+        // in-place edit strands the summary above them (at the top). Clear the
+        // early draft and post the summary fresh below the thoughts, so the order
+        // reads thoughts → summary → answer (the final posts fresh below this).
+        await draftStream.clear();
+        await deliverDiscordReply({
+          cfg,
+          replies: [{ text: buildProgressSummaryLine() }],
+          target: deliverTarget,
+          token,
+          accountId,
+          rest: deliveryRest,
+          runtime,
+          replyToId: replyReference.use(),
+          replyToMode,
+          textLimit,
+          maxLinesPerMessage,
+          tableMode,
+          chunkMode,
+          sessionKey: ctxPayload.SessionKey,
+          threadBindings,
+          mediaLocalRoots,
+          kind: "block",
+        });
+        replyReference.markSent();
+        draftPreview.markPreviewFinalized();
+      } else {
+        const draftId = draftStream.messageId();
+        if (draftId !== undefined) {
+          await draftStream.seal();
+          try {
+            await editMessageDiscord(
+              deliverChannelId,
+              draftId,
+              {
+                content: buildProgressSummaryLine(),
+                ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
+              },
+              { cfg, accountId, rest: deliveryRest },
+            );
+            draftPreview.markPreviewFinalized();
+          } catch (err) {
+            logVerbose(
+              `discord: progress draft summary edit failed; clearing draft (${String(err)})`,
+            );
+            await draftStream.clear();
+          }
         }
       }
       // Fall through to the generic fresh send below for the final itself.
