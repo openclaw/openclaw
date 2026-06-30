@@ -161,4 +161,32 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       }
     });
   });
+
+  it("returns null when the response exceeds the buffer size cap", async () => {
+    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+      const socketPath = path.join(dir, "socket.sock");
+      const server = net.createServer((socket) => {
+        socket.on("data", () => {
+          // Stream a newline-free body larger than JSONL_SOCKET_MAX_BUFFER_BYTES.
+          socket.write("x".repeat(1024 * 1024 + 1024));
+        });
+      });
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
+
+      try {
+        const result = await requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 500,
+          accept: () => undefined,
+        });
+        expect(result).toBeNull();
+      } finally {
+        server.close();
+      }
+    });
+  });
 });
