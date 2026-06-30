@@ -1943,8 +1943,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/normalization-core
       '@openclaw/uirouter':
-        specifier: file:../../../uirouter/.artifacts/local-pack/openclaw-uirouter-0.1.0.tgz
-        version: file:../../uirouter/.artifacts/local-pack/openclaw-uirouter-0.1.0.tgz
+        specifier: 0.1.0
+        version: 0.1.0
       dompurify:
         specifier: 3.4.11
         version: 3.4.11
@@ -3152,9 +3152,8 @@ packages:
     peerDependencies:
       undici: '>=8.3.0 <9'
 
-  '@openclaw/uirouter@file:../../uirouter/.artifacts/local-pack/openclaw-uirouter-0.1.0.tgz':
-    resolution: {integrity: sha512-YnjS+VUJyK7iX0qarvX8jrN/aJidO8oeCxPgMtL6bQQ+ZtfUmP3wjPAeGxFefp99Et8io3Pg3jD/XyLMhI3PsQ==, tarball: file:../../uirouter/.artifacts/local-pack/openclaw-uirouter-0.1.0.tgz}
-    version: 0.1.0
+  '@openclaw/uirouter@0.1.0':
+    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.219.0':
@@ -8918,7 +8917,7 @@ snapshots:
     dependencies:
       undici: 8.5.0
 
-  '@openclaw/uirouter@file:../../uirouter/.artifacts/local-pack/openclaw-uirouter-0.1.0.tgz': {}
+  '@openclaw/uirouter@0.1.0': {}
 
   '@opentelemetry/api-logs@0.219.0':
     dependencies:
