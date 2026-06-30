@@ -306,12 +306,16 @@ async function readGeminiFileOutput(params: {
 
 function applyGeminiBatchOutputLine(params: {
   line: GeminiBatchOutputLine;
+  requested: Set<string>;
   remaining: Set<string>;
   errors: string[];
   byCustomId: Map<string, number[]>;
 }) {
   const customId = params.line.key ?? params.line.custom_id ?? params.line.request_id;
   if (!customId) {
+    return;
+  }
+  if (!params.requested.has(customId)) {
     return;
   }
   params.remaining.delete(customId);
@@ -444,13 +448,14 @@ export async function runGeminiEmbeddingBatches(
       }
 
       const errors: string[] = [];
-      const remaining = new Set(group.map((request) => request.custom_id));
+      const requested = new Set(group.map((request) => request.custom_id));
+      const remaining = new Set(requested);
 
       await readGeminiFileOutput({
         gemini: params.gemini,
         fileId: completed.outputFileId,
         onLine: (line) => {
-          applyGeminiBatchOutputLine({ line, remaining, errors, byCustomId });
+          applyGeminiBatchOutputLine({ line, requested, remaining, errors, byCustomId });
         },
       });
 
