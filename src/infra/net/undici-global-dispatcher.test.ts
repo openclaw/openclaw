@@ -22,11 +22,15 @@ const {
 } = vi.hoisted(() => {
   class AgentLocal {
     constructor(public readonly options?: Record<string, unknown>) {}
+    close(cb?: () => void): void { cb?.(); }
+    destroy(cb?: () => void): void { cb?.(); }
   }
 
   class EnvHttpProxyAgentLocal {
     public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
+    close(cb?: () => void): void { cb?.(); }
+    destroy(cb?: () => void): void { cb?.(); }
   }
 
   class ProxyAgentLocal {
