@@ -92,7 +92,6 @@ export type PluginHookInboundClaimEvent = {
   isGroup: boolean;
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
-  gatewayClientScopes?: string[];
   wasMentioned?: boolean;
   metadata?: Record<string, unknown>;
 };

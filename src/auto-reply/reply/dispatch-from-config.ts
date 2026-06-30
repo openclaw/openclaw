@@ -2150,7 +2150,7 @@ export async function dispatchReplyFromConfig(
         `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
       );
       // Bound native runtimes need the current owner decision, not stale bind-time identity.
-      // Gateway scopes remain explicit so plugins can preserve scope precedence over owner status.
+      // The resolver folds internal operator.admin authority into this owner decision.
       const bindingAuthorization = resolveCommandAuthorization({
         ctx,
         cfg,
@@ -2162,9 +2162,6 @@ export async function dispatchReplyFromConfig(
             const authorizedInboundClaimEvent = {
               ...inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
-              ...(ctx.GatewayClientScopes
-                ? { gatewayClientScopes: [...ctx.GatewayClientScopes] }
-                : {}),
             };
             return hookRunner.runInboundClaimForPluginOutcome(
               pluginOwnedBinding.pluginId,

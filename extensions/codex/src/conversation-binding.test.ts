@@ -581,7 +581,6 @@ describe("codex conversation binding", () => {
         channel: "discord",
         isGroup: true,
         senderIsOwner: false,
-        gatewayClientScopes: ["operator.write"],
       },
       {
         channelId: "discord",
@@ -606,17 +605,14 @@ describe("codex conversation binding", () => {
     expect(result).toEqual({ handled: true });
   });
 
-  it.each([
-    { senderIsOwner: false },
-    { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
-  ])("blocks inbound bound turns without current owner or admin authority", async (auth) => {
+  it("blocks inbound bound turns without current owner or admin authority", async () => {
     const result = await handleCodexConversationInboundClaim(
       {
         content: "run this",
         channel: "discord",
         isGroup: true,
         commandAuthorized: true,
-        ...auth,
+        senderIsOwner: false,
       },
       {
         channelId: "discord",
