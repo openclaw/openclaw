@@ -32,7 +32,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
+import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -112,16 +112,7 @@ export {
 } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const TELEGRAM_CODEX_LOGIN_PROVIDER = "openai";
-const TELEGRAM_CODEX_LOGIN_METHOD = "device-code";
-const TELEGRAM_CODEX_LOGIN_FLOW_TTL_MS = 15 * 60_000;
-const TELEGRAM_CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai", "openai-codex"]);
-
-type TelegramCodexLoginFlowRecord = {
-  expiresAt: number;
-};
-
-const activeTelegramCodexLoginFlows = new Map<string, TelegramCodexLoginFlowRecord>();
+const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();
 
 type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramChunkMode = ReturnType<
@@ -160,35 +151,6 @@ type TelegramNativeCommandThreadContext = {
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
 
-function resolveTelegramCodexLoginProvider(rawProvider: string | undefined): string | null {
-  const normalized = normalizeLowercaseStringOrEmpty(rawProvider ?? "codex").replace(/_/gu, "-");
-  if (!normalized) {
-    return TELEGRAM_CODEX_LOGIN_PROVIDER;
-  }
-  return TELEGRAM_CODEX_LOGIN_PROVIDER_ALIASES.has(normalized)
-    ? TELEGRAM_CODEX_LOGIN_PROVIDER
-    : null;
-}
-
-function hasConfiguredTelegramLoginOwner(cfg: OpenClawConfig): boolean {
-  const owners = cfg.commands?.ownerAllowFrom;
-  return Array.isArray(owners) && owners.some((owner) => normalizeOptionalString(String(owner)));
-}
-
-function resolveProviderScopedProfileId(
-  authProfileOverride: string | undefined,
-  provider: string,
-): string | undefined {
-  const profileId = normalizeOptionalString(authProfileOverride);
-  if (!profileId) {
-    return undefined;
-  }
-  const providerPrefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
-  return normalizeLowercaseStringOrEmpty(profileId).startsWith(providerPrefix)
-    ? profileId
-    : undefined;
-}
-
 function resolveTelegramCodexLoginProviderInput(commandArgs: CommandArgs | undefined): string {
   const providerValue = commandArgs?.values?.provider;
   return typeof providerValue === "string" && providerValue.trim()
@@ -215,44 +177,6 @@ function buildTelegramCodexLoginFlowKey(params: {
     params.agentId,
     params.provider,
   ].join(":");
-}
-
-function createTelegramLoginPrompter(params: {
-  bot: Bot;
-  chatId: number;
-  threadParams: ReturnType<typeof buildTelegramThreadParams>;
-  runtime: RuntimeEnv;
-}): ModelsAuthLoginFlowOptions["prompter"] {
-  const sendMessage = async (message: string) => {
-    const text = message.trim();
-    if (!text) {
-      return;
-    }
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime: params.runtime,
-      fn: () => params.bot.api.sendMessage(params.chatId, text, params.threadParams ?? {}),
-    });
-  };
-  const unsupportedPrompt = async () => {
-    throw new Error("Telegram /login supports only fixed Codex device-code auth.");
-  };
-  return {
-    intro: async () => {},
-    outro: async () => {},
-    note: async (message, title) => {
-      await sendMessage([title?.trim(), message.trim()].filter(Boolean).join("\n\n"));
-    },
-    plain: sendMessage,
-    select: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["select"],
-    multiselect: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["multiselect"],
-    text: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["text"],
-    confirm: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["confirm"],
-    progress: () => ({
-      update: () => {},
-      stop: () => {},
-    }),
-  };
 }
 
 function buildTelegramCommandMenuModelContext(params: {
@@ -1336,7 +1260,10 @@ export const registerTelegramNativeCommands = ({
               fn: () => bot.api.sendMessage(chatId, text, threadParams),
             });
           };
-          if (!senderIsOwner || !hasConfiguredTelegramLoginOwner(runtimeCfg)) {
+          if (
+            !senderIsOwner ||
+            !codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(runtimeCfg)
+          ) {
             await sendLoginMessage(
               "Only a configured OpenClaw owner can start Codex login from Telegram.",
             );
@@ -1348,7 +1275,7 @@ export const registerTelegramNativeCommands = ({
             );
             return;
           }
-          const loginProvider = resolveTelegramCodexLoginProvider(
+          const loginProvider = codexChannelLoginRuntime.resolveProvider(
             resolveTelegramCodexLoginProviderInput(commandArgs),
           );
           if (!loginProvider) {
@@ -1362,19 +1289,16 @@ export const registerTelegramNativeCommands = ({
             agentId: route.agentId,
             provider: loginProvider,
           });
-          const now = Date.now();
-          const activeFlow = activeTelegramCodexLoginFlows.get(flowKey);
-          if (activeFlow && activeFlow.expiresAt > now) {
+          const reservation = codexChannelLoginRuntime.reserveFlow({
+            flows: activeTelegramCodexLoginFlows,
+            flowKey,
+          });
+          if (reservation.status === "active") {
             await sendLoginMessage(
               "A Codex login code is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
             );
             return;
           }
-          if (activeFlow) {
-            activeTelegramCodexLoginFlows.delete(flowKey);
-          }
-          const flowRecord = { expiresAt: now + TELEGRAM_CODEX_LOGIN_FLOW_TTL_MS };
-          activeTelegramCodexLoginFlows.set(flowKey, flowRecord);
           try {
             const loginFlow =
               telegramDeps.runModelsAuthLoginFlow ??
@@ -1397,25 +1321,20 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const profileId = resolveProviderScopedProfileId(
+            const profileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
               targetSessionEntry?.authProfileOverride,
               loginProvider,
             );
-            await loginFlow({
+            await codexChannelLoginRuntime.runDeviceLoginFlow({
+              runLoginFlow: loginFlow,
               provider: loginProvider,
-              method: TELEGRAM_CODEX_LOGIN_METHOD,
-              agent: route.agentId,
+              agentId: route.agentId,
               ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
-              prompter: createTelegramLoginPrompter({
-                bot,
-                chatId,
-                threadParams: buildTelegramThreadParams(threadSpec),
-                runtime,
-              }),
-              isRemote: true,
-              openUrl: async () => {},
+              sendMessage: sendLoginMessage,
+              unsupportedPromptMessage:
+                "Telegram /login supports only fixed Codex device-code auth.",
             });
             await sendLoginMessage("Codex login complete. Try your request again now.");
           } catch {
@@ -1424,9 +1343,11 @@ export const registerTelegramNativeCommands = ({
               "Codex login did not complete. Send `/login codex` to request a new code.",
             );
           } finally {
-            if (activeTelegramCodexLoginFlows.get(flowKey) === flowRecord) {
-              activeTelegramCodexLoginFlows.delete(flowKey);
-            }
+            codexChannelLoginRuntime.releaseFlow({
+              flows: activeTelegramCodexLoginFlows,
+              flowKey,
+              record: reservation.record,
+            });
           }
           return;
         }

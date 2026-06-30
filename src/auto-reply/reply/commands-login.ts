@@ -5,26 +5,18 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  runModelsAuthLoginFlow,
+  codexChannelLoginRuntime,
   type ModelsAuthLoginFlowOptions,
-} from "../../commands/models/auth.js";
+} from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
-const CODEX_LOGIN_PROVIDER = "openai";
-const CODEX_LOGIN_METHOD = "device-code";
-const CODEX_LOGIN_FLOW_TTL_MS = 15 * 60_000;
-const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai", "openai-codex"]);
 const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
 const PUBLIC_CHAT_TYPES = new Set(["channel", "forum", "group", "public", "supergroup", "topic"]);
 const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "internal", "web"]);
 
-type CodexLoginFlowRecord = {
-  expiresAt: number;
-};
-
-const activeCodexLoginFlows = new Map<string, CodexLoginFlowRecord>();
+const activeCodexLoginFlows = new Map<string, { expiresAt: number }>();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
@@ -37,17 +29,8 @@ function parseLoginCommand(commandBodyNormalized: string): { providerInput: stri
   return { providerInput };
 }
 
-function resolveCodexLoginProvider(rawProvider: string | undefined): string | null {
-  const normalized = normalizeLowercaseStringOrEmpty(rawProvider ?? "codex").replace(/_/gu, "-");
-  if (!normalized) {
-    return CODEX_LOGIN_PROVIDER;
-  }
-  return CODEX_LOGIN_PROVIDER_ALIASES.has(normalized) ? CODEX_LOGIN_PROVIDER : null;
-}
-
 function hasConfiguredCommandOwners(params: HandleCommandsParams): boolean {
-  const owners = params.cfg.commands?.ownerAllowFrom;
-  return Array.isArray(owners) && owners.some((owner) => normalizeOptionalString(String(owner)));
+  return codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(params.cfg);
 }
 
 function hasInternalAdminScope(params: HandleCommandsParams): boolean {
@@ -112,20 +95,6 @@ function isPrivateLoginContext(params: HandleCommandsParams): boolean {
   return false;
 }
 
-function resolveProviderScopedProfileId(
-  authProfileOverride: string | undefined,
-  provider: string,
-): string | undefined {
-  const profileId = normalizeOptionalString(authProfileOverride);
-  if (!profileId) {
-    return undefined;
-  }
-  const providerPrefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
-  return normalizeLowercaseStringOrEmpty(profileId).startsWith(providerPrefix)
-    ? profileId
-    : undefined;
-}
-
 function keyPart(value: unknown, fallback: string): string {
   if (typeof value === "string") {
     return value.trim() || fallback;
@@ -163,36 +132,6 @@ function resolveLoginAgentId(params: HandleCommandsParams): string | undefined {
   );
 }
 
-function buildLoginPrompter(params: {
-  sendMessage: (text: string) => Promise<void>;
-}): ModelsAuthLoginFlowOptions["prompter"] {
-  const sendCleanMessage = async (message: string) => {
-    const text = message.trim();
-    if (text) {
-      await params.sendMessage(text);
-    }
-  };
-  const unsupportedPrompt = async () => {
-    throw new Error("Channel /login supports only fixed Codex device-code auth.");
-  };
-  return {
-    intro: async () => {},
-    outro: async () => {},
-    note: async (message, title) => {
-      await sendCleanMessage([title?.trim(), message.trim()].filter(Boolean).join("\n\n"));
-    },
-    plain: sendCleanMessage,
-    select: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["select"],
-    multiselect: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["multiselect"],
-    text: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["text"],
-    confirm: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["confirm"],
-    progress: () => ({
-      update: () => {},
-      stop: () => {},
-    }),
-  };
-}
-
 function buildFinalReply(status: string): ReplyPayload {
   return { text: status };
 }
@@ -218,37 +157,36 @@ async function runChannelCodexLogin(params: {
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
   const flowKey = buildCodexLoginFlowKey(params.commandParams, params.provider);
-  const now = Date.now();
-  const activeFlow = activeCodexLoginFlows.get(flowKey);
-  if (activeFlow && activeFlow.expiresAt > now) {
+  const reservation = codexChannelLoginRuntime.reserveFlow({
+    flows: activeCodexLoginFlows,
+    flowKey,
+  });
+  if (reservation.status === "active") {
     return {
       text: "A Codex login code is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.",
     };
   }
-  if (activeFlow) {
-    activeCodexLoginFlows.delete(flowKey);
-  }
   if (!params.commandParams.opts?.onBlockReply) {
+    codexChannelLoginRuntime.releaseFlow({
+      flows: activeCodexLoginFlows,
+      flowKey,
+      record: reservation.record,
+    });
     return {
       text: "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
     };
   }
 
-  const flowRecord = { expiresAt: now + CODEX_LOGIN_FLOW_TTL_MS };
-  activeCodexLoginFlows.set(flowKey, flowRecord);
   try {
-    await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
+    await codexChannelLoginRuntime.runDeviceLoginFlow({
       provider: params.provider,
-      method: CODEX_LOGIN_METHOD,
-      agent: params.agentId,
+      agentId: params.agentId,
       ...(params.profileId ? { profileId: params.profileId } : {}),
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
-      prompter: buildLoginPrompter({
-        sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
-      }),
-      isRemote: true,
-      openUrl: async () => {},
+      sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
+      unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
+      runLoginFlow: params.runLoginFlow,
     });
     return buildFinalReply("Codex login complete. Try your request again now.");
   } catch {
@@ -256,9 +194,11 @@ async function runChannelCodexLogin(params: {
       "Codex login did not complete. Send `/login codex` to request a new code.",
     );
   } finally {
-    if (activeCodexLoginFlows.get(flowKey) === flowRecord) {
-      activeCodexLoginFlows.delete(flowKey);
-    }
+    codexChannelLoginRuntime.releaseFlow({
+      flows: activeCodexLoginFlows,
+      flowKey,
+      record: reservation.record,
+    });
   }
 }
 
@@ -280,7 +220,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  const provider = resolveCodexLoginProvider(parsed.providerInput);
+  const provider = codexChannelLoginRuntime.resolveProvider(parsed.providerInput);
   if (!provider) {
     return {
       shouldContinue: false,
@@ -310,7 +250,10 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     commandParams: params,
     provider,
     agentId,
-    profileId: resolveProviderScopedProfileId(params.sessionEntry?.authProfileOverride, provider),
+    profileId: codexChannelLoginRuntime.resolveProviderScopedProfileId(
+      params.sessionEntry?.authProfileOverride,
+      provider,
+    ),
   });
   return { shouldContinue: false, reply };
 };
@@ -319,5 +262,5 @@ export const testing = {
   clearActiveFlows() {
     activeCodexLoginFlows.clear();
   },
-  resolveCodexLoginProvider,
+  resolveCodexLoginProvider: codexChannelLoginRuntime.resolveProvider,
 };
