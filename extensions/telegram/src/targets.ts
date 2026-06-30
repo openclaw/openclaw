@@ -104,10 +104,15 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 // unexpected colons that are not part of a known t.me URL form, the parser
 // is oversplitting — fall back to full-string instead of silently
 // embedding colon-separated residue in chatId.
-const LOOKS_LIKE_TME_URL = /^(?:https?:\/\/)?t\.me\//i;
+// Mirrors the lookup shape used by normalizeTelegramLookupTarget:
+//   /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i
+// so malformed t.me-looking inputs like "https://t.me/foo:bar:9" are
+// rejected (the extracted chatId "https://t.me/foo:bar" is not a valid
+// lookup target).
+const VALID_TME_LOOKUP_TARGET = /^(?:https?:\/\/)?t\.me\/[A-Za-z0-9_]+$/i;
 
 function hasOversplitColons(chatId: string): boolean {
-  return chatId.includes(":") && !LOOKS_LIKE_TME_URL.test(chatId);
+  return chatId.includes(":") && !VALID_TME_LOOKUP_TARGET.test(chatId);
 }
 
 export function parseTelegramTarget(to: string): TelegramTarget {
