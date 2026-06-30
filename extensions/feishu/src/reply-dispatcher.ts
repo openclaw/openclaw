@@ -15,6 +15,7 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {
@@ -77,12 +78,6 @@ function rememberStreamingStartFailure(accountId: string, now = Date.now()): num
   const backoffUntil = now + STREAMING_START_FAILURE_BACKOFF_MS;
   streamingStartBackoffUntilByAccount.set(accountId, backoffUntil);
   return backoffUntil;
-}
-
-function formatMediaFallbackText(text: string | undefined, mediaUrl: string): string {
-  const trimmedText = text?.trim() ?? "";
-  const attachmentText = `📎 ${mediaUrl}`;
-  return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
 }
 
 export function clearFeishuStreamingStartBackoffForTests() {
@@ -556,11 +551,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onError:
         options?.fallbackText === undefined
           ? undefined
-          : async ({ mediaUrl }) => {
-              const fallbackText = formatMediaFallbackText(
-                sentFallbackText ? undefined : options.fallbackText,
+          : async ({ error, mediaUrl }) => {
+              const fallbackText = await buildFeishuMediaFallbackText({
+                text: sentFallbackText ? undefined : options.fallbackText,
                 mediaUrl,
-              );
+                error,
+              });
               sentFallbackText = true;
               await sendChunkedTextReply({
                 text: fallbackText,

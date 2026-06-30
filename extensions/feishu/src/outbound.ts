@@ -28,6 +28,11 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
+import {
+  buildFeishuMediaFallbackText,
+  buildFeishuMediaUploadFailureFallbackText,
+  isPublicFeishuMediaReference,
+} from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
@@ -592,7 +597,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           });
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
-          // fall through to plain text as last resort
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: buildFeishuMediaUploadFailureFallbackText({}),
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread,
+          });
         }
       }
 
@@ -653,11 +665,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
-        const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
+        const trimmedMediaUrl = mediaUrl?.trim();
+        const commentMediaText =
+          trimmedMediaUrl && (await isPublicFeishuMediaReference(trimmedMediaUrl))
+            ? trimmedMediaUrl
+            : trimmedMediaUrl
+              ? buildFeishuMediaUploadFailureFallbackText({})
+              : undefined;
+        const commentText = [text?.trim(), commentMediaText].filter(Boolean).join("\n\n");
         return await sendOutboundText({
           cfg,
           to,
-          text: commentText || mediaUrl || text || "",
+          text: commentText || text || "",
           accountId: accountId ?? undefined,
           replyToMessageId,
           replyInThread,
@@ -710,8 +729,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
-          // Fallback to URL link if upload fails
-          const fallbackText = [text?.trim(), `📎 ${mediaUrl}`].filter(Boolean).join("\n\n");
+          const fallbackText = await buildFeishuMediaFallbackText({ text, mediaUrl, error: err });
           return await sendOutboundText({
             cfg,
             to,
