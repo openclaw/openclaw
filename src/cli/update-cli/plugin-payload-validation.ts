@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
@@ -12,6 +13,8 @@ export type PluginPayloadSmokeFailureReason =
   | "missing-package-dir"
   | "missing-package-json"
   | "invalid-package-json"
+  | "missing-bundle-manifest"
+  | "invalid-bundle-manifest"
   | "missing-main-entry"
   | "missing-extension-entry"
   | "missing-openclaw-peer-link";
@@ -32,8 +35,9 @@ const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "
 
 /**
  * Verify that each tracked plugin install record on disk is structurally
- * loadable: the install dir exists, contains a parseable `package.json`,
- * and any declared package entry files exist.
+ * loadable: code packages contain a parseable `package.json` and declared
+ * package entry files, while bundle packages satisfy their bundle manifest
+ * contract.
  *
  * IMPORTANT: this is intentionally a *static* check. We do NOT execute the
  * plugin's code, so post-update side effects (network calls, filesystem
@@ -75,6 +79,15 @@ export async function runPluginPayloadSmokeCheck(params: {
         reason: "missing-package-dir",
         detail: `Install dir is missing: ${installPath}`,
       });
+      continue;
+    }
+
+    const bundleFailure = validateBundleInstallRecordPayload({ pluginId, installPath, record });
+    if (bundleFailure) {
+      failures.push(bundleFailure);
+      continue;
+    }
+    if (isBundleInstallRecord(record)) {
       continue;
     }
 
@@ -168,6 +181,46 @@ export async function runPluginPayloadSmokeCheck(params: {
   }
 
   return { checked, failures };
+}
+
+export function isBundleInstallRecord(record: PluginInstallRecord): boolean {
+  return (
+    (record as { format?: unknown }).format === "bundle" || record.clawhubFamily === "bundle-plugin"
+  );
+}
+
+export function validateBundleInstallRecordPayload(params: {
+  pluginId: string;
+  installPath: string;
+  record: PluginInstallRecord;
+}): PluginPayloadSmokeFailure | null {
+  if (!isBundleInstallRecord(params.record)) {
+    return null;
+  }
+  const bundleFormat = detectBundleManifestFormat(params.installPath);
+  if (!bundleFormat) {
+    return {
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "missing-bundle-manifest",
+      detail: `No supported bundle manifest or bundle marker found under ${params.installPath}`,
+    };
+  }
+  const bundleManifest = loadBundleManifest({
+    rootDir: params.installPath,
+    bundleFormat,
+  });
+  if (bundleManifest.ok) {
+    return null;
+  }
+  return {
+    pluginId: params.pluginId,
+    installPath: params.installPath,
+    reason: bundleManifest.error.startsWith("plugin manifest not found")
+      ? "missing-bundle-manifest"
+      : "invalid-bundle-manifest",
+    detail: `Bundle manifest validation failed: ${bundleManifest.error}`,
+  };
 }
 
 function manifestDeclaresOpenClawPeer(manifest: PackageManifest): boolean {
