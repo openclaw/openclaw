@@ -74,6 +74,35 @@ describe("native hook relay gateway method", () => {
     expectInvalidRequest(respond, "native hook relay bridge stale registration");
     expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
+
+  it("passes requireGeneration:false through so a stale generation still hits the live relay", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "relay-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    const respond = await invokeNativeHook({
+      provider: "codex",
+      relayId: first.relayId,
+      generation: first.generation,
+      event: "post_tool_use",
+      rawPayload: POST_TOOL_USE_PAYLOAD,
+      requireGeneration: false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { stdout: "", stderr: "", exitCode: 0 });
+    expect(testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
+  });
 });
 
 async function invokeNativeHook(params: Record<string, unknown>) {

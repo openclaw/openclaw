@@ -196,6 +196,46 @@ describe("native hook relay CLI", () => {
     );
   });
 
+  it("falls back to the gateway with requireGeneration:false after a stale direct bridge error", async () => {
+    const invokeBridge = vi.fn(async () => {
+      throw new Error("native hook relay bridge stale registration");
+    });
+    const callGateway = vi.fn(async () => ({ stdout: "relayed", stderr: "", exitCode: 0 }));
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        invokeBridge: invokeBridge as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("relayed");
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "nativeHook.invoke",
+        params: expect.objectContaining({
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          requireGeneration: false,
+        }),
+      }),
+    );
+  });
+
   it.each([
     {
       event: "pre_tool_use",
@@ -224,12 +264,14 @@ describe("native hook relay CLI", () => {
       stdout: null,
     },
   ])(
-    "does not fall back to the gateway after a stale direct bridge error for $event",
+    "fails closed when the gateway fallback after a stale direct bridge error also fails for $event",
     async (testCase) => {
       const invokeBridge = vi.fn(async () => {
         throw new Error("native hook relay bridge stale registration");
       });
-      const callGateway = vi.fn(async () => ({ stdout: "unexpected", stderr: "", exitCode: 0 }));
+      const callGateway = vi.fn(async () => {
+        throw new Error("gateway closed");
+      });
       const stdout = createWritableTextBuffer();
       const stderr = createWritableTextBuffer();
 
@@ -256,8 +298,12 @@ describe("native hook relay CLI", () => {
         expect(stdout.text()).toBe("");
       }
       expect(stderr.text()).toContain("native hook relay unavailable");
-      expect(stderr.text()).toContain("native hook relay bridge stale registration");
-      expect(callGateway).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "nativeHook.invoke",
+          params: expect.objectContaining({ requireGeneration: false }),
+        }),
+      );
     },
   );
 

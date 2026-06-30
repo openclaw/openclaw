@@ -11,15 +11,19 @@ export const nativeHookRelayHandlers: GatewayRequestHandlers = {
   "nativeHook.invoke": async ({ params, respond }) => {
     try {
       // Relay invocations are one-shot bridges into a live native harness.
-      // Require the current generation so stale clients cannot post into a
-      // newly registered relay with the same id.
+      // Default to requiring the current generation so stale clients cannot post
+      // into a newly registered relay with the same id. The CLI relays
+      // requireGeneration:false only after the direct bridge reported a stale
+      // generation, and this gateway method remains admin-scoped, so a
+      // still-live relay can accept invokes from a long-lived session whose
+      // generation lapsed across a gateway restart/plugin reload.
       const result: NativeHookRelayProcessResponse = await invokeNativeHookRelay({
         provider: params.provider,
         relayId: params.relayId,
         generation: params.generation,
         event: params.event,
         rawPayload: params.rawPayload,
-        requireGeneration: true,
+        requireGeneration: params.requireGeneration !== false,
       });
       respond(true, result);
     } catch (error) {

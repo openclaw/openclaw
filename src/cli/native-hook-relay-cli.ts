@@ -58,6 +58,11 @@ export async function runNativeHookRelayCli(
   const relayId = readRequiredOption(opts.relayId, "relay-id");
   const generation = opts.generation?.trim() || undefined;
   const event = readRequiredOption(opts.event, "event");
+  // A long-lived session can hold a stale relay generation after a gateway
+  // restart or plugin reload. When the direct bridge rejects that generation we
+  // retry through the gateway with requireGeneration disabled so the invoke can
+  // still reach the live relay instead of failing closed on a dead generation.
+  let fallbackRequireGeneration = true;
   let timeoutMs: number;
   try {
     timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
@@ -116,11 +121,13 @@ export async function runNativeHookRelayCli(
         });
       }
       if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return writeNativeHookRelayUnavailableResponse({ stdout, stderr, opts, provider, event });
+        // Stale generation: retry through the gateway relay, but drop the
+        // generation requirement so a still-live relay accepts the invoke.
+        fallbackRequireGeneration = false;
       }
-      // Fall through to the gateway path for embedded/local gateway cases and
-      // older registrations that predate the direct relay bridge.
+      // Fall through to the gateway path for embedded/local gateway cases,
+      // older registrations that predate the direct relay bridge, and stale
+      // generations that should still hit a live relay.
     }
 
     try {
@@ -128,7 +135,14 @@ export async function runNativeHookRelayCli(
         deadline,
         callGatewayFn<NativeHookRelayProcessResponse>({
           method: "nativeHook.invoke",
-          params: { provider, relayId, generation, event, rawPayload },
+          params: {
+            provider,
+            relayId,
+            generation,
+            event,
+            rawPayload,
+            ...(fallbackRequireGeneration ? {} : { requireGeneration: false }),
+          },
           timeoutMs: remainingNativeHookRelayDeadlineMs(deadline),
           signal: deadline.signal,
           scopes: [ADMIN_SCOPE],
