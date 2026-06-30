@@ -694,6 +694,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               if (coreBlockStreamingEnabled) {
                 // Send block text as an independent Feishu message for
                 // true progressive delivery without card-side playback.
+                // Preserve mention targets on the first block so @mentioned
+                // users receive a notification.
+                const isFirstBlock = sentBlockText === "";
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
@@ -702,6 +705,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
+                  ...(isFirstBlock && mentionTargets?.length ? { mentions: mentionTargets } : {}),
                 });
                 sentBlockText += text;
                 markVisibleReplySent();

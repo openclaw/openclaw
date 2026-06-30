@@ -741,6 +741,75 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("preserves mention targets on the first independently sent block", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    await options.deliver({ text: "first block" }, { kind: "block" });
+    await options.deliver({ text: "second block" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    // First block carries mentions
+    expectMockArgFields(sendMessageFeishuMock, "first block with mentions", {
+      text: "first block",
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+    // Second block does NOT carry mentions
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second block without mentions",
+      {
+        text: "second block",
+      },
+      1,
+    );
+    const secondCallArg = sendMessageFeishuMock.mock.calls[1][0];
+    expect(secondCallArg).not.toHaveProperty("mentions");
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not attach mentions to block when mentionTargets is empty", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      mentionTargets: [],
+    });
+
+    await options.deliver({ text: "block text" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const callArg = sendMessageFeishuMock.mock.calls[0][0];
+    expect(callArg).not.toHaveProperty("mentions");
+  });
+
   it("does not prepend automatic mentions to streaming card closes", async () => {
     const overrides = {
       runtime: createRuntimeLogger(),
