@@ -9,13 +9,14 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { clearClientCache, createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
+  isFeishuInvalidTokenError,
   resolveFeishuReceiptKind,
   toFeishuSendResult,
 } from "./send-result.js";
@@ -596,6 +597,31 @@ export function buildFeishuPostMessagePayload(params: {
   };
 }
 
+/**
+ * Resolve the Feishu send target and run `send`. If the attempt fails because
+ * the cached tenant_access_token is invalid (codes 99991663/99991664), the
+ * cached SDK client still holds the stale token, so drop it, rebuild a fresh
+ * client, and retry the send exactly once — the same recovery users get today
+ * only by manually restarting the gateway. (#97287)
+ */
+async function sendWithFeishuInvalidTokenRecovery(
+  params: { cfg: ClawdbotConfig; to: string; accountId?: string },
+  send: (target: ReturnType<typeof resolveFeishuSendTarget>) => Promise<FeishuSendResult>,
+): Promise<FeishuSendResult> {
+  const target = resolveFeishuSendTarget(params);
+  try {
+    return await send(target);
+  } catch (err) {
+    if (!isFeishuInvalidTokenError(err)) {
+      throw err;
+    }
+    // Drop the stale cached client (and its invalid token), then rebuild and
+    // retry once with a fresh client/token.
+    clearClientCache(target.accountId);
+    return send(resolveFeishuSendTarget(params));
+  }
+}
+
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
@@ -609,7 +635,6 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -619,17 +644,22 @@ export async function sendMessageFeishu(
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
-  const directParams = { receiveId, receiveIdType, content, msgType };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType,
-    directParams,
-    directErrorPrefix: "Feishu send failed",
-    replyErrorPrefix: "Feishu reply failed",
-  });
+  return sendWithFeishuInvalidTokenRecovery(
+    { cfg, to, accountId },
+    ({ client, receiveId, receiveIdType }) => {
+      const directParams = { receiveId, receiveIdType, content, msgType };
+      return sendReplyOrFallbackDirect(client, {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
+        content,
+        msgType,
+        directParams,
+        directErrorPrefix: "Feishu send failed",
+        replyErrorPrefix: "Feishu reply failed",
+      });
+    },
+  );
 }
 
 export type SendFeishuCardParams = {
@@ -646,20 +676,24 @@ export type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
-  const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType: "interactive",
-    directParams,
-    directErrorPrefix: "Feishu card send failed",
-    replyErrorPrefix: "Feishu card reply failed",
-  });
+  return sendWithFeishuInvalidTokenRecovery(
+    { cfg, to, accountId },
+    ({ client, receiveId, receiveIdType }) => {
+      const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
+      return sendReplyOrFallbackDirect(client, {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
+        content,
+        msgType: "interactive",
+        directParams,
+        directErrorPrefix: "Feishu card send failed",
+        replyErrorPrefix: "Feishu card reply failed",
+      });
+    },
+  );
 }
 
 export async function editMessageFeishu(params: {

@@ -9,6 +9,7 @@ const {
   mockClientList,
   mockClientPatch,
   mockCreateFeishuClient,
+  mockClearClientCache,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
   mockRuntimeConvertMarkdownTables,
@@ -19,6 +20,7 @@ const {
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockClearClientCache: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
   mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
@@ -39,6 +41,7 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
+  clearClientCache: mockClearClientCache,
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -214,6 +217,37 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("recovers from an invalid tenant_access_token (99991663) by refreshing the client and retrying once (#97287)", async () => {
+    // Regression for #97287: a fulfilled Feishu response carrying invalid-token
+    // code 99991663 must drop the stale cached SDK client and retry the send
+    // once, instead of failing every message until a manual gateway restart.
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 99991663, msg: "Invalid access token" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_recovered" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "hello",
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(mockClearClientCache).toHaveBeenCalledWith("default");
+    expect(result.messageId).toBe("om_recovered");
   });
 
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
