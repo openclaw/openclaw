@@ -9,6 +9,7 @@ import {
   isPlainTextToolNameChar,
   isXmlishNameChar,
   matchesLiteralPrefix,
+  skipWhitespace,
   stripXmlishAttributeQuotes,
   XMLISH_FUNCTION_CALLS_OPEN_RE,
   XMLISH_INVOKE_OPEN_RE,
@@ -82,33 +83,118 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `<${ns}parameter`));
 }
 
+// Phase-scan result for an optional grammar token: either fully consumed (with the
+// offset after it), still a viable streaming prefix, or a definite mismatch.
+type XmlishPrefixScan = { kind: "complete"; cursor: number } | { kind: "viable" } | { kind: "no" };
+
+// Matches a fixed keyword case-insensitively (the grammar regexes use the `i` flag),
+// reporting a partial keyword still streaming as a viable prefix rather than a miss.
+function scanCaseInsensitiveLiteral(
+  text: string,
+  start: number,
+  literal: string,
+): XmlishPrefixScan {
+  const segment = text.slice(start, start + literal.length).toLowerCase();
+  if (segment === literal) {
+    return { kind: "complete", cursor: start + literal.length };
+  }
+  return literal.startsWith(segment) ? { kind: "viable" } : { kind: "no" };
+}
+
+// Matches the optional namespace plus the `invoke` keyword as one unit, since the
+// namespace is only legal when it leads into `invoke`. A partial of any allowed
+// `<ns>invoke` spelling keeps the streamed prefix viable.
+function scanNamespacedInvoke(text: string, start: number): XmlishPrefixScan {
+  let viable = false;
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    const scan = scanCaseInsensitiveLiteral(text, start, `${ns}invoke`);
+    if (scan.kind === "complete") {
+      return scan;
+    }
+    if (scan.kind === "viable") {
+      viable = true;
+    }
+  }
+  return viable ? { kind: "viable" } : { kind: "no" };
+}
+
+// Walks the attribute-dialect invoke open one grammar phase at a time, mirroring
+// XMLISH_INVOKE_OPEN_RE (`^<\s*(?:antml:|mm:)?invoke\s+name\s*=\s*(quoted)\s*>`). A
+// streamed buffer that ends partway through any phase stays viable; we only reject
+// once the text definitively cannot become a legal invoke-open for a repairable
+// name. This keeps grammar-legal split forms (`<invoke name = "x">`, leading or
+// extra whitespace) buffered instead of leaking as visible text mid-stream.
 function isViableXmlishInvokeOpenPrefix(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
 ): boolean {
-  for (const ns of XMLISH_INVOKE_NAMESPACES) {
-    for (const quote of ['"', "'"]) {
-      const lead = `<${ns}invoke name=${quote}`;
-      if (lead.startsWith(text)) {
-        return true;
-      }
-      if (!text.startsWith(lead)) {
-        continue;
-      }
-      const afterLead = text.slice(lead.length);
-      const closeQuote = afterLead.indexOf(quote);
-      if (closeQuote === -1) {
-        return matcher.hasNamePrefix(afterLead);
-      }
-      const name = afterLead.slice(0, closeQuote);
-      if (!matcher.hasExactName(name)) {
-        return false;
-      }
-      // After the closing quote only optional whitespace and the `>` remain.
-      return /^\s*>?$/.test(afterLead.slice(closeQuote + 1));
-    }
+  const length = text.length;
+  // Phase: leading `<`.
+  if (length === 0) {
+    return true;
   }
-  return false;
+  if (text[0] !== "<") {
+    return false;
+  }
+  // Phase: optional whitespace, then optional namespace + `invoke`.
+  let cursor = skipWhitespace(text, 1);
+  if (cursor >= length) {
+    return true;
+  }
+  const invoke = scanNamespacedInvoke(text, cursor);
+  if (invoke.kind === "no") {
+    return false;
+  }
+  if (invoke.kind === "viable") {
+    return true;
+  }
+  cursor = invoke.cursor;
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: required whitespace before `name`.
+  if (!/\s/.test(text[cursor] ?? "")) {
+    return false;
+  }
+  cursor = skipWhitespace(text, cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: `name`, then optional whitespace around `=`.
+  const name = scanCaseInsensitiveLiteral(text, cursor, "name");
+  if (name.kind === "no") {
+    return false;
+  }
+  if (name.kind === "viable") {
+    return true;
+  }
+  cursor = skipWhitespace(text, name.cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  if (text[cursor] !== "=") {
+    return false;
+  }
+  cursor = skipWhitespace(text, cursor + 1);
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: opening quote, then the quoted tool name.
+  const quote = text[cursor];
+  if (quote !== '"' && quote !== "'") {
+    return false;
+  }
+  cursor += 1;
+  const close = text.indexOf(quote, cursor);
+  if (close === -1) {
+    // Name still streaming: gate the partial against repairable tool names.
+    return matcher.hasNamePrefix(text.slice(cursor));
+  }
+  if (!matcher.hasExactName(text.slice(cursor, close))) {
+    return false;
+  }
+  // After the closing quote only optional whitespace and the `>` remain.
+  return /^\s*>?$/.test(text.slice(close + 1));
 }
 
 function couldStillBeXmlishInvokeOpen(

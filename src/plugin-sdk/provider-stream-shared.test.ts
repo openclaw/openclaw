@@ -107,6 +107,59 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
   return result.value as StreamEvent;
 }
 
+// Streams an attribute-dialect invoke open whose whitespace is split across chunks,
+// then asserts the buffered prefix is promoted to a tool call instead of leaking as
+// visible text. The intermediate chunks land on grammar-legal whitespace the literal
+// prefix recognizer used to reject (spaces around `=`, leading space after `<`).
+async function expectWhitespaceSplitInvokeOpenPromotes(params: {
+  ns: string;
+  quote: string;
+  openChunks: readonly string[];
+}): Promise<void> {
+  const { ns, quote, openChunks } = params;
+  const { source, stream } = createControlledPlainTextToolCallCompatStream();
+  const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+  const openTag = openChunks.join("");
+  const rawToolText = [
+    openTag,
+    `<${ns}parameter name=${quote}path${quote}>`,
+    "src/index.ts",
+    `</${ns}parameter>`,
+    `</${ns}invoke>`,
+  ].join("\n");
+
+  try {
+    source.push({ type: "start", partial: { content: [] } } as never);
+    expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+    for (const chunk of openChunks) {
+      source.push({ type: "text_delta", contentIndex: 0, delta: chunk } as never);
+    }
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText.slice(openTag.length),
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawToolText }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    // First event after `start` must be the promoted tool call, never a leaked
+    // text delta carrying the buffered invoke markup.
+    const event = await nextEvent(iterator, "converted whitespace-split invoke tool call");
+    expect(event.type).toBe("toolcall_start");
+  } finally {
+    source.end();
+    await iterator.return?.();
+  }
+}
+
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
     expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
@@ -2224,6 +2277,31 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       source.end();
       await iterator.return?.();
     }
+  });
+
+  it("keeps whitespace-split attribute-dialect invoke opens buffered for conversion", async () => {
+    // `<invoke name = "read">` (spaces around `=`) split mid-whitespace: the prefix
+    // recognizer must stay viable across the split instead of flushing raw markup.
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "",
+      quote: '"',
+      openChunks: ["<invoke name ", `= "read">`],
+    });
+    // Namespaced open with a leading space after `<` and the split landing inside
+    // the `invoke` keyword run.
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "antml:",
+      quote: '"',
+      openChunks: ["< antml:invoke", ` name="read">`],
+    });
+  });
+
+  it("keeps single-quoted whitespace-split invoke opens buffered for conversion", async () => {
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "",
+      quote: "'",
+      openChunks: ["<invoke name =", ` 'read'>`],
+    });
   });
 
   it("does not buffer normal final prose until done", async () => {
