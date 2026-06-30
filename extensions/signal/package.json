@@ -1,7 +1,6 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.6.9",
-  "private": true,
+  "version": "2026.6.10",
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
@@ -39,6 +38,28 @@
           "description": "Signal HTTP daemon port"
         }
       ]
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/signal",
+      "npmSpec": "@openclaw/signal",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.10"
+    },
+    "build": {
+      "openclawVersion": "2026.6.10",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   }
 }

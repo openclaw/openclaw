@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -882,11 +882,13 @@ describe("test-projects args", () => {
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
           "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/check-workflows.test.ts",
           "test/scripts/ci-hydrate-testbox-env.test.ts",
           "test/scripts/clawhub-fixture-server.test.ts",
           "test/scripts/codex-install-assertions.test.ts",
           "test/scripts/config-reload-mutate-metadata.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",
@@ -905,12 +907,19 @@ describe("test-projects args", () => {
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
           "test/scripts/proxy-install-ca.test.ts",
           "test/scripts/release-preflight.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
           "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.runtime-config.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
         watchMode: false,
       },
       {
@@ -923,6 +932,9 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/agent-bundle-mcp-runtime.test.ts",
+          "src/agents/agent-tools-agent-config.exec.test.ts",
+          "src/agents/bash-tools.exec-foreground-failures.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
         ],

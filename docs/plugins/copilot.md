@@ -103,8 +103,65 @@ The harness advertises support for the canonical `github-copilot` provider
 
 - `github-copilot`
 
-Anything outside that set falls through `selection.ts`'s `auto_pi` branch back
-to PI.
+It also supports custom `models.providers` entries when the selected model has
+a non-empty `baseUrl` and one of these API shapes:
+
+- `openai-responses`
+- `openai-completions`
+- `ollama` (OpenAI-compatible completions)
+- `azure-openai-responses`
+- `anthropic-messages`
+
+Native provider ids such as `openai`, `anthropic`, `google`, and `ollama` remain
+owned by their native runtimes. Use a distinct custom provider id when routing
+an endpoint through Copilot BYOK.
+
+Copilot BYOK endpoints must be public-network HTTPS URLs. The harness gives the
+Copilot SDK a per-attempt loopback proxy URL, then forwards provider traffic
+through OpenClaw's guarded fetch path so DNS pinning and SSRF policy stay
+owned by OpenClaw. Use the native OpenClaw runtime for local Ollama, LM Studio,
+or LAN model servers.
+
+## BYOK
+
+Copilot BYOK uses the SDK's session-level custom provider contract. OpenClaw
+passes the resolved model endpoint, API key, bearer-token mode, headers, model
+id, and context/output limits without moving provider transport logic into
+core.
+
+For example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "custom-proxy/llama-3.1-8b",
+      models: {
+        "custom-proxy/llama-3.1-8b": {
+          agentRuntime: { id: "copilot" },
+        },
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "custom-proxy": {
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "${CUSTOM_PROXY_API_KEY}",
+        api: "openai-responses",
+        authHeader: true,
+        models: [{ id: "llama-3.1-8b", name: "Llama 3.1 8B" }],
+      },
+    },
+  },
+}
+```
+
+BYOK sessions are separately keyed from subscription sessions and from other
+endpoints or credential fingerprints. Rotating the key, headers, model, or
+endpoint creates a fresh Copilot SDK session instead of resuming incompatible
+state.
 
 ## Auth
 
@@ -150,6 +207,13 @@ the same directory), or `~/.openclaw/agents/<agentId>/copilot` otherwise.
 Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
+Live harness tests use `OPENCLAW_COPILOT_AGENT_LIVE_TOKEN` when a direct token
+is needed. The shared live-test setup intentionally scrubs
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` after staging real auth
+profiles into the isolated test home, so passing a `gh auth token` value
+through the dedicated live-test variable avoids false skips without exposing
+the token to unrelated suites.
+
 ## Configuration surface
 
 The harness reads its config from per-attempt input
@@ -157,9 +221,9 @@ The harness reads its config from per-attempt input
 `extensions/copilot/src/`:
 
 - `copilotHome` — per-agent CLI state directory (defaults documented above).
-- `model` — string or `{ provider, id, api? }`. When omitted, OpenClaw uses
-  the agent's normal model selection and the harness verifies the resolved
-  provider is in the supported set.
+- `model` — string or `{ provider, id, api?, baseUrl?, headers?, authHeader? }`.
+  When omitted, OpenClaw uses the agent's normal model selection and the
+  harness verifies the resolved provider is supported.
 - `reasoningEffort` — `"low" | "medium" | "high" | "xhigh"`. Maps from
   OpenClaw's `ThinkLevel` / `ReasoningLevel` resolution in
   `auto-reply/thinking.ts`.
@@ -246,21 +310,17 @@ under `describe("runSideQuestion")`.
 
 ## Limitations
 
-- The harness only claims the canonical `github-copilot` provider at MVP.
-  Additional providers (BYOK or otherwise) should land in follow-up PRs that
-  ship the adapter alongside the wire-up.
+- The harness claims `github-copilot` plus unowned custom BYOK provider ids.
+  Manifest-owned native provider ids stay on their owning runtime even when
+  `agentRuntime.id` is forced to `copilot`.
 - The harness does not deliver TUI; PI's TUI is unaffected and remains the
   fallback for whatever runtimes do not have a peer surface.
 - PI session state is not migrated when an agent switches to `copilot`.
   Selection is per attempt; existing PI sessions remain valid.
-- **Interactive `ask_user` is not yet wired.** The SDK's
-  `onUserInputRequest` handler is intentionally not registered, which
-  per the SDK contract hides the `ask_user` tool from the model
-  entirely. Agents running under this harness make best-judgment
-  decisions from the initial prompt rather than asking clarifying
-  questions mid-turn. A follow-up will port the codex pattern at
-  `extensions/codex/src/app-server/user-input-bridge.ts` to route SDK
-  `UserInputRequest`s through the OpenClaw channel/TUI prompt path.
+- `ask_user` uses the same OpenClaw prompt-and-reply path as the Codex
+  harness. When the Copilot SDK asks for user input, OpenClaw posts a
+  blocking prompt to the active channel/TUI and the next queued user
+  message resolves the SDK request.
 
 ## Permissions and ask_user
 
@@ -314,13 +374,23 @@ right scope, and `session_status: "current"` resolves to a stale
 sandbox key. The bridge builder is in
 `extensions/copilot/src/tool-bridge.ts` and mirrors the PI
 authoritative call at
-`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. Two PI fields
-are intentionally **not** forwarded at MVP and tracked as follow-ups:
-`sandbox` (the harness does not yet route through `resolveSandboxContext`)
-and the PI tool-search/code-mode machinery
-(`toolSearchCatalogRef`, `includeCoreTools`,
-`includeToolSearchControls`, `toolSearchCatalogExecutor`,
-`toolConstructionPlan`), which has no analog at the SDK boundary.
+`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. `runAttempt`
+already resolves sandbox context through the shared
+`resolveSandboxContext` seam, passes the SDK an effective working
+directory, and forwards `sandbox` plus the subagent-spawn workspace into
+the tool bridge. The bridge also forwards the bounded tool-construction
+controls it can enforce at the SDK boundary: `includeCoreTools`, the
+runtime tool allowlist, and `toolConstructionPlan`.
+
+The bridge also uses the shared harness tool-surface helper from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` for PI parity. When
+tool-search is enabled, the SDK sees compact control tools plus a hidden
+catalog executor instead of every OpenClaw tool schema. When code mode is
+enabled, the helper builds the same code-mode control surface and catalog
+lifecycle used by other agent harnesses. Local-model lean defaults,
+runtime-compatible schema filtering, directory hydration, and catalog
+cleanup all stay in the shared helper so Copilot and Codex-adjacent
+harnesses do not drift.
 
 ### Session-level GitHub token
 
@@ -337,7 +407,10 @@ When the resolved mode is `useLoggedInUser`, the session-level field
 is omitted so the SDK keeps deriving identity from the logged-in
 identity.
 
-`ask_user` is intentionally hidden — see Limitations above.
+`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge accepts
+choice indexes or labels for fixed-choice requests, accepts free-form
+answers when the SDK request allows them, and cancels a pending request
+when the OpenClaw attempt is aborted.
 
 ## Related
 

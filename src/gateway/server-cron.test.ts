@@ -285,7 +285,7 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("requests a safe gateway restart when isolated cron setup times out", async () => {
+  it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
     loadConfigMock.mockReturnValue(cfg);
@@ -315,12 +315,7 @@ describe("buildGatewayCronService", () => {
       const runResult = await runPromise;
 
       expect(runResult).toEqual({ ok: true, ran: true });
-      expect(requestSafeGatewayRestartMock).toHaveBeenCalledTimes(1);
-      expect(requestSafeGatewayRestartMock).toHaveBeenCalledWith({
-        reason: "cron.isolated_agent_setup_timeout",
-        delayMs: 0,
-        preservePendingEmitHooks: true,
-      });
+      expect(requestSafeGatewayRestartMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
       vi.useRealTimers();

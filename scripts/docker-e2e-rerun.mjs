@@ -382,6 +382,19 @@ function runInfo(runId, repo) {
   );
 }
 
+function safePathSegment(value) {
+  return (
+    String(value ?? "")
+      .replace(/[^a-zA-Z0-9_.-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 80) || "run"
+  );
+}
+
+function defaultOutputDir(input) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${safePathSegment(input)}-`));
+}
+
 function printEntries(entries, ref, workflow, runValue) {
   if (runValue) {
     console.log(`Run: ${runValue.url}`);
@@ -457,8 +470,7 @@ function main() {
     const repo = options.repo || detectRepo();
     const runLocal = runInfo(options.input, repo);
     const ref = options.ref || runLocal.headSha || runLocal.headBranch;
-    const outputDir =
-      options.dir || path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${options.input}`);
+    const outputDir = options.dir || defaultOutputDir(options.input);
     const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
     const files = findFiles(outputDir, new Set(["failures.json", "summary.json"]));
     const entries = mergeByLane(

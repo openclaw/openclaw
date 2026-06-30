@@ -271,6 +271,23 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects CommonJS require chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/index.cjs"],
+      {
+        "dist/index.cjs": 'module.exports = require("./chunk.cjs");\n',
+        "dist/chunk.cjs": "module.exports = {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.cjs");
+      },
+      "2026.4.27",
+    );
+  });
+
   it("rejects dist files with missing import.meta.url URL dependencies", () => {
     withTarball(
       ["dist/index.js"],

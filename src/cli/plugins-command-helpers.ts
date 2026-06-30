@@ -127,7 +127,7 @@ export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime):
 } {
   return {
     info: (msg) => runtime.log(msg),
-    warn: (msg) => runtime.log(theme.warn(msg)),
+    warn: (msg) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
 }
 

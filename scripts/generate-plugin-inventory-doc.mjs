@@ -145,6 +145,7 @@ function humanizeId(value) {
     ["qqbot", "QQ Bot"],
     ["qwen", "Qwen"],
     ["qwencloud", "Qwen Cloud"],
+    ["raft", "Raft"],
     ["searxng", "SearXNG"],
     ["sglang", "SGLang"],
     ["stepfun", "StepFun"],

@@ -51,6 +51,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -84,6 +85,8 @@ import {
 } from "../../media/local-roots.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { renderQrPngDataUrl } from "../../media/qr-image.js";
+import { renderQrTerminal } from "../../media/qr-terminal.js";
 import {
   deleteMediaBuffer,
   MEDIA_MAX_BYTES,
@@ -137,6 +140,7 @@ import {
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  projectChatDisplayMessages,
   projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -154,11 +158,14 @@ import { ADMIN_SCOPE } from "../method-scopes.js";
 import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readRecentSessionMessagesAsync,
+  readSessionMessagesPageWithStatsAsync,
   readSessionMessagesAsync,
 } from "../session-transcript-readers.js";
 import {
@@ -237,6 +244,12 @@ type PreRegisteredAgentRun = {
 };
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
+type ChatHistoryPage = {
+  messages: unknown[];
+  offset?: number;
+  totalMessages?: number;
+  rawPageMessages?: number;
+};
 
 type ChatMetadataResult = {
   commands?: unknown[];
@@ -281,6 +294,26 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   mode?: string | null;
 }): boolean {
   return isOperatorUiClient(client);
+}
+
+const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function resolveControlUiReconnectResumeParams(
+  params: unknown,
+  clientInfo?: { id?: string | null; mode?: string | null },
+): { params: unknown; resumeRequested: boolean } {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { params, resumeRequested: false };
+  }
+  const record = params as Record<string, unknown>;
+  const resumeRequested =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+  if (!resumeRequested) {
+    return { params, resumeRequested: false };
+  }
+  const validatedParams = { ...record };
+  delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
+  return { params: validatedParams, resumeRequested: true };
 }
 
 function emitOperatorChatSendServerTiming(params: {
@@ -556,7 +589,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
 }
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
-let chatHistoryPlaceholderEmitCount = 0;
+let chatHistoryOmittedEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -827,11 +860,34 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
-    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
+    (payload) =>
+      payload.sensitiveMedia === true &&
+      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
   );
 }
 
 type AssistantDisplayContentBlock = Record<string, unknown>;
+
+async function buildPairingQrAssistantContentBlock(
+  payload: ReplyPayload,
+): Promise<AssistantDisplayContentBlock | undefined> {
+  const qr = readPairingQrReplyChannelData(payload);
+  if (!qr) {
+    return undefined;
+  }
+  const [imageUrl, terminalText] = await Promise.all([
+    renderQrPngDataUrl(qr.setupCode),
+    renderQrTerminal(qr.setupCode, { small: true }),
+  ]);
+  return {
+    type: "openclaw_pairing_qr",
+    image_url: imageUrl,
+    terminalText,
+    alt: "OpenClaw pairing QR code",
+    expiresAtMs: qr.expiresAtMs,
+    sensitive: true,
+  };
+}
 
 function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
   if (!value) {
@@ -866,8 +922,10 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   payloads: ReplyPayload[];
   managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
+  includeSensitiveDisplay?: boolean;
   onLocalAudioAccessDenied?: (message: string) => void;
   onManagedImagePrepareError?: (message: string) => void;
+  onSensitiveDisplayPrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) =>
@@ -888,6 +946,16 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       content.push({ type: "text", text });
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
+    }
+    if (params.includeSensitiveDisplay === true) {
+      try {
+        const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
+        if (pairingQrBlock) {
+          content.push(pairingQrBlock);
+        }
+      } catch (err) {
+        params.onSensitiveDisplayPrepareError?.(formatForLog(err));
+      }
     }
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
@@ -1619,6 +1687,8 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       : {};
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
+  const metadataIdempotencyKey =
+    typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   return {
     role,
     timestamp,
@@ -1626,6 +1696,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
+      ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -1651,30 +1722,73 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+// Enforces the final byte budget for chat.history. Returns only the surviving
+// messages; how many original messages were omitted is measured end-to-end by
+// reportOmittedChatHistory, which alone sees the full replace/cap/final pipeline
+// and so can count unique omitted originals without double-counting.
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
-  placeholderCount: number;
 } {
   const { messages, maxBytes } = params;
   if (messages.length === 0) {
-    return { messages, placeholderCount: 0 };
+    return { messages };
   }
   if (jsonUtf8Bytes(messages) <= maxBytes) {
-    return { messages, placeholderCount: 0 };
+    return { messages };
   }
   const last = messages.at(-1);
   if (last && jsonUtf8Bytes([last]) <= maxBytes) {
-    return { messages: [last], placeholderCount: 0 };
+    return { messages: [last] };
   }
   const placeholder = buildOversizedHistoryPlaceholder(last);
   if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
-    return { messages: [placeholder], placeholderCount: 1 };
+    return { messages: [placeholder] };
   }
   // The oversized placeholder still does not fit (e.g. the source message
   // carried very large metadata). Never return an empty history — that renders
   // as a blank transcript and reads as data loss even though the on-disk
   // transcript is intact. Fall back to a small metadata-free sentinel.
-  return { messages: [buildChatHistoryUnavailableSentinel()], placeholderCount: 1 };
+  return { messages: [buildChatHistoryUnavailableSentinel()] };
+}
+
+// Counts how many of the original chat.history messages lost their verbatim
+// representation by the time the budget pipeline finished — whether they were
+// replaced with a placeholder, dropped by the front byte cap, or collapsed by
+// the final budget. Identity membership counts each omitted original exactly
+// once (a message that is first replaced and then trimmed is not counted twice),
+// and emits the truncation diagnostic so operators see when history is omitted.
+// Returns the omitted count (0 when nothing was omitted, so no diagnostic fires).
+export function reportOmittedChatHistory(params: {
+  originalMessages: unknown[];
+  finalMessages: unknown[];
+  normalizedBytes: number;
+  maxHistoryBytes: number;
+  logDebug: (message: string) => void;
+}): number {
+  const { originalMessages, finalMessages, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const survivors = new Set(finalMessages);
+  let omittedCount = 0;
+  for (const message of originalMessages) {
+    if (!survivors.has(message)) {
+      omittedCount += 1;
+    }
+  }
+  if (omittedCount === 0) {
+    return 0;
+  }
+  chatHistoryOmittedEmitCount += omittedCount;
+  logLargePayload({
+    surface: "gateway.chat.history",
+    action: "truncated",
+    bytes: normalizedBytes,
+    limitBytes: maxHistoryBytes,
+    count: omittedCount,
+    reason: "chat_history_budget",
+  });
+  logDebug(
+    `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
+  );
+  return omittedCount;
 }
 
 function resolveTranscriptPath(params: {
@@ -2549,6 +2663,45 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
   return typeof metadata?.id === "string" ? metadata.id : undefined;
 }
 
+function readChatHistoryMessageSeq(message: unknown): number | undefined {
+  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const seq = metadata?.seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+}
+
+function resolveChatHistoryNextOffset(params: {
+  messages: unknown[];
+  totalMessages: number;
+  offset: number;
+  rawPageMessages: number;
+}): number {
+  const oldestSeq = params.messages
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  if (oldestSeq !== undefined) {
+    return Math.max(params.offset, params.totalMessages - oldestSeq + 1);
+  }
+  return params.offset + params.rawPageMessages;
+}
+
+function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+  if (messages.length <= max) {
+    return messages;
+  }
+  const start = Math.max(0, messages.length - max);
+  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
+  if (boundarySeq === undefined) {
+    return messages.slice(start);
+  }
+  // Offset cursors can only resume at transcript-record boundaries.
+  // Keep boundary rows with the same seq together so projection mirrors are not stranded.
+  let safeStart = start;
+  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
+    safeStart--;
+  }
+  return messages.slice(safeStart);
+}
+
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -2595,6 +2748,151 @@ function dropLocalHistoryOverreadContextMessage(
   return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
+async function readChatHistoryPage(params: {
+  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  provider: string | undefined;
+  sessionId: string | undefined;
+  storePath: string | undefined;
+  sessionAgentId: string;
+  canonicalKey: string;
+  max: number;
+  maxHistoryBytes: number;
+  effectiveMaxChars: number;
+  offset: number | undefined;
+}): Promise<ChatHistoryPage> {
+  const {
+    entry,
+    provider,
+    sessionId,
+    storePath,
+    sessionAgentId,
+    canonicalKey,
+    max,
+    maxHistoryBytes,
+    effectiveMaxChars,
+    offset,
+  } = params;
+  if (!sessionId || !storePath) {
+    return { messages: [] };
+  }
+
+  const readScope = {
+    agentId: sessionAgentId,
+    sessionEntry: entry,
+    sessionId,
+    sessionKey: canonicalKey,
+    storePath,
+  };
+  if (offset !== undefined) {
+    const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
+    const readPage =
+      offset === 0
+        ? await readRecentSessionMessagesWithStatsAsync(readScope, {
+            maxMessages: rawHistoryWindow.maxMessages + 1,
+            maxLines: rawHistoryWindow.maxLines + 1,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
+          })
+        : await readSessionMessagesPageWithStatsAsync(readScope, {
+            offset,
+            maxMessages: max + 1,
+            allowResetArchiveFallback: true,
+          });
+    const overreadContextMessage =
+      offset === 0
+        ? readPage.messages.length > rawHistoryWindow.maxMessages
+          ? readPage.messages[0]
+          : undefined
+        : readPage.messages.length > max
+          ? readPage.messages[0]
+          : undefined;
+    const localMessages =
+      offset === 0
+        ? dropLocalHistoryOverreadContextMessage(
+            dropPreSessionStartAnnouncePairs(
+              readPage.messages,
+              typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+            ),
+            overreadContextMessage,
+          )
+        : dropLocalHistoryOverreadContextMessage(
+            dropPreSessionStartAnnouncePairs(
+              readPage.messages,
+              typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+            ),
+            overreadContextMessage,
+          );
+    const rawPageMessages =
+      offset === 0
+        ? readPage.messages.length
+        : Math.min(max, Math.max(0, readPage.totalMessages - offset));
+    const rawMessages = localMessages;
+    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
+      rawMessages,
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    );
+    const projected =
+      offset === 0
+        ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
+            maxChars: effectiveMaxChars,
+            maxMessages: max,
+          })
+        : projectChatDisplayMessages(recencyFilteredMessages, {
+            maxChars: effectiveMaxChars,
+          });
+    const windowed =
+      offset === 0 ? projected : capOffsetChatHistoryProjectedMessages(projected, max);
+    const normalized = augmentChatHistoryWithCanvasBlocks(windowed);
+    return {
+      messages: normalized,
+      offset,
+      totalMessages: readPage.totalMessages,
+      rawPageMessages,
+    };
+  }
+
+  const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
+  const localHistoryReadOptions = {
+    maxMessages: rawHistoryWindow.maxMessages + 1,
+    maxLines: rawHistoryWindow.maxLines + 1,
+  };
+  const localMessages = await readRecentSessionMessagesAsync(readScope, {
+    ...localHistoryReadOptions,
+    maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+    allowResetArchiveFallback: true,
+  });
+  const overreadContextMessage =
+    localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
+  const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
+    dropPreSessionStartAnnouncePairs(
+      localMessages,
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    ),
+    overreadContextMessage,
+  );
+  const rawMessages = augmentChatHistoryWithCliSessionImports({
+    entry,
+    provider,
+    localMessages: localMessagesWithBoundaryFilter,
+  });
+  // Drop subagent_announce pairs (user inter-session announce + adjacent
+  // assistant) whose record timestamp predates the current session's
+  // sessionStartedAt. Run after CLI history imports too, because those
+  // timestamped messages share the same chat.history response surface.
+  const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
+    rawMessages,
+    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+  );
+  return {
+    messages: augmentChatHistoryWithCanvasBlocks(
+      projectRecentChatDisplayMessages(recencyFilteredMessages, {
+        maxChars: effectiveMaxChars,
+        maxMessages: max,
+      }),
+    ),
+  };
+}
+
 async function handleChatHistoryRequest({
   params,
   respond,
@@ -2618,10 +2916,11 @@ async function handleChatHistoryRequest({
     );
     return;
   }
-  const { sessionKey, limit, maxChars } = params as {
+  const { sessionKey, limit, offset, maxChars } = params as {
     sessionKey: string;
     agentId?: string;
     limit?: number;
+    offset?: number;
     maxChars?: number;
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
@@ -2676,57 +2975,20 @@ async function handleChatHistoryRequest({
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-  const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
-  const localHistoryReadOptions = {
-    maxMessages: rawHistoryWindow.maxMessages + 1,
-    maxLines: rawHistoryWindow.maxLines + 1,
-  };
-  const localMessages =
-    sessionId && storePath
-      ? await readRecentSessionMessagesAsync(
-          {
-            agentId: sessionAgentId,
-            sessionEntry: entry,
-            sessionId,
-            sessionKey: canonicalKey,
-            storePath,
-          },
-          {
-            ...localHistoryReadOptions,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-            allowResetArchiveFallback: true,
-          },
-        )
-      : [];
-  const overreadContextMessage =
-    localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
-  const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
-    dropPreSessionStartAnnouncePairs(
-      localMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    ),
-    overreadContextMessage,
-  );
-  const rawMessages = augmentChatHistoryWithCliSessionImports({
+  const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+  const historyPage = await readChatHistoryPage({
     entry,
     provider: resolvedSessionModel.provider,
-    localMessages: localMessagesWithBoundaryFilter,
+    sessionId,
+    storePath,
+    sessionAgentId,
+    canonicalKey,
+    max,
+    maxHistoryBytes,
+    effectiveMaxChars,
+    offset,
   });
-  // Drop subagent_announce pairs (user inter-session announce + adjacent
-  // assistant) whose record timestamp predates the current session's
-  // sessionStartedAt. Run after CLI history imports too, because those
-  // timestamped messages share the same chat.history response surface.
-  const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-    rawMessages,
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-  );
-  const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-  const normalized = augmentChatHistoryWithCanvasBlocks(
-    projectRecentChatDisplayMessages(recencyFilteredMessages, {
-      maxChars: effectiveMaxChars,
-      maxMessages: max,
-    }),
-  );
+  const normalized = historyPage.messages;
   const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = replaceOversizedChatHistoryMessages({
     messages: normalized,
@@ -2739,21 +3001,26 @@ async function handleChatHistoryRequest({
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-  const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
-  if (placeholderCount > 0) {
-    chatHistoryPlaceholderEmitCount += placeholderCount;
-    logLargePayload({
-      surface: "gateway.chat.history",
-      action: "truncated",
-      bytes: jsonUtf8Bytes(normalized),
-      limitBytes: maxHistoryBytes,
-      count: placeholderCount,
-      reason: "chat_history_budget",
-    });
-    context.logGateway.debug(
-      `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
-    );
-  }
+  const nextOffset =
+    historyPage.offset !== undefined && historyPage.totalMessages !== undefined
+      ? resolveChatHistoryNextOffset({
+          messages: bounded.messages,
+          totalMessages: historyPage.totalMessages,
+          offset: historyPage.offset,
+          rawPageMessages: historyPage.rawPageMessages ?? bounded.messages.length,
+        })
+      : undefined;
+  const hasMore =
+    nextOffset !== undefined && historyPage.totalMessages !== undefined
+      ? nextOffset < historyPage.totalMessages
+      : undefined;
+  reportOmittedChatHistory({
+    originalMessages: normalized,
+    finalMessages: bounded.messages,
+    normalizedBytes: jsonUtf8Bytes(normalized),
+    maxHistoryBytes,
+    logDebug: (message) => context.logGateway.debug(message),
+  });
   const modelCatalog = await modelCatalogPromise;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const startupMetadata = includeMetadata
@@ -2806,6 +3073,12 @@ async function handleChatHistoryRequest({
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    ...(historyPage.offset !== undefined ? { offset: historyPage.offset } : {}),
+    ...(hasMore ? { nextOffset } : {}),
+    ...(hasMore !== undefined ? { hasMore } : {}),
+    ...(historyPage.totalMessages !== undefined
+      ? { totalMessages: historyPage.totalMessages }
+      : {}),
     defaults,
     sessionInfo,
     thinkingLevel,
@@ -3110,7 +3383,9 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
-    if (!validateChatSendParams(params)) {
+    const clientInfo = client?.connect?.client;
+    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
+    if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
         false,
         undefined,
@@ -3121,7 +3396,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = controlUiReconnectResume.params as {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
@@ -3364,7 +3639,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3725,6 +3999,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let pendingDispatchLifecycleError:
+        | {
+            endedAt: number;
+            error: string;
+            sessionId: string;
+            startedAt: number;
+          }
+        | undefined;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -3957,6 +4239,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+              requestedSessionId,
+              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
@@ -4396,6 +4680,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     payloads: finalPayloads,
                     managedImageLocalRoots: mediaLocalRoots,
                     includeSensitiveMedia: false,
+                    includeSensitiveDisplay: true,
                     onLocalAudioAccessDenied: (message) => {
                       context.logGateway.warn(
                         `webchat audio embedding denied local path: ${message}`,
@@ -4404,6 +4689,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                     onManagedImagePrepareError: (message) => {
                       context.logGateway.warn(
                         `webchat image embedding skipped attachment: ${message}`,
+                      );
+                    },
+                    onSensitiveDisplayPrepareError: (message) => {
+                      context.logGateway.warn(
+                        `webchat sensitive display skipped attachment: ${message}`,
                       );
                     },
                   });
@@ -4934,6 +5224,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err: unknown) => {
+          const errorMessage = String(err);
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
@@ -4943,7 +5234,19 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          if (
+            !agentRunStarted &&
+            !activeRunAbort.controller.signal.aborted &&
+            !context.chatAbortedRuns.has(clientRunId)
+          ) {
+            pendingDispatchLifecycleError = {
+              endedAt: Date.now(),
+              error: errorMessage,
+              sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
+              startedAt: activeRunAbort.entry?.startedAtMs ?? now,
+            };
+          }
+          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -4953,7 +5256,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               payload: {
                 runId: clientRunId,
                 status: "error" as const,
-                summary: String(err),
+                summary: errorMessage,
               },
               error,
             },
@@ -4963,7 +5266,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             runId: clientRunId,
             sessionKey,
             agentId,
-            errorMessage: String(err),
+            errorMessage,
           });
         })
         .finally(() => {
@@ -4971,6 +5274,53 @@ export const chatHandlers: GatewayRequestHandlers = {
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          if (!pendingDispatchLifecycleError) {
+            return;
+          }
+          const persistDispatchLifecycleError = async () => {
+            const dispatchError = pendingDispatchLifecycleError;
+            if (!dispatchError) {
+              return;
+            }
+            const hasActiveRun = hasTrackedActiveSessionRun({
+              context,
+              requestedKey: rawSessionKey,
+              canonicalKey: sessionKey,
+              ...(sessionKey === "global" && agentId ? { agentId } : {}),
+              defaultAgentId: resolveDefaultAgentId(cfg),
+            });
+            if (hasActiveRun) {
+              return;
+            }
+            try {
+              await persistGatewaySessionLifecycleEvent({
+                sessionKey,
+                ...(sessionKey === "global" && agentId ? { agentId } : {}),
+                event: {
+                  runId: clientRunId,
+                  sessionId: dispatchError.sessionId,
+                  lifecycleGeneration,
+                  ts: dispatchError.endedAt,
+                  data: {
+                    phase: "error",
+                    startedAt: dispatchError.startedAt,
+                    endedAt: dispatchError.endedAt,
+                    error: dispatchError.error,
+                  },
+                },
+              });
+              emitSessionsChanged(context, {
+                sessionKey,
+                ...(agentId ? { agentId } : {}),
+                reason: "chat.dispatch-error",
+              });
+            } catch (persistErr: unknown) {
+              context.logGateway.warn(
+                `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+              );
+            }
+          };
+          void persistDispatchLifecycleError();
         });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });

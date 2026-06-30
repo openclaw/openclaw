@@ -17,6 +17,7 @@ import {
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
+  formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -604,7 +605,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
           "src/cli/run-main.test.ts",
@@ -950,7 +951,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/openai-image-auth-docker-client.ts",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
         [
           "test/scripts/openai-image-auth-docker-client.test.ts",
           "extensions/openai/image-generation-provider.test.ts",
@@ -1282,6 +1283,34 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
+    const packageAcceptanceTargets = [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ];
+    const workflowTargets = new Map([
+      [".github/workflows/mantis-discord-smoke.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
+      [
+        ".github/workflows/mantis-telegram-desktop-proof.yml",
+        [
+          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+    ]);
+
+    for (const [workflowPath, targets] of workflowTargets) {
+      expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps release-check workflow edits on release workflow regression tests", () => {
     expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
       {
@@ -1387,6 +1416,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/clawtributors-map.json"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/update-clawtributors.test.ts"],
+    });
+
+    expect(resolveChangedTestTargetPlan(["scripts/docs-list.js"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/docs-list.test.ts"],
     });
 
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({
@@ -2396,19 +2430,21 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes MCP Docker E2E script targets instead of skipping changed tests", () => {
+  it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
-      "scripts/e2e/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+      "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
       "scripts/e2e/mcp-channels-seed.ts",
       "scripts/e2e/docker-openai-seed.ts",
-      "scripts/e2e/mcp-client-temp-state.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
+      "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
       "scripts/e2e/cron-mcp-cleanup-seed.ts",
@@ -2422,13 +2458,13 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-observability.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/docker-e2e-seeds.test.ts",
-        "test/scripts/mcp-channels-harness.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "src/gateway/server.cron.test.ts",
         "src/gateway/server-methods/agent.test.ts",
         "src/cron/isolated-agent/run.fast-mode.test.ts",
@@ -2440,7 +2476,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/openai-image-auth-docker.sh",
-      "scripts/e2e/openai-image-auth-docker-client.ts",
+      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2482,7 +2518,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/crestodian-first-run-docker.sh",
-      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
       "scripts/e2e/crestodian-planner-docker.sh",
       "scripts/e2e/crestodian-planner-docker-client.mjs",
@@ -2946,26 +2982,12 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("explains changed paths that need explicit broad fallback before skipping", () => {
-    withTinyGitRepo({ "package.json": '{"scripts":{}}\n' }, (cwd) => {
-      commitTinyGitRepo(cwd);
-      fs.writeFileSync(path.join(cwd, "package.json"), '{"scripts":{"test":"node"}}\n');
-
-      const result = spawnSync(
-        process.execPath,
-        [path.resolve(process.cwd(), "scripts/test-projects.mjs"), "--changed", "HEAD"],
-        {
-          cwd,
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toContain("[test] no precise changed test targets; skipping Vitest.");
-      expect(result.stderr).toContain("[test]   package.json");
-      expect(result.stderr).toContain(
-        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
-      );
-    });
+    expect(formatNoChangedTestTargetLines(["unknown-root-surface.txt"])).toEqual([
+      "[test] no precise changed test targets; skipping Vitest.",
+      "[test] 1 changed path require broad Vitest fallback:",
+      "[test]   unknown-root-surface.txt",
+      "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+    ]);
   });
 
   it("keeps the broad changed run available for unknown root surfaces", () => {

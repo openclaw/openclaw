@@ -17,6 +17,12 @@ and workspace defaults in one guided flow.
 openclaw onboard
 ```
 
+QuickStart is usually only a few minutes, but full onboarding can take longer
+when provider sign-in, channel pairing, daemon install, network downloads,
+skills, or optional plugins need extra setup. The wizard shows this timeline up
+front, and optional steps can be skipped and revisited later with
+`openclaw configure`.
+
 ## Locale
 
 The CLI wizard localizes fixed onboarding copy. It resolves locale from

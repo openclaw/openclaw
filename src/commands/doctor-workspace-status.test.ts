@@ -205,6 +205,54 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+  it("uses package-version update commands for exact npm plugin drift", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "brave",
+            name: "Brave",
+            origin: "global",
+            source: "/tmp/brave/index.js",
+          }),
+        ],
+      }),
+      [],
+      {
+        cfg: {
+          plugins: {
+            entries: {
+              brave: { enabled: true },
+            },
+          },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.10-beta.1",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.6.9",
+              gatewayVersion: "2026.6.10-beta.1",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.6.9",
+            },
+          ],
+        },
+      },
+    );
+    try {
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      expect(driftCalls).toHaveLength(1);
+      const [[body]] = driftCalls;
+      expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
+      expect(body).not.toContain("openclaw plugins update brave");
+      expect(body).toContain("openclaw gateway restart");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("omits plugin version drift when no daemon status report is supplied", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({

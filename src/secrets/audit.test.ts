@@ -771,4 +771,65 @@ describe("secrets audit", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not flag openclaw.json model provider apiKey marker values as plaintext", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          lmstudio: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            api: "openai-completions",
+            apiKey: "lmstudio-local",
+            models: [{ id: "lmstudio-local", name: "lmstudio-local" }],
+          },
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            api: "openai-completions",
+            apiKey: "ollama-local",
+            models: [{ id: "ollama-local", name: "ollama-local" }],
+          },
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-real-plaintext",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.lmstudio.apiKey",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.ollama.apiKey",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
 });

@@ -250,4 +250,149 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("- WARN legacy-plugin [hook-only]: uses a compatibility shim");
     expect(text).toContain("Full inventory: /plugins list");
   });
+
+  it("separates runtime-loaded plugins from installed-but-not-active inventory", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        // Disk scan marks this "loaded" from config, but the runtime registry
+        // never loaded it (absent from runtimeLoadedPluginIds).
+        { id: "installed-idle", status: "loaded", enabled: true },
+        { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
+        { id: "off", status: "disabled", enabled: false },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+    expect(text).toContain("Disabled: 1");
+    // The errored plugin stays in Errors and the disabled plugin in Disabled;
+    // neither leaks into the installed inventory line.
+    expect(text).toContain("- broken [load]: boom");
+    expect(text).not.toContain("Loaded: 2");
+  });
+
+  it("falls back to status-loaded when runtime provenance is absent", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "a", status: "loaded", enabled: true },
+        { id: "b", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+    });
+
+    expect(text).toContain("Loaded: 2 (a, b)");
+    expect(text).not.toContain("Installed (not active):");
+  });
+
+  it("keeps installed-only loaded plugins out of Loaded after merge", () => {
+    const snapshot = mergeStatusPluginHealthSnapshots(
+      {
+        plugins: [{ id: "installed-idle", status: "loaded", enabled: true }],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+      },
+      {
+        plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+        runtimeLoadedPluginIds: ["runtime-ok"],
+      },
+    );
+
+    expect(snapshot.runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
+    const text = formatDetailedPluginHealth(snapshot);
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+  });
+
+  it("lists runtime-loaded plugins even when absent from the merged plugin records", () => {
+    // A plugin live only via a pinned runtime surface is in runtimeLoadedPluginIds
+    // but not in snapshot.plugins; it must still show under Loaded, not be dropped.
+    const text = formatDetailedPluginHealth({
+      plugins: [{ id: "active-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["active-ok", "pinned-only"],
+    });
+
+    expect(text).toContain("Loaded: 2 (active-ok, pinned-only)");
+    expect(text).not.toContain("Installed (not active):");
+  });
+
+  it("flags should-run plugins missing from the runtime-loaded set as drift", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        // Planned for eager startup but never loaded at runtime: drift.
+        { id: "planned-missing", status: "loaded", enabled: true },
+        // Installed/discovered but not in the startup plan: neutral inventory.
+        { id: "not-planned-idle", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      shouldRunPluginIds: ["planned-missing", "runtime-ok"],
+    });
+
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Configured to run but not loaded: 1 (planned-missing)");
+    // Not-planned stays neutral; the drift id never appears in both inventory lines.
+    expect(text).toContain("Installed (not active): 1 (not-planned-idle)");
+  });
+
+  it("reports no drift when every should-run plugin is runtime-loaded", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "a", status: "loaded", enabled: true },
+        { id: "b", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["a", "b"],
+      shouldRunPluginIds: ["a", "b"],
+    });
+
+    expect(text).toContain("Loaded: 2 (a, b)");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
+
+  it("does not re-report should-run plugins already shown as error or disabled", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
+        { id: "off", status: "disabled", enabled: false },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      // Both broken and off are in the startup plan but already explained by their
+      // own records, so neither should surface as drift.
+      shouldRunPluginIds: ["broken", "off", "runtime-ok"],
+    });
+
+    expect(text).toContain("- broken [load]: boom");
+    expect(text).toContain("Disabled: 1");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
+
+  it("omits the drift line when the should-run set is absent (back-compat)", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        { id: "installed-idle", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
 });

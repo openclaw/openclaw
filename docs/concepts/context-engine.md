@@ -200,13 +200,15 @@ Required members:
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
   Controls which token estimate the runner uses for preemptive overflow
   prechecks. Defaults to `"assembled"`, which means only the assembled
-  prompt's estimate is checked - appropriate for engines that return a
-  windowed, self-contained context. Set to `"preassembly_may_overflow"` only
-  when your assembled view can hide overflow risk in the underlying
-  transcript; the runner then takes the maximum of the assembled estimate
-  and the pre-assembly (unwindowed) session-history estimate when deciding
-  whether to preemptively compact. Either way, the messages you return are
-  still what the model sees - `promptAuthority` only affects the precheck.
+  prompt's estimate is checked for engines that do not own compaction.
+  Engines that set `ownsCompaction: true` manage their own prompt admission,
+  so OpenClaw skips the generic pre-prompt precheck by default. Set
+  `"preassembly_may_overflow"` only when your assembled view can hide overflow
+  risk in the underlying transcript; the runner then keeps the generic
+  precheck active and takes the maximum of the assembled estimate and the
+  pre-assembly (unwindowed) session-history estimate when deciding whether to
+  preemptively compact. Either way, the messages you return are still what the
+  model sees - `promptAuthority` only affects the precheck.
 </ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
@@ -294,7 +296,7 @@ protects engines that would corrupt state if they ran in an unsupported host.
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction for that run, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw may still run the pre-prompt overflow safeguard; when it predicts the full transcript will overflow, the recovery path calls the active engine's `compact()` before submitting another prompt.
+    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction and generic pre-prompt overflow precheck for that run, and the engine's `compact()` implementation is responsible for `/compact`, provider overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw still runs the pre-prompt overflow safeguard when the engine returns `promptAuthority: "preassembly_may_overflow"` from `assemble()`.
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
     OpenClaw runtime's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.

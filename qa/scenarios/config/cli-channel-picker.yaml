@@ -1,0 +1,23 @@
+title: CLI channel picker evidence
+
+scenario:
+  id: cli-channel-picker
+  surface: cli-install-update-onboard-doctor
+  category: cli-install-update-onboard-doctor.plugin-and-channel-setup
+  coverage:
+    primary:
+      - cli.channel-picker
+  objective: Link channel onboarding picker e2e coverage to CLI maturity accounting.
+  successCriteria:
+    - The channel picker remains usable with broken sibling registry diagnostics.
+    - Hidden setup channels are omitted from selectable choices.
+    - Configured and disabled channel states are presented with the expected actions.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/commands/onboard-channels.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/commands/onboard-channels.e2e.test.ts
+    summary: Vitest e2e coverage for channel onboarding picker behavior.

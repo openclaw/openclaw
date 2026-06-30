@@ -14,11 +14,13 @@ export type AssembleResult = {
    * preemptive overflow prechecks. The returned `messages` are always the
    * prompt sent to the model; this only affects the precheck's token comparison.
    *
-   * - "assembled": the precheck uses only the assembled prompt's estimate.
+   * - "assembled": the generic precheck uses only the assembled prompt's estimate
+   *   unless the engine owns compaction; owning engines manage prompt admission.
    * - "preassembly_may_overflow": the precheck takes the maximum of the
    *   assembled estimate and the pre-assembly (unwindowed) session-history
    *   estimate. Engines opt into this when their assembled view can hide an
-   *   overflow that would still affect the underlying transcript.
+   *   overflow that would still affect the underlying transcript. This opt-in
+   *   keeps the generic precheck active even for engines that own compaction.
    *
    * Defaults to "assembled".
    */

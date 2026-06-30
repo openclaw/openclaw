@@ -4,6 +4,10 @@
 
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "../../../agents/provider-http-errors.js";
+import {
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
@@ -175,6 +179,8 @@ async function fetchResponse(
   }
 }
 
+// Shared 16 MiB bounded reader — a hostile OAuth endpoint cannot force the
+// runtime to buffer an unbounded body through `.text()` / `.json()`.
 async function fetchJson(
   url: string,
   init: RequestInit,
@@ -182,11 +188,12 @@ async function fetchJson(
   options: CopilotRequestOptions = {},
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
+  const label = `GitHub Copilot ${operation}`;
   if (!response.ok) {
-    const text = await response.text();
+    const text = await readProviderTextResponse(response, label);
     throw new Error(`${response.status} ${response.statusText}: ${text}`);
   }
-  return response.json();
+  return readProviderJsonResponse(response, label);
 }
 
 async function startDeviceFlow(
