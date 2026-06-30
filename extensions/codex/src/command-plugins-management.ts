@@ -1,5 +1,6 @@
 // Codex plugin module implements command plugins management behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   buildCodexCommandPickerPresentation,
@@ -79,7 +80,7 @@ export async function handleCodexPluginsSubcommand(
     if (!target || args.length > 1) {
       return { text: `Usage: /codex plugins ${normalized} <name>` };
     }
-    if (!canMutateCodexPlugins(ctx)) {
+    if (!canMutateCodexHost(ctx)) {
       return {
         text: `Only an owner or operator.admin gateway client can run /codex plugins ${normalized}.`,
       };
@@ -195,13 +196,6 @@ function buildPluginNamePickerReply(
       buttons,
     ),
   };
-}
-
-function canMutateCodexPlugins(ctx: PluginCommandContext): boolean {
-  if (ctx.senderIsOwner === true) {
-    return true;
-  }
-  return ctx.gatewayClientScopes?.includes("operator.admin") === true;
 }
 
 export function buildPluginsHelp(): string {
