@@ -174,6 +174,34 @@ describe("minimax music generation provider", () => {
     expect(result.tracks[0]?.buffer).toEqual(terminalAudio);
   });
 
+  it("skips malformed SSE data frames and processes valid audio frames", async () => {
+    const audioHex = Buffer.from("valid-audio").toString("hex");
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        [
+          "data: NOT JSON {{{",
+          `data: ${JSON.stringify({
+            data: { status: 2, audio: audioHex },
+            base_resp: { status_code: 0 },
+          })}`,
+        ].join("\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildMinimaxMusicGenerationProvider();
+    const result = await provider.generateMusic({
+      provider: "minimax",
+      model: "music-2.6",
+      prompt: "skip malformed",
+      cfg: {},
+    });
+
+    expect(result.tracks).toHaveLength(1);
+    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("valid-audio"));
+  });
+
   it("rejects streamed generated music that exceeds the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: new Response(

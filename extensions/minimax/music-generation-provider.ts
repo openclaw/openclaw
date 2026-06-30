@@ -263,7 +263,12 @@ async function readStreamingTrack(
     if (!json || json === "[DONE]") {
       continue;
     }
-    const frame = JSON.parse(json) as MinimaxMusicStreamFrame;
+    let frame: MinimaxMusicStreamFrame;
+    try {
+      frame = JSON.parse(json) as MinimaxMusicStreamFrame;
+    } catch {
+      continue;
+    }
     assertMinimaxBaseResp(frame.base_resp, "MiniMax music generation failed");
     const audio = normalizeOptionalString(frame.data?.audio);
     if (audio) {
