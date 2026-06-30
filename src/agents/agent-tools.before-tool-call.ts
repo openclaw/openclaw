@@ -827,10 +827,7 @@ async function requestPluginToolApproval(params: {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: buildPluginApprovalFailureReason({
-        fallbackReason: "Approval timed out",
-        ctx: params.ctx,
-      }),
+      reason: "Approval timed out",
       params: params.baseParams,
     };
   } catch (err) {
