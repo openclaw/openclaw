@@ -187,6 +187,32 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToId).toBe("1700000000001");
   });
 
+  it("falls back to dataMessage timestamp for native reply metadata", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          timestamp: 1700000000002,
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000002");
+    expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000002);
+  });
+
   it("preserves the last debounced message body for native reply quote metadata", async () => {
     vi.useFakeTimers();
     const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
