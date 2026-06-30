@@ -1,6 +1,10 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidScreenshotScene
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.ui.chat.ChatMessageListCard
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -29,6 +33,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @Composable
 fun AndroidScreenshotModeScreen(scene: AndroidScreenshotScene) {
@@ -80,6 +90,11 @@ private fun ScreenshotSceneBody(
   scene: AndroidScreenshotScene,
   modifier: Modifier = Modifier,
 ) {
+  if (scene == AndroidScreenshotScene.ChatProof) {
+    ChatProofScene(modifier = modifier.fillMaxWidth().padding(vertical = 20.dp))
+    return
+  }
+
   Column(
     modifier = modifier.fillMaxWidth().padding(vertical = 20.dp),
     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -87,6 +102,7 @@ private fun ScreenshotSceneBody(
     when (scene) {
       AndroidScreenshotScene.Connect -> ConnectScene()
       AndroidScreenshotScene.Chat -> ChatScene()
+      AndroidScreenshotScene.ChatProof -> Unit
       AndroidScreenshotScene.Voice -> VoiceScene()
       AndroidScreenshotScene.Screen -> ScreenScene()
       AndroidScreenshotScene.Settings -> SettingsScene()
@@ -119,6 +135,43 @@ private fun ChatScene() {
     label = "Molty",
     text = "Always. Lurking in the shadows, exfoliating.",
     raised = true,
+  )
+}
+
+@Composable
+private fun ChatProofScene(modifier: Modifier = Modifier) {
+  val messages = remember { proofChatMessages() }
+  var pendingRunCount by remember { mutableStateOf(0) }
+  var pendingToolCalls by remember { mutableStateOf(emptyList<ChatPendingToolCall>()) }
+  var streamingAssistantText by remember { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(Unit) {
+    delay(8_000)
+    pendingRunCount = 1
+    streamingAssistantText =
+      "This live reply is streaming below the reader's current viewport. The transcript should stay put until Jump to latest is tapped."
+    delay(4_000)
+    pendingToolCalls =
+      listOf(
+        ChatPendingToolCall(
+          toolCallId = "proof-tool-call",
+          name = "scroll.proof",
+          startedAtMs = 1_900_000_000_000,
+        ),
+      )
+    streamingAssistantText =
+      "This live reply is streaming below the reader's current viewport. The transcript should stay put until Jump to latest is tapped.\n\nA tool row arrived too; layout growth still must not pull the reader away."
+  }
+
+  ChatMessageListCard(
+    sessionKey = "chat-proof-scroll-session",
+    messages = messages,
+    historyLoading = false,
+    pendingRunCount = pendingRunCount,
+    pendingToolCalls = pendingToolCalls,
+    streamingAssistantText = streamingAssistantText,
+    healthOk = true,
+    modifier = modifier.fillMaxSize(),
   )
 }
 
@@ -295,6 +348,8 @@ private fun ContextBar(
 
 @Composable
 private fun ScreenshotTabBar(activeScene: AndroidScreenshotScene) {
+  val chatActive = activeScene == AndroidScreenshotScene.Chat || activeScene == AndroidScreenshotScene.ChatProof
+
   Surface(
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(8.dp),
@@ -306,7 +361,7 @@ private fun ScreenshotTabBar(activeScene: AndroidScreenshotScene) {
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
       TabIcon(icon = Icons.Default.CheckCircle, active = activeScene == AndroidScreenshotScene.Connect)
-      TabIcon(icon = Icons.Default.ChatBubble, active = activeScene == AndroidScreenshotScene.Chat)
+      TabIcon(icon = Icons.Default.ChatBubble, active = chatActive)
       TabIcon(icon = Icons.Default.Mic, active = activeScene == AndroidScreenshotScene.Voice)
       TabIcon(icon = Icons.AutoMirrored.Filled.ScreenShare, active = activeScene == AndroidScreenshotScene.Screen)
       TabIcon(icon = Icons.Default.Settings, active = activeScene == AndroidScreenshotScene.Settings)
@@ -384,7 +439,53 @@ private fun sceneTitle(scene: AndroidScreenshotScene): String =
   when (scene) {
     AndroidScreenshotScene.Connect -> "Connect"
     AndroidScreenshotScene.Chat -> "Chat"
+    AndroidScreenshotScene.ChatProof -> "Chat scroll proof"
     AndroidScreenshotScene.Voice -> "Talk"
     AndroidScreenshotScene.Screen -> "Device tools"
     AndroidScreenshotScene.Settings -> "Settings"
   }
+
+private fun proofChatMessages(): List<ChatMessage> =
+  listOf(
+    proofMessage("proof-01", "user", "Open the mobile chat proof thread.", 1),
+    proofMessage(
+      "proof-02",
+      "assistant",
+      "Loaded the thread. There is enough previous conversation visible to preserve orientation before the next turn begins.",
+      2,
+    ),
+    proofMessage("proof-03", "user", "Show me a few earlier details so I know where I am.", 3),
+    proofMessage(
+      "proof-04",
+      "assistant",
+      "Earlier context remains in the transcript. Scroll position should be tied to reader intent, not to message count.",
+      4,
+    ),
+    proofMessage("proof-05", "user", "I am going to scroll away from the live edge now.", 5),
+    proofMessage(
+      "proof-06",
+      "assistant",
+      "When the reader moves away, incoming text should wait offscreen and surface a clear return action.",
+      6,
+    ),
+    proofMessage("proof-07", "user", "Keep this turn near the top of the viewport when the thread reopens.", 7),
+    proofMessage(
+      "proof-08",
+      "assistant",
+      "Restored near the latest user turn with previous context still visible. The next live rows are intentionally delayed so the proof can scroll away first.\n\nKeep reading from here: this paragraph is long enough to make the delayed stream arrive below the fold on tall phones. If the scroll controller is correct, this text remains anchored while new assistant, thinking, and tool rows are inserted later in the timeline.",
+      8,
+    ),
+  )
+
+private fun proofMessage(
+  id: String,
+  role: String,
+  text: String,
+  timestampSeconds: Long,
+): ChatMessage =
+  ChatMessage(
+    id = id,
+    role = role,
+    content = listOf(ChatMessageContent(text = text)),
+    timestampMs = timestampSeconds * 1_000,
+  )
