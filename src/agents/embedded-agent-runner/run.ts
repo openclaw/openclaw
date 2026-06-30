@@ -1117,6 +1117,10 @@ async function runEmbeddedAgentInternal(
             {
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
+              // Enable bundled static catalog fallback so plugin-provided
+              // models that are not discoverable via agent model discovery
+              // can still be resolved from the static catalog.
+              allowBundledStaticCatalogFallback: true,
             },
           );
           firstModelResolution ??= candidateResolution;

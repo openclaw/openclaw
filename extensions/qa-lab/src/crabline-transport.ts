@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Crabline fake-provider transport behavior.
+// Qa Lab plugin module implements Crabline local-provider transport behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -6,6 +6,7 @@ import {
   OPENCLAW_CRABLINE_MANIFEST_PATH,
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
+  type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -96,16 +97,13 @@ async function waitForCrablineReady(params: {
 
 async function postCrablineInbound(params: {
   adapter: StartedOpenClawCrablineAdapter;
-  providerBody: Record<string, unknown>;
+  providerInbound: OpenClawCrablineInbound;
 }) {
   const { response, release } = await fetchWithSsrFGuard({
-    url: params.adapter.manifest.endpoints.adminInboundUrl,
+    url: params.providerInbound.providerUrl,
     init: {
-      body: JSON.stringify(params.providerBody),
-      headers: {
-        authorization: `Bearer ${params.adapter.manifest.adminToken}`,
-        "content-type": "application/json",
-      },
+      body: JSON.stringify(params.providerInbound.providerBody),
+      headers: params.providerInbound.providerHeaders,
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },
@@ -190,7 +188,7 @@ function createCrablineState(params: {
       });
       await postCrablineInbound({
         adapter: params.adapter,
-        providerBody: providerInbound.providerBody,
+        providerInbound,
       });
       return message;
     },
@@ -227,7 +225,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }) {
     super({
       id: CRABLINE_TRANSPORT_ID,
-      label: `crabline fake ${params.selection.channel}`,
+      label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
       state: params.state,
@@ -257,17 +255,19 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     return delivery;
   };
 
+  createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
+
   handleAction = async (_params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline fake-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
-    `Runs OpenClaw's ${this.#selection.channel} channel plugin against a Crabline fake provider server.`,
+    `Runs OpenClaw's ${this.#selection.channel} channel plugin against a Crabline local provider server.`,
     "No live channel service or external credential lease is required.",
   ];
 
