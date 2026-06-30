@@ -206,28 +206,19 @@ function stringsMatch(left: unknown, right: unknown): boolean {
 }
 
 function nodeMatchesPairedDevice(node: NodeListNode, device: PairedDevice): boolean {
-  return (
-    stringsMatch(node.nodeId, device.deviceId) ||
-    stringsMatch(node.remoteIp, device.remoteIp) ||
-    stringsMatch(node.displayName, device.displayName)
-  );
+  return stringsMatch(node.nodeId, device.deviceId) || stringsMatch(node.remoteIp, device.remoteIp);
 }
 
 function nodeMatchesQuery(node: NodeListNode, query: string): boolean {
   return (
     stringsMatch(node.nodeId, query) ||
     stringsMatch(node.remoteIp, query) ||
-    stringsMatch(node.displayName, query) ||
     stringsMatch(node.pendingRequestId, query)
   );
 }
 
 function pairedDeviceMatchesQuery(device: PairedDevice, query: string): boolean {
-  return (
-    stringsMatch(device.deviceId, query) ||
-    stringsMatch(device.remoteIp, query) ||
-    stringsMatch(device.displayName, query)
-  );
+  return stringsMatch(device.deviceId, query) || stringsMatch(device.remoteIp, query);
 }
 
 async function tryReadGatewayPairingList(opts: DevicesRpcOpts): Promise<DevicePairingList | null> {

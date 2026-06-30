@@ -546,6 +546,98 @@ describe("devices cli approve", () => {
     expect(errorOutput).not.toContain("secret-token");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("does not suggest node approval for a wrong-layer device IP when only display names match", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Shared Phone",
+            remoteIp: "192.168.0.202",
+            roles: ["node"],
+          }),
+        ],
+      })
+      .mockRejectedValueOnce(new Error("device pairing approval denied"))
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
+      .mockResolvedValueOnce({
+        nodes: [
+          {
+            nodeId: "unrelated-node",
+            displayName: "Shared Phone",
+            remoteIp: "10.0.0.50",
+            approvalState: "pending-reapproval",
+            pendingRequestId: "node-req-unrelated",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Shared Phone",
+            remoteIp: "192.168.0.202",
+            roles: ["node"],
+          }),
+        ],
+      });
+
+    await runDevicesApprove(["192.168.0.202"]);
+
+    expectGatewayCall(3, { method: "node.list" });
+    expectGatewayCall(4, { method: "device.pair.list" });
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).not.toContain("node-req-unrelated");
+    expect(errorOutput).not.toContain("openclaw nodes approve");
+  });
+
+  it("does not suggest node approval when the query only matches a paired device display name", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "paired-node",
+            displayName: "Shared Phone",
+            roles: ["node"],
+          }),
+        ],
+      })
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
+      .mockResolvedValueOnce({
+        nodes: [
+          {
+            nodeId: "paired-node",
+            displayName: "Shared Phone",
+            approvalState: "pending-approval",
+            pendingRequestId: "node-req-display-name",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "paired-node",
+            displayName: "Shared Phone",
+            roles: ["node"],
+          }),
+        ],
+      });
+
+    await runDevicesApprove(["Shared Phone"]);
+
+    expectGatewayCall(2, { method: "node.list" });
+    expectGatewayCall(3, { method: "device.pair.list" });
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).not.toContain("node-req-display-name");
+    expect(errorOutput).not.toContain("openclaw nodes approve");
+  });
 });
 
 describe("devices cli remove", () => {
@@ -1441,6 +1533,40 @@ describe("devices cli list", () => {
     expect(output).not.toContain("url-secret");
     expect(output).not.toContain("gateway.example");
     expect(output).not.toContain("secret-token");
+  });
+
+  it("does not show node approval commands for paired node devices when only display names match", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Shared Phone",
+            remoteIp: "192.168.0.202",
+            role: "node",
+            roles: [],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({
+        nodes: [
+          {
+            nodeId: "unrelated-node",
+            displayName: "Shared Phone",
+            remoteIp: "10.0.0.50",
+            approvalState: "pending-reapproval",
+            pendingRequestId: "node-req-unrelated",
+          },
+        ],
+      });
+
+    await runDevicesCommand(["list"]);
+
+    expectGatewayCall(1, { method: "node.list" });
+    const output = readRuntimeOutput();
+    expect(output).not.toContain("node-req-unrelated");
+    expect(output).not.toContain("openclaw nodes approve");
   });
 
   it("does not show upgrade context for key-mismatched pending requests", async () => {
