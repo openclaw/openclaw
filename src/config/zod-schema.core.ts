@@ -539,21 +539,19 @@ const ModelProviderSchema = z
     request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema).optional(),
   })
-  .strict();
+  .strict()
+  .transform((provider) => {
+    const { baseURL, ...canonical } = provider;
+    if (baseURL !== undefined && canonical.baseUrl === undefined) {
+      return { ...canonical, baseUrl: baseURL };
+    }
+    return canonical;
+  });
 
 const ModelProvidersSchema = z
   .record(z.string(), ModelProviderSchema)
   .superRefine((providers, ctx) => {
     for (const [providerId, provider] of Object.entries(providers)) {
-      // Normalize baseURL alias → canonical baseUrl (mutate in-place;
-      // downstream code only reads baseUrl, never the untyped baseURL).
-      const raw = provider as Record<string, unknown>;
-      if (typeof raw.baseURL === "string") {
-        if (!provider.baseUrl) {
-          raw.baseUrl = raw.baseURL;
-        }
-        delete raw.baseURL;
-      }
       if (isBuiltInModelProviderOverlayId(providerId)) {
         continue;
       }

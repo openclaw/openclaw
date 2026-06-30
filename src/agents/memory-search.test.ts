@@ -1,7 +1,7 @@
 // Verifies memory-search config resolution across providers, sync, and batching.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { OpenClawSchema } from "../config/zod-schema.js";
+import { validateConfigObjectRaw } from "../config/validation.js";
 import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -758,7 +758,7 @@ describe("memory search config", () => {
   });
 
   it("uses built-in openai adapter after baseURL normalizes to baseUrl", () => {
-    const cfg = OpenClawSchema.parse({
+    const validated = validateConfigObjectRaw({
       models: {
         providers: {
           openai: {
@@ -771,6 +771,11 @@ describe("memory search config", () => {
         defaults: { memorySearch: { provider: "openai" } },
       },
     });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error(validated.issues.map((issue) => issue.message).join("; "));
+    }
+    const cfg = validated.config;
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
