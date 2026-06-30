@@ -16,6 +16,18 @@ is not a proposal to replace Task Flow, background tasks, Workboard, sessions, o
 external workflow systems. The intent is to give those existing surfaces a common
 runtime ledger for long-running, branching, multi-agent work.
 
+The review request for this RFC is intentionally narrow: maintainers should use
+it to decide whether the boundary belongs in a small core durable kernel, inside
+Task Flow internals, or in a narrower shared task/session module. Until that
+boundary is accepted, this document should be read as proposed direction rather
+than shipped OpenClaw behavior.
+
+The companion implementation proof is tracked in
+[openclaw/openclaw#97508](https://github.com/openclaw/openclaw/pull/97508). That
+PR demonstrates the proposed first slice as an opt-in, local-first ledger with
+read-only inspection and restart/upgrade proof; this RFC remains the architecture
+decision point.
+
 ## Problem
 
 OpenClaw already has durable session transcripts, background task records, Task
@@ -101,8 +113,9 @@ The first implementation should be local-first and opt-in:
 
 To keep review focused, this proposal should move in vertical slices:
 
-1. RFC and maintainer alignment.
-2. Opt-in coordination ledger in the shared OpenClaw state database.
+1. RFC and maintainer alignment on the owner boundary.
+2. Opt-in coordination ledger in the shared OpenClaw state database, with schema
+   lifecycle and upgrade-safety proof.
 3. Read-only Gateway and CLI timeline/projection APIs with disabled-by-default
    regression tests.
 4. Subagent child-run recording and fan-in projection without raw task
@@ -110,13 +123,33 @@ To keep review focused, this proposal should move in vertical slices:
 5. Recovery worker, retention, and migration hardening after the primitive shape
    is accepted.
 
-## Open Questions
+## Maintainer Decision Requested
 
-- Should the initial coordination ledger be part of Task Flow internals, a
-  standalone core runtime module, or a narrower shared task/session submodule?
-- Which existing operator surfaces should read the first projection: Task Flow,
-  Workboard, CLI, Control UI, or all of them through Gateway?
-- What retention policy is acceptable for event timelines in local-first
-  installs?
-- Which migration and doctor checks should be required before the feature moves
-  from experimental to default-on?
+Recommended decision:
+
+- Treat the durable ledger as a small standalone core runtime module, with Task
+  Flow, Workboard, CLI, and Control UI reading it through Gateway-facing
+  projections instead of owning the persistence model directly. This keeps the
+  primitive reusable across agent turns, subagent fan-in, and future operator
+  surfaces without coupling the schema to one product view.
+- Use shared `state/openclaw.sqlite` as the local-first lifecycle home for the
+  first coordination tables. This avoids introducing a new service, keeps the
+  feature backupable with the existing OpenClaw state directory, and lets schema
+  lifecycle, doctor checks, and upgrade safety be reviewed in one place.
+- Keep the MVP boundary at opt-in read-only inspection plus restart/upgrade
+  safety. Task Flow integration, Workboard presentation, retention,
+  compaction, and worker policy should remain follow-ups after maintainers
+  accept the primitive shape.
+
+Before publishing this RFC as accepted direction, please confirm whether this
+boundary is acceptable or whether upstream would prefer to place the ledger
+inside Task Flow internals or a broader shared task/session module.
+
+## Non-Blocking Follow-Ups
+
+- Choose the first operator surface for projection reads after the core boundary
+  is accepted: Task Flow, Workboard, CLI, Control UI, or all of them through
+  Gateway.
+- Define timeline retention and compaction policy for local-first installs.
+- Define the migration and doctor checks required before the feature moves from
+  experimental to default-on.
