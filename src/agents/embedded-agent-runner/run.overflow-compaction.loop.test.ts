@@ -63,6 +63,11 @@ function expectRetryContinuesFromTranscript() {
   expect(retryParams.prompt).not.toBe(baseParams.prompt);
 }
 
+function expectTruncationScopeSessionFile(callIndex: number, sessionFile: string) {
+  const args = requireMockCallArg(mockedTruncateOversizedToolResultsInSession, callIndex);
+  expect(requireRecord(args.scope, "truncation scope").sessionFile).toBe(sessionFile);
+}
+
 function makeUserMessage(content: string = baseParams.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
 }
@@ -636,9 +641,7 @@ describe("overflow compaction in run loop", () => {
     expect(
       requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
     ).toBe(200000);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -684,9 +687,7 @@ describe("overflow compaction in run loop", () => {
     const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
     const messages = oversizedArgs.messages as Array<{ role?: string }>;
     expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -827,9 +828,7 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
-      "/tmp/session.json",
-    );
+    expectTruncationScopeSessionFile(0, "/tmp/session.json");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
     expect(result.meta.error).toBeUndefined();

@@ -7,6 +7,14 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  replaceTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
@@ -17,6 +25,7 @@ let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.
 let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
+let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
@@ -36,6 +45,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     resolveAutoLiveToolResultMaxChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
+    truncateOversizedToolResultsInRuntimeTranscript,
     truncateOversizedToolResultsInSession,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
@@ -641,6 +651,156 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
+  it("truncates SQLite runtime transcripts without treating the marker as a file", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-tool-truncation";
+    const sessionKey = "agent:main:test";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionStoreEntry);
+    await appendTranscriptMessage(scope, {
+      message: makeUserMessage("run tools"),
+    });
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
+    await appendTranscriptMessage(scope, {
+      message: makeToolResult(medium, "call_1"),
+    });
+    await appendTranscriptMessage(scope, {
+      message: makeToolResult(medium, "call_2"),
+    });
+    await appendTranscriptMessage(scope, {
+      message: makeToolResult(medium, "call_3"),
+    });
+
+    const listener = vi.fn();
+    const cleanup = onInternalSessionTranscriptUpdate(listener);
+    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+      scope: { ...scope, sessionFile },
+      contextWindowTokens: 100,
+    });
+    cleanup();
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    expect(listener).toHaveBeenCalledWith({
+      sessionFile,
+      sessionKey,
+      agentId: "main",
+      sessionId,
+      target: { agentId: "main", sessionId, sessionKey },
+    });
+
+    const toolResultTexts = (await loadTranscriptEvents(scope))
+      .filter(
+        (entry): entry is { message: AgentMessage; type: "message" } =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "message" in entry &&
+          "type" in entry &&
+          entry.type === "message",
+      )
+      .map((entry) => entry.message)
+      .filter((message): message is ToolResultMessage => message.role === "toolResult")
+      .map(getFirstToolResultText);
+
+    expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
+    expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
+  });
+
+  it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-leaf-tool-truncation";
+    const sessionKey = "agent:main:test";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionStoreEntry);
+    const activeLarge = "selected branch tool output ".repeat(700);
+    const inactiveLarge = "inactive branch tool output ".repeat(700);
+    await replaceTranscriptEvents(scope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "message",
+        id: "root-user",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: makeUserMessage("run tools"),
+      },
+      {
+        type: "message",
+        id: "selected-tool",
+        parentId: "root-user",
+        timestamp: "2026-01-01T00:00:02.000Z",
+        message: makeToolResult(activeLarge, "call_selected"),
+      },
+      {
+        type: "message",
+        id: "inactive-tool",
+        parentId: "root-user",
+        timestamp: "2026-01-01T00:00:03.000Z",
+        message: makeToolResult(inactiveLarge, "call_inactive"),
+      },
+      {
+        type: "leaf",
+        id: "selected-leaf",
+        parentId: "inactive-tool",
+        timestamp: "2026-01-01T00:00:04.000Z",
+        targetId: "selected-tool",
+      },
+    ]);
+
+    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+      scope: { ...scope, sessionFile },
+      contextWindowTokens: 100,
+    });
+
+    expect(result.truncated).toBe(true);
+    const messages = (await loadTranscriptEvents(scope))
+      .filter(
+        (entry): entry is { message: AgentMessage; type: "message" } =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "message" in entry &&
+          "type" in entry &&
+          entry.type === "message",
+      )
+      .map((entry) => entry.message);
+    const selectedTool = messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "call_selected",
+    );
+    const inactiveTool = messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "call_inactive",
+    );
+
+    expect(selectedTool ? getFirstToolResultText(selectedTool) : "").toContain("truncated");
+    expect(inactiveTool ? getFirstToolResultText(inactiveTool) : "").toBe(inactiveLarge);
+  });
+
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
     // update event instead of reopening through SessionManager internals.

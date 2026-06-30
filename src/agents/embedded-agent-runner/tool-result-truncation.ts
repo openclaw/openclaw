@@ -2,6 +2,8 @@
  * Truncates oversized tool-result content in messages and transcripts.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
@@ -17,14 +19,20 @@ import { SessionManager } from "../sessions/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
+  createTranscriptFileStateFromPersistedEntries,
   persistTranscriptStateMutation,
   readTranscriptFileState,
-  type TranscriptFileState,
+  TranscriptFileState,
 } from "./transcript-file-state.js";
 import {
   rewriteTranscriptEntriesInSessionManager,
+  rewriteTranscriptEntriesInRuntimeTranscript,
   rewriteTranscriptEntriesInState,
 } from "./transcript-rewrite.js";
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -63,6 +71,23 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
+
+async function readRuntimeTranscriptFileState(
+  scope: RuntimeTranscriptScope,
+): Promise<TranscriptFileState> {
+  const target = await resolveRuntimeTranscriptReadTarget(scope);
+  const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
+  if (!sqliteMarker) {
+    throw new Error("runtime transcript target is not SQLite-backed");
+  }
+  const events = await loadTranscriptEvents({
+    agentId: sqliteMarker.agentId,
+    sessionId: sqliteMarker.sessionId,
+    sessionKey: target.sessionKey,
+    storePath: sqliteMarker.storePath,
+  });
+  return createTranscriptFileStateFromPersistedEntries(events);
+}
 
 function resolveSuffixFactory(
   suffix: ToolResultTruncationOptions["suffix"],
@@ -839,6 +864,38 @@ function buildToolResultReplacementPlan(params: {
     aggregateReducibleChars,
   };
 }
+
+function buildRecoveryToolResultReplacementPlan(params: {
+  branch: ToolResultBranchEntry[];
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+}): {
+  maxChars: number;
+  aggregateBudgetChars: number;
+  plan: ReturnType<typeof buildToolResultReplacementPlan>;
+} {
+  const maxChars = Math.max(
+    1,
+    params.maxCharsOverride ?? calculateMaxToolResultChars(params.contextWindowTokens),
+  );
+  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
+    params.contextWindowTokens,
+    maxChars,
+    params.aggregateMaxCharsOverride,
+  );
+  return {
+    maxChars,
+    aggregateBudgetChars,
+    plan: buildToolResultReplacementPlan({
+      branch: params.branch,
+      maxChars,
+      aggregateBudgetChars,
+      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    }),
+  };
+}
+
 export function estimateToolResultReductionPotential(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
@@ -905,26 +962,17 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
-  const maxChars = Math.max(
-    1,
-    params.maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
-  );
-  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
-    contextWindowTokens,
-    maxChars,
-    params.aggregateMaxCharsOverride,
-  );
   const branch = sessionManager.getBranch() as ToolResultBranchEntry[];
 
   if (branch.length === 0) {
     return { truncated: false, truncatedCount: 0, reason: "empty session" };
   }
 
-  const plan = buildToolResultReplacementPlan({
+  const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
     branch,
-    maxChars,
-    aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    contextWindowTokens,
+    maxCharsOverride: params.maxCharsOverride,
+    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
   });
   if (plan.replacements.length === 0) {
     return {
@@ -980,26 +1028,17 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
-  const maxChars = Math.max(
-    1,
-    params.maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
-  );
-  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
-    contextWindowTokens,
-    maxChars,
-    params.aggregateMaxCharsOverride,
-  );
   const branch = state.getBranch() as ToolResultBranchEntry[];
 
   if (branch.length === 0) {
     return { truncated: false, truncatedCount: 0, reason: "empty session" };
   }
 
-  const plan = buildToolResultReplacementPlan({
+  const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
     branch,
-    maxChars,
-    aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    contextWindowTokens,
+    maxCharsOverride: params.maxCharsOverride,
+    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
   });
   if (plan.replacements.length === 0) {
     return {
@@ -1060,6 +1099,64 @@ export function truncateOversizedToolResultsInSessionManager(params: {
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
+  } catch (err) {
+    const errMsg = formatErrorMessage(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  }
+}
+
+/**
+ * Truncates oversized tool results in the active runtime transcript.
+ */
+export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  try {
+    const state = await readRuntimeTranscriptFileState(params.scope);
+    const { contextWindowTokens } = params;
+    const branch = state.getBranch() as ToolResultBranchEntry[];
+
+    if (branch.length === 0) {
+      return { truncated: false, truncatedCount: 0, reason: "empty session" };
+    }
+
+    const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
+      branch,
+      contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+    });
+    if (plan.replacements.length === 0) {
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason: "no oversized or aggregate tool results",
+      };
+    }
+
+    const rewriteResult = await rewriteTranscriptEntriesInRuntimeTranscript({
+      scope: params.scope,
+      request: { replacements: plan.replacements },
+      config: params.config,
+    });
+
+    log.info(
+      `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+        `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars} ` +
+        `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
+        `sessionKey=${params.scope.sessionKey ?? params.scope.sessionId ?? "unknown"}`,
+    );
+
+    return {
+      truncated: rewriteResult.changed,
+      truncatedCount: rewriteResult.rewrittenEntries,
+      reason: rewriteResult.reason,
+    };
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
