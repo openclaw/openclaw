@@ -104,6 +104,7 @@ import {
 } from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+import { detectBundleManifestFormat } from "../../plugins/bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -576,13 +577,12 @@ export async function collectMissingPluginInstallPayloads(params: {
     }
     const packageJsonPath = path.join(installPath, "package.json");
     if (!(await pathExists(packageJsonPath))) {
-      // Bundle plugins use `.claude-plugin/plugin.json` instead of
-      // `package.json`.  Do not flag them as missing.
-      const bundleManifestPath = path.join(installPath, ".claude-plugin", "plugin.json");
-      if (
-        (record as { clawhubFamily?: string }).clawhubFamily !== "bundle-plugin" ||
-        !(await pathExists(bundleManifestPath))
-      ) {
+      // Bundle plugins use manifest files (`.claude-plugin/plugin.json`,
+      // `.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`, or
+      // manifestless Claude markers) instead of `package.json`.  Use the
+      // shared bundle detector to cover all supported formats.
+      const isBundle = (record as { clawhubFamily?: string }).clawhubFamily === "bundle-plugin";
+      if (!isBundle || detectBundleManifestFormat(installPath) === null) {
         missing.push({ pluginId, installPath, reason: "missing-package-json" });
       }
     }

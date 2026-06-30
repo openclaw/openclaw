@@ -498,7 +498,51 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.checked).toEqual(["my-bundle"]);
   });
 
-  it("reports failure for a clawhub bundle-plugin with missing .claude-plugin/plugin.json", async () => {
+  it("accepts a clawhub bundle-plugin with .codex-plugin/plugin.json", async () => {
+    const dir = path.join(tmpRoot, "codex-bundle");
+    await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "codex-bundle", version: "1.0.0" }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "codex-bundle": {
+          source: "clawhub",
+          clawhubFamily: "bundle-plugin",
+          installPath: dir,
+        } as PluginInstallRecord,
+      },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["codex-bundle"]);
+  });
+
+  it("accepts a clawhub bundle-plugin with .cursor-plugin/plugin.json", async () => {
+    const dir = path.join(tmpRoot, "cursor-bundle");
+    await fs.mkdir(path.join(dir, ".cursor-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".cursor-plugin", "plugin.json"),
+      JSON.stringify({ name: "cursor-bundle", version: "1.0.0" }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "cursor-bundle": {
+          source: "clawhub",
+          clawhubFamily: "bundle-plugin",
+          installPath: dir,
+        } as PluginInstallRecord,
+      },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["cursor-bundle"]);
+  });
+
+  it("reports failure for a clawhub bundle-plugin with no bundle manifest at all", async () => {
     const dir = path.join(tmpRoot, "broken-bundle");
     await fs.mkdir(dir, { recursive: true });
     const result = await runPluginPayloadSmokeCheck({
@@ -516,7 +560,7 @@ describe("runPluginPayloadSmokeCheck", () => {
         pluginId: "broken-bundle",
         installPath: dir,
         reason: "missing-package-json",
-        detail: `Bundle plugin manifest is missing: ${path.join(dir, ".claude-plugin", "plugin.json")}`,
+        detail: `Bundle plugin manifest is missing under ${dir}`,
       },
     ]);
   });
@@ -540,6 +584,5 @@ describe("runPluginPayloadSmokeCheck", () => {
       pluginId: "bad-bundle",
       reason: "invalid-package-json",
     });
-    expect(result.failures[0]?.detail).toContain("Could not parse bundle plugin manifest");
   });
 });

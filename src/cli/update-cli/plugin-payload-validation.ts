@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
@@ -90,30 +91,28 @@ export async function runPluginPayloadSmokeCheck(params: {
     }
 
     if (isBundlePluginRecord(record)) {
-      // Bundle plugins use `.claude-plugin/plugin.json` instead of
-      // `package.json`.  Verify the bundle manifest exists and is
-      // valid JSON so we catch real corruption without false-failing
-      // on the missing npm manifest.
-      const bundleManifestPath = path.join(installPath, ".claude-plugin", "plugin.json");
-      const bundleManifestStat = await safeStat(bundleManifestPath);
-      if (!bundleManifestStat?.isFile()) {
+      // Bundle plugins use manifest files (`.claude-plugin/plugin.json`,
+      // `.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`, or
+      // manifestless Claude markers) instead of `package.json`.  Use the
+      // shared bundle detector/loader to cover all supported formats.
+      const bundleFormat = detectBundleManifestFormat(installPath);
+      if (bundleFormat === null) {
         failures.push({
           pluginId,
           installPath,
           reason: "missing-package-json",
-          detail: `Bundle plugin manifest is missing: ${bundleManifestPath}`,
+          detail: `Bundle plugin manifest is missing under ${installPath}`,
         });
-      } else {
-        try {
-          JSON.parse(await fs.readFile(bundleManifestPath, "utf8"));
-        } catch (err) {
-          failures.push({
-            pluginId,
-            installPath,
-            reason: "invalid-package-json",
-            detail: `Could not parse bundle plugin manifest: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
+        continue;
+      }
+      const loaded = loadBundleManifest({ rootDir: installPath, bundleFormat });
+      if (!loaded.ok) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: "invalid-package-json",
+          detail: `Could not load bundle plugin manifest: ${loaded.error}`,
+        });
       }
       continue;
     }
