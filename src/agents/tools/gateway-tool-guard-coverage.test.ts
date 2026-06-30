@@ -373,6 +373,14 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("blocks gateway.bind exposure changes via config.patch", () => {
+    expectBlocked({ gateway: { bind: "loopback" } }, { gateway: { bind: "tailnet" } });
+  });
+
+  it("blocks gateway.bind exposure changes via config.apply", () => {
+    expectBlockedApply({ gateway: { bind: "loopback" } }, { gateway: { bind: "tailnet" } });
+  });
+
   it("blocks global tools policy rewrites via config.patch", () => {
     expectBlocked(
       { tools: { allow: ["read"] } },

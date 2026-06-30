@@ -6,10 +6,15 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const matchPluginCommandMock = vi.hoisted(() => vi.fn());
 const executePluginCommandMock = vi.hoisted(() => vi.fn());
+const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/commands.js", () => ({
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 function buildPluginParams(
@@ -45,6 +50,7 @@ function buildPluginParams(
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
   });
 
   it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
@@ -192,4 +198,37 @@ describe("handlePluginCommand", () => {
     });
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["/pair qr", "/ pair qr"])(
+    "does not let manifest-declared plugin slash commands fall through to the agent: %s",
+    async (commandBody) => {
+      matchPluginCommandMock.mockReturnValue(null);
+      getCurrentPluginMetadataSnapshotMock.mockReturnValue({
+        plugins: [
+          {
+            id: "device-pair",
+            commandAliases: [{ name: "pair", kind: "runtime-slash" }],
+          },
+        ],
+      });
+
+      const result = await handlePluginCommand(
+        buildPluginParams(commandBody, {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        true,
+      );
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text:
+            "Plugin command /pair is declared by the device-pair plugin, but no runtime handler is registered " +
+            "in this gateway process. Try again after plugins finish loading or restart the gateway.",
+        },
+      });
+      expect(executePluginCommandMock).not.toHaveBeenCalled();
+    },
+  );
 });
