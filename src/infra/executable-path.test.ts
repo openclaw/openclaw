@@ -216,3 +216,105 @@ describe("resolveExecutable", () => {
     });
   });
 });
+
+describe("caller env PATHEXT propagation", () => {
+  // These tests verify that isExecutableFile and its callers use the
+  // caller-provided env.PATHEXT (not just process.env.PATHEXT) on Windows.
+  // Regression for: isExecutableFile hardcoded undefined -> ignore caller env.
+
+  it("isExecutableFile respects caller env.PATHEXT on Windows", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const ps1File = path.join(base, "script.ps1");
+      await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
+
+      // On Windows with only .PS1 in caller env, isExecutableFile should accept it
+      withMockedPlatform("win32", () => {
+        expect(isExecutableFile(ps1File, { env: { PATHEXT: ".PS1" } })).toBe(true);
+      });
+    });
+  });
+
+  it("isExecutableFile fallback to process.env when no caller env is given", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const ps1File = path.join(base, "script.ps1");
+      await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
+
+      // Save current process.env.PATHEXT, set it to empty so no extension matches
+      const orig = process.env.PATHEXT;
+      process.env.PATHEXT = ".TXT";
+      try {
+        withMockedPlatform("win32", () => {
+          // .PS1 not in process.env.PATHEXT (which is .TXT)
+          expect(isExecutableFile(ps1File)).toBe(false);
+        });
+      } finally {
+        restoreEnvValue("PATHEXT", orig);
+      }
+    });
+  });
+
+  it("resolveExecutableFromPathEnv uses caller env PATHEXT on Windows", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+
+      const ps1Path = path.join(binDir, "tool.ps1");
+      await fs.writeFile(ps1Path, 'Write-Output "ok"\n', "utf8");
+      // On Windows the delimiter is ";", build pathEnv accordingly for mocked platform
+      const pathEnv = `${binDir};${process.env.PATH ?? ""}`;
+
+      withMockedPlatform("win32", () => {
+        // Caller env has .PS1, process.env.PATHEXT does not
+        const result = resolveExecutableFromPathEnv("tool", pathEnv, { PATHEXT: ".PS1" });
+        expect(result).toBe(ps1Path);
+      });
+    });
+  });
+
+  it("resolveExecutablePath with path separator passes env to PATHEXT check on Windows", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const ps1File = path.join(base, "script.ps1");
+      await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
+
+      withMockedPlatform("win32", () => {
+        // Passing an absolute path (has separator) with custom env
+        const result = resolveExecutablePath(ps1File, { env: { PATHEXT: ".PS1" } });
+        expect(result).toBe(ps1File);
+      });
+    });
+  });
+
+  it("resolveExecutablePath without path separator falls back to PATH env", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir, { recursive: true });
+      const ps1Path = path.join(binDir, "runner.ps1");
+      await fs.writeFile(ps1Path, 'Write-Output "ok"\n', "utf8");
+
+      withMockedPlatform("win32", () => {
+        const result = resolveExecutablePath("runner", {
+          env: { PATH: binDir, PATHEXT: ".PS1" },
+        });
+        expect(result).toBe(ps1Path);
+      });
+    });
+  });
+
+  it("resolveExecutablePath with path separator falls back to process.env when no caller env given", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const ps1File = path.join(base, "script.ps1");
+      await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
+
+      const orig = process.env.PATHEXT;
+      process.env.PATHEXT = ".TXT";
+      try {
+        withMockedPlatform("win32", () => {
+          // No caller env given, process.env.PATHEXT is .TXT -> .PS1 not matched -> undefined
+          expect(resolveExecutablePath(ps1File)).toBeUndefined();
+        });
+      } finally {
+        restoreEnvValue("PATHEXT", orig);
+      }
+    });
+  });
+});
