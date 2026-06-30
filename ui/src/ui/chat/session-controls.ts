@@ -633,7 +633,7 @@ function renderChatSessionPickerPopover(
               updateChatSessionPickerSearchQuery(state, (event.target as HTMLInputElement).value);
             }}
             @keydown=${(event: KeyboardEvent) => {
-              if (event.key === "Enter") {
+              if (event.key === "Enter" && !event.isComposing) {
                 event.preventDefault();
                 void applyChatSessionPickerSearch(state);
               }

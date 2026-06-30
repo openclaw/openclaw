@@ -93,7 +93,7 @@ export function renderAgentOverview(params: {
 
   const handleChipKeydown = (e: KeyboardEvent) => {
     const input = e.target as HTMLInputElement;
-    if (e.key === "Enter" || e.key === ",") {
+    if ((e.key === "Enter" || e.key === ",") && !e.isComposing) {
       e.preventDefault();
       const parsed = parseFallbackList(input.value);
       if (parsed.length > 0) {

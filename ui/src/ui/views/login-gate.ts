@@ -315,7 +315,7 @@ export function renderLoginGate(state: AppViewState) {
                 }}
                 placeholder="OPENCLAW_GATEWAY_TOKEN (${t("login.passwordPlaceholder")})"
                 @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
+                  if (e.key === "Enter" && !e.isComposing) {
                     state.connect();
                   }
                 }}
@@ -348,7 +348,7 @@ export function renderLoginGate(state: AppViewState) {
                 }}
                 placeholder="${t("login.passwordPlaceholder")}"
                 @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
+                  if (e.key === "Enter" && !e.isComposing) {
                     state.connect();
                   }
                 }}

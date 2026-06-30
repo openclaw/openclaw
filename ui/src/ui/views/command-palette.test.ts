@@ -229,4 +229,23 @@ describe("command palette", () => {
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
+
+  it("ignores Enter keydown during IME composition", async () => {
+    const onNavigate = vi.fn();
+    await renderPalette({ query: "overview", activeIndex: 0, onNavigate });
+    const input = expectPaletteInput();
+
+    const enterWhileComposing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    // Simulate isComposing — JSDOM doesn't set it from the constructor,
+    // so override via defineProperty before dispatch.
+    Object.defineProperty(enterWhileComposing, "isComposing", { value: true });
+    input.dispatchEvent(enterWhileComposing);
+
+    expect(enterWhileComposing.defaultPrevented).toBe(false);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
 });

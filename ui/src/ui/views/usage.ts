@@ -677,7 +677,7 @@ export function renderUsage(props: UsageProps) {
               @input=${(e: Event) =>
                 filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)}
               @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" && !e.isComposing) {
                   e.preventDefault();
                   filterActions.onApplyQuery();
                 }

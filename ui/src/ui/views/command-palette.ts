@@ -234,6 +234,10 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
     return;
   }
 
+  if (e.isComposing) {
+    return;
+  }
+
   const items = filteredItems(props.query);
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
