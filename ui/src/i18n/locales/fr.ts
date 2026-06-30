@@ -1344,7 +1344,7 @@ export const fr: TranslationMap = {
     settings: "Paramètres de chat",
     thinkingToggle: "Afficher/masquer la sortie de réflexion/travail de l’assistant",
     toolCallsToggle: "Afficher/masquer les appels d’outil et les résultats d’outil",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "Mode de défilement automatique",
     autoScrollAlways: "Toujours",

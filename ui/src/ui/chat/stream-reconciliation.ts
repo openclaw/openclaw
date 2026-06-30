@@ -347,18 +347,39 @@ function hasAssistantStreamPartReplacement(
   );
 }
 
+function hasVisibleAssistantMessageAfterUser(
+  messages: unknown[],
+  isHiddenAssistantMessage: AssistantMessageVisibility,
+): boolean {
+  const startIndex = lastUserMessageIndex(messages) + 1;
+  return messages.slice(startIndex).some((message) => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+    if (role !== "assistant" || isHiddenAssistantMessage(message)) {
+      return false;
+    }
+    return Boolean(extractText(message)?.trim());
+  });
+}
+
 export function historyReplacedVisibleStream(
   messages: unknown[],
   state: StreamReconciliationState,
   opts: Pick<
     MaterializeVisibleStreamOptions,
-    "includeCurrent" | "isHiddenAssistantMessage" | "isHiddenStreamText"
+    "includeCurrent" | "isHiddenAssistantMessage" | "isHiddenStreamText" | "persistCommentary"
   >,
 ): boolean {
   const parts = visibleAssistantStreamParts(state, opts);
+  const requiredParts =
+    opts.persistCommentary === true ? parts : parts.filter((part) => !part.itemId);
   return (
     parts.length > 0 &&
-    parts.every((part) =>
+    (requiredParts.length > 0 ||
+      hasVisibleAssistantMessageAfterUser(messages, opts.isHiddenAssistantMessage)) &&
+    requiredParts.every((part) =>
       hasAssistantStreamPartReplacement(messages, part, opts.isHiddenAssistantMessage),
     )
   );

@@ -1336,7 +1336,7 @@ export const it: TranslationMap = {
     settings: "Impostazioni chat",
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "Modalità di scorrimento automatico",
     autoScrollAlways: "Sempre",

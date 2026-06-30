@@ -1292,7 +1292,7 @@ export const zh_CN: TranslationMap = {
     settings: "聊天设置",
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "自动滚动模式",
     autoScrollAlways: "始终",

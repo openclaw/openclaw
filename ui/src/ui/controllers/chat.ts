@@ -774,6 +774,7 @@ async function loadChatHistoryUncached(
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
+        persistCommentary: chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };

@@ -1297,7 +1297,7 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
     autoScrollAlways: "เสมอ",
