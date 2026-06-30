@@ -197,6 +197,10 @@ Default cadence behavior:
 /dreaming help
 ```
 
+`/dreaming on` and `/dreaming off` change gateway-wide configuration. Channel
+callers must be owners, and Gateway clients must have `operator.admin`.
+`/dreaming status` and `/dreaming help` remain read-only.
+
 ## CLI workflow
 
 <Tabs>

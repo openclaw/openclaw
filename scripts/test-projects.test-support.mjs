@@ -761,7 +761,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+    "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
     [
       "src/agents/agent-bundle-mcp-runtime.test.ts",
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
@@ -796,7 +796,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/crestodian-first-run-docker-client.ts",
+    "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
       "src/cli/run-main.test.ts",
@@ -895,8 +895,19 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/mcp-channels-docker-client.ts",
+    "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+    [
+      "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+    ],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
+    ["test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts"],
   ],
   ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
@@ -925,7 +936,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
     ["test/scripts/docker-e2e-seeds.test.ts", "test/scripts/mcp-code-mode-gateway-client.test.ts"],
   ],
-  ["scripts/e2e/mcp-client-temp-state.ts", ["test/scripts/mcp-channels-harness.test.ts"]],
   [
     "scripts/e2e/cron-cli-docker.sh",
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-observability.test.ts"],
@@ -1819,7 +1829,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "scripts/e2e/openai-image-auth-docker-client.ts",
+    "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     [
       "test/scripts/openai-image-auth-docker-client.test.ts",
       "extensions/openai/image-generation-provider.test.ts",
@@ -1914,7 +1924,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
   ["scripts/dev/test-device-pair-telegram.ts", ["test/scripts/test-device-pair-telegram.test.ts"]],
-  ["scripts/test-live-media.ts", ["test/scripts/test-live-media.test.ts"]],
+  [
+    "test/e2e/qa-lab/media/hosted-media-provider-live.ts",
+    ["test/e2e/qa-lab/media/hosted-media-provider-live.test.ts"],
+  ],
   ["scripts/profile-extension-memory.mjs", ["test/scripts/profile-extension-memory.test.ts"]],
   [
     "scripts/openclaw-performance-source-summary.mjs",

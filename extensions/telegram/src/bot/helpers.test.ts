@@ -184,9 +184,9 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "dm" as const }, expected: undefined },
     { input: { id: -1, scope: "dm" as const }, expected: undefined },
     { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    // id=0 should be included for forum and none scopes (not falsy)
+    // id=0 should be included for forum scope (not falsy).
     { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
+    { input: { id: 42, scope: "none" as const }, expected: undefined },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
   });

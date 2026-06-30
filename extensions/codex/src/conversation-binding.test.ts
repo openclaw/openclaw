@@ -296,6 +296,33 @@ describe("codex conversation binding", () => {
     expect(bindingAfterStart.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
   });
 
+  it("starts a new bind thread when no model override is provided", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        return {
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+          model: "gpt-5.5",
+        };
+      }),
+    });
+
+    await startCodexConversationThread({
+      sessionFile,
+      workspaceDir: tempDir,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params).not.toHaveProperty("model");
+    expect(requests[0]?.params).not.toHaveProperty("modelProvider");
+    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
+      '"model": "gpt-5.5"',
+    );
+  });
+
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({

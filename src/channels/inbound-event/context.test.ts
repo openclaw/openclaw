@@ -50,6 +50,7 @@ describe("buildChannelInboundEventContext", () => {
         name: "User One",
         username: "userone",
         tag: "User#0001",
+        isBot: true,
         roles: ["admin"],
       },
       conversation: {
@@ -162,6 +163,7 @@ describe("buildChannelInboundEventContext", () => {
       SenderId: "u1",
       SenderUsername: "userone",
       SenderTag: "User#0001",
+      SenderIsBot: true,
       MemberRoleIds: ["admin"],
       Timestamp: 123,
       Provider: "test-provider",

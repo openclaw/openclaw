@@ -2100,6 +2100,68 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects Computer Use installation from non-owner non-admin callers", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext(
+      "computer-use install --source attacker/marketplace --plugin untrusted",
+      undefined,
+      { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+    );
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Only an owner or operator.admin");
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it("keeps Computer Use status overrides read-only for non-owner callers", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext(
+      "computer-use status --source existing/source --marketplace-path /existing/marketplace --marketplace existing --plugin existing-plugin --mcp-server existing-server",
+      undefined,
+      {
+        senderIsOwner: false,
+        gatewayClientScopes: ["operator.write"],
+      },
+    );
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Computer Use: ready");
+    expect(readCodexComputerUseStatus).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      forceEnable: true,
+      overrides: {
+        marketplaceSource: "existing/source",
+        marketplacePath: "/existing/marketplace",
+        marketplaceName: "existing",
+        pluginName: "existing-plugin",
+        mcpServerName: "existing-server",
+      },
+    });
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it("allows operator.admin gateway callers to install Codex Computer Use", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+    const ctx = createContext("computer-use install", undefined, {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+    });
+
+    const result = await handleCodexCommand(ctx, {
+      deps: createDeps({ installCodexComputerUse }),
+    });
+
+    expectResultTextContains(result, "Computer Use: ready");
+    expect(installCodexComputerUse).toHaveBeenCalledOnce();
+  });
+
   it("shows help when Computer Use option values are missing", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 

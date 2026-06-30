@@ -2,8 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
+  createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
+  MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
   mergeCronRunDiagnostics,
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
@@ -78,6 +80,42 @@ describe("cron run diagnostics", () => {
       "delivery failed",
     ]);
     expect(summarizeCronRunDiagnostics(merged)).toBe("delivery failed");
+  });
+
+  it("warns when cron toolsAllow requests web_search without a provider", () => {
+    const diagnostics = createCronRunDiagnosticsFromMissingWebSearchProvider({
+      toolsAllow: ["web_*"],
+      hasWebSearchProvider: false,
+      nowMs: () => 900,
+    });
+
+    expect(diagnostics).toEqual({
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: 900,
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: "web_search",
+        },
+      ],
+    });
+  });
+
+  it("does not warn for wildcard toolsAllow or configured web_search providers", () => {
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["*"],
+        hasWebSearchProvider: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["web_search"],
+        hasWebSearchProvider: true,
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps a later delivery error summary ahead of an earlier warning", () => {

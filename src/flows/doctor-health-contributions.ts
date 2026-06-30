@@ -1634,6 +1634,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-health",
       label: "Gateway health",
+      healthCheckIds: ["core/doctor/gateway-health"],
       run: runGatewayHealthChecks,
     }),
     createDoctorHealthContribution({
@@ -1654,6 +1655,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-daemon",
       label: "Gateway daemon",
+      healthCheckIds: ["core/doctor/gateway-daemon"],
       run: runGatewayDaemonHealth,
     }),
     createDoctorHealthContribution({

@@ -2284,6 +2284,23 @@ describe("diagnostics-otel service", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 45,
+      promptStats: {
+        inputMessagesCount: 2,
+        inputMessagesChars: 3456,
+        systemPromptChars: 789,
+        toolDefinitionsCount: 4,
+        toolDefinitionsChars: 2345,
+        totalChars: 6590,
+      },
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 5,
+        reasoningTokens: 8,
+        promptTokens: 135,
+        total: 155,
+      },
       trace: {
         traceId: TRACE_ID,
         spanId: CHILD_SPAN_ID,
@@ -2418,6 +2435,21 @@ describe("diagnostics-otel service", () => {
     expect(modelSpanAttributes["openclaw.model_call.request_bytes"]).toBe(1234);
     expect(modelSpanAttributes["openclaw.model_call.response_bytes"]).toBe(567);
     expect(modelSpanAttributes["openclaw.model_call.time_to_first_byte_ms"]).toBe(45);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_count"]).toBe(2);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_chars"]).toBe(3456);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.system_prompt_chars"]).toBe(789);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_count"]).toBe(4);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_chars"]).toBe(2345);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.total_chars"]).toBe(6590);
+    expect(modelSpanAttributes["openclaw.model_call.usage.input_tokens"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(20);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_read_input_tokens"]).toBe(30);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_creation_input_tokens"]).toBe(5);
+    expect(modelSpanAttributes["openclaw.model_call.usage.reasoning_output_tokens"]).toBe(8);
+    expect(modelSpanAttributes["openclaw.model_call.usage.prompt_tokens"]).toBe(135);
+    expect(modelSpanAttributes["openclaw.model_call.usage.total_tokens"]).toBe(155);
+    expect(modelSpanAttributes["gen_ai.usage.input_tokens"]).toBe(135);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(20);
     const runDuration = lastHistogramRecord("openclaw.run.duration_ms");
     expect(runDuration?.[0]).toBe(100);
     expect(Object.hasOwn(runDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);
