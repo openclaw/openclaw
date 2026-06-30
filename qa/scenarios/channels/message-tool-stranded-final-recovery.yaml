@@ -30,6 +30,7 @@ scenario:
     kind: flow
     summary: Send a direct message_tool_only turn whose model reply omits the message tool, then verify the bounded retry delivers the original reply via message(action=send) without looping.
     config:
+      requiredProviderMode: mock-openai
       conversationId: qa-stranded-recovery-dm
       promptSnippet: qa stranded final recovery check
       prompt: "qa stranded final recovery check. Answer me directly with a thorough multi-sentence reply. exact marker: `QA-STRANDED-85714`"
@@ -40,6 +41,9 @@ flow:
   steps:
     - name: strands a substantive private final then recovers via a single message(action=send) retry
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
         - call: waitForGatewayHealthy
           args:
             - ref: env
