@@ -9,6 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isReservedCommandName } from "../../plugins/command-registration.js";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
 import {
   createPluginActivationSource,
@@ -98,6 +99,10 @@ function resolveManifestRuntimeSlashCommandReservation(params: {
         continue;
       }
       const aliasName = normalizeLowercaseStringOrEmpty(alias.name);
+      // Manifest aliases do not prove reserved-command ownership; only runtime registration does.
+      if (aliasName && isReservedCommandName(aliasName)) {
+        continue;
+      }
       if (aliasName && candidates.has(aliasName)) {
         return {
           commandName: aliasName,
