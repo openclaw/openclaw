@@ -49,11 +49,10 @@ import {
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
-  hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
   resolveResponsesServerCompactionThreshold,
-  shouldRunMemoryFlush,
+  shouldRunPreCompactionMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -1247,20 +1246,16 @@ export async function runMemoryFlushIfNeeded(params: {
       `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
   );
 
-  const shouldFlushMemory =
-    (memoryFlushWritable &&
-      !params.isHeartbeat &&
-      !isCli &&
-      shouldRunMemoryFlush({
-        entry,
-        tokenCount: tokenCountForFlush,
-        contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-        softThresholdTokens: memoryFlushPlan.softThresholdTokens,
-      })) ||
-    (shouldForceFlushByTranscriptSize &&
-      entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry));
+  const shouldFlushMemory = shouldRunPreCompactionMemoryFlush({
+    entry,
+    tokenCount: tokenCountForFlush,
+    contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+    memoryFlushWritable: memoryFlushWritable && !params.isHeartbeat && !isCli,
+    memoryFlushEnabled: true,
+    forceFlushByTranscriptSize: shouldForceFlushByTranscriptSize && entry != null,
+  });
 
   if (!shouldFlushMemory) {
     return entry ?? params.sessionEntry;

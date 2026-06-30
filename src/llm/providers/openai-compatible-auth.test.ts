@@ -1,5 +1,6 @@
 // OpenAI-compatible auth tests cover API key and base URL normalization.
 import { afterEach, describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
@@ -51,6 +52,91 @@ describe("OpenAI-compatible provider credentials", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("No API key for provider: custom-openai-compatible");
+  });
+
+  it("can place Responses system prompts in top-level instructions for compatible providers", async () => {
+    let capturedPayload:
+      | { instructions?: string; input?: Array<{ role?: string; type?: string }> }
+      | undefined;
+    const model = {
+      ...createBaseModel("openai-responses"),
+      reasoning: true,
+      compat: { systemPromptMode: "instructions" },
+    } satisfies Model<"openai-responses">;
+    const stream = streamOpenAIResponses(
+      model,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload: (payload) => {
+          capturedPayload = payload as typeof capturedPayload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("stop after payload");
+    expect(capturedPayload?.instructions).toBe("Stable\nDynamic");
+    expect(capturedPayload?.input?.some((item) => item.role === "developer")).toBe(false);
+    expect(capturedPayload?.input?.some((item) => item.role === "system")).toBe(false);
+    expect(capturedPayload?.input?.find((item) => item.role === "user")).toMatchObject({
+      type: "message",
+      role: "user",
+    });
+  });
+
+  it("can place Responses system prompts in a first user message for providers that reject system fields", async () => {
+    let capturedPayload:
+      | {
+          instructions?: string;
+          input?: Array<{ role?: string; type?: string; content?: unknown }>;
+        }
+      | undefined;
+    const model = {
+      ...createBaseModel("openai-responses"),
+      reasoning: true,
+      compat: { systemPromptMode: "user" },
+    } satisfies Model<"openai-responses">;
+    const stream = streamOpenAIResponses(
+      model,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload: (payload) => {
+          capturedPayload = payload as typeof capturedPayload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("stop after payload");
+    expect(capturedPayload?.instructions).toBeUndefined();
+    expect(capturedPayload?.input?.some((item) => item.role === "developer")).toBe(false);
+    expect(capturedPayload?.input?.some((item) => item.role === "system")).toBe(false);
+    expect(capturedPayload?.input?.[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "System instructions for this run:\n\nStable\nDynamic" },
+      ],
+    });
+    expect(capturedPayload?.input?.[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hi" }],
+    });
   });
 
   it("does not replay Responses item ids for direct store-disabled requests", async () => {

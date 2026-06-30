@@ -45,6 +45,7 @@ import {
   mockedResolveModelAsync,
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
+  mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   mockedWaitForDeferredTurnMaintenanceForSession,
@@ -255,6 +256,36 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+  });
+
+  it("runs embedded pre-attempt memory flush before the backend attempt", async () => {
+    mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded.mockResolvedValueOnce({ attempted: true });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-pre-attempt-memory-flush-order",
+    });
+
+    expect(mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedRunEmbeddedAttempt.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+    const flushParams = mockCallArg(mockedRunEmbeddedPreAttemptMemoryFlushIfNeeded) as {
+      sessionId?: string;
+      sessionKey?: string;
+      provider?: string;
+      model?: string;
+      contextWindowTokens?: number;
+      runParams?: RunEmbeddedAgentParams;
+    };
+    expect(flushParams.sessionId).toBe("test-session");
+    expect(flushParams.sessionKey).toBe("test-key");
+    expect(flushParams.provider).toBe("anthropic");
+    expect(flushParams.model).toBe("test-model");
+    expect(flushParams.contextWindowTokens).toBe(200000);
+    expect(flushParams.runParams?.runId).toBe("run-pre-attempt-memory-flush-order");
   });
 
   it("passes precomputed before_agent_start result into the attempt", async () => {

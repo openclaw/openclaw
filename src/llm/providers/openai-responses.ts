@@ -1,6 +1,10 @@
 // OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import OpenAI from "openai";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type {
+  ResponseCreateParamsStreaming,
+  ResponseInputItem,
+} from "openai/resources/responses/responses.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
   CacheRetention,
@@ -13,6 +17,7 @@ import type {
   Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -32,6 +37,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+    systemPromptMode: model.compat?.systemPromptMode ?? "message",
   };
 }
 
@@ -180,15 +186,38 @@ function buildParams(
   context: Context,
   options?: OpenAIResponsesOptions,
 ) {
+  const compat = getCompat(model);
+  const systemPromptAsInstructions = compat.systemPromptMode === "instructions";
+  const systemPromptAsUserMessage = compat.systemPromptMode === "user";
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !systemPromptAsInstructions && !systemPromptAsUserMessage,
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
   });
+  const systemPrompt =
+    (systemPromptAsInstructions || systemPromptAsUserMessage) && context.systemPrompt
+      ? sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt))
+      : undefined;
+  const input =
+    systemPromptAsUserMessage && systemPrompt
+      ? [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `System instructions for this run:\n\n${systemPrompt}`,
+              },
+            ],
+          } satisfies ResponseInputItem,
+          ...(messages as ResponseInputItem[]),
+        ]
+      : messages;
 
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const compat = getCompat(model);
   const params: ResponseCreateParamsStreaming = {
     model: model.id,
-    input: messages,
+    input,
     stream: true,
     prompt_cache_key:
       cacheRetention === "none"
@@ -197,6 +226,10 @@ function buildParams(
     prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
     store: false,
   };
+
+  if (systemPromptAsInstructions && systemPrompt) {
+    params.instructions = systemPrompt;
+  }
 
   if (options?.maxTokens) {
     params.max_output_tokens = options?.maxTokens;
