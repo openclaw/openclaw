@@ -51,6 +51,40 @@ describe("slugifyWikiSegment", () => {
 });
 
 describe("toWikiPageSummary", () => {
+  it("ignores wikilink-looking syntax inside fenced and inline code", () => {
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/entities/code-notes.md",
+      relativePath: "entities/code-notes.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.code-notes",
+          title: "Code Notes",
+        },
+        body: [
+          "# Code Notes",
+          "",
+          "Real links still count: [[real-target]] and [Guide](../sources/guide.md).",
+          "",
+          "Inline code does not: `[[inline-fake]]` or `[inline markdown](missing.md)`.",
+          "",
+          "```bash",
+          'if [[ "$name" == "Alice" ]]; then',
+          "  echo [[fenced-fake]]",
+          "fi",
+          "```",
+          "",
+          "```scala",
+          "val maybeUser: Future[Option[User]] = loadUser()",
+          "```",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(summary?.linkTargets).toEqual(["real-target", "sources/guide.md"]);
+  });
+
   it("marks raw and generated source body metadata", () => {
     const rawSource = toWikiPageSummary({
       absolutePath: "/tmp/wiki/sources/raw-alpha.md",

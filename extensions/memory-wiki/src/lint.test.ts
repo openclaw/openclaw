@@ -67,6 +67,65 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
+  it("ignores wikilink-looking syntax inside markdown code when linting links", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-code-wikilinks-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: [
+          "# Alpha",
+          "",
+          "Real link: [[sources/alpha]].",
+          "",
+          "Inline code is not a link: `[[inline-fake]]`.",
+          "",
+          "```bash",
+          'if [[ "$name" == "Alice" ]]; then',
+          "  echo [[fenced-fake]]",
+          "fi",
+          "```",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(
+      result.issues.filter(
+        (issue) => issue.code === "broken-wikilink" && issue.path === "entities/alpha.md",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-raw-sources-",

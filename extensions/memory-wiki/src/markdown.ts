@@ -116,6 +116,7 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
+const FENCED_CODE_START_PATTERN = /^(?: {0,3})(`{3,}|~{3,})/;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -386,8 +387,64 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
+function maskInlineCodeSpans(markdown: string): string {
+  let masked = "";
+  let index = 0;
+  while (index < markdown.length) {
+    if (markdown[index] !== "`") {
+      masked += markdown[index];
+      index += 1;
+      continue;
+    }
+
+    const delimiterStart = index;
+    while (index < markdown.length && markdown[index] === "`") {
+      index += 1;
+    }
+    const delimiter = markdown.slice(delimiterStart, index);
+    const closingIndex = markdown.indexOf(delimiter, index);
+    if (closingIndex === -1) {
+      masked += delimiter;
+      continue;
+    }
+
+    masked += " ";
+    index = closingIndex + delimiter.length;
+  }
+  return masked;
+}
+
+function maskMarkdownCode(markdown: string): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const maskedLines: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (const line of lines) {
+    const fenceMatch = FENCED_CODE_START_PATTERN.exec(line);
+    const fenceDelimiter = fenceMatch?.[1];
+    if (fence) {
+      if (fenceDelimiter?.startsWith(fence.marker) && fenceDelimiter.length >= fence.length) {
+        fence = null;
+      }
+      maskedLines.push("");
+      continue;
+    }
+    if (fenceDelimiter) {
+      fence = {
+        marker: fenceDelimiter[0] as "`" | "~",
+        length: fenceDelimiter.length,
+      };
+      maskedLines.push("");
+      continue;
+    }
+    maskedLines.push(line);
+  }
+
+  return maskInlineCodeSpans(maskedLines.join("\n"));
+}
+
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = maskMarkdownCode(markdown).replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
