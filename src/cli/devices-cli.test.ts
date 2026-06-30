@@ -1382,6 +1382,58 @@ describe("devices cli list", () => {
     expect(output).toContain("Paired");
   });
 
+  it("shows pending node approvals with approve command", async () => {
+    mockGatewayPairingList();
+    callGateway.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "node-uuid-123",
+          displayName: "Colin's S25",
+          approvalState: "pending-reapproval",
+          pendingRequestId: "req-uuid-456",
+          remoteIp: "192.168.0.202",
+        },
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = readRuntimeOutput();
+    expect(output).toContain("Pending node approvals");
+    expect(output).toContain("Reapproval pending for");
+    expect(output).toContain("Colin's S25");
+    expect(output).toContain("openclaw nodes approve req-uuid-456");
+  });
+
+  it("skips node approval hint when no nodes have pending approvals", async () => {
+    mockGatewayPairingList();
+    callGateway.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "node-uuid-123",
+          displayName: "Colin's S25",
+          approvalState: "approved",
+        },
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = readRuntimeOutput();
+    expect(output).not.toContain("Pending node approvals");
+  });
+
+  it("silently skips node.list errors", async () => {
+    mockGatewayPairingList();
+    callGateway.mockRejectedValueOnce(new Error("unknown method"));
+
+    await runDevicesCommand(["list"]);
+
+    const output = readRuntimeOutput();
+    expect(output).not.toContain("Pending node approvals");
+    expect(output).toContain("Paired");
+  });
+
   it("emits JSON when the gateway transport fails in JSON mode", async () => {
     const error = new Error("gateway closed (1006)");
     const payload = {

@@ -38,6 +38,7 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
+import { parseNodeList } from "../shared/node-list-parse.js";
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
@@ -762,6 +763,29 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
         })),
       }).trimEnd(),
     );
+  }
+  if (!opts.json) {
+    try {
+      const nodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+      const pendingNodes = nodes.filter(
+        (n) => n.approvalState === "pending-approval" || n.approvalState === "pending-reapproval",
+      );
+      if (pendingNodes.length > 0) {
+        defaultRuntime.log(
+          `${theme.heading("Pending node approvals")} ${theme.muted(`(${pendingNodes.length})`)}`,
+        );
+        for (const node of pendingNodes) {
+          const label = sanitizeForLog(node.displayName?.trim() || node.nodeId);
+          const action = node.approvalState === "pending-reapproval" ? "Reapproval" : "Approval";
+          const cmd = node.pendingRequestId
+            ? `openclaw nodes approve ${node.pendingRequestId}`
+            : "openclaw nodes pending";
+          defaultRuntime.log(`  ${action} pending for "${label}". Run ${formatCliCommand(cmd)}`);
+        }
+      }
+    } catch {
+      // node.list may not be available on all gateway versions; silently skip.
+    }
   }
   if (!list.pending?.length && !list.paired?.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
