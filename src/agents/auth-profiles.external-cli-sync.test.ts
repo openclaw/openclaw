@@ -546,6 +546,7 @@ describe("external cli oauth resolution", () => {
 
     const profiles = resolveExternalCliAuthProfiles(makeStore(), {
       providerIds: ["claude-cli"],
+      allowKeychainPrompt: false,
     });
 
     expect(profiles).toStrictEqual([]);

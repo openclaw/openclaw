@@ -460,13 +460,18 @@ function readClaudeCliApiKeyHelperCredential(homeDir?: string): ClaudeCliCredent
   };
 }
 
-/** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
+/** Reads Claude CLI credentials in Claude Code's credential precedence order. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   homeDir?: string;
   execSync?: ExecSyncFn;
 }): ClaudeCliCredential | null {
+  const helperCredential = readClaudeCliApiKeyHelperCredential(options?.homeDir);
+  if (helperCredential) {
+    return helperCredential;
+  }
+
   const platform = options?.platform ?? process.platform;
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
@@ -481,14 +486,11 @@ export function readClaudeCliCredentials(options?: {
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") {
-    return readClaudeCliApiKeyHelperCredential(options?.homeDir);
+    return null;
   }
 
   const data = raw as Record<string, unknown>;
-  return (
-    parseClaudeCliOauthCredential(data.claudeAiOauth) ??
-    readClaudeCliApiKeyHelperCredential(options?.homeDir)
-  );
+  return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
 /** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
