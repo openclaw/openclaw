@@ -863,6 +863,21 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["target=node", { target: "node" }],
+    ["an explicit node pin", { node: "node-1" }],
+    ["automatic node routing", {}],
+  ])("blocks %s when host control is disabled", async (_label, route) => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool({ allowHostControl: false });
+
+    await expect(tool.execute?.("call-1", { action: "status", ...route })).rejects.toThrow(
+      /browser control is disabled by sandbox policy/i,
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
   it("fails node proxy calls cleanly when payloadJSON is malformed", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({
@@ -1239,7 +1254,7 @@ describe("browser tool snapshot maxChars", () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
-    const tool = createBrowserTool();
+    const tool = createBrowserTool({ allowHostControl: true });
     await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
