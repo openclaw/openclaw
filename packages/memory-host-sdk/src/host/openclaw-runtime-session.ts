@@ -8,6 +8,8 @@ export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
+  resolveBareUserMessageText,
+  resolveTrustedInboundBareBody,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,

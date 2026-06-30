@@ -4,6 +4,8 @@ import type { TemplateContext } from "../templating.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
+  reconcileTrustedInboundBareBody,
+  resolveBareUserMessageText,
   extractInboundSenderLabel,
   stripInboundMetadata,
   stripLeadingInboundMetadata,
@@ -281,5 +283,83 @@ describe("builder compatibility", () => {
     const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+});
+
+describe("trusted bare body helpers", () => {
+  it("prefers trusted bare user text over sentinel stripping", () => {
+    const trustedBareBody = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+    const message = {
+      role: "user",
+      content: `${CONV_BLOCK}\n\nVisible runtime decoration`,
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: trustedBareBody,
+        },
+      },
+    };
+
+    expect(resolveBareUserMessageText(message, message.content)).toBe(trustedBareBody);
+  });
+
+  it("trusts sentinel-looking text only when the caller opts in", () => {
+    const sentinelLookingText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+    const message = {
+      role: "user",
+      content: sentinelLookingText,
+    };
+
+    expect(reconcileTrustedInboundBareBody(message)).toEqual(message);
+    expect(
+      reconcileTrustedInboundBareBody(message, {
+        allowTrustFromSentinelText: true,
+      }),
+    ).toMatchObject({
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: sentinelLookingText,
+        },
+      },
+    });
+  });
+
+  it("clears a stale trusted bare body when sentinel-looking content changes", () => {
+    const message = {
+      role: "user",
+      content: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"message_id":"msg-2"}',
+        "```",
+        "rewritten sentinel-looking text",
+      ].join("\n"),
+      __openclaw: {
+        inboundDecoration: {
+          bareBody: [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"message_id":"msg-1"}',
+            "```",
+            "Literal quoted metadata from the user",
+          ].join("\n"),
+        },
+      },
+    };
+
+    expect(reconcileTrustedInboundBareBody(message)).not.toHaveProperty(
+      "__openclaw.inboundDecoration.bareBody",
+    );
   });
 });

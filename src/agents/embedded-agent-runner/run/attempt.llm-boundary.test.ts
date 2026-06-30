@@ -420,6 +420,44 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(currentContent).toContain("quoted status body");
   });
 
+  it("prefers the trusted bare body for historical user replay", () => {
+    const trustedBareBody = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-1"}',
+      "```",
+      "Literal quoted metadata from the user",
+    ].join("\n");
+    const input = [
+      {
+        role: "user",
+        content: "decorated runtime text that should not be replayed",
+        timestamp: 1,
+        __openclaw: {
+          inboundDecoration: {
+            bareBody: trustedBareBody,
+          },
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Current ask" }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: unknown }>;
+
+    expect(output[0]?.content).toBe(trustedBareBody);
+  });
+
   it("strips tool result details before provider conversion", () => {
     const input = [
       {

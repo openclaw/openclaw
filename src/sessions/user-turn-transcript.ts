@@ -2,6 +2,7 @@
 import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { reconcileTrustedInboundBareBody } from "../auto-reply/reply/strip-inbound-meta.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
@@ -245,7 +246,9 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
   } as PersistedUserTurnMessage;
-  return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
+  return attachTrustedBareUserTurnMessage(
+    applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage,
+  );
 }
 
 function resolvePersistedUserTurnMessage(
@@ -268,6 +271,14 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
     ?.beforeAgentRunBlocked;
   return marker !== undefined;
+}
+
+function attachTrustedBareUserTurnMessage(
+  message: PersistedUserTurnMessage,
+): PersistedUserTurnMessage {
+  return reconcileTrustedInboundBareBody(message, {
+    allowTrustFromSentinelText: true,
+  });
 }
 
 // Runtime messages may lack transcript metadata because channel adapters prepare
@@ -317,12 +328,13 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  return idempotencyKey
+  const finalUserMessage = idempotencyKey
     ? ({
         ...(nextUserMessage as unknown as Record<string, unknown>),
         idempotencyKey,
       } as unknown as PersistedUserTurnMessage)
     : nextUserMessage;
+  return attachTrustedBareUserTurnMessage(finalUserMessage);
 }
 
 export async function appendUserTurnTranscriptMessage(
