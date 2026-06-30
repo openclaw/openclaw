@@ -3711,9 +3711,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
-    const delivered = expectDeliverRepliesParams().replies as Array<ReplyPayload>;
-    expect(delivered[0]?.isReasoning).toBeUndefined();
+    const delivered = expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
+    expect(delivered).not.toHaveProperty("isReasoning");
   });
 
   it("does not persist typed reasoning-only finals in progress stream mode", async () => {
