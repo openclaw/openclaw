@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
   OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -42,6 +43,32 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
         ...options,
         env: options.env ?? env,
       });
+    },
+  };
+}
+
+function createUnpersistedConversationContext(): PluginDoctorStateMigrationContext {
+  return {
+    openPluginStateKeyedStore<T>(): PluginStateKeyedStore<T> {
+      return {
+        async register() {},
+        async registerIfAbsent() {
+          return false;
+        },
+        async lookup() {
+          return undefined;
+        },
+        async consume() {
+          return undefined;
+        },
+        async delete() {
+          return false;
+        },
+        async entries() {
+          return [];
+        },
+        async clear() {},
+      };
     },
   };
 }
@@ -133,6 +160,88 @@ describe("msteams doctor state migration", () => {
       conversation: { id: "19:conv@thread.tacv2" },
       user: { id: "user-1" },
     });
+  });
+
+  it("preserves legacy conversations when retained rows are not visible in plugin state", async () => {
+    const filePath = path.join(stateDir, "msteams-conversations.json");
+    const ref: StoredConversationReference = {
+      conversation: { id: "19:lost@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "user-lost" },
+    };
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          "19:lost@thread.tacv2": ref,
+        },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+
+    const migration = migrationById("msteams-conversations-json-to-plugin-state");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createUnpersistedConversationContext(),
+    });
+
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 0 Microsoft Teams conversation entries"),
+    ]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Left Microsoft Teams conversation legacy source in place because 1 retained entry was not visible in plugin state after migration",
+      ),
+    ]);
+    await expect(fs.access(filePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
+  });
+
+  it("archives legacy conversations when zero imports are already present in plugin state", async () => {
+    const filePath = path.join(stateDir, "msteams-conversations.json");
+    const ref: StoredConversationReference = {
+      conversation: { id: "19:existing@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "user-existing" },
+    };
+    await fs.writeFile(
+      filePath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          "19:existing@thread.tacv2": ref,
+        },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+
+    const migration = migrationById("msteams-conversations-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const store = context.openPluginStateKeyedStore<StoredConversationReference>({
+      namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
+      maxEntries: 2000,
+    });
+    await store.register(buildMSTeamsConversationStateKey("19:existing@thread.tacv2"), ref);
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 0 Microsoft Teams conversation entries"),
+      expect.stringContaining("Archived Microsoft Teams conversation legacy source"),
+    ]);
+    await expect(fs.access(filePath)).rejects.toThrow();
+    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
 
   it("imports legacy polls and vote buckets into plugin state", async () => {

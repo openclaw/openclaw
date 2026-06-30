@@ -300,25 +300,37 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
         maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
       });
+      let attempted = 0;
       let imported = 0;
-      for (const [rawConversationId, reference] of selectRetainedMSTeamsConversations(
-        state.conversations,
-      )) {
+      let present = 0;
+      const retainedConversations = selectRetainedMSTeamsConversations(state.conversations);
+      for (const [rawConversationId, reference] of retainedConversations) {
         const conversationId = normalizeStoredConversationId(rawConversationId);
         if (!conversationId) {
           continue;
         }
+        attempted++;
+        const key = buildMSTeamsConversationStateKey(conversationId);
         const didImport = await store.registerIfAbsent(
-          buildMSTeamsConversationStateKey(conversationId),
+          key,
           prepareMSTeamsConversationReferenceForStorage(conversationId, reference),
         );
         if (didImport) {
           imported++;
         }
+        if (await store.lookup(key)) {
+          present++;
+        }
       }
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
+      if (attempted > 0 && imported === 0 && present === 0) {
+        warnings.push(
+          `Left ${MSTEAMS_PLUGIN_ID} conversation legacy source in place because ${attempted} retained ${attempted === 1 ? "entry was" : "entries were"} not visible in plugin state after migration`,
+        );
+        return { changes, warnings };
+      }
       await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} conversation`,
