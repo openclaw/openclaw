@@ -87,7 +87,11 @@ function parseSafeContentLength(value: string | null): number | null {
   if (!value) {
     return null;
   }
-  const size = Number(value);
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const size = Number(trimmed);
   return Number.isSafeInteger(size) && size >= 0 ? size : null;
 }
 
