@@ -1335,7 +1335,7 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "Automatisch scrollen",
     autoScrollAlways: "Altijd",

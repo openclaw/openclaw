@@ -164,6 +164,45 @@ describe("stream reconciliation", () => {
     ).toEqual(["latest ask", "before tool"]);
   });
 
+  it("does not require transient keyed commentary to be present in history", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [{ text: "before tool", ts: 2, itemId: "preamble-1" }],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    const messages = [
+      { role: "user", content: "latest ask", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "final answer" }], timestamp: 3 },
+    ];
+
+    expect(
+      historyReplacedVisibleStream(messages, state, {
+        ...visibleStreamOptions,
+        persistCommentary: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps transient keyed commentary when history has no terminal assistant message", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [{ text: "before tool", ts: 2, itemId: "preamble-1" }],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    const messages = [{ role: "user", content: "latest ask", timestamp: 1 }];
+
+    expect(
+      historyReplacedVisibleStream(messages, state, {
+        ...visibleStreamOptions,
+        persistCommentary: false,
+      }),
+    ).toBe(false);
+  });
+
   it("replaces materialized tool stream segments with matching terminal messages", () => {
     const state = {
       chatStream: null,

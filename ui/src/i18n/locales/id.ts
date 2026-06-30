@@ -1329,7 +1329,7 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
-    commentaryToggle: "Keep commentary after the final answer (off: clears with the final message)",
+    commentaryToggle: "Keep commentary after the final answer",
     commentaryLabel: "Commentary",
     autoScrollMode: "Mode gulir otomatis",
     autoScrollAlways: "Selalu",
