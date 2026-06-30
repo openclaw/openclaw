@@ -18,8 +18,7 @@ import {
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,14 +31,6 @@ function generateBootSessionId(): string {
   const suffix = crypto.randomUUID().slice(0, 8);
   return `boot-${ts}-${suffix}`;
 }
-
-type SessionMappingSnapshot = {
-  storePath: string;
-  sessionKey: string;
-  canRestore: boolean;
-  hadEntry: boolean;
-  entry?: SessionEntry;
-};
 
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
@@ -101,68 +92,6 @@ async function loadBootFile(
   }
 }
 
-function snapshotSessionMapping(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): SessionMappingSnapshot {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  try {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[params.sessionKey];
-    if (!entry) {
-      return {
-        storePath,
-        sessionKey: params.sessionKey,
-        canRestore: true,
-        hadEntry: false,
-      };
-    }
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: true,
-      hadEntry: true,
-      entry: structuredClone(entry),
-    };
-  } catch (err) {
-    log.debug("boot: could not snapshot session mapping", {
-      sessionKey: params.sessionKey,
-      error: String(err),
-    });
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: false,
-      hadEntry: false,
-    };
-  }
-}
-
-async function restoreSessionMapping(
-  snapshot: SessionMappingSnapshot,
-): Promise<string | undefined> {
-  if (!snapshot.canRestore) {
-    return undefined;
-  }
-  try {
-    await updateSessionStore(
-      snapshot.storePath,
-      (store) => {
-        if (snapshot.hadEntry && snapshot.entry) {
-          store[snapshot.sessionKey] = snapshot.entry;
-          return;
-        }
-        delete store[snapshot.sessionKey];
-      },
-      { activeSessionKey: snapshot.sessionKey },
-    );
-    return undefined;
-  } catch (err) {
-    return formatErrorMessage(err);
-  }
-}
-
 export async function runBootOnce(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -193,39 +122,49 @@ export async function runBootOnce(params: {
   const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotSessionMapping({
-    cfg: params.cfg,
-    sessionKey,
-  });
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
 
-  // Register the boot prompt for the message-tool echo guard so the
-  // tool layer can drop fallback-model echoes that copy substantial
-  // BOOT.md content without preserving the wrapper markers above.
-  // Always cleared in finally so a failed run does not leave a stale
-  // entry that mis-fires on an unrelated subsequent run reusing the
-  // same session key. Refs #53732.
-  setBootEchoContextForSession(sessionKey, message);
-  let agentFailure: string | undefined;
-  try {
-    await agentCommand(
-      {
-        message,
-        sessionKey,
-        sessionId,
-        deliver: false,
-        suppressPromptPersistence: true,
-      },
-      bootRuntime,
-      params.deps,
-    );
-  } catch (err) {
-    agentFailure = formatErrorMessage(err);
-    log.error(`boot: agent run failed: ${agentFailure}`);
-  } finally {
-    clearBootEchoContextForSession(sessionKey);
+  const mappingPreservation = await preserveTemporarySessionMapping(
+    { storePath, sessionKey },
+    async () => {
+      // Register the boot prompt for the message-tool echo guard so the
+      // tool layer can drop fallback-model echoes that copy substantial
+      // BOOT.md content without preserving the wrapper markers above.
+      // Always cleared in finally so a failed run does not leave a stale
+      // entry that mis-fires on an unrelated subsequent run reusing the
+      // same session key. Refs #53732.
+      setBootEchoContextForSession(sessionKey, message);
+      try {
+        await agentCommand(
+          {
+            message,
+            sessionKey,
+            sessionId,
+            deliver: false,
+            suppressPromptPersistence: true,
+          },
+          bootRuntime,
+          params.deps,
+        );
+        return undefined;
+      } catch (err) {
+        const failure = formatErrorMessage(err);
+        log.error(`boot: agent run failed: ${failure}`);
+        return failure;
+      } finally {
+        clearBootEchoContextForSession(sessionKey);
+      }
+    },
+  );
+  const agentFailure = mappingPreservation.result;
+  if (mappingPreservation.snapshotFailure) {
+    log.debug("boot: could not snapshot session mapping", {
+      sessionKey,
+      error: mappingPreservation.snapshotFailure,
+    });
   }
-
-  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
+  const mappingRestoreFailure = mappingPreservation.restoreFailure;
   if (mappingRestoreFailure) {
     log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
   }

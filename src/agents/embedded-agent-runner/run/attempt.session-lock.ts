@@ -14,6 +14,7 @@ import {
   type OwnedSessionTranscriptCacheSnapshot,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
@@ -891,7 +892,7 @@ function waitForSessionFileOwnerRelease(params: {
 }): Promise<void> {
   if (params.signal?.aborted) {
     return Promise.reject(
-      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+      toErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
     );
   }
   return new Promise<void>((resolve, reject) => {
@@ -915,7 +916,7 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
     const timeoutMs = resolveSessionFileOwnerWaitTimeoutMs(params.timeoutMs);
     if (timeoutMs !== undefined) {
@@ -1170,6 +1171,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  // Set when an active retained write prevents immediate held-lock release.
+  // The scope completion path retries release after the retained use unwinds.
+  let releaseHeldLockDeferred = false;
   let retainedLockUseCount = 0;
   const retainedLockIdleWaiters = new Set<() => void>();
   let heldLockDraining = false;
@@ -1602,6 +1606,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        releaseHeldLockDeferred = true;
         return;
       }
       if (!heldLock) {
@@ -1638,6 +1643,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Do not wait for retained idle from inside the active scope; that
+        // scope must unwind before the retained-use waiter can resolve.
         return undefined;
       }
       if (!heldLock) {
@@ -1659,6 +1666,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Same active-scope self-deadlock guard as takeHeldLockAfterRetainedIdle.
         return;
       }
       if (!heldLock) {
@@ -1720,6 +1728,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     }
     await releaseHeldLockAfterTakeover();
+    // Retained use has been released and the active scope is no longer live,
+    // so a prior active-scope release bailout can drain the held file lock now.
+    if (releaseHeldLockDeferred) {
+      releaseHeldLockDeferred = false;
+      await releaseHeldLockWithFence();
+    }
     if (!outcome.ok) {
       throw outcome.error;
     }
@@ -2077,18 +2091,4 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

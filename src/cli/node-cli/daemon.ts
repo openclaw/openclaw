@@ -156,6 +156,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         }
       },
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
@@ -167,6 +174,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       await service.install({
         env: process.env,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

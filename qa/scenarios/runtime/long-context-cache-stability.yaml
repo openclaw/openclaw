@@ -11,9 +11,9 @@ scenario:
       - runtime.long-context
   objective: Exercise repeated same-session turns after a large tool result so prompt assembly and provider cache reuse remain stable.
   successCriteria:
-    - The agent reads a large workspace fixture and returns the warmup marker.
+    - The agent reads a large workspace fixture and returns the warmup marker from the capped read output.
     - A follow-up turn reuses the same session and returns the hit marker.
-    - Mock-provider evidence shows the large tool result remained in the assembled prompt.
+    - Mock-provider evidence shows the capped large tool result remained in the assembled prompt.
   docsRefs:
     - docs/concepts/qa-e2e-automation.md
     - docs/reference/test.md
@@ -26,6 +26,9 @@ scenario:
     config:
       sessionKey: agent:qa:long-context-cache-stability
       fixtureFile: large-cache-fixture.txt
+      cacheEvidenceNeedle: CACHE-FIXTURE-0050
+      cacheEvidenceLine: "CACHE-FIXTURE-0050: stable tool-result evidence for prompt-cache reuse across long sessions."
+      followupPromptNeedle: Using the already-read
       warmupMarker: QA-LARGE-CACHE-WARMUP-OK
       hitMarker: QA-LARGE-CACHE-HIT-OK
 
@@ -55,7 +58,7 @@ flow:
             - sessionKey:
                 ref: sessionKey
               message:
-                expr: "`Read ${config.fixtureFile}, verify it contains CACHE-FIXTURE-1600, then reply exactly ${config.warmupMarker}.`"
+                expr: "`Read ${config.fixtureFile}, verify it contains ${config.cacheEvidenceNeedle}, then reply exactly ${config.warmupMarker}.`"
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
         - call: waitForCondition
@@ -70,7 +73,7 @@ flow:
             - sessionKey:
                 ref: sessionKey
               message:
-                expr: "`Using the already-read ${config.fixtureFile}, confirm CACHE-FIXTURE-1600 is still present and reply exactly ${config.hitMarker}.`"
+                expr: "`Using the already-read ${config.fixtureFile}, confirm ${config.cacheEvidenceNeedle} is still present and reply exactly ${config.hitMarker}.`"
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
         - call: waitForCondition
@@ -83,8 +86,17 @@ flow:
         - set: debugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+        - set: cappedReadOutputIndex
+          value:
+            expr: "debugRequests.reduce((found, planned, index) => { if (found >= 0 || !planned.plannedToolCallId || planned.plannedToolName !== 'read' || planned.plannedToolArgs?.path !== config.fixtureFile) return found; const outputOffset = debugRequests.slice(index + 1).findIndex((candidate) => Boolean(candidate.toolOutputCallId) && candidate.toolOutputCallId === planned.plannedToolCallId); if (outputOffset < 0) return found; const output = debugRequests[index + 1 + outputOffset]; const evidence = [planned.allInputText, output.allInputText, output.toolOutput].filter((value) => typeof value === 'string').join('\\n'); const hasCodexFormattedTruncation = evidence.includes('Warning: truncated output') && (evidence.includes('chars truncated') || evidence.includes('tokens truncated')); return evidence.includes(config.cacheEvidenceLine) && (evidence.includes('[Read output capped at 50KB') || evidence.includes('...(OpenClaw truncated dynamic tool result') || evidence.includes('...(truncated)...') || hasCodexFormattedTruncation) ? index + 1 + outputOffset : found; }, -1)"
+        - set: hasCappedReadEvidence
+          value:
+            expr: "cappedReadOutputIndex >= 0"
+        - set: hasFollowupCacheEvidence
+          value:
+            expr: "cappedReadOutputIndex >= 0 && debugRequests.some((request, index) => index > cappedReadOutputIndex && String(request.prompt ?? '').includes(config.followupPromptNeedle) && String(request.allInputText ?? '').includes(config.cacheEvidenceLine))"
         - assert:
-            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && String(request.allInputText ?? '').length >= 100000)"
+            expr: "!env.mock || (hasCappedReadEvidence && hasFollowupCacheEvidence)"
             message:
-              expr: "`large read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8))}`"
+              expr: "`large capped read cache evidence was not observed: ${JSON.stringify({ hasCappedReadEvidence, hasFollowupCacheEvidence, requests: debugRequests.slice(-8).map((request) => ({ prompt: request.prompt ?? null, plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, plannedToolCallId: request.plannedToolCallId ?? null, toolOutputCallId: request.toolOutputCallId ?? null, toolOutputLength: String(request.toolOutput ?? '').length, outputHasReadCap: String(request.toolOutput ?? '').includes('[Read output capped at 50KB'), outputHasCodexTruncation: String(request.toolOutput ?? '').includes('...(truncated)...'), inputHasEvidenceLine: String(request.allInputText ?? '').includes(config.cacheEvidenceLine) })) })}`"
       detailsExpr: "outbound?.text ?? config.hitMarker"

@@ -1,21 +1,32 @@
 // Mistral provider tests cover request mapping and stream conversion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 
 const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
 }));
 
-vi.mock("@mistralai/mistralai", () => ({
-  Mistral: class MockMistral {
-    chat = {
-      stream: vi.fn(async (payload: unknown) => {
-        mistralMockState.payloads.push(payload);
-        throw new Error("stop before network");
-      }),
-    };
-  },
-}));
+vi.mock("@mistralai/mistralai", async () => {
+  // Preserve real exports for everything except `Mistral`, so the new
+  // imports of `HTTPClient` and `Fetcher` introduced by the bounded-stream
+  // helper (`createBoundedMistralHttpClient`) resolve correctly. Only
+  // `Mistral` itself is overridden so the test can capture payloads without
+  // any actual HTTP traffic.
+  const actual =
+    await vi.importActual<typeof import("@mistralai/mistralai")>("@mistralai/mistralai");
+  return {
+    ...actual,
+    Mistral: class MockMistral {
+      chat = {
+        stream: vi.fn(async (payload: unknown) => {
+          mistralMockState.payloads.push(payload);
+          throw new Error("stop before network");
+        }),
+      };
+    },
+  };
+});
 
 import { streamMistral, streamSimpleMistral } from "./mistral.js";
 
@@ -213,5 +224,25 @@ describe("Mistral provider", () => {
       type: "function",
       function: { name: "healthy_tool" },
     });
+  });
+
+  it("strips the internal cache boundary marker from the system message", async () => {
+    const stream = streamSimpleMistral(
+      makeMistralModel(),
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      { apiKey: "sk-mistral-provider" },
+    );
+
+    await stream.result();
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage = payload.messages.find((message) => message.role === "system");
+    expect(systemMessage?.content).toBe("Stable\nDynamic");
+    expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 });

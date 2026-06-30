@@ -18,12 +18,16 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
-vi.mock("./shared.js", () => ({
-  requireValidConfig: vi.fn(async () => ({ channels: {} })),
-  formatChannelAccountLabel: vi.fn(
-    ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
-  ),
-}));
+vi.mock("./shared.js", async () => {
+  const actual = await vi.importActual<typeof import("./shared.js")>("./shared.js");
+  return {
+    ...actual,
+    requireValidConfig: vi.fn(async () => ({ channels: {} })),
+    formatChannelAccountLabel: vi.fn(
+      ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
+    ),
+  };
+});
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),

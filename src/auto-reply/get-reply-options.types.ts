@@ -73,6 +73,8 @@ export type GetReplyOptions = {
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
+  /** If false, send only the initial typing signal without periodic keepalive refreshes. */
+  typingKeepalive?: boolean;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
@@ -153,6 +155,8 @@ export type GetReplyOptions = {
   }) => Promise<void> | void;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
+  reasoningPayloadsEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

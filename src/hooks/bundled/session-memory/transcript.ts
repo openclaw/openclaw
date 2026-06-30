@@ -1,7 +1,41 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+
+const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
+const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
+const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
+  String.raw`<${SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX}${SESSION_MEMORY_TOOL_DIRECTIVE_KIND}\b[^>]*>` +
+    String.raw`[\s\S]*?(?:<\/${SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX}${SESSION_MEMORY_TOOL_DIRECTIVE_KIND}>|$)`,
+  "gi",
+);
+const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
+const SESSION_MEMORY_MEDIA_PLACEHOLDER_RE = /(^|\n)\s*<media:[^>]+>(?:\s*\([^)]*\))?\s*/gi;
+const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
+
+function isNoReplyMarker(text: string): boolean {
+  const trimmed = text.trim();
+  return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
+}
+
+export function sanitizeSessionMemoryTranscriptText(text: string): string | null {
+  if (isNoReplyMarker(text)) {
+    return null;
+  }
+  const withoutArtifacts = sanitizeModelSpecialTokens(text)
+    .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
+    .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
+    .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
+    .replace(SESSION_MEMORY_MEDIA_PLACEHOLDER_RE, "$1")
+    .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
+    .trim();
+
+  return withoutArtifacts || null;
+}
 
 function extractTextMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {
@@ -31,6 +65,7 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastAssistantText: string | undefined;
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -45,9 +80,26 @@ export async function getRecentSessionContent(
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
+            if (role === "user") {
+              // New turn: reset even when slash commands are omitted from
+              // memory, so later standalone delivery mirrors are preserved.
+              lastAssistantText = undefined;
+            }
             const text = extractTextMessageContent(msg.content);
-            if (text && !text.startsWith("/")) {
-              allMessages.push(`${role}: ${text}`);
+            const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
+            // Skip delivery-mirror rows only when they duplicate the preceding
+            // assistant text. Delivery-mirror rows with unique visible content
+            // (e.g., message-tool replies) are preserved.
+            if (isOpenClawDeliveryMirrorAssistantMessage(msg)) {
+              if (sanitized && sanitized === lastAssistantText) {
+                continue;
+              }
+            }
+            if (sanitized && !sanitized.startsWith("/")) {
+              allMessages.push(`${role}: ${sanitized}`);
+              if (role === "assistant") {
+                lastAssistantText = sanitized;
+              }
             }
           }
         }

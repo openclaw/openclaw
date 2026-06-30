@@ -736,7 +736,14 @@ describe("kitchen-sink RPC command output capture", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+    const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
+    const grandchildScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
 
     writeFileSync(
       scriptPath,
@@ -746,8 +753,8 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
+  ${JSON.stringify(grandchildScript)},
+], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
@@ -755,19 +762,28 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
       detached: undefined,
       timeoutKillGraceMs: 25,
       timeoutMs: 500,
     });
+    const runErrorPromise = runPromise.then(
+      () => {
+        throw new Error("expected timed command to reject");
+      },
+      (error: unknown) => error,
+    );
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
+      await waitFor(() => existsSync(grandchildReadyPath));
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 500ms");
+      const runError = await runErrorPromise;
+      expect(runError).toBeInstanceOf(Error);
+      expect((runError as Error).message).toContain("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -1013,7 +1029,14 @@ describe("kitchen-sink RPC caller loading", () => {
     const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
     const scriptPath = path.join(root, "term-zero-grandchild.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+    const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
+    const grandchildScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
 
     writeFileSync(
       scriptPath,
@@ -1023,8 +1046,8 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
+  ${JSON.stringify(grandchildScript)},
+], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -1032,18 +1055,27 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
       timeoutKillGraceMs: 2_000,
-      timeoutMs: 100,
+      timeoutMs: 1_500,
     });
+    const runErrorPromise = runPromise.then(
+      () => {
+        throw new Error("expected timed command to reject");
+      },
+      (error: unknown) => error,
+    );
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
+      await waitFor(() => existsSync(grandchildReadyPath));
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+      const runError = await runErrorPromise;
+      expect(runError).toBeInstanceOf(Error);
+      expect((runError as Error).message).toContain("timed out after 1500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
