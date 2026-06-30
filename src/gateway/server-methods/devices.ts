@@ -15,7 +15,7 @@ import {
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
   getPendingDevicePairing,
-  listDevicePairing,
+  listDevicePairingCached,
   removePairedDevice,
   type DeviceAuthToken,
   type RevokeDeviceTokenDenyReason,
@@ -202,7 +202,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
-  "device.pair.list": async ({ params, respond, client }) => {
+  "device.pair.list": async ({ params, respond, client, context }) => {
     if (!validateDevicePairListParams(params)) {
       respond(
         false,
@@ -216,8 +216,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const list = await listDevicePairing();
+    const startedAtMs = Date.now();
+    const listStartedAtMs = Date.now();
+    const list = await listDevicePairingCached();
+    const listMs = Date.now() - listStartedAtMs;
     const authz = resolveDeviceSessionAuthz(client);
+    const filterStartedAtMs = Date.now();
     const visibleList =
       authz.callerDeviceId && !authz.isAdminCaller
         ? {
@@ -227,14 +231,25 @@ export const deviceHandlers: GatewayRequestHandlers = {
             paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
           }
         : list;
-    respond(
-      true,
-      {
-        pending: visibleList.pending,
-        paired: visibleList.paired.map((device) => redactPairedDevice(device)),
-      },
-      undefined,
-    );
+    const filterMs = Date.now() - filterStartedAtMs;
+    const redactStartedAtMs = Date.now();
+    const paired = visibleList.paired.map((device) => redactPairedDevice(device));
+    const redactMs = Date.now() - redactStartedAtMs;
+    const totalMs = Date.now() - startedAtMs;
+    if (totalMs > 1_000) {
+      context.logGateway.warn(
+        `[device.pair.list] slow totalMs=${totalMs} listMs=${listMs} filterMs=${filterMs} redactMs=${redactMs} pending=${visibleList.pending.length} paired=${visibleList.paired.length}`,
+      );
+    }
+    const payload = {
+      pending: visibleList.pending,
+      paired,
+    };
+    if (totalMs > 1_000) {
+      respond(true, payload, undefined, { totalMs, listMs, filterMs, redactMs });
+      return;
+    }
+    respond(true, payload, undefined);
   },
   "device.pair.approve": async ({ params, respond, context, client }) => {
     if (!validateDevicePairApproveParams(params)) {

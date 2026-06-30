@@ -9,6 +9,7 @@ import {
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /** Snapshot returned by the gateway readiness probe. */
 export type ReadinessResult = {
@@ -21,7 +22,8 @@ export type ReadinessResult = {
 /** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
-const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
+const DEFAULT_READINESS_CACHE_TTL_MS = 10_000;
+const log = createSubsystemLogger("gateway/readiness");
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
@@ -75,9 +77,12 @@ export function createReadinessChecker(deps: {
       return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
     }
 
+    const snapshotStart = Date.now();
     const snapshot = channelManager.getRuntimeSnapshot();
+    const snapshotMs = Date.now() - snapshotStart;
     const failing: string[] = [];
 
+    const evaluationStart = Date.now();
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {
         continue;
@@ -98,6 +103,15 @@ export function createReadinessChecker(deps: {
           break;
         }
       }
+    }
+    const evaluationMs = Date.now() - evaluationStart;
+    const totalMs = Date.now() - now;
+    if (totalMs > 1000) {
+      log.warn(
+        `[readiness] slow evaluation totalMs=${totalMs} snapshotMs=${snapshotMs} evaluationMs=${evaluationMs} channels=${Object.keys(
+          snapshot.channelAccounts,
+        ).length}`,
+      );
     }
 
     cachedAt = now;

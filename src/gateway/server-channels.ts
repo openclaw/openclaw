@@ -959,10 +959,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {
+    const startedAtMs = Date.now();
     const cfg = getRuntimeConfig();
     const channels: ChannelRuntimeSnapshot["channels"] = {};
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
+    const timings: string[] = [];
     for (const plugin of listChannelPlugins()) {
+      const pluginStartedAtMs = Date.now();
       const store = getStore(plugin.id);
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
@@ -995,6 +998,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         accounts[defaultAccountId] ?? cloneDefaultRuntime(plugin.id, defaultAccountId);
       channels[plugin.id] = defaultAccount;
       channelAccounts[plugin.id] = accounts;
+      const pluginMs = Date.now() - pluginStartedAtMs;
+      if (pluginMs > 250) {
+        timings.push(`${plugin.id}:${pluginMs}ms/accounts=${accountIds.length}`);
+      }
+    }
+    const totalMs = Date.now() - startedAtMs;
+    if (totalMs > 1_000) {
+      Object.values(channelLogs)[0]?.warn?.(
+        `[channels] slow runtime snapshot totalMs=${totalMs} plugins=${timings.join(",") || "none"}`,
+      );
     }
     return { channels, channelAccounts };
   };

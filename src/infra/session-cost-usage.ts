@@ -2124,7 +2124,9 @@ export async function discoverAllSessions(params?: {
     }
     const isPrimaryTranscript = isPrimarySessionTranscriptFileName(fileName);
 
-    // Try to read first user message for label extraction
+    // Try to read first user message for label extraction only when the caller
+    // needs it. Usage dashboards can discover sessions from filenames/mtime
+    // without opening every transcript.
     let firstUserMessage: string | undefined;
     if (params?.includeFirstUserMessage !== false) {
       try {

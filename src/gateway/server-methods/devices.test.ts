@@ -39,6 +39,7 @@ vi.mock("../../infra/device-pairing.js", async () => {
     getPairedDevice: getPairedDeviceMock,
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
+    listDevicePairingCached: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
     rejectDevicePairing: rejectDevicePairingMock,
     revokeDeviceToken: revokeDeviceTokenMock,

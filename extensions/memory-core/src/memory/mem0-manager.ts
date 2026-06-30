@@ -122,9 +122,12 @@ export class Mem0MemoryManager implements MemorySearchManager {
         top_k: topK,
         threshold,
         version: "v2",
-        filters: {
-          AND: [{ user_id: scoped.userId }, { agent_id: scoped.agentScopedId }],
-        },
+        filters:
+          this.mem0.searchPath === "/search"
+            ? { user_id: scoped.userId, agent_id: scoped.agentScopedId }
+            : {
+                AND: [{ user_id: scoped.userId }, { agent_id: scoped.agentScopedId }],
+              },
       },
     });
     const results: MemorySearchResult[] = [];
@@ -258,7 +261,7 @@ export class Mem0MemoryManager implements MemorySearchManager {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          ...(this.mem0.apiKey ? { Authorization: `Token ${this.mem0.apiKey}` } : {}),
+          ...(this.mem0.apiKey ? { "X-API-Key": this.mem0.apiKey } : {}),
         },
         body: JSON.stringify(params.body),
         signal: controller.signal,
