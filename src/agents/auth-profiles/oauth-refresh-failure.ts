@@ -44,7 +44,12 @@ function isOAuthRefreshFailureMessage(message: string): boolean {
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
-    lower.includes("authentication session could not be refreshed automatically")
+    lower.includes("authentication session could not be refreshed automatically") ||
+    // Claude CLI subprocess emits its own 401 message when its stored OAuth
+    // token expires. OpenClaw strips ANTHROPIC_API_KEY before spawning it, so
+    // a 401 here is unambiguously an OAuth-expiry signal — recognize it so the
+    // re-auth hint reaches channel replies instead of the generic failure text.
+    (lower.includes("failed to authenticate") && lower.includes("401"))
   );
 }
 

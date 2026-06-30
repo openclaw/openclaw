@@ -85,4 +85,19 @@ describe("oauth refresh failure hints", () => {
       reason: "token_invalidated",
     });
   });
+
+  it("recognizes claude-cli 401 subprocess output as an OAuth refresh failure", () => {
+    // Claude CLI emits its own "Failed to authenticate. API Error: 401 ..." line
+    // when its stored OAuth token expires. Without this match the channel reply
+    // falls back to the generic "Something went wrong" text instead of the
+    // re-auth hint.
+    expect(
+      classifyOAuthRefreshFailure(
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ).toEqual({
+      provider: null,
+      reason: null,
+    });
+  });
 });
