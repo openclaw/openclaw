@@ -21,7 +21,10 @@ const baseCfg = (autoUpdate: boolean): OpenClawConfig =>
     },
   }) as unknown as OpenClawConfig;
 
-type IngressSpyFn = (...args: unknown[]) => Promise<{ payloads: unknown[] }>;
+type IngressSpyFn = (
+  opts: Record<string, unknown>,
+  ...rest: unknown[]
+) => Promise<{ payloads: unknown[] }>;
 let ingressSpy: ReturnType<typeof vi.fn<IngressSpyFn>>;
 let workspaceDir: string;
 
