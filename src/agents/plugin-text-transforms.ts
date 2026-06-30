@@ -147,10 +147,7 @@ function transformAssistantEventText(
     return event as AssistantMessageEvent;
   }
   const next = { ...event };
-  if (
-    (next.type === "text_delta" || next.type === "toolcall_delta") &&
-    typeof next.delta === "string"
-  ) {
+  if (next.type === "text_delta" && typeof next.delta === "string") {
     next.delta = applyPluginTextReplacements(next.delta, replacements);
   }
   if (next.type === "text_end" && typeof next.content === "string") {
