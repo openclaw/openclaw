@@ -1181,6 +1181,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      allowReentrant: true,
       ...resolveSessionWriteLockOptions(params.config, {
         maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
           timeoutMs: compactionTimeoutMs,
