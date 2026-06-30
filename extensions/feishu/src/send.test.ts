@@ -105,6 +105,49 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("upgrades single newlines to double newlines for Feishu md rendering", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "first line\nsecond line\nthird line",
+    });
+    const element = JSON.parse(payload.content).zh_cn.content[0][0];
+    expect(element.tag).toBe("md");
+    expect(element.text).toBe("first line\n\nsecond line\n\nthird line");
+  });
+
+  it("preserves existing double newlines and code blocks when upgrading newlines", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: [
+        "paragraph one",
+        "",
+        "paragraph two has\na soft break",
+        "",
+        "```ts",
+        "const x = 1\nconst y = 2",
+        "```",
+        "",
+        "tail with\nsoft break",
+      ].join("\n"),
+    });
+    const element = JSON.parse(payload.content).zh_cn.content[0][0];
+    expect(element.text).toBe(
+      [
+        "paragraph one",
+        "",
+        "paragraph two has",
+        "",
+        "a soft break",
+        "",
+        "```ts",
+        "const x = 1\nconst y = 2",
+        "```",
+        "",
+        "tail with",
+        "",
+        "soft break",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("getMessageFeishu", () => {

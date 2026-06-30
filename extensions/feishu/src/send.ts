@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -583,7 +583,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: upgradeSingleNewlinesForFeishuMd(messageText),
     },
   ];
   return {
@@ -594,6 +594,44 @@ export function buildFeishuPostMessagePayload(params: {
     }),
     msgType: "post",
   };
+}
+
+/**
+ * Upgrades single `\n` to `\n\n` for Feishu `tag: "md"` rendering.
+ *
+ * Feishu's post+md renderer collapses a single `\n` to a space, so paragraph
+ * breaks and soft line wraps show up mashed together. Only `\n\n` is treated
+ * as a paragraph break. Skip fenced/inline code so example output and code
+ * blocks keep their original line shape.
+ */
+function upgradeSingleNewlinesForFeishuMd(text: string): string {
+  if (!text.includes("\n")) {
+    return text;
+  }
+  const codeRegions = findCodeRegions(text);
+  if (codeRegions.length === 0) {
+    return upgradeSingleNewlinesInRange(text);
+  }
+  let result = "";
+  let cursor = 0;
+  for (const region of codeRegions) {
+    if (region.start > cursor) {
+      result += upgradeSingleNewlinesInRange(text.slice(cursor, region.start));
+    }
+    result += text.slice(region.start, region.end);
+    cursor = region.end;
+  }
+  if (cursor < text.length) {
+    result += upgradeSingleNewlinesInRange(text.slice(cursor));
+  }
+  return result;
+}
+
+function upgradeSingleNewlinesInRange(segment: string): string {
+  // Match a `\n` that is neither preceded nor followed by another `\n`.
+  // Lookbehind/lookahead let adjacent single newlines (e.g. `a\nb\nc`) all
+  // upgrade rather than just the first one in the run.
+  return segment.replace(/(?<=[^\n])\n(?=[^\n])/g, "\n\n");
 }
 
 export async function sendMessageFeishu(
