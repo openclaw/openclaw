@@ -399,7 +399,10 @@ describe("Discord model picker preference migration", () => {
     }
     const entries = await plan.readEntries();
     expect(entries).toHaveLength(2);
-    expect(entries.map((e) => e.key).sort()).toEqual(["111100001111:bot1", "222200002222:bot2"]);
+    expect(entries.map((e) => e.key).toSorted()).toEqual([
+      "111100001111:bot1",
+      "222200002222:bot2",
+    ]);
     expect(entries[0]?.value).toEqual({ version: 1, hashes: { "global:reconcile": hash } });
   });
 
