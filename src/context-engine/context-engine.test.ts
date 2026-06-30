@@ -400,9 +400,15 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     };
   }
 
-  private rejectRuntimeSettings(params: { runtimeSettings?: unknown }): void {
+  private rejectLegacyCompatFields(params: Record<string, unknown>): void {
     if (Object.hasOwn(params, "runtimeSettings")) {
       throw new Error("Unrecognized key(s) in object: 'runtimeSettings'");
+    }
+    if (Object.hasOwn(params, "sessionTarget")) {
+      throw new Error("Unrecognized key(s) in object: 'sessionTarget'");
+    }
+    if (Object.hasOwn(params, "runtimeContext")) {
+      throw new Error("Unrecognized key(s) in object: 'runtimeContext'");
     }
   }
 
@@ -411,9 +417,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<BootstrapResult> {
     this.bootstrapCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { bootstrapped: true };
   }
 
@@ -431,9 +439,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     sessionKey?: string;
     sessionFile: string;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<ContextEngineMaintenanceResult> {
     this.maintainCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
   }
 
@@ -444,9 +454,11 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     messages: AgentMessage[];
     prePromptMessageCount: number;
     runtimeSettings?: unknown;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeContext?: unknown;
   }): Promise<void> {
     this.afterTurnCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
   }
 
   async assemble(params: {
@@ -456,7 +468,7 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     runtimeSettings?: unknown;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { messages: params.messages, estimatedTokens: 3 };
   }
 
@@ -466,9 +478,10 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: unknown;
+    runtimeContext?: unknown;
   }): Promise<CompactResult> {
     this.compactCalls.push({ ...params });
-    this.rejectRuntimeSettings(params);
+    this.rejectLegacyCompatFields(params);
     return { ok: true, compacted: false };
   }
 }
@@ -1757,8 +1770,14 @@ describe("assemble() prompt forwarding", () => {
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("runtimeSettings");
   });
 
-  it("retries strict legacy lifecycle hooks without runtimeSettings", async () => {
+  it("retries strict legacy lifecycle hooks without additive host fields", async () => {
     const runtimeSettings = { schemaVersion: 1 } as never;
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+    } satisfies ContextEngineSessionTarget;
+    const runtimeContext = { transcriptStorage: { kind: "sqlite" } } as never;
     const resolveStrictEngine = async () => {
       const engineId = uniqueEngineId("runtime-settings-legacy");
       const strictEngine = new LegacyRuntimeSettingsStrictEngine(engineId);
@@ -1773,6 +1792,8 @@ describe("assemble() prompt forwarding", () => {
       sessionKey: "agent:main:test",
       sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const maintain = await resolveStrictEngine();
@@ -1781,6 +1802,8 @@ describe("assemble() prompt forwarding", () => {
       sessionKey: "agent:main:test",
       sessionFile: "sessions/s1.jsonl",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const afterTurn = await resolveStrictEngine();
@@ -1791,6 +1814,8 @@ describe("assemble() prompt forwarding", () => {
       messages: [makeMockMessage("assistant", "done")],
       prePromptMessageCount: 0,
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     const assemble = await resolveStrictEngine();
@@ -1806,6 +1831,8 @@ describe("assemble() prompt forwarding", () => {
       sessionId: "s1",
       sessionKey: "agent:main:test",
       runtimeSettings,
+      sessionTarget,
+      runtimeContext,
     });
 
     for (const calls of [
@@ -1815,9 +1842,29 @@ describe("assemble() prompt forwarding", () => {
       assemble.strictEngine.assembleCalls,
       compact.strictEngine.compactCalls,
     ]) {
-      expect(calls).toHaveLength(2);
+      const finalCall = calls.at(-1);
+      expect(finalCall).toBeDefined();
       expect(calls[0]).toHaveProperty("runtimeSettings");
-      expect(calls[1]).not.toHaveProperty("runtimeSettings");
+      expect(calls[0]).toHaveProperty("sessionKey", "agent:main:test");
+      expect(finalCall).toHaveProperty("sessionKey", "agent:main:test");
+      expect(finalCall).not.toHaveProperty("runtimeSettings");
+      expect(finalCall).not.toHaveProperty("sessionTarget");
+      expect(finalCall).not.toHaveProperty("runtimeContext");
+    }
+    for (const calls of [
+      bootstrap.strictEngine.bootstrapCalls,
+      maintain.strictEngine.maintainCalls,
+      afterTurn.strictEngine.afterTurnCalls,
+      compact.strictEngine.compactCalls,
+    ]) {
+      expect(calls).toHaveLength(4);
+      expect(calls[0]).toHaveProperty("sessionTarget", sessionTarget);
+      expect(calls[0]).toHaveProperty("runtimeContext", runtimeContext);
+    }
+    expect(assemble.strictEngine.assembleCalls).toHaveLength(2);
+    for (const call of assemble.strictEngine.assembleCalls) {
+      expect(call).not.toHaveProperty("sessionTarget");
+      expect(call).not.toHaveProperty("runtimeContext");
     }
   });
 });
