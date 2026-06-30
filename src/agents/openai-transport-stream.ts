@@ -477,6 +477,7 @@ type ResponsesFailedNoDetailsObservation = {
 
 type ResponsesFailedEventSummary = {
   message: string;
+  code?: string;
   responseId?: string;
   observation?: ResponsesFailedNoDetailsObservation;
 };
@@ -502,8 +503,12 @@ function buildResponsesFailedEventSummary(
   message: string,
   responseId: string | undefined,
   observation?: ResponsesFailedNoDetailsObservation,
+  code?: string,
 ): ResponsesFailedEventSummary {
   const summary: ResponsesFailedEventSummary = { message };
+  if (code) {
+    summary.code = code;
+  }
   if (responseId) {
     summary.responseId = responseId;
   }
@@ -715,6 +720,8 @@ function normalizeResponsesFailedEvent(
       return buildResponsesFailedEventSummary(
         `${code || "unknown"}: ${message || "no message"}`,
         responseId,
+        undefined,
+        code || undefined,
       );
     }
   }
@@ -730,6 +737,39 @@ function normalizeResponsesFailedEvent(
     responseId,
     buildResponsesFailedNoDetailsObservation(event, model, response),
   );
+}
+
+/**
+ * #95441: Normalize a streamed `type: "error"` SSE event into a flat
+ * {code, message, responseId}. The provider may put the structured code at the
+ * top level (`event.code`) OR nest it under `event.error.code` (the same shape
+ * `response.failed` already handles). The pre-fix code only read the flat
+ * `event.code`, so a nested `{ type: "error", error: { code:
+ * "invalid_encrypted_content" } }` lost its code and the drain-level retry
+ * detector never saw the encrypted-content failure. Reading both shapes keeps
+ * the structured `code` intact so `isInvalidEncryptedContentError` can trigger
+ * the retry.
+ */
+function normalizeResponsesErrorEvent(event: Record<string, unknown>): {
+  code?: string;
+  message?: string;
+  responseId?: string;
+} {
+  const nestedError = isRecord(event.error) ? event.error : undefined;
+  const flatCode = readResponseFailedString(event, "code").trim();
+  const nestedCode = readResponseFailedString(nestedError, "code").trim();
+  const flatMessage = readResponseFailedString(event, "message").trim();
+  const nestedMessage = readResponseFailedString(nestedError, "message").trim();
+  const response = isRecord(event.response) ? event.response : undefined;
+  const responseId =
+    readResponseFailedString(event, "response_id").trim() ||
+    readResponseFailedString(response, "id").trim() ||
+    undefined;
+  return {
+    code: flatCode || nestedCode || undefined,
+    message: flatMessage || nestedMessage || undefined,
+    responseId,
+  };
 }
 
 function logResponsesFailedNoDetails(observation: ResponsesFailedNoDetailsObservation): void {
@@ -801,18 +841,72 @@ function summarizeOpenAITransportError(error: unknown): string {
   ].join(" ");
 }
 
-function isInvalidEncryptedContentError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
+const ENCRYPTED_CONTENT_ERROR_CODES = new Set([
+  "invalid_encrypted_content",
+  "thinking_signature_invalid",
+]);
+
+/**
+ * Error thrown while draining a Responses SSE stream (from a `response.failed`
+ * or `error` event). Carries the structured provider `code` so the drain-level
+ * retry can detect the encrypted-content / signature failure class without
+ * re-parsing the message string.
+ */
+class ResponsesStreamFailureError extends Error {
+  readonly code?: string;
+  readonly responseId?: string;
+  constructor(message: string, options?: { code?: string; responseId?: string }) {
+    super(message);
+    this.name = "ResponsesStreamFailureError";
+    this.code = options?.code;
+    this.responseId = options?.responseId;
+  }
+}
+
+function isInvalidEncryptedContentError(error: unknown, depth = 0): boolean {
+  if (!error || typeof error !== "object" || depth > 4) {
     return false;
   }
-  const record = error as { code?: unknown; message?: unknown };
-  if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
+  const record = error as {
+    code?: unknown;
+    message?: unknown;
+    error?: unknown;
+    cause?: unknown;
+    response?: unknown;
+    body?: unknown;
+  };
+  if (typeof record.code === "string" && ENCRYPTED_CONTENT_ERROR_CODES.has(record.code)) {
     return true;
   }
+  if (typeof record.message === "string") {
+    if (
+      record.message.includes("invalid_encrypted_content") ||
+      record.message.includes("thinking_signature_invalid")
+    ) {
+      return true;
+    }
+    // #95441: the provider's pre-stream 400 can arrive as human-readable prose
+    // with no structured code, e.g. "The encrypted content for item ... could
+    // not be verified." Match that shape too so the retry still fires.
+    const lowerMessage = record.message.toLowerCase();
+    if (
+      lowerMessage.includes("encrypted content") &&
+      (lowerMessage.includes("could not be verified") ||
+        lowerMessage.includes("could not be decrypted") ||
+        lowerMessage.includes("could not be parsed"))
+    ) {
+      return true;
+    }
+  }
+  // SDK/transport errors nest the real code under error/cause/response.body.error.
   return (
-    typeof record.message === "string" &&
-    (record.message.includes("invalid_encrypted_content") ||
-      record.message.includes("thinking_signature_invalid"))
+    isInvalidEncryptedContentError(record.error, depth + 1) ||
+    isInvalidEncryptedContentError(record.cause, depth + 1) ||
+    isInvalidEncryptedContentError(record.body, depth + 1) ||
+    isInvalidEncryptedContentError(
+      isRecord(record.response) ? record.response.body : undefined,
+      depth + 1,
+    )
   );
 }
 
@@ -833,7 +927,11 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key === "encrypted_content") {
+    if (key === "encrypted_content" || key === "thinkingSignature" || key === "textSignature") {
+      // #95441: drop all replay-only provider-private reasoning material, not
+      // just nested encrypted_content. Stale thinkingSignature/textSignature
+      // can also be rejected as unverifiable on replay; remove them before the
+      // sanitized retry.
       changed = true;
       continue;
     }
@@ -979,30 +1077,70 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   );
 }
 
-async function createResponsesStreamWithEncryptedContentRetry(params: {
+/**
+ * #95441: Drain-level encrypted-content retry.
+ *
+ * The poison encrypted reasoning is usually rejected mid-stream as a
+ * `response.failed` (or `type: "error"`) SSE event, which `processResponsesStream`
+ * throws. It can also be rejected before streaming starts, by
+ * `client.responses.create()` itself. Either way the throw previously bubbled to
+ * the outer transport catch with no retry.
+ *
+ * This helper wraps create + drain so an encrypted-content failure from either
+ * point can be retried ONCE with a sanitized request. It is fail-fast and safe:
+ * it only retries when NO assistant content has been committed yet (the single
+ * `start` event is owned by the caller and is emitted exactly once), so the user
+ * never sees a duplicate `start`, duplicate partial, or duplicate `done`. The
+ * reused `output` is mutated in place; on a clean retry the successful response
+ * id overwrites the failed one.
+ */
+async function runResponsesDrainWithEncryptedRetry(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
   requestOptions: unknown;
   model: Model;
-}): Promise<AsyncIterable<unknown>> {
-  try {
-    return (await params.client.responses.create(
-      params.request as never,
-      params.requestOptions as never,
+  output: MutableAssistantOutput;
+  stream: { push(event: unknown): void };
+  processOptions?: Parameters<typeof processResponsesStream>[4];
+}): Promise<void> {
+  const { client, requestOptions, model, output, stream, processOptions } = params;
+
+  const drainOnce = async (request: OpenAIResponsesRequestParams): Promise<void> => {
+    const responseStream = (await client.responses.create(
+      request as never,
+      requestOptions as never,
     )) as unknown as AsyncIterable<unknown>;
+    await processResponsesStream(responseStream, output, stream, model, processOptions);
+  };
+
+  try {
+    await drainOnce(params.request);
   } catch (error) {
+    if (!isInvalidEncryptedContentError(error)) {
+      throw error;
+    }
+    // Only safe to transparently retry when nothing has been committed to the
+    // user-visible stream yet. Any emitted content block means a delta already
+    // went out; retrying would double-emit, so surface the original error.
+    if (output.content.length > 0) {
+      throw error;
+    }
     const retryRequest = stripResponsesRequestEncryptedContent(params.request);
-    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
+    if (retryRequest === params.request) {
+      // Nothing to strip => a second identical request would just fail again.
       throw error;
     }
     log.warn(
-      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-        `api=${params.model.api} model=${params.model.id}`,
+      `[responses] retrying drain without encrypted reasoning content provider=${model.provider} ` +
+        `api=${model.api} model=${model.id} responseId=${
+          (error as { responseId?: string }).responseId ?? "unknown"
+        }`,
     );
-    return (await params.client.responses.create(
-      retryRequest as never,
-      params.requestOptions as never,
-    )) as unknown as AsyncIterable<unknown>;
+    // Reset the failed-attempt bookkeeping on the reused output so the retry's
+    // successful values win. Content is already known empty here.
+    output.responseId = undefined;
+    output.stopReason = "stop";
+    await drainOnce(retryRequest);
   }
 }
 
@@ -1853,8 +1991,10 @@ async function processResponsesStream(
         output.stopReason = "toolUse";
       }
     } else if (type === "error") {
-      throw new Error(
-        `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
+      const errorSummary = normalizeResponsesErrorEvent(event);
+      throw new ResponsesStreamFailureError(
+        `Error Code ${errorSummary.code || "unknown"}: ${errorSummary.message || "Unknown error"}`,
+        { code: errorSummary.code, responseId: errorSummary.responseId },
       );
     } else if (type === "response.failed") {
       const failure = normalizeResponsesFailedEvent(event, model);
@@ -1864,7 +2004,10 @@ async function processResponsesStream(
       if (failure.observation) {
         logResponsesFailedNoDetails(failure.observation);
       }
-      throw new Error(failure.message);
+      throw new ResponsesStreamFailureError(failure.message, {
+        code: failure.code,
+        responseId: failure.responseId,
+      });
     }
     await cooperativeScheduler.afterEvent();
   }
@@ -2097,25 +2240,31 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
-        const responseStream = await createResponsesStreamWithEncryptedContentRetry({
+        // A single `start` is emitted exactly once for the whole turn, before any
+        // create/drain. The drain-level retry (#95441) reuses this same output
+        // and never re-emits `start`, so an encrypted-content retry stays
+        // invisible to the consumer.
+        stream.push({ type: "start", partial: output as never });
+        await runResponsesDrainWithEncryptedRetry({
           client,
           request: params,
           requestOptions,
           model,
+          output,
+          stream,
+          processOptions: {
+            serviceTier: responsesOptions?.serviceTier,
+            applyServiceTierPricing,
+            signal: options?.signal,
+            authProfileId: responsesOptions?.authProfileId,
+            sessionId: options?.sessionId,
+          },
         });
         emitModelTransportDebug(
           log,
           `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
             `elapsedMs=${Date.now() - requestStartedAt}`,
         );
-        stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model, {
-          serviceTier: responsesOptions?.serviceTier,
-          applyServiceTierPricing,
-          signal: options?.signal,
-          authProfileId: responsesOptions?.authProfileId,
-          sessionId: options?.sessionId,
-        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -4505,7 +4654,9 @@ export const testing = {
   buildOpenAIResponsesReasoningReplayMetadata,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
-  createResponsesStreamWithEncryptedContentRetry,
+  runResponsesDrainWithEncryptedRetry,
+  isInvalidEncryptedContentError,
+  normalizeResponsesErrorEvent,
   stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,

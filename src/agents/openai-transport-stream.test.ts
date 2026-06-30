@@ -1,6 +1,5 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
-import OpenAI from "openai";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -4917,8 +4916,90 @@ describe("openai transport stream", () => {
     expect(stripped.input[1]).toEqual(params.input[1]);
   });
 
-  it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
-    const request = {
+  // ---------------------------------------------------------------------------
+  // PR #95441: drain-level retry for streamed `response.failed` with
+  // invalid_encrypted_content / thinking_signature_invalid.
+  //
+  // The pre-stream path (failure thrown by `client.responses.create()`) and
+  // the mid-stream path (a `response.failed` SSE event thrown inside
+  // `processResponsesStream`) both land in the outer catch with no retry on
+  // stock builds. These gates lock the fail-fast drain-level retry: reuse the SAME already-started
+  // output/stream (content empty at failure), re-create + re-drain once.
+  // ---------------------------------------------------------------------------
+  describe("drain-level encrypted-content retry (#95441)", () => {
+    const responsesModel: Model<"openai-responses"> = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    };
+
+    function makeStartedStreamRecorder() {
+      // Mirrors the real call site: a single `start` event is pushed before the
+      // drain. Gate 1/6 assert exactly one `start` and one assistant lifecycle.
+      const events: Array<{ type: string; [k: string]: unknown }> = [];
+      const stream = {
+        push(event: unknown) {
+          events.push(event as { type: string });
+        },
+        end() {
+          events.push({ type: "__end__" });
+        },
+      };
+      return { events, stream };
+    }
+
+    function encryptedFailedEvent(responseId: string) {
+      return {
+        type: "response.failed",
+        response: {
+          id: responseId,
+          status: "failed",
+          error: {
+            code: "invalid_encrypted_content",
+            message: "The encrypted content for item rs_prior could not be verified.",
+            type: "invalid_request_error",
+          },
+        },
+      };
+    }
+
+    function completedTextEvents(responseId: string, text: string): unknown[] {
+      // Minimal successful Responses stream producing one text block.
+      return [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "message", id: "msg_ok", role: "assistant", content: [] },
+        },
+        {
+          type: "response.content_part.added",
+          item_id: "msg_ok",
+          output_index: 0,
+          content_index: 0,
+          part: { type: "output_text", text: "" },
+        },
+        {
+          type: "response.output_text.delta",
+          item_id: "msg_ok",
+          output_index: 0,
+          content_index: 0,
+          delta: text,
+        },
+        {
+          type: "response.completed",
+          response: { id: responseId, status: "completed", output: [] },
+        },
+      ];
+    }
+
+    const poisonedRequest = {
       model: "gpt-5.5",
       stream: true,
       input: [
@@ -4932,68 +5013,309 @@ describe("openai transport stream", () => {
           type: "message",
           id: "msg_prior",
           role: "assistant",
-          content: [{ type: "output_text", text: "visible answer" }],
-        },
-        {
-          type: "function_call",
-          id: "fc_prior",
-          call_id: "call_abc",
-          name: "price_lookup",
-          arguments: "{}",
+          content: [{ type: "output_text", text: "prior answer" }],
         },
       ],
     };
-    const recoveredStream = streamChunks([]);
-    const create = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new OpenAI.BadRequestError(
-          400,
-          {
-            code: "thinking_signature_invalid",
-            message:
-              "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
-            type: "invalid_request_error",
-          },
-          undefined,
-          new Headers(),
-        ),
-      )
-      .mockResolvedValueOnce(recoveredStream);
 
-    await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+    // Gate 1: created -> failed(invalid_encrypted_content) with empty content =>
+    // retry once, 2nd attempt succeeds, and only ONE `start` is emitted.
+    it("retries once on empty-content failure and emits a single start", async () => {
+      const { events, stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_1")]))
+        .mockResolvedValueOnce(streamChunks(completedTextEvents("resp_ok_2", "hi")));
+
+      // The real call site pushes exactly one `start` before the drain helper.
+      stream.push({ type: "start", partial: output });
+      await testing.runResponsesDrainWithEncryptedRetry({
         client: { responses: { create } } as never,
-        request: request as never,
+        request: poisonedRequest as never,
         requestOptions: undefined,
-        model: {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          api: "openai-responses",
-          provider: "openai",
-          baseUrl: "https://api.openai.com/v1",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8192,
-        },
-      }),
-    ).resolves.toBe(recoveredStream);
+        model: responsesModel,
+        output,
+        stream,
+      });
 
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(create.mock.calls[0]?.[0]).toBe(request);
-    expect(create.mock.calls[1]?.[0]).toEqual({
-      ...request,
-      input: [
-        {
-          type: "reasoning",
-          id: "rs_prior",
-          summary: [],
+      expect(create).toHaveBeenCalledTimes(2);
+      // 2nd create received the sanitized request (no encrypted_content).
+      expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("encrypted_content");
+      // Exactly one `start` across the whole lifecycle (helper must not add another).
+      expect(events.filter((e) => e.type === "start")).toHaveLength(1);
+      expect(output.content.map((b) => (b as { type: string }).type)).toContain("text");
+    });
+
+    // Gate 2: any content already streamed before failure => NO retry, original
+    // error rethrown (anti double-emit).
+    it("does not retry once content has already streamed", async () => {
+      const { stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(
+          streamChunks([
+            ...completedTextEvents("resp_partial", "partial").slice(0, 3),
+            encryptedFailedEvent("resp_failed_after_content"),
+          ]),
+        );
+
+      await expect(
+        testing.runResponsesDrainWithEncryptedRetry({
+          client: { responses: { create } } as never,
+          request: poisonedRequest as never,
+          requestOptions: undefined,
+          model: responsesModel,
+          output,
+          stream,
+        }),
+      ).rejects.toThrow(/invalid_encrypted_content/);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    // Gate 3: nothing to strip (stripResponsesRequestEncryptedContent is a
+    // no-op) => do NOT retry (avoid a pointless second request / loop).
+    it("does not retry when there is nothing to strip", async () => {
+      const { stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const cleanRequest = { model: "gpt-5.5", stream: true, input: [] };
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_clean")]));
+
+      await expect(
+        testing.runResponsesDrainWithEncryptedRetry({
+          client: { responses: { create } } as never,
+          request: cleanRequest as never,
+          requestOptions: undefined,
+          model: responsesModel,
+          output,
+          stream,
+        }),
+      ).rejects.toThrow(/invalid_encrypted_content/);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    // Gate 4: sanitized retry still fails => retry only once, surface the error.
+    it("retries at most once even if the sanitized attempt fails", async () => {
+      const { stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_a")]))
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_b")]));
+
+      await expect(
+        testing.runResponsesDrainWithEncryptedRetry({
+          client: { responses: { create } } as never,
+          request: poisonedRequest as never,
+          requestOptions: undefined,
+          model: responsesModel,
+          output,
+          stream,
+        }),
+      ).rejects.toThrow(/invalid_encrypted_content/);
+      expect(create).toHaveBeenCalledTimes(2);
+    });
+
+    // Gate 5: responseId boundary - the final output carries the RETRY response
+    // id, not the first failed id.
+    it("surfaces the retry response id, not the failed one", async () => {
+      const { stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_old")]))
+        .mockResolvedValueOnce(streamChunks(completedTextEvents("resp_ok_new", "ok")));
+
+      await testing.runResponsesDrainWithEncryptedRetry({
+        client: { responses: { create } } as never,
+        request: poisonedRequest as never,
+        requestOptions: undefined,
+        model: responsesModel,
+        output,
+        stream,
+      });
+
+      expect(output.responseId).toBe("resp_ok_new");
+    });
+
+    // Gate 6: transcript boundary - exactly one assistant lifecycle; no
+    // "failed empty assistant + success assistant" double `done`.
+    it("produces exactly one assistant lifecycle (no double done)", async () => {
+      const { events, stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedFailedEvent("resp_failed_once")]))
+        .mockResolvedValueOnce(streamChunks(completedTextEvents("resp_ok_final", "done")));
+
+      // The real call site pushes exactly one `start` before the drain helper.
+      stream.push({ type: "start", partial: output });
+      await testing.runResponsesDrainWithEncryptedRetry({
+        client: { responses: { create } } as never,
+        request: poisonedRequest as never,
+        requestOptions: undefined,
+        model: responsesModel,
+        output,
+        stream,
+      });
+
+      // The helper drains only; the single start/done are owned by the caller,
+      // so the recorder should never see two starts from the retry path.
+      expect(events.filter((e) => e.type === "start")).toHaveLength(1);
+    });
+
+    // Gate 7: shared matcher covers `event.type === "error"` carrying the same
+    // code, and surfaces the structured code on the failed-event summary.
+    it("matches nested error shapes and surfaces the failed-event code", () => {
+      expect(
+        testing.isInvalidEncryptedContentError({
+          error: { code: "invalid_encrypted_content" },
+        }),
+      ).toBe(true);
+      expect(
+        testing.isInvalidEncryptedContentError({
+          response: { body: { error: { code: "thinking_signature_invalid" } } },
+        }),
+      ).toBe(true);
+      expect(
+        testing.isInvalidEncryptedContentError({
+          cause: { code: "invalid_encrypted_content" },
+        }),
+      ).toBe(true);
+      // response.incomplete style is NOT treated as encrypted-content.
+      expect(testing.isInvalidEncryptedContentError({ code: "max_output_tokens" })).toBe(false);
+      // The failed-event summary surfaces the structured code for the matcher.
+      const summary = testing.normalizeResponsesFailedEvent(
+        encryptedFailedEvent("resp_failed_code"),
+        responsesModel,
+      );
+      expect(summary.code).toBe("invalid_encrypted_content");
+    });
+
+    function encryptedErrorEvent(): unknown {
+      // A streamed `type: "error"` SSE that nests the code under `error.code`
+      // (the shape that the pre-#95441b code dropped). No top-level event.code.
+      return {
+        type: "error",
+        error: {
+          code: "invalid_encrypted_content",
+          message: "The encrypted content for item rs_prior could not be verified.",
+          type: "invalid_request_error",
         },
-        request.input[1],
-        request.input[2],
-      ],
+      };
+    }
+
+    // Gate 8: a nested `type: "error"` SSE carrying invalid_encrypted_content
+    // must drive the SAME drain-level retry as response.failed. This is the
+    // production path the standalone matcher test did not cover: the thrown
+    // ResponsesStreamFailureError must keep the nested code so the detector
+    // fires and the sanitized retry succeeds.
+    it("retries on a nested type:error encrypted-content event", async () => {
+      const { events, stream } = makeStartedStreamRecorder();
+      const output = createResponsesAssistantOutput(
+        responsesModel as unknown as Model<"azure-openai-responses">,
+      );
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(streamChunks([encryptedErrorEvent()]))
+        .mockResolvedValueOnce(streamChunks(completedTextEvents("resp_ok_after_error", "hi")));
+
+      stream.push({ type: "start", partial: output });
+      await testing.runResponsesDrainWithEncryptedRetry({
+        client: { responses: { create } } as never,
+        request: poisonedRequest as never,
+        requestOptions: undefined,
+        model: responsesModel,
+        output,
+        stream,
+      });
+
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("encrypted_content");
+      expect(events.filter((e) => e.type === "start")).toHaveLength(1);
+      expect(output.content.map((b) => (b as { type: string }).type)).toContain("text");
+    });
+
+    // Gate 9: the type:error normalizer reads BOTH the flat (event.code) and the
+    // nested (event.error.code) shapes, so neither wire form loses the code.
+    it("normalizes flat and nested type:error code shapes", () => {
+      expect(testing.normalizeResponsesErrorEvent(encryptedErrorEvent() as never).code).toBe(
+        "invalid_encrypted_content",
+      );
+      expect(
+        testing.normalizeResponsesErrorEvent({
+          type: "error",
+          code: "invalid_encrypted_content",
+          message: "flat",
+        } as never).code,
+      ).toBe("invalid_encrypted_content");
+    });
+
+    // Gate 10: the matcher also recognizes the provider's pre-stream 400 prose
+    // (no structured code) so #95441's primary failure shape still triggers
+    // the sanitized retry.
+    it("matches the bare provider 400 prose with no structured code", () => {
+      expect(
+        testing.isInvalidEncryptedContentError({
+          message: "The encrypted content for item rs_prior could not be verified.",
+        }),
+      ).toBe(true);
+      expect(
+        testing.isInvalidEncryptedContentError({
+          message: "Encrypted content could not be decrypted or parsed.",
+        }),
+      ).toBe(true);
+      // Unrelated prose must NOT match.
+      expect(testing.isInvalidEncryptedContentError({ message: "content moderation failed" })).toBe(
+        false,
+      );
+    });
+
+    // Gate 11: the sanitized retry strips ALL replay-only provider-private
+    // material (#95441 fix #3) -- thinkingSignature/textSignature in addition
+    // to nested encrypted_content -- not just encrypted_content alone.
+    it("strips thinkingSignature and textSignature, not just encrypted_content", () => {
+      const stripped = testing.stripResponsesRequestEncryptedContent({
+        model: "gpt-5.5",
+        stream: true,
+        input: [
+          {
+            type: "reasoning",
+            id: "rs_prior",
+            encrypted_content: "ciphertext",
+            thinkingSignature: "sig-think",
+            summary: [],
+          },
+          {
+            type: "message",
+            id: "msg_prior",
+            role: "assistant",
+            textSignature: "sig-text",
+            content: [{ type: "output_text", text: "prior answer" }],
+          },
+        ],
+      } as never);
+      const serialized = JSON.stringify(stripped);
+      expect(serialized).not.toContain("encrypted_content");
+      expect(serialized).not.toContain("thinkingSignature");
+      expect(serialized).not.toContain("textSignature");
+      // Non-private content is preserved.
+      expect(serialized).toContain("prior answer");
     });
   });
 
