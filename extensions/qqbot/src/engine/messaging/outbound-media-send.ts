@@ -210,6 +210,19 @@ function resolveOutboundMediaReadFile(ctx: OutboundMediaAccessContext) {
   return ctx.mediaAccess?.readFile ?? ctx.mediaReadFile;
 }
 
+function resolveHostReadMediaAccess(
+  ctx: OutboundMediaAccessContext,
+): OutboundMediaAccessContext["mediaAccess"] | undefined {
+  const mediaLocalRoots = resolveOutboundMediaLocalRoots(ctx);
+  if (!ctx.mediaAccess && !mediaLocalRoots) {
+    return undefined;
+  }
+  return {
+    ...(ctx.mediaAccess ?? {}),
+    ...(mediaLocalRoots ? { localRoots: mediaLocalRoots } : {}),
+  };
+}
+
 function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
   switch (mediaKind) {
     case "image":
@@ -265,12 +278,12 @@ async function stageHostReadVoice(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  const mediaAccess = resolveHostReadMediaAccess(ctx);
   const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
     maxBytes: getMaxUploadSize(MediaFileType.VOICE),
-    mediaAccess: ctx.mediaAccess,
-    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaAccess,
     mediaReadFile,
-    workspaceDir: ctx.mediaAccess?.workspaceDir,
+    workspaceDir: mediaAccess?.workspaceDir,
   });
   const stagedDir = getQQBotMediaDir("host-read", "voice");
   await mkdir(stagedDir, { recursive: true });
@@ -292,13 +305,13 @@ async function trySendViaHostRead(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  const mediaAccess = resolveHostReadMediaAccess(ctx);
   try {
     const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
       maxBytes: getMaxUploadSize(mediaFileTypeForKind(mediaKind)),
-      mediaAccess: ctx.mediaAccess,
-      mediaLocalRoots: ctx.mediaLocalRoots,
+      mediaAccess,
       mediaReadFile,
-      workspaceDir: ctx.mediaAccess?.workspaceDir,
+      workspaceDir: mediaAccess?.workspaceDir,
     });
     const kind = senderKindForLoadedMedia(mediaKind, loaded.kind);
     const creds = accountToCreds(ctx.account);

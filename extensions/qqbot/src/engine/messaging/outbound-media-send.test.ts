@@ -224,7 +224,10 @@ describe("trySendViaHostRead error handling", () => {
     expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "/tmp/workspace/report.docx",
       expect.objectContaining({
-        mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+        mediaAccess: expect.objectContaining({
+          localRoots: ["/tmp/openclaw-sandbox", "/tmp/workspace"],
+          workspaceDir: "/tmp/workspace",
+        }),
         workspaceDir: "/tmp/workspace",
       }),
     );
@@ -257,10 +260,9 @@ describe("trySendViaHostRead error handling", () => {
       "/workspace/attachments/report.docx",
       expect.objectContaining({
         mediaAccess: expect.objectContaining({
-          localRoots: ["/workspace/attachments"],
+          localRoots: ["/workspace/attachments", "/tmp/agent-workspace"],
           workspaceDir: "/tmp/agent-workspace",
         }),
-        mediaLocalRoots: ["/workspace/attachments"],
         workspaceDir: "/tmp/agent-workspace",
       }),
     );
@@ -280,7 +282,13 @@ describe("trySendViaHostRead error handling", () => {
     expect(result).toMatchObject({ channel: "qqbot", messageId: "voice-1" });
     expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "/tmp/workspace/clip.mp3",
-      expect.objectContaining({ maxBytes: expect.any(Number) }),
+      expect.objectContaining({
+        maxBytes: expect.any(Number),
+        mediaAccess: expect.objectContaining({
+          localRoots: ["/tmp/openclaw-sandbox", "/tmp/workspace"],
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
     );
     expect(audioPortMock.waitForFile).toHaveBeenCalledWith(expect.stringMatching(/clip-.*\.mp3$/));
     expect(mockedSenderSendMedia).toHaveBeenCalledWith(
