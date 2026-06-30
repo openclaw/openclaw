@@ -78,11 +78,13 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -857,6 +859,53 @@ private fun GatewaySettingsScreen(
   var passwordInput by remember { mutableStateOf("") }
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
+  var pendingSetupResetConfig by remember { mutableStateOf<GatewayConnectConfig?>(null) }
+
+  fun saveAndConnect(
+    config: GatewayConnectConfig,
+    resetSetupAuth: Boolean,
+  ) {
+    validationText = null
+    viewModel.saveGatewayConfigAndConnect(
+      host = config.host,
+      port = config.port,
+      tls = config.tls,
+      token = config.token,
+      bootstrapToken = config.bootstrapToken,
+      password = config.password,
+      resetSetupAuth = resetSetupAuth,
+    )
+  }
+
+  pendingSetupResetConfig?.let { config ->
+    AlertDialog(
+      onDismissRequest = { pendingSetupResetConfig = null },
+      title = { Text("Replace gateway setup?") },
+      text = {
+        Text(
+          gatewaySettingsSetupResetConfirmationText(),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+        )
+      },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            pendingSetupResetConfig = null
+            saveAndConnect(config = config, resetSetupAuth = true)
+          },
+        ) {
+          Text("Replace setup")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingSetupResetConfig = null }) {
+          Text("Cancel")
+        }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
 
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
@@ -914,45 +963,30 @@ private fun GatewaySettingsScreen(
         ClawPrimaryButton(
           text = "Save & Connect",
           onClick = {
-            val setup = setupCode.trim().takeIf { it.isNotEmpty() }?.let(::decodeGatewaySetupCode)
-            val endpointConfig =
-              if (setup != null) {
-                parseGatewayEndpointResult(setup.url).config
-              } else {
-                composeGatewayManualUrl(hostInput, portInput, tlsInput)?.let { parseGatewayEndpointResult(it).config }
-              }
-            if (endpointConfig == null) {
+            val config =
+              resolveGatewaySettingsConnectConfig(
+                setupCode = setupCode,
+                savedManualHost = manualHost,
+                savedManualPort = manualPort.toString(),
+                savedManualTls = manualTls,
+                manualHostInput = hostInput,
+                manualPortInput = portInput,
+                manualTlsInput = tlsInput,
+                savedBootstrapToken = savedBootstrapToken,
+                savedGatewayToken = savedGatewayToken,
+                tokenInput = tokenInput,
+                bootstrapTokenInput = bootstrapTokenInput,
+                passwordInput = passwordInput,
+              )
+            if (config == null) {
               validationText = "Enter a valid setup code or gateway address."
               return@ClawPrimaryButton
             }
-            val bootstrapToken =
-              setup
-                ?.bootstrapToken
-                ?.trim()
-                .orEmpty()
-                .ifEmpty { bootstrapTokenInput.trim().ifEmpty { savedBootstrapToken } }
-            val token =
-              setup
-                ?.token
-                ?.trim()
-                .orEmpty()
-                .ifEmpty { tokenInput.trim().ifEmpty { if (bootstrapToken.isBlank()) savedGatewayToken else "" } }
-            val password =
-              setup
-                ?.password
-                ?.trim()
-                .orEmpty()
-                .ifEmpty { passwordInput.trim() }
-            validationText = null
-            viewModel.saveGatewayConfigAndConnect(
-              host = endpointConfig.host,
-              port = endpointConfig.port,
-              tls = endpointConfig.tls,
-              token = token,
-              bootstrapToken = bootstrapToken,
-              password = password,
-              resetSetupAuth = setup != null,
-            )
+            if (gatewaySettingsRequiresSetupAuthReset(setupCode)) {
+              pendingSetupResetConfig = config
+            } else {
+              saveAndConnect(config = config, resetSetupAuth = false)
+            }
           },
           modifier = Modifier.fillMaxWidth(),
         )
@@ -1062,6 +1096,10 @@ internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): St
     "" -> "Unknown"
     else -> flavor.trim()
   }
+
+internal fun gatewaySettingsSetupResetConfirmationText(): String =
+  "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. " +
+    "This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."
 
 @Composable
 private fun AboutStatusRow(
