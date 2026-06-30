@@ -1,4 +1,6 @@
 /** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -240,20 +242,39 @@ describe("Code Mode", () => {
   });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    // Use pathToFileURL so the test is correct on Windows (drive-letter paths)
-    // as well as POSIX systems, rather than hardcoding file:///repo/...
-    const { pathToFileURL } = require("node:url");
-    const path = require("node:path");
+    // The original test hardcoded POSIX file:// URLs and compared against a
+    // hardcoded POSIX pathname. resolveCodeModeWorkerUrl() internally calls
+    // fileURLToPath() and uses path.sep to locate the "/dist/" segment, so
+    // its behavior is platform-dependent — but pathToFileURL() in Node.js
+    // always uses the *current* process's platform semantics and cannot be
+    // forced to emit a Windows-style file:///C:/... URL from a POSIX (e.g.
+    // Linux CI) process, or vice versa. That means this test cannot fully
+    // simulate Windows behavior on a Linux runner regardless of how the
+    // fixture is built.
+    //
+    // What we *can* assert platform-independently is the actual contract of
+    // resolveCodeModeWorkerUrl: given a module URL whose path contains a
+    // "dist" segment, it returns a URL pointing at
+    // "<distRoot>/agents/code-mode.worker.js", and a hashed selection-*.js
+    // module resolves to the same destination as the stable code-mode.js
+    // module. We verify this using the current process's own
+    // pathToFileURL/path.join (so the assertion is internally consistent
+    // regardless of which platform CI runs on), rather than a hardcoded
+    // POSIX string that happened to only ever match Linux.
+    const distRoot = path.join(process.cwd(), "dist-test-fixture", "dist");
+    const agentsDir = path.join(distRoot, "agents");
+    const workerUrl = pathToFileURL(path.join(distRoot, "agents", "code-mode.worker.js"));
 
-    const distDir = path.join(path.sep, "repo", "dist");
-    const agentsDir = path.join(distDir, "agents");
-    const workerPath = pathToFileURL(path.join(agentsDir, "code-mode.worker.js")).pathname;
+    const stableModuleUrl = pathToFileURL(path.join(agentsDir, "code-mode.js")).href;
+    const hashedModuleUrl = pathToFileURL(path.join(distRoot, "selection-abc123.js")).href;
 
-    const stableUrl = pathToFileURL(path.join(agentsDir, "code-mode.js")).href;
-    const hashedUrl = pathToFileURL(path.join(distDir, "selection-abc123.js")).href;
+    const stableResolved = testing.resolveCodeModeWorkerUrl(stableModuleUrl);
+    const hashedResolved = testing.resolveCodeModeWorkerUrl(hashedModuleUrl);
 
-    expect(testing.resolveCodeModeWorkerUrl(stableUrl).pathname).toBe(workerPath);
-    expect(testing.resolveCodeModeWorkerUrl(hashedUrl).pathname).toBe(workerPath);
+    expect(stableResolved.href).toBe(workerUrl.href);
+    expect(hashedResolved.href).toBe(workerUrl.href);
+    // Both inputs resolve to the exact same destination, regardless of platform.
+    expect(stableResolved.href).toBe(hashedResolved.href);
   });
 
   it("hides all normal tools behind exec and wait", () => {
