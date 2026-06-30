@@ -78,6 +78,37 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
+    // Bundle-format plugins (Claude-plugin layout: .claude-plugin/plugin.json +
+    // skills/) ship without package.json.  Validate the bundle manifest instead
+    // of requiring an npm package.json (#97985).
+    const isBundlePlugin =
+      record.clawhubFamily === "bundle-plugin" ||
+      (await safeStat(path.join(installPath, ".claude-plugin", "plugin.json")))?.isFile();
+    if (isBundlePlugin) {
+      const bundleManifestPath = path.join(installPath, ".claude-plugin", "plugin.json");
+      const bundleManifestStat = await safeStat(bundleManifestPath);
+      if (!bundleManifestStat?.isFile()) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: "missing-package-json",
+          detail: `.claude-plugin/plugin.json is missing under ${installPath}`,
+        });
+        continue;
+      }
+      try {
+        JSON.parse(await fs.readFile(bundleManifestPath, "utf8"));
+      } catch (err) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: "invalid-package-json",
+          detail: `Could not parse .claude-plugin/plugin.json: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      continue;
+    }
+
     const packageJsonPath = path.join(installPath, "package.json");
     const packageJsonStat = await safeStat(packageJsonPath);
     if (!packageJsonStat?.isFile()) {

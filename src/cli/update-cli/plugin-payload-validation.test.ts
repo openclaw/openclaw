@@ -461,6 +461,82 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
+  it("accepts a bundle plugin (clawhubFamily=bundle-plugin) with valid .claude-plugin/plugin.json", async () => {
+    const dir = path.join(tmpRoot, "feishu-bundle");
+    await fs.mkdir(path.join(dir, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "feishu", version: "1.0.0" }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        feishu: { source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir },
+      },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["feishu"]);
+  });
+
+  it("accepts a bundle plugin detected by .claude-plugin/plugin.json presence", async () => {
+    const dir = path.join(tmpRoot, "feishu-bundle");
+    await fs.mkdir(path.join(dir, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "feishu" }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        feishu: { source: "clawhub", installPath: dir },
+      },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["feishu"]);
+  });
+
+  it("reports a failure for a bundle plugin with missing .claude-plugin/plugin.json", async () => {
+    const dir = path.join(tmpRoot, "bad-bundle");
+    await fs.mkdir(dir, { recursive: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        bad: { source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "bad",
+        installPath: dir,
+        reason: "missing-package-json",
+        detail: `.claude-plugin/plugin.json is missing under ${dir}`,
+      },
+    ]);
+  });
+
+  it("reports a failure for a bundle plugin with unparseable .claude-plugin/plugin.json", async () => {
+    const dir = path.join(tmpRoot, "bad-bundle");
+    await fs.mkdir(path.join(dir, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".claude-plugin", "plugin.json"), "not-json", "utf8");
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        bad: { source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "bad",
+        installPath: dir,
+        reason: "invalid-package-json",
+        detail:
+          "Could not parse .claude-plugin/plugin.json: Unexpected token 'o', \"not-json\" is not valid JSON",
+      },
+    ]);
+  });
+
   it("only checks records whose source is package-tracked (npm/clawhub/git/marketplace)", async () => {
     const dir = path.join(tmpRoot, "tracked");
     await writePackage(dir, { name: "tracked" }, "module.exports = {};");
