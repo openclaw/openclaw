@@ -29,6 +29,11 @@ export * from "../tools/index.js";
 // Intentional public runtime surface: channel plugins use ingress agent helpers directly.
 export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";
+export {
+  runModelsAuthLoginFlow,
+  type ModelsAuthLoginFlowOptions,
+  type ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 
 export {
   CLAUDE_CLI_PROFILE_ID,

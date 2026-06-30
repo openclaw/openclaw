@@ -1,4 +1,8 @@
 // Telegram plugin module implements bot native command deps behavior.
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -18,6 +22,7 @@ export type TelegramNativeCommandDeps = Pick<
   | "syncTelegramMenuCommands"
 > & {
   getPluginCommandSpecs?: typeof getPluginCommandSpecs;
+  runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
 };
 
 export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
@@ -38,6 +43,10 @@ export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
   },
   get getPluginCommandSpecs() {
     return getPluginCommandSpecs;
+  },
+  async runModelsAuthLoginFlow(opts) {
+    const { runModelsAuthLoginFlow } = await import("openclaw/plugin-sdk/agent-runtime");
+    return await runModelsAuthLoginFlow(opts);
   },
   async editMessageTelegram(...args) {
     const { editMessageTelegram } = await loadTelegramSendModule();

@@ -12,6 +12,7 @@ export type OAuthRefreshFailureReason =
   | "invalid_grant"
   | "sign_in_again"
   | "invalid_refresh_token"
+  | "token_invalidated"
   | "revoked";
 
 type OAuthRefreshFailure = {
@@ -66,6 +67,9 @@ export function classifyOAuthRefreshFailureReason(
   }
   if (lower.includes("invalid_grant")) {
     return "invalid_grant";
+  }
+  if (lower.includes("token_invalidated")) {
+    return "token_invalidated";
   }
   if (lower.includes("signing in again") || lower.includes("sign in again")) {
     return "sign_in_again";

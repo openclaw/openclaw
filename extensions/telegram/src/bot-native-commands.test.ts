@@ -33,6 +33,7 @@ type PlugCommandHarnessParams = {
   result?: Record<string, unknown>;
   registerOverrides?: Partial<Parameters<typeof registerTelegramNativeCommands>[0]>;
 };
+type LoginFlowMock = ReturnType<typeof vi.fn>;
 
 function primePlugCommand(params: PlugCommandHarnessParams = {}) {
   pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
@@ -73,6 +74,33 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
   };
 }
 
+function registerLoginCommand(params: {
+  cfg: OpenClawConfig;
+  loginFlow: LoginFlowMock;
+  allowFrom?: string[];
+}) {
+  const botHarness = createCommandBot();
+  const nativeParams = createNativeCommandTestParams(params.cfg, {
+    bot: botHarness.bot,
+    allowFrom: params.allowFrom ?? ["200"],
+  });
+  registerTelegramNativeCommands({
+    ...nativeParams,
+    telegramDeps: {
+      ...nativeParams.telegramDeps,
+      runModelsAuthLoginFlow: params.loginFlow,
+    } as never,
+  });
+  const handler = botHarness.commandHandlers.get("login");
+  if (!handler) {
+    throw new Error("expected login command handler to be registered");
+  }
+  return {
+    ...botHarness,
+    handler,
+  };
+}
+
 function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | undefined): string[] {
   const callbackData: string[] = [];
   for (const row of replyMarkup?.inline_keyboard ?? []) {
@@ -99,6 +127,14 @@ function firstCallArg(mock: { mock: { calls: Array<Array<unknown>> } }, argIndex
     throw new Error(`expected first mock call arg ${argIndex}`);
   }
   return arg as Record<string, unknown>;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function firstDeliverRepliesParams() {
@@ -431,6 +467,130 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast auto")).toBe("/fast auto");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("handles /login codex by sending the device code before login completes", async () => {
+    const loginFlow = vi.fn(
+      async (params: {
+        provider?: string;
+        method?: string;
+        agent?: string;
+        prompter: { note: (message: string, title?: string) => Promise<void> };
+      }) => {
+        expect(params.provider).toBe("openai");
+        expect(params.method).toBe("device-code");
+        expect(params.agent).toBe("main");
+        await params.prompter.note(
+          [
+            "Open this URL in your LOCAL browser and enter the code below.",
+            "URL: https://auth.openai.com/codex/device",
+            "Code: ABCD-EFGH",
+            "Code expires in 15 minutes. Never share it.",
+          ].join("\n"),
+          "OpenAI Codex device code",
+        );
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      },
+    );
+    const { handler, sendMessage, setMyCommands } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toContainEqual({
+      command: "login",
+      description: "Pair Codex login in this chat.",
+    });
+
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+
+    const texts = sendMessage.mock.calls.map((call) => String(call[1]));
+    expect(texts[0]).toContain("URL: https://auth.openai.com/codex/device");
+    expect(texts[0]).toContain("Code: ABCD-EFGH");
+    expect(texts[0]).toContain("Never share it.");
+    expect(texts.at(-1)).toContain("Codex login complete. Try your request again now.");
+  });
+
+  it("rejects /login for authorized senders who are not owners", async () => {
+    const loginFlow = vi.fn(async () => ({
+      providerId: "openai",
+      methodId: "device-code",
+      profiles: [],
+    }));
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          allowFrom: { telegram: ["200"] },
+          ownerAllowFrom: ["999"],
+        },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+
+    expect(loginFlow).not.toHaveBeenCalled();
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+      "Only the OpenClaw owner can start Codex login from Telegram.",
+    );
+  });
+
+  it("dedupes active /login flows for the same Telegram thread", async () => {
+    const deferred = createDeferred<void>();
+    const loginFlow = vi.fn(
+      async (params: {
+        prompter: { note: (message: string, title?: string) => Promise<void> };
+      }) => {
+        await params.prompter.note(
+          [
+            "Open this URL in your LOCAL browser and enter the code below.",
+            "URL: https://auth.openai.com/codex/device",
+            "Code: FIRST-CODE",
+            "Code expires in 15 minutes. Never share it.",
+          ].join("\n"),
+          "OpenAI Codex device code",
+        );
+        await deferred.promise;
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      },
+    );
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    const first = handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    await vi.waitFor(() => expect(loginFlow).toHaveBeenCalledTimes(1));
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    deferred.resolve();
+    await first;
+
+    expect(loginFlow).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+      "A Codex login code is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
+    );
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

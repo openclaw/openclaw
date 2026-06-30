@@ -1,7 +1,7 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
-import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -263,6 +263,22 @@ export function buildBuiltinChatCommands(
           description: "Optional note for Codex feedback upload",
           type: "string",
           captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "login",
+      nativeName: "login",
+      description: "Pair Codex login in this chat.",
+      textAlias: "/login",
+      category: "management",
+      tier: "standard",
+      args: [
+        {
+          name: "provider",
+          description: "Provider to pair",
+          type: "string",
+          choices: ["codex", "openai"],
         },
       ],
     }),
