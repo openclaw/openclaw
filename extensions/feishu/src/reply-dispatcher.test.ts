@@ -2146,3 +2146,78 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
   });
 });
+
+describe("streaming start param filtering (Phase 10)", () => {
+  function computeStreamingStartParams(params: {
+    replyToMessageId?: string;
+    skipReplyToInMessages?: boolean;
+    rootId?: string;
+  }): { replyToMessageId?: string; rootId?: string } {
+    const sendReplyToMessageId = params.skipReplyToInMessages ? undefined : params.replyToMessageId;
+    const effectiveRootId = params.skipReplyToInMessages ? undefined : params.rootId;
+    return { replyToMessageId: sendReplyToMessageId, rootId: effectiveRootId };
+  }
+
+  it("passes both replyToMessageId and rootId for group/topic replies", () => {
+    const r = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: false,
+      rootId: "root-456",
+    });
+    expect(r.replyToMessageId).toBe("msg-123");
+    expect(r.rootId).toBe("root-456");
+  });
+
+  it("filters both when skipReplyToInMessages is true", () => {
+    const r = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: true,
+      rootId: "root-456",
+    });
+    expect(r.replyToMessageId).toBeUndefined();
+    expect(r.rootId).toBeUndefined();
+  });
+
+  it("handles undefined rootId", () => {
+    const r = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: false,
+    });
+    expect(r.replyToMessageId).toBe("msg-123");
+    expect(r.rootId).toBeUndefined();
+  });
+
+  it("handles skipReplyToInMessages with undefined rootId", () => {
+    const r = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: true,
+    });
+    expect(r.replyToMessageId).toBeUndefined();
+    expect(r.rootId).toBeUndefined();
+  });
+
+  it("handles undefined replyToMessageId", () => {
+    const r = computeStreamingStartParams({ skipReplyToInMessages: false, rootId: "root-456" });
+    expect(r.replyToMessageId).toBeUndefined();
+    expect(r.rootId).toBe("root-456");
+  });
+
+  it("ensures allowTopLevelReplyFallback uses effectiveRootId", () => {
+    const dm = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: true,
+      rootId: "root-456",
+    });
+    expect(dm.rootId !== undefined && dm.replyToMessageId !== undefined).toBe(false);
+    const thread = computeStreamingStartParams({
+      replyToMessageId: "msg-123",
+      skipReplyToInMessages: false,
+      rootId: "root-456",
+    });
+    expect(
+      thread.rootId !== undefined &&
+        thread.replyToMessageId !== undefined &&
+        thread.replyToMessageId !== thread.rootId,
+    ).toBe(true);
+  });
+});

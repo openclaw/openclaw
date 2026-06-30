@@ -172,15 +172,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  // When skipReplyToInMessages is set for ordinary DMs, both the reply target
+  // and the root message id must be filtered so the streaming card does not
+  // route through root_create or reply_to modes intended for group/thread.
+  const effectiveRootId = skipReplyToInMessages ? undefined : rootId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
     effectiveReplyInThread === true &&
     threadReplyMode &&
-    rootId !== undefined &&
+    effectiveRootId !== undefined &&
     sendReplyToMessageId !== undefined &&
-    sendReplyToMessageId !== rootId;
+    sendReplyToMessageId !== effectiveRootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -393,9 +397,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const cardHeader = resolveCardHeader(agentId, identity);
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
-          replyToMessageId,
+          replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
-          rootId,
+          rootId: effectiveRootId,
           header: cardHeader,
           note: cardNote,
         });
