@@ -437,14 +437,10 @@ export function buildSessionContext(
  * Encodes cwd into a safe directory name under ~/.openclaw/agent/sessions/.
  */
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
-  // Percent-encode path separators so distinct cwds never collide on encoding.
-  // Previously '/' '\\' ':' all mapped to '-', causing /home/a/b-c and
-  // /home/a/b/c to share one session directory (#96542).
-  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, (ch) => {
-    if (ch === "/") return "%2F";
-    if (ch === "\\") return "%5C";
-    return "%3A";
-  })}--`;
+  // Pairwise-cwd collisions (e.g. /home/a/b-c vs /home/a/b/c mapping to the
+  // same safe-path) are caught by the header-cwd verification in continueRecent,
+  // so the session directory key does not need to be injective (#96542).
+  const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
