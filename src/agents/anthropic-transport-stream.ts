@@ -571,6 +571,8 @@ function mapStopReason(reason: string | undefined): string {
       return "toolUse";
     case "pause_turn":
       return "stop";
+    case "max_turns":
+      return "length";
     case "refusal":
     case "sensitive":
       return "error";
@@ -579,6 +581,20 @@ function mapStopReason(reason: string | undefined): string {
     default:
       throw new Error(`Unhandled stop reason: ${String(reason)}`);
   }
+}
+
+function appendProviderStopReasonDiagnostic(
+  output: { diagnostics?: AssistantMessageDiagnostic[] },
+  details: { provider: string; rawStopReason: string; normalizedStopReason: string },
+): void {
+  output.diagnostics = [
+    ...(output.diagnostics ?? []),
+    {
+      type: "provider_stop_reason",
+      timestamp: Date.now(),
+      details,
+    },
+  ];
 }
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
@@ -1532,7 +1548,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               if (delta.stop_reason === "refusal") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
-                output.stopReason = mapStopReason(delta.stop_reason);
+                const normalizedStopReason = mapStopReason(delta.stop_reason);
+                output.stopReason = normalizedStopReason;
+                if (delta.stop_reason === "max_turns") {
+                  appendProviderStopReasonDiagnostic(output, {
+                    provider: model.provider,
+                    rawStopReason: delta.stop_reason,
+                    normalizedStopReason,
+                  });
+                }
               }
             }
             if (typeof usage?.input_tokens === "number") {
