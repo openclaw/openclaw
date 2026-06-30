@@ -360,7 +360,9 @@ function isAnthropic128kOutputModel(modelId: string): boolean {
   if (isAnthropicFable5Model(modelId)) {
     return true;
   }
-  return /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
+  return /^claude-(?:opus-4-8|sonnet-5)(?=$|[^a-z0-9])/.test(
+    resolveClaudeModelIdentity({ id: modelId }),
+  );
 }
 
 function isAnthropicOpus47OrNewerModel(modelId: string): boolean {

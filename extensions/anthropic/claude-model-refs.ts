@@ -7,7 +7,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants
 
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
   opus: "claude-opus-4-8",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
   haiku: "claude-haiku-4-5",
 };
 
@@ -88,6 +88,9 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   const trimmed = split.model.trim();
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!normalized) {
+    return null;
+  }
+  if (normalized.startsWith("claude-sonnet-5")) {
     return null;
   }
   const upgraded = upgradeOldClaudeModelId(normalized);

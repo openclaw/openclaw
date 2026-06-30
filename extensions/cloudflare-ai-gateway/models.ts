@@ -7,12 +7,12 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 /** Provider id used in model refs and auth profiles. */
 export const CLOUDFLARE_AI_GATEWAY_PROVIDER_ID = "cloudflare-ai-gateway";
 /** Default Cloudflare AI Gateway model id exposed by the bundled provider. */
-export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
+export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-5";
 /** Fully-qualified default model ref used by onboarding. */
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF = `${CLOUDFLARE_AI_GATEWAY_PROVIDER_ID}/${CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID}`;
 
-const CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
-const CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS = 64_000;
+const CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+const CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS = 128_000;
 const CLOUDFLARE_AI_GATEWAY_DEFAULT_COST = {
   input: 3,
   output: 15,
@@ -33,7 +33,7 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   const id = params?.id?.trim() || CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID;
   return {
     id,
-    name: params?.name ?? "Claude Sonnet 4.6",
+    name: params?.name ?? "Claude Sonnet 5",
     reasoning: params?.reasoning ?? true,
     input: params?.input ?? ["text", "image"],
     cost: CLOUDFLARE_AI_GATEWAY_DEFAULT_COST,

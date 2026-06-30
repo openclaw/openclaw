@@ -11,7 +11,7 @@ import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-m
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveAnthropicVertexRegion } from "./region.js";
 /** Default Anthropic Vertex model used for implicit provider catalogs. */
-export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
+export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-5";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const ANTHROPIC_VERTEX_FABLE_MAX_TOKENS = 128_000;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -49,6 +49,15 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
     }),
     buildAnthropicVertexModel({
+      id: ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      maxTokens: 128000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    }),
+    buildAnthropicVertexModel({
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       reasoning: true,
@@ -67,7 +76,7 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       thinkingLevelMap: { xhigh: null, max: "max" },
     }),
     buildAnthropicVertexModel({
-      id: ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
+      id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       reasoning: true,
       input: ["text", "image"],

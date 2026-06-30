@@ -47,6 +47,17 @@ describe("Claude model contracts", () => {
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
   });
 
+  it("recognizes Claude Sonnet 5 as a modern adaptive-thinking model", () => {
+    expect(supportsClaudeAdaptiveThinking({ id: "anthropic/claude-sonnet-5" })).toBe(true);
+    expect(supportsClaudeNativeMaxEffort({ id: "claude-sonnet-5" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-sonnet-5" })).toBe(true);
+    expectLevelIdsInclude(resolveClaudeThinkingProfile("claude-sonnet-5"), [
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+  });
+
   it("does not classify later numeric model versions as supported aliases", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-80" })).toBe(false);

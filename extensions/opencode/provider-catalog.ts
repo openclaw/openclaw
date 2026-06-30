@@ -36,6 +36,7 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-sonnet-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   "claude-sonnet-4": {
     input: 3,
     output: 15,
@@ -133,6 +134,7 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-opus-4-6": "Claude Opus 4.6",
   "claude-opus-4-7": "Claude Opus 4.7",
   "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-sonnet-5": "Claude Sonnet 5",
   "claude-sonnet-4": "Claude Sonnet 4",
   "claude-sonnet-4-5": "Claude Sonnet 4.5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
@@ -311,6 +313,7 @@ function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
 const OPENCODE_ZEN_MODELS = [
   "claude-fable-5",
   "claude-opus-4-8",
+  "claude-sonnet-5",
   "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-opus-4-5",
