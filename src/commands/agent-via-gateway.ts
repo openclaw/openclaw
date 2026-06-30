@@ -9,7 +9,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { DEFAULT_AGENT_TIMEOUT_SECONDS } from "../agents/timeout.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -714,9 +713,10 @@ async function agentViaGatewayCommand(
     }
   }
   const timeoutSeconds = parseTimeoutSeconds(opts.timeout);
-  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(
-    timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
-  );
+  const gatewayTimeoutMs =
+    timeoutSeconds === undefined
+      ? NO_GATEWAY_TIMEOUT_MS
+      : resolveGatewayAgentTimeoutMs(timeoutSeconds);
 
   const sessionKey =
     classifySessionKeyShape(explicitSessionKey) === "agent"

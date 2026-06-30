@@ -290,9 +290,12 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("omits the gateway timeout override when --timeout is omitted", async () => {
+  it("omits the gateway timeout override and preserves longer server-owned waits", async () => {
     await withTempStore(async ({ store }) => {
-      const config = { agents: { defaults: {} }, session: { store, mainKey: "main" } };
+      const config = {
+        agents: { defaults: { timeoutSeconds: 200_000 } },
+        session: { store, mainKey: "main" },
+      };
       loadConfig.mockReturnValue(config);
       loadRuntimeConfig.mockReturnValue(config);
       loadConfigWithShellEnvFallback.mockResolvedValue(config);
@@ -304,7 +307,7 @@ describe("agentCliCommand", () => {
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
       const params = requireRecord(request.params, "gateway request params");
       expect(params).not.toHaveProperty("timeout");
-      expect(request.timeoutMs).toBe(172_830_000);
+      expect(request.timeoutMs).toBe(2_147_000_000);
     });
   });
 
