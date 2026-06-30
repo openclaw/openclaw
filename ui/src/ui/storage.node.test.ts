@@ -42,7 +42,7 @@ function setControlUiBasePath(value: string | undefined) {
 function setViteDevPage() {
   vi.stubGlobal("document", {
     querySelector: (selector: string) =>
-      selector === 'script[src*="/@vite/client"]' ? ({ src: "/@vite/client" } as Element) : null,
+      selector === 'script[src*="/@vite/client"]' ? ({ src: "/@vite/client" } as unknown as Element) : null,
   } as Document);
 }
 
