@@ -524,6 +524,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
+    delete this.mcporterEnv.XDG_CONFIG_HOME;
     this.closeSignal = new Promise<void>((resolve) => {
       this.resolveCloseSignal = resolve;
     });
