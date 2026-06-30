@@ -1050,7 +1050,8 @@ capabilities: {
 ```
 
 When a channel declares `captionedFinalText: true`, core changes final-mode
-auto-TTS delivery:
+auto-TTS delivery **only when the resolved auto mode is not `tagged`** (i.e.
+`always`/`inbound` final-mode TTS). In those modes:
 
 - **Text-only blocks** are suppressed during streaming. The text is
   accumulated internally and bundled as a caption on the final voice note.
@@ -1058,9 +1059,15 @@ auto-TTS delivery:
   immediately with their text stripped to avoid duplicating the caption.
 - **Fallback**: if TTS synthesis fails, accumulated text is delivered as a
   plain text reply so the user still sees the response.
-- **Tagged mode**: in `auto: "tagged"` mode, partial reply previews are also
-  suppressed on caption-capable channels to prevent raw `[[tts:text]]`
-  directives from leaking through the draft preview lane.
+
+- **Tagged mode**: in `auto: "tagged"` mode, captioned-final deferral of
+  ordinary block text is **not** engaged — plain block replies that carry
+  visible text stay visible as usual, and declaring `captionedFinalText` does
+  not hide them. Caption-capable channels still suppress the live partial-reply
+  preview during a captioned-final TTS reply, and a directive-only final reply (one whose
+  visible text is entirely consumed by `[[tts:text]]` directives) has its
+  resolved directive text attached as the voice-note caption rather than sent
+  as separate visible text.
 
 Channels that cannot attach text to voice messages, or where clients do not
 render voice-note captions, should **not** enable this capability.

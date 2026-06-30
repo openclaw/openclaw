@@ -7543,6 +7543,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Walkthrough
   - H2: File structure
   - H2: Advanced topics
+  - H2: Captioned final text (TTS voice notes)
   - H2: Next steps
   - H2: Related
 
@@ -10612,6 +10613,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-user preferences
   - H2: Output formats
   - H2: Auto-TTS behavior
+  - H2: Captioned final text (captionedFinalText)
+  - H3: When to opt in
+  - H3: Tagged mode behavior
+  - H3: How to opt in (channel plugin)
+  - H2: Output formats by channel
   - H2: Field reference
   - H2: Agent tool
   - H2: Gateway RPC

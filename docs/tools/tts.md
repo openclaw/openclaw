@@ -712,7 +712,9 @@ Reply -> TTS enabled?
 
 Channel plugins can opt in to **captioned final text** delivery by declaring
 `captionedFinalText: true` on their `capabilities.tts.voice` object. When
-enabled, core changes how text and audio are delivered during an auto-TTS reply:
+enabled, core changes how text and audio are delivered during an auto-TTS
+reply **only when the resolved auto mode is not `tagged`** (i.e. `always` or
+`inbound` final-mode TTS):
 
 1. **Live text suppression.** Instead of streaming block text to the channel
    while TTS synthesis runs, core accumulates the text internally.
@@ -731,10 +733,15 @@ clients do not render voice-note captions) should not enable this.
 
 ### Tagged mode behavior
 
-In `auto: "tagged"` mode on caption-capable channels, partial reply previews
-are suppressed to prevent raw `[[tts:text]]...[[/tts:text]]` directives from
-leaking through the channel's draft preview lane before the final
-voice-plus-caption delivery.
+In `auto: "tagged"` mode, captioned-final deferral of ordinary block text is
+**not** engaged even on caption-capable channels: plain block replies that
+carry visible text are delivered normally and stay visible — declaring
+`captionedFinalText` does not hide them. Caption-capable channels still
+suppress the live partial-reply preview during a captioned-final TTS reply, and a
+directive-only final reply (one whose visible text is entirely consumed by
+`[[tts:text]]...[[/tts:text]]` directives) has its resolved directive text
+attached as the final voice-note caption rather than sent as separate visible
+text.
 
 ### How to opt in (channel plugin)
 
