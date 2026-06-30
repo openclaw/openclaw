@@ -643,6 +643,37 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("keeps the full streamed answer when the final payload is only the last block", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        blockStreaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness();
+
+    // Multi-message turn (e.g. a CLI backend that emits one assistant message
+    // per tool round): the streamed blocks accumulate on the card...
+    await options.deliver({ text: "part1 " }, { kind: "block" });
+    await options.deliver({ text: "part2" }, { kind: "block" });
+    // ...but the final payload carries only the LAST block. It must be merged
+    // into the accumulated text, not replace it (otherwise the card collapses
+    // to just the last block).
+    await options.deliver({ text: "part2" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("part1 part2", {
+      note: "Agent: agent",
+    });
+  });
+
   it("does not prepend automatic mentions to streaming card closes", async () => {
     const overrides = {
       runtime: createRuntimeLogger(),
