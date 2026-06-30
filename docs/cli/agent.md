@@ -38,7 +38,7 @@ Related:
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
-- `--timeout <seconds>`: override agent timeout (default 600 or config value)
+- `--timeout <seconds>`: override agent timeout (config value or runtime default 172800 seconds)
 - `--json`: output JSON
 
 ## Examples
