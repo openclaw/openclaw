@@ -742,6 +742,7 @@ export const uk: TranslationMap = {
       uptime: "Час роботи",
       tickInterval: "Інтервал тіку",
       lastChannelsRefresh: "Останнє оновлення каналів",
+      configPath: "Config Path",
       channelsHint:
         "Використовуйте «Канали», щоб прив’язати WhatsApp, Telegram, Discord, Signal або iMessage.",
     },

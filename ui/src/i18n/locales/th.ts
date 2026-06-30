@@ -736,6 +736,7 @@ export const th: TranslationMap = {
       uptime: "เวลาทำงาน",
       tickInterval: "ช่วงเวลา Tick",
       lastChannelsRefresh: "รีเฟรช Channels ล่าสุด",
+      configPath: "Config Path",
       channelsHint: "ใช้ Channels เพื่อเชื่อมโยง WhatsApp, Telegram, Discord, Signal หรือ iMessage",
     },
     stats: {

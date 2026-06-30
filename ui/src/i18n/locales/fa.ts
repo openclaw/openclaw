@@ -741,6 +741,7 @@ export const fa: TranslationMap = {
       uptime: "زمان کارکرد",
       tickInterval: "فاصله Tick",
       lastChannelsRefresh: "آخرین تازه‌سازی کانال‌ها",
+      configPath: "Config Path",
       channelsHint:
         "برای پیوند دادن WhatsApp، Telegram، Discord، Signal یا iMessage از کانال‌ها استفاده کنید.",
     },

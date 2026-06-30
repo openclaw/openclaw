@@ -738,6 +738,7 @@ export const hi: TranslationMap = {
       uptime: "अपटाइम",
       tickInterval: "टिक अंतराल",
       lastChannelsRefresh: "अंतिम चैनल रिफ्रेश",
+      configPath: "Config Path",
       channelsHint:
         "WhatsApp, Telegram, Discord, Signal, या iMessage को लिंक करने के लिए Channels का उपयोग करें.",
     },

@@ -743,6 +743,7 @@ export const nl: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick-interval",
       lastChannelsRefresh: "Laatste Channels-vernieuwing",
+      configPath: "Config Path",
       channelsHint:
         "Gebruik Channels om WhatsApp, Telegram, Discord, Signal of iMessage te koppelen.",
     },
