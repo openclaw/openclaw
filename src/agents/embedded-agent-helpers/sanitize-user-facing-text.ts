@@ -127,14 +127,19 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
-    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
+  // Check overloaded BEFORE rate limit: isRateLimitErrorMessage matches the
+  // bare "429" token, so an overloaded-worded 429 body (z.ai code 1305 etc.)
+  // would surface the wrong user-facing copy ("API rate limit reached").
+  // 503/499 already follow this order in the HTTP status classifier; the
+  // user-facing copy should match.
+  if (isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
   }
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  if (isOverloadedErrorMessage(raw)) {
-    return OVERLOADED_ERROR_USER_MESSAGE;
+  if (isRateLimitErrorMessage(raw)) {
+    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   return undefined;
 }
