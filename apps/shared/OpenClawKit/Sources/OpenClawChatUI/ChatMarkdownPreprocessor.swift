@@ -218,6 +218,15 @@ enum ChatMarkdownPreprocessor {
         output = output.replacingOccurrences(of: "\r\n", with: "\n")
         output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
         output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        // Convert single newlines to paragraph breaks so they render as
+        // visible line breaks rather than soft breaks (spaces) in markdown.
+        // Uses a lookahead/lookbehind regex to match \n that is NOT preceded
+        // or followed by another \n, preserving intentional \n\n paragraph
+        // breaks already present in the source.
+        output = output.replacingOccurrences(
+            of: "(?<!\n)\n(?!\n)",
+            with: "\n\n",
+            options: .regularExpression)
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
