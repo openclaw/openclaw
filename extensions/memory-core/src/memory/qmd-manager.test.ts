@@ -292,6 +292,84 @@ describe("QmdMemoryManager", () => {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
 
+  function createClosableQmdManagerForTest(params?: {
+    pendingUpdate?: Promise<void> | null;
+    queuedForcedUpdate?: Promise<void> | null;
+  }): QmdMemoryManager {
+    const manager = Object.create(QmdMemoryManager.prototype) as QmdMemoryManager;
+    const mutable = manager as unknown as {
+      closed: boolean;
+      resolveCloseSignal: () => void;
+      updateTimer: NodeJS.Timeout | null;
+      embedTimer: NodeJS.Timeout | null;
+      watchTimer: NodeJS.Timeout | null;
+      watcher: { close: () => Promise<void> } | null;
+      queuedForcedRuns: number;
+      pendingUpdate: Promise<void> | null;
+      queuedForcedUpdate: Promise<void> | null;
+      db: { close: () => void } | null;
+    };
+    mutable.closed = false;
+    mutable.resolveCloseSignal = vi.fn();
+    mutable.updateTimer = null;
+    mutable.embedTimer = null;
+    mutable.watchTimer = null;
+    mutable.watcher = null;
+    mutable.queuedForcedRuns = 0;
+    mutable.pendingUpdate = params?.pendingUpdate ?? null;
+    mutable.queuedForcedUpdate = params?.queuedForcedUpdate ?? null;
+    mutable.db = null;
+    return manager;
+  }
+
+  it("clears qmd close timeout timers when update waits settle first", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createClosableQmdManagerForTest({
+        pendingUpdate: Promise.resolve(),
+        queuedForcedUpdate: Promise.resolve(),
+      });
+
+      await manager.close(5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expectMockMessageNotContains(logWarnMock, "qmd close timed out");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses one qmd close timeout across pending and queued update waits", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createClosableQmdManagerForTest({
+        pendingUpdate: new Promise(() => {}),
+        queuedForcedUpdate: new Promise(() => {}),
+      });
+      let closed = false;
+
+      const closePromise = manager.close(5_000).then(() => {
+        closed = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      await Promise.resolve();
+      expect(closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await closePromise;
+
+      expect(closed).toBe(true);
+      expectMockMessageContains(
+        logWarnMock,
+        "qmd close timed out waiting for pending update and queued forced update after 5000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps mcporter search process timeout grace", () => {
     expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
     expect(resolveQmdMcporterSearchProcessTimeoutMs(10_000)).toBe(12_000);

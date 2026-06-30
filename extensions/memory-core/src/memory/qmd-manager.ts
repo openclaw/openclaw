@@ -1921,7 +1921,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  async close(): Promise<void> {
+  async close(timeoutMs?: number): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -1944,8 +1944,45 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.watcher = null;
     }
     this.queuedForcedRuns = 0;
-    await this.pendingUpdate?.catch(() => undefined);
-    await this.queuedForcedUpdate?.catch(() => undefined);
+    const pendingUpdates = [
+      { label: "pending update", promise: this.pendingUpdate },
+      { label: "queued forced update", promise: this.queuedForcedUpdate },
+    ].filter(
+      (update): update is { label: string; promise: Promise<void> } => update.promise !== null,
+    );
+    if (pendingUpdates.length > 0) {
+      const cleanupTimeoutMs =
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? Math.floor(timeoutMs)
+          : undefined;
+      const updatesDone = Promise.all(
+        pendingUpdates.map(async ({ promise }) => await promise.catch(() => undefined)),
+      ).then(() => undefined);
+
+      if (cleanupTimeoutMs === undefined) {
+        await updatesDone;
+      } else {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const labels = pendingUpdates.map(({ label }) => label).join(" and ");
+        const timeoutPromise = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            log.warn(
+              `qmd close timed out waiting for ${labels} after ${cleanupTimeoutMs}ms; proceeding with cleanup`,
+            );
+            resolve();
+          }, cleanupTimeoutMs);
+          timer.unref?.();
+        });
+
+        try {
+          await Promise.race([updatesDone, timeoutPromise]);
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
+      }
+    }
     if (this.db) {
       this.db.close();
       this.db = null;

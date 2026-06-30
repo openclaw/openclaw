@@ -40,6 +40,9 @@ function nativePath(candidate: string): string {
   return path.resolve(candidate);
 }
 
+type ManagerSearchParams = Parameters<SearchManager["search"]>;
+type ManagerSearchResult = Awaited<ReturnType<SearchManager["search"]>>;
+
 function createManagerMock(params: {
   backend: "qmd" | "builtin";
   provider: string;
@@ -56,7 +59,12 @@ function createManagerMock(params: {
   withMemorySourceCounts?: boolean;
 }) {
   return {
-    search: vi.fn(async () => params.searchResults ?? []),
+    search: vi.fn(
+      async (
+        _query: ManagerSearchParams[0],
+        _opts?: ManagerSearchParams[1],
+      ): Promise<ManagerSearchResult> => params.searchResults ?? [],
+    ),
     readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
     status: vi.fn(() =>
       createManagerStatus({

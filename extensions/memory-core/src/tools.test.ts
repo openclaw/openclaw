@@ -1,11 +1,12 @@
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockArgs,
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
@@ -303,6 +304,43 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("bounds one-shot CLI qmd cleanup after memory_search timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 45_000 } },
+          },
+        }),
+        oneShotCliRun: true,
+      });
+
+      const resultPromise = tool.execute("qmd-cli-cleanup-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 45s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchSignal?.aborted).toBe(true);
+      expect(getMemoryCloseMockCalls()).toBe(1);
+      expect(getMemoryCloseMockArgs()).toEqual([{ timeoutMs: 5_000 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps qmd-configured wiki-only searches on the default deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -478,6 +516,7 @@ describe("memory_search unavailable payloads", () => {
       expect.objectContaining({ purpose: "cli" }),
     ]);
     expect(getMemoryCloseMockCalls()).toBe(1);
+    expect(getMemoryCloseMockArgs()).toEqual([{ timeoutMs: 5_000 }]);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {
