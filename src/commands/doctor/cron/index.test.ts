@@ -13,6 +13,7 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
@@ -442,6 +443,117 @@ describe("maybeRepairLegacyCronStore", () => {
     await expect(fs.readFile(`${storePath}.migrated`, "utf-8")).resolves.toBe("old archive");
     await expect(fs.stat(`${storePath}.migrated.2`)).resolves.toBeTruthy();
     expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("archives the legacy cron store and its state file on a successful rename", async () => {
+    const storePath = await makeTempStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        { version: 1, jobs: { "legacy-job": { updatedAtMs: 1, state: {} } } },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${storePath}.migrated`)).resolves.toBeTruthy();
+    await expect(fs.stat(`${statePath}.migrated`)).resolves.toBeTruthy();
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+    expectNoNoteContaining("could not archive the legacy cron file", "Doctor warnings");
+  });
+
+  it("falls back to copy+unlink when renaming the legacy cron store fails with EXDEV", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+
+    const realRename = fs.rename;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (oldPath === storePath) {
+        const exdev = new Error(
+          "EXDEV: cross-device link not permitted, rename",
+        ) as NodeJS.ErrnoException;
+        exdev.code = "EXDEV";
+        throw exdev;
+      }
+      return realRename(oldPath, newPath);
+    });
+
+    await withRestoredMocks([renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expect(renameSpy).toHaveBeenCalled();
+      // Cross-device rename failed, so archiving fell back to copy+unlink: the legacy
+      // file is moved to its archive path and removed from the original location.
+      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(`${storePath}.migrated`, "utf-8")).resolves.toContain("legacy-job");
+      expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+      expectNoNoteContaining("could not archive the legacy cron file", "Doctor warnings");
+    });
+
+    // A second doctor pass must not re-detect (and re-warn about) the archived store.
+    noteMock.mockClear();
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+  });
+
+  it("warns honestly without a false success when archiving the legacy cron store fails entirely", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+
+    const realRename = fs.rename;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (oldPath === storePath) {
+        const exdev = new Error(
+          "EXDEV: cross-device link not permitted, rename",
+        ) as NodeJS.ErrnoException;
+        exdev.code = "EXDEV";
+        throw exdev;
+      }
+      return realRename(oldPath, newPath);
+    });
+    const realCopyFile = fs.copyFile;
+    const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (src, dest, mode) => {
+      if (src === storePath) {
+        const eacces = new Error("EACCES: permission denied, copyfile") as NodeJS.ErrnoException;
+        eacces.code = "EACCES";
+        throw eacces;
+      }
+      return realCopyFile(src, dest, mode);
+    });
+
+    await withRestoredMocks([copyFileSpy, renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      // Both rename and the copy+unlink fallback failed, so the legacy file must remain
+      // and doctor must surface a warning instead of claiming a finished migration.
+      await expect(fs.stat(storePath)).resolves.toBeTruthy();
+      expectNoteContaining("could not archive the legacy cron file", "Doctor warnings");
+      expectNoteContaining("EACCES", "Doctor warnings");
+      expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+    });
   });
 
   it("imports legacy-only jobs when SQLite already has cron rows", async () => {

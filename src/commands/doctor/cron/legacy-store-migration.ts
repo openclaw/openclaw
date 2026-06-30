@@ -29,15 +29,35 @@ async function legacyCronFileExists(filePath: string): Promise<boolean> {
     .catch(() => false);
 }
 
-async function archiveLegacyCronFile(filePath: string): Promise<void> {
+type ArchiveOutcome = { ok: true } | { ok: false; reason: string };
+
+async function archiveLegacyCronFile(filePath: string): Promise<ArchiveOutcome> {
   if (!(await legacyCronFileExists(filePath))) {
-    return;
+    return { ok: true };
   }
   let archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}`;
   for (let index = 2; await legacyCronFileExists(archivePath); index += 1) {
     archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}.${index}`;
   }
-  await fs.rename(filePath, archivePath).catch(() => undefined);
+  try {
+    await fs.rename(filePath, archivePath);
+    return { ok: true };
+  } catch (err) {
+    // A cross-device rename (EXDEV) is common when the cron store lives on a Docker
+    // bind mount; fall back to copy+unlink below so the legacy file is still archived.
+    // Any other rename failure is surfaced so doctor reports it instead of silently
+    // leaving the legacy file to be re-detected on every run.
+    if ((err as { code?: unknown })?.code !== "EXDEV") {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  try {
+    await fs.copyFile(filePath, archivePath);
+    await fs.unlink(filePath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 function parseCronStateFile(raw: string): {
@@ -223,13 +243,31 @@ export async function legacyCronStoreFilesExist(storePath: string): Promise<bool
   );
 }
 
-/** Rename legacy cron JSON/state files after successful migration. */
-export async function archiveLegacyCronStoreForMigration(storePath: string): Promise<void> {
+export type LegacyCronArchiveResult =
+  | { ok: true }
+  | { ok: false; failures: Array<{ path: string; reason: string }> };
+
+/**
+ * Archive legacy cron JSON/state files after successful migration. Uses rename, then a
+ * copy+unlink fallback for cross-device (EXDEV) moves, and reports any file that could
+ * not be archived so the caller does not claim a finished migration while a leftover
+ * legacy file would be re-detected on the next doctor run.
+ */
+export async function archiveLegacyCronStoreForMigration(
+  storePath: string,
+): Promise<LegacyCronArchiveResult> {
   const resolvedStorePath = path.resolve(storePath);
-  await Promise.all([
-    archiveLegacyCronFile(resolvedStorePath),
-    archiveLegacyCronFile(resolveLegacyCronStatePath(resolvedStorePath)),
-  ]);
+  const targets = [resolvedStorePath, resolveLegacyCronStatePath(resolvedStorePath)];
+  const failures: Array<{ path: string; reason: string }> = [];
+  await Promise.all(
+    targets.map(async (target) => {
+      const outcome = await archiveLegacyCronFile(target);
+      if (!outcome.ok) {
+        failures.push({ path: target, reason: outcome.reason });
+      }
+    }),
+  );
+  return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
 
 /** Load legacy cron JSON/state files into the current loaded-store shape for migration. */

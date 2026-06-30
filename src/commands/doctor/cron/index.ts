@@ -195,10 +195,21 @@ async function applyLegacyCronStoreRepair(params: {
   }
 
   if (state.legacyStoreDetected) {
-    await archiveLegacyCronStoreForMigration(state.storePath);
-    changes.push(
-      `Cron store migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
-    );
+    const archiveResult = await archiveLegacyCronStoreForMigration(state.storePath);
+    if (archiveResult.ok) {
+      changes.push(
+        `Cron store migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
+      );
+    } else {
+      // SQLite already holds the migrated jobs, but the legacy file could not be
+      // archived (e.g. EXDEV copy+unlink failed), so report it honestly instead of
+      // claiming a finished migration; doctor re-detects the leftover and retries.
+      for (const failure of archiveResult.failures) {
+        warnings.push(
+          `Migrated cron jobs to SQLite but could not archive the legacy cron file at ${shortenHomePath(failure.path)}: ${failure.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
+        );
+      }
+    }
   } else if (state.legacyRunLogDetected && importedRunLogs > 0) {
     changes.push(
       `Cron run logs migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
