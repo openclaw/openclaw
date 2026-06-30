@@ -15,6 +15,7 @@
  *    it is treated as a new message.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
 import {
@@ -542,7 +543,7 @@ export class StreamingController {
    */
   async onDeliver(payload: { text?: string }): Promise<void> {
     const rawLen = payload.text?.length ?? 0;
-    const preview = (payload.text ?? "").slice(0, 60).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(payload.text ?? "", 60).replace(/\n/g, "\\n");
     this.logDebug(
       `onDeliver: rawLen=${rawLen}, phase=${this.phase}, streamMsgId=${this.streamMsgId}, sentIndex=${this.sentIndex}, sentChunks=${this.sentStreamChunkCount}, firstCB=${this.firstCallbackSource}, preview="${preview}"`,
     );
