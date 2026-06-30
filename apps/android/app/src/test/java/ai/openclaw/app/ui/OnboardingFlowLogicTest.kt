@@ -203,6 +203,29 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayDetailPreservesRetryablePairingGuidance() {
+    assertEquals(
+      "Gateway approval is in progress. OpenClaw will retry automatically.",
+      recoveryGatewayDetail(
+        ready = false,
+        remoteAddress = null,
+        statusText = "Connected (node offline)",
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = "wait_then_retry",
+            pauseReconnect = false,
+            retryable = true,
+          ),
+      ),
+    )
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
     val cases =
       listOf(

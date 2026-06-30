@@ -1206,7 +1206,7 @@ private fun resolveGatewayConfig(
 }
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-private fun recoveryGatewayDetail(
+internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
@@ -1229,6 +1229,8 @@ private fun recoveryGatewayDetail(
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
         ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
+    } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
+      "Gateway approval is in progress. OpenClaw will retry automatically."
     } else if (gatewayConnectionProblem != null) {
       recoveryGatewayAuthDetail(gatewayConnectionProblem)
     } else if (statusText.contains("operator offline", ignoreCase = true)) {
