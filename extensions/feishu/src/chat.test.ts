@@ -300,6 +300,48 @@ describe("registerFeishuChatTools", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
+  it("lets explicit accountId override the contextual chat account", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              accounts: {
+                a: {
+                  appId: "app-a",
+                  appSecret: "sec-a", // pragma: allowlist secret
+                  tools: { chat: true },
+                },
+                b: {
+                  appId: "app-b",
+                  appSecret: "sec-b", // pragma: allowlist secret
+                  tools: { chat: true },
+                },
+              },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const tool = buildChatTool(registerTool, { agentAccountId: "b" });
+
+    chatGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { name: "tenant a group" },
+    });
+    await tool.execute("tc_explicit_account", {
+      action: "info",
+      chat_id: "oc_a",
+      accountId: "a",
+    });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+  });
+
   it("rejects a disabled contextual chat account instead of falling back silently", async () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(
@@ -337,6 +379,45 @@ describe("registerFeishuChatTools", () => {
     expect((result.details as { error?: string }).error).toContain(
       'Feishu Chat tools are disabled for account \\"a\\"',
     );
+  });
+
+  it("registers chat when only a later account enables chat", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              accounts: {
+                a: {
+                  appId: "app-a",
+                  appSecret: "sec-a", // pragma: allowlist secret
+                  tools: { chat: false },
+                },
+                b: {
+                  appId: "app-b",
+                  appSecret: "sec-b", // pragma: allowlist secret
+                  tools: { chat: true },
+                },
+              },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    expect(registerTool).toHaveBeenCalledTimes(1);
+    const tool = buildChatTool(registerTool, { agentAccountId: "b" });
+
+    chatGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { name: "tenant b group" },
+    });
+    await tool.execute("tc_later_enabled_context_account", { action: "info", chat_id: "oc_b" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
   it("preserves Feishu diagnostics from rejected member lookups", async () => {
