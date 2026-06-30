@@ -723,7 +723,7 @@ export function createFollowupRunner(params: {
         noOpRearmWakeClass = noOpRearmAdmission.wake;
         if (!noOpRearmAdmission.admit) {
           if (noOpRearmAdmission.diagnostic) {
-            defaultRuntime.log(noOpRearmAdmission.diagnostic.message);
+            defaultRuntime.log?.(noOpRearmAdmission.diagnostic.message);
           }
           clearAgentRunContext(runId, lifecycleGeneration);
           return;

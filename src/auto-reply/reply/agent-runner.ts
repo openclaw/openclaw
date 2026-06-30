@@ -1902,7 +1902,7 @@ export async function runReplyAgent(replyParams: {
       noOpRearmWakeClass = admission.wake;
       if (!admission.admit) {
         if (admission.diagnostic) {
-          defaultRuntime.log(admission.diagnostic.message);
+          defaultRuntime.log?.(admission.diagnostic.message);
         }
         // Silent suppression: no provider turn, no visible reply. The finally block
         // completes the reply operation and typing, identical to a NO_REPLY turn.

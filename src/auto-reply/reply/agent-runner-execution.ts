@@ -147,7 +147,6 @@ import {
 } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { hasInboundAudio } from "./inbound-media.js";
-import { assertNoOpRearmAdmissionEvaluated } from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyProviderRequestError,
@@ -1825,22 +1824,6 @@ export async function runAgentTurnWithFallback(params: {
   };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-
-  // Defensive backstop (#1138/#1142). runReplyAgent decides no-op replay admission
-  // before this provider path; this best-effort tripwire surfaces one diagnostic if
-  // a room-event provider turn ever reaches the runner without that admission, so a
-  // future provider path cannot silently bypass the guard. Diagnostic-only.
-  if (params.sessionKey) {
-    const bypass = assertNoOpRearmAdmissionEvaluated({
-      sessionKey: params.sessionKey,
-      inboundEventKind: params.followupRun.currentInboundEventKind,
-      site: "agent-runner-execution",
-    });
-    if (bypass) {
-      defaultRuntime.log(bypass.message);
-    }
-  }
-
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });

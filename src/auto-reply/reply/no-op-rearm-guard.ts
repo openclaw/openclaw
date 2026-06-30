@@ -347,14 +347,6 @@ export type NoOpRearmDiagnostic = {
   message: string;
 };
 
-export type NoOpRearmBypassDiagnostic = {
-  code: "noop-rearm-admission-bypass";
-  key: string;
-  sessionKey: string;
-  site: string;
-  message: string;
-};
-
 export type NoOpRearmDecision =
   | { admit: true; reason: string; wake: NoOpRearmWakeClass }
   | {
@@ -384,21 +376,11 @@ export type NoOpRearmGuardOptions = {
   staleHumanEdgeAfterMs?: number;
 };
 
-/**
- * Window for the defensive backstop to treat a session as "just evaluated".
- * Generous because the explicit gate can sit ahead of slow pre-provider work
- * (e.g. preflight compaction) in the same turn; the backstop is a best-effort
- * tripwire, never a blocker.
- */
-const PROVIDER_GUARD_ASSERT_WINDOW_MS = 60_000;
-
 type LedgerEntry = {
   streak: number;
   lastNoOpAtMs?: number;
   lastWakeSource?: string;
   lastFreshHumanEdgeAtMs?: number;
-  lastEvaluatedAtMs?: number;
-  bypassDiagnosedEpisode?: boolean;
   seenMessageIds: string[];
   diagnosedEpisode: boolean;
   lastDiagnosticAtMs?: number;
@@ -486,7 +468,6 @@ export class NoOpRearmGuard {
   evaluate(input: NoOpRearmWakeInput): NoOpRearmDecision {
     const key = resolveNoOpRearmKey(input);
     const entry = this.getEntry(key);
-    entry.lastEvaluatedAtMs = this.now();
     let wake = classifyNoOpRearmWake(input, this.classifyOptions());
 
     if (wake.kind === "fresh_human_edge") {
@@ -597,47 +578,6 @@ export class NoOpRearmGuard {
     return this.entries.get(resolveNoOpRearmKey(input))?.streak ?? 0;
   }
 
-  /**
-   * Defensive backstop: returns a one-shot diagnostic when a guarded-family wake
-   * (room-event backlog) reaches a provider runner without a recent admission
-   * evaluation for that session. The explicit gates all evaluate immediately
-   * before constructing the provider turn, so this only fires if a future provider
-   * path bypasses admission. Diagnostic-only; never blocks.
-   */
-  assertEvaluatedBeforeProvider(input: {
-    sessionKey: string;
-    flowId?: string;
-    chainId?: string;
-    inboundEventKind?: InboundEventKind | undefined;
-    site: string;
-  }): NoOpRearmBypassDiagnostic | undefined {
-    if (input.inboundEventKind !== "room_event") {
-      return undefined;
-    }
-    const key = resolveNoOpRearmKey(input);
-    const entry = this.entries.get(key);
-    const recentlyEvaluated =
-      entry?.lastEvaluatedAtMs !== undefined &&
-      this.now() - entry.lastEvaluatedAtMs <= PROVIDER_GUARD_ASSERT_WINDOW_MS;
-    if (recentlyEvaluated) {
-      return undefined;
-    }
-    const target = entry ?? this.getEntry(key);
-    if (target.bypassDiagnosedEpisode === true) {
-      return undefined;
-    }
-    target.bypassDiagnosedEpisode = true;
-    return {
-      code: "noop-rearm-admission-bypass",
-      key,
-      sessionKey: input.sessionKey,
-      site: input.site,
-      message:
-        `[noop-rearm-guard] room-event provider turn started without no-op replay admission ` +
-        `(session=${input.sessionKey} site=${input.site}); a provider path may be bypassing the guard.`,
-    };
-  }
-
   /** Drop all ledger state. Lifecycle/test reset. */
   clear(): void {
     this.entries.clear();
@@ -659,15 +599,4 @@ export function evaluateNoOpRearmAdmission(input: NoOpRearmWakeInput): NoOpRearm
 /** Post-turn outcome recording against the process singleton. */
 export function recordNoOpRearmOutcome(input: NoOpRearmRecordInput): NoOpRearmTurnOutcome {
   return defaultGuard.record(input);
-}
-
-/** Defensive backstop against the process singleton. */
-export function assertNoOpRearmAdmissionEvaluated(input: {
-  sessionKey: string;
-  flowId?: string;
-  chainId?: string;
-  inboundEventKind?: InboundEventKind | undefined;
-  site: string;
-}): NoOpRearmBypassDiagnostic | undefined {
-  return defaultGuard.assertEvaluatedBeforeProvider(input);
 }
