@@ -766,6 +766,63 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   if (!list.pending?.length && !list.paired?.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
   }
+
+  // Check for pending node pairings and surface them if found.
+  // This helps users who are trying to approve Android/iOS node reconnections
+  // but don't know the node UUID or the correct command.
+  try {
+    const gatewayCall = await import("../gateway/call.js");
+    const clientInfo = await import("../../packages/gateway-protocol/src/client-info.js");
+    const nodeResult = await gatewayCall.callGateway({
+      url: opts.url,
+      token: opts.token,
+      password: opts.password,
+      method: "node.pair.list",
+      params: {},
+      timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
+      clientName: clientInfo.GATEWAY_CLIENT_NAMES.CLI,
+      mode: clientInfo.GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.pairing"],
+    });
+    const nodePairingList = nodeResult as {
+      pending?: Array<{
+        requestId: string;
+        nodeId?: string;
+        displayName?: string;
+        remoteIp?: string;
+      }>;
+    };
+    if (nodePairingList.pending && nodePairingList.pending.length > 0) {
+      if (!opts.json) {
+        defaultRuntime.log("");
+        defaultRuntime.log(theme.heading("Note: Pending node approvals detected"));
+        defaultRuntime.log(
+          theme.muted(
+            `Found ${nodePairingList.pending.length} pending node approval(s). Use the request ID shown below:`,
+          ),
+        );
+        defaultRuntime.log(`  ${formatCliCommand("openclaw nodes approve <requestId>")}`);
+        defaultRuntime.log("");
+        defaultRuntime.log(theme.muted("Pending node approvals:"));
+        for (const node of nodePairingList.pending) {
+          const displayId = node.nodeId ?? node.requestId;
+          const displayName = node.displayName ? `${node.displayName} ` : "";
+          const ipInfo = node.remoteIp ? ` @ ${sanitizeForLog(node.remoteIp)}` : "";
+          // Show requestId first since that's what nodes approve expects, then nodeId for reference
+          defaultRuntime.log(
+            `  • ${displayName}(requestId: ${node.requestId}, nodeId: ${displayId})${ipInfo}`,
+          );
+        }
+        defaultRuntime.log("");
+      } else {
+        // Include node pairing info in JSON output
+        const output = { ...list, pendingNodePairings: nodePairingList.pending };
+        defaultRuntime.writeJson(output);
+      }
+    }
+  } catch {
+    // Silently ignore errors fetching node pairings - this is diagnostic only.
+  }
 }
 
 export async function runDevicesRemoveCommand(
