@@ -30,6 +30,12 @@ export {
   type AssociativeBoxContext,
   type AssociativeContext,
 } from "../../../../src/agents/memory/associative-context.js";
+export {
+  readTagCooccurrence,
+  type TagGraphNeighbor,
+  type TagGraphTargetRef,
+  type TagGraphTraversal,
+} from "../../../../src/agents/memory/tag-graph.js";
 
 // Session and reply helpers.
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";

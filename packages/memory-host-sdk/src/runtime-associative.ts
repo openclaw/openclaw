@@ -4,4 +4,8 @@ export {
   readAssociativeContext,
   type AssociativeBoxContext,
   type AssociativeContext,
+  readTagCooccurrence,
+  type TagGraphNeighbor,
+  type TagGraphTargetRef,
+  type TagGraphTraversal,
 } from "./host/openclaw-runtime.js";

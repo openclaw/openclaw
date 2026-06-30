@@ -18,7 +18,7 @@ function invoke(params: Record<string, unknown>): Captured {
   let captured: Captured | undefined;
   accordionHandlers["accordion.toggle"]({
     params,
-    respond: (success, result, error) => {
+    respond: (success: boolean, result: unknown, error: unknown) => {
       captured = { success, result, error };
     },
     context: { getRuntimeConfig: () => ({}) } as never,
