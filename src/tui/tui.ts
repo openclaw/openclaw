@@ -234,10 +234,11 @@ export function resolveGatewayDisconnectState(reason?: string): {
   if (/pairing required|scope upgrade/i.test(reasonLabel)) {
     return {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "scope upgrade needed: run openclaw devices approve",
+      activityStatus: "device approval needed: preview latest request",
       pairingHint:
-        "Device scope upgrade needed. Run `openclaw devices approve --latest` " +
-        "(add `--token` if it can't approve its own upgrade), then reconnect.",
+        "Device approval needed. Run `openclaw devices approve --latest` to preview the pending request, " +
+        "then rerun the printed `openclaw devices approve <requestId>` command " +
+        "(reuse `--token` or other auth flags if needed), then reconnect.",
     };
   }
   return {
