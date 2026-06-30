@@ -351,6 +351,35 @@ function samePendingApprovalSnapshot(
   return true;
 }
 
+function isStringSubset(subset: readonly string[], superset: readonly string[]): boolean {
+  const supersetSet = new Set(superset);
+  for (const value of subset) {
+    if (!supersetSet.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// True when the incoming request only asks for roles/scopes a single existing pending
+// request (same key + role) already covers. Such subset re-requests refresh in place so
+// the owner's listed requestId stays valid; escalations still supersede with a fresh id.
+function incomingApprovalCoveredByExisting(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+): boolean {
+  if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
+    return false;
+  }
+  return (
+    isStringSubset(resolveRequestedRoles(incoming), resolveRequestedRoles(existing)) &&
+    isStringSubset(resolveRequestedScopes(incoming), resolveRequestedScopes(existing))
+  );
+}
+
 function refreshPendingDevicePairingRequest(
   existing: DevicePairingPendingRequest,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
@@ -618,7 +647,9 @@ export async function requestDevicePairing(
       pendingById: state.pendingById,
       existing: pendingForDevice,
       incoming: req,
-      canRefreshSingle: (existing, incoming) => samePendingApprovalSnapshot(existing, incoming),
+      canRefreshSingle: (existing, incoming) =>
+        samePendingApprovalSnapshot(existing, incoming) ||
+        incomingApprovalCoveredByExisting(existing, incoming),
       refreshSingle: (existing, incoming) =>
         refreshPendingDevicePairingRequest(existing, incoming, isRepair),
       buildReplacement: ({ existing, incoming }) => {
