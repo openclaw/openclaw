@@ -16,7 +16,7 @@ title: "Thinking levels"
   - xhigh → "ultrathink+" (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7+ effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7+, and Google Gemini dynamic thinking)
   - max → provider max reasoning (Anthropic Claude Opus 4.7+; Ollama maps this to its highest native `think` effort)
-  - ultra → native Codex app-server Ultra mode when the discovered Codex model advertises it; Codex owns the proactive multi-agent behavior and backend effort mapping
+  - ultra → native Codex app-server Ultra mode when live model discovery advertises it; Codex owns the proactive multi-agent behavior and backend effort mapping, and older Codex runtimes that do not advertise Ultra will not expose this level
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest` and the legacy `ultrathink` alias map to `high`; `ultra` must be requested explicitly.
 - Provider notes:
