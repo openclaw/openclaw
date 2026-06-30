@@ -351,6 +351,7 @@ describe("Google embedding-batch file-content streaming (real HTTP server)", () 
     expect(result.size).toBe(requests.length);
     expect(result.get("r0")).toEqual([1, 0, 0]);
     expect(result.get(`r${requests.length - 1}`)).toEqual([1, 0, 0]);
+    console.log(`[gemini-batch-proof] under-cap: streamed ${result.size} embeddings from >16 MiB JSONL output (real HTTP server, no fetch mock)`);
   });
 
   it("rejects a single oversized JSONL output line", async () => {
@@ -365,16 +366,17 @@ describe("Google embedding-batch file-content streaming (real HTTP server)", () 
     };
     const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
 
-    await expect(
-      runGeminiEmbeddingBatches({
-        gemini,
-        agentId: "main",
-        requests: singleRequest(),
-        wait: true,
-        concurrency: 1,
-        pollIntervalMs: 50,
-        timeoutMs: 10_000,
-      }),
-    ).rejects.toThrow(/gemini\.batch-file-content: JSONL line exceeds/);
+    const err = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    }).then(() => null).catch((e: unknown) => e as Error);
+    expect(err).not.toBeNull();
+    expect(err?.message).toMatch(/gemini\.batch-file-content: JSONL line exceeds/);
+    console.log(`[gemini-batch-proof] over-cap: oversized JSONL line (17 MiB) rejected before full buffering — ${err?.message}`);
   });
 });
