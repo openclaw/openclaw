@@ -840,16 +840,13 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
-      }
+      // NOTE: The message-level isGeneratedCronPromptMessage check that was here
+      // has been removed. It incorrectly caught human-typed [cron:...] prefixes in
+      // user messages, causing the entire archive to be classified as cron-generated
+      // and wiping all indexed content. Real cron sessions are already detected by
+      // the record-level isCronRunGeneratedRecord check above (which inspects
+      // session-meta sessionKey) and the session store classification at the top of
+      // this function. See https://github.com/openclaw/openclaw/issues/98241.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
