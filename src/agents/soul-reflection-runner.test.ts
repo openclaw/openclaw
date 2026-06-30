@@ -21,12 +21,13 @@ const baseCfg = (autoUpdate: boolean): OpenClawConfig =>
     },
   }) as unknown as OpenClawConfig;
 
-let ingressSpy: ReturnType<typeof vi.fn>;
+type IngressSpyFn = (...args: unknown[]) => Promise<{ payloads: unknown[] }>;
+let ingressSpy: ReturnType<typeof vi.fn<IngressSpyFn>>;
 let workspaceDir: string;
 
 beforeEach(() => {
   workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-soul-runner-"));
-  ingressSpy = vi.fn().mockResolvedValue({ payloads: [] });
+  ingressSpy = vi.fn<IngressSpyFn>().mockResolvedValue({ payloads: [] });
   runnerTesting.setDepsForTest({
     agentCommandFromIngress: ingressSpy as never,
   });
