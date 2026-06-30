@@ -34,7 +34,7 @@ workspace root.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md", "TOOLS_SHARED.md"]
         }
       }
     }
@@ -48,6 +48,9 @@ workspace root.
 - `patterns` (string[]): alias of `paths`.
 - `files` (string[]): alias of `paths`.
 
-All paths are resolved from the workspace and must stay inside it (including realpath checks).
+All paths are resolved from the workspace and must stay inside it (including realpath checks),
+except for the built-in `TOOLS_SHARED.md` sibling-share exception:
+`<agent-workspace>/TOOLS_SHARED.md -> ../shared/TOOLS.md`.
 Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+`TOOLS_SHARED.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`,
+`MEMORY.md`).

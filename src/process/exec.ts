@@ -7,13 +7,13 @@ import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import {

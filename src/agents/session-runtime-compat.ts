@@ -8,10 +8,7 @@ import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
-type SessionRuntimeCompatEntry = Pick<
-  SessionEntry,
-  "agentHarnessId" | "agentRuntimeOverride"
->;
+type SessionRuntimeCompatEntry = Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
 
 /** Resolves the persisted runtime id, preferring explicit overrides. */
 export function resolvePersistedSessionRuntimeId(

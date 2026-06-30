@@ -187,9 +187,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { default: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { default: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 

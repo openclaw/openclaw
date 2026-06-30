@@ -235,7 +235,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md", "TOOLS_SHARED.md"]
         }
       }
     }
@@ -243,7 +243,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `TOOLS_SHARED.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`). Extra bootstrap files must stay inside the workspace after realpath checks, except for the built-in `TOOLS_SHARED.md` sibling-share exception: `<agent-workspace>/TOOLS_SHARED.md -> ../shared/TOOLS.md`.
 
 <a id="command-logger"></a>
 

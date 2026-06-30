@@ -75,6 +75,9 @@ These are the standard files OpenClaw expects inside the workspace:
   <Accordion title="TOOLS.md - local tool conventions">
     Notes about your local tools and conventions. Does not control tool availability; it is only guidance.
   </Accordion>
+  <Accordion title="TOOLS_SHARED.md - shared tool conventions">
+    Optional shared tool guidance. It can be a normal workspace-local file, or the exact supported sibling symlink `TOOLS_SHARED.md -> ../shared/TOOLS.md` for multi-agent setups that share one tool-conventions file.
+  </Accordion>
   <Accordion title="HEARTBEAT.md - heartbeat checklist">
     Optional tiny checklist for heartbeat runs. Keep it short to avoid token burn.
   </Accordion>

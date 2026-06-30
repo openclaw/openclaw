@@ -72,6 +72,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["identity.md", 30],
   ["user.md", 40],
   ["tools.md", 50],
+  ["tools_shared.md", 51],
   ["bootstrap.md", 60],
   ["memory.md", 70],
 ]);
@@ -1057,7 +1058,7 @@ export function buildAgentSystemPrompt(params: {
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md is usage guidance, not availability.",
+      "TOOLS.md and TOOLS_SHARED.md are usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,

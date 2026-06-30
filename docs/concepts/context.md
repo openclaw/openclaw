@@ -117,6 +117,7 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 - `AGENTS.md`
 - `SOUL.md`
 - `TOOLS.md`
+- `TOOLS_SHARED.md` when present
 - `IDENTITY.md`
 - `USER.md`
 - `HEARTBEAT.md`

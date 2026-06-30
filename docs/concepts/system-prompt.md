@@ -172,6 +172,7 @@ prompt surface that matches their lifetime:
 - `AGENTS.md`
 - `SOUL.md`
 - `TOOLS.md`
+- `TOOLS_SHARED.md` when present
 - `IDENTITY.md`
 - `USER.md`
 - `HEARTBEAT.md`
@@ -180,18 +181,30 @@ prompt surface that matches their lifetime:
 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files
 in every user turn. Codex loads `AGENTS.md` through its own project-doc
-discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
-Codex developer instructions. The compact OpenClaw skills list is also forwarded
-as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
-not injected; heartbeat turns get a collaboration-mode note pointing to the file
-when it exists and is non-empty. `MEMORY.md` content from the configured agent
-workspace is not pasted into every native Codex turn; when memory tools are
-available for that workspace, Codex turns get a small workspace-memory note in
-turn-scoped collaboration developer instructions and should use `memory_search`
-or `memory_get` when durable memory is relevant. If tools are disabled, memory
-search is unavailable, or the active workspace differs from the agent memory
-workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
-`BOOTSTRAP.md` content keeps the normal turn-context role for now.
+discovery. `TOOLS.md` and `TOOLS_SHARED.md` are forwarded as inherited Codex
+developer instructions so tool-use guidance persists across the thread.
+`SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as turn-scoped
+collaboration developer instructions so native Codex subagents do not inherit
+parent-only persona and user profile context. The compact OpenClaw skills list
+is also forwarded as turn-scoped collaboration developer instructions.
+`HEARTBEAT.md` content is not injected; heartbeat turns get a collaboration-mode
+note pointing to the file when it exists and is non-empty. `MEMORY.md` content
+from the configured agent workspace is not pasted into every native Codex turn;
+when memory tools are available for that workspace, Codex turns get a small
+workspace-memory note in turn-scoped collaboration developer instructions and
+should use `memory_search` or `memory_get` when durable memory is relevant. If
+tools are disabled, memory search is unavailable, or the active workspace
+differs from the agent memory workspace, `MEMORY.md` falls back to the normal
+bounded turn-context path. Active `BOOTSTRAP.md` content keeps the normal
+turn-context role for now.
+
+`TOOLS_SHARED.md` is optional. A normal workspace-local file is loaded from the
+workspace root. OpenClaw also supports exactly one cross-workspace symlink shape:
+`<agent-workspace>/TOOLS_SHARED.md -> ../shared/TOOLS.md`. That exception lets
+multiple sibling agent workspaces share tool guidance while keeping arbitrary
+symlinks and other sibling workspace files outside the bootstrap read boundary.
+Existing workspaces that already contain a `TOOLS_SHARED.md` file or that exact
+symlink will start injecting it after upgrading to a version with this support.
 
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
@@ -224,8 +237,11 @@ searches memory directly. If `MEMORY.md` is repeatedly truncated there, distill
 it into a shorter durable summary and move detailed history into `memory/*.md`,
 or intentionally raise the bootstrap limits.
 
-Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
-are filtered out to keep the sub-agent context small).
+Sub-agent sessions only inject `AGENTS.md`, `TOOLS.md`, and `TOOLS_SHARED.md`
+(other bootstrap files are filtered out to keep the sub-agent context small).
+Cron sessions also include `TOOLS_SHARED.md` when present, alongside their
+existing cron bootstrap allowlist (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+`IDENTITY.md`, and `USER.md`).
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
