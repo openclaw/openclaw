@@ -466,8 +466,9 @@ export function createWriteToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
-        if (precheck.state === "same") {
+        // Terminal no-op: an overwrite would leave the file unchanged.
+        // Append mode must preserve intentional duplicate content.
+        if (!append && precheck.state === "same") {
           return {
             ...textResult(
               `No changes made to ${path}. The file already has identical content.`,
