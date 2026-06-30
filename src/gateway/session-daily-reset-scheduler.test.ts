@@ -496,6 +496,71 @@ describe("daily session reset scheduler", () => {
     );
   });
 
+  it("does not let one active global agent suppress another agent's stale reset", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-reset-"));
+    tmpDirs.push(rootDir);
+    const mainStorePath = path.join(rootDir, "agents", "main", "sessions", "sessions.json");
+    const workStorePath = path.join(rootDir, "agents", "work", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+    await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+    await fs.writeFile(
+      mainStorePath,
+      JSON.stringify({
+        global: {
+          sessionId: "main-old-session",
+          updatedAt: beforeReset,
+          sessionStartedAt: beforeReset,
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      workStorePath,
+      JSON.stringify({
+        global: {
+          sessionId: "work-old-session",
+          updatedAt: beforeReset,
+          sessionStartedAt: beforeReset,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: {
+        scope: "global",
+        store: path.join(rootDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        reset: {
+          mode: "daily",
+          atHour: 4,
+        },
+      },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } as OpenClawConfig;
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      activeSessionKeys: new Set(["agent:main:main"]),
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 1, errors: 0 });
+    expect(performReset).toHaveBeenCalledOnce();
+    expect(performReset).toHaveBeenCalledWith(
+      "global",
+      {
+        sessionId: "work-old-session",
+        updatedAt: beforeReset,
+      },
+      { agentId: "work" },
+    );
+  });
+
   it("notifies successful scheduled daily resets with the canonical session key", async () => {
     const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
     const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();

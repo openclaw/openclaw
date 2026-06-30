@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
@@ -20,6 +21,7 @@ import {
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
@@ -35,9 +37,21 @@ function broadcastScheduledDailyReset(params: {
       stateVersion?: { presence?: number; health?: number };
     },
   ) => void;
+  broadcastToConnIds?: (
+    event: string,
+    payload: unknown,
+    connIds: ReadonlySet<string>,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => void;
+  getSessionEventSubscriberConnIds?: () => ReadonlySet<string>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   sessionKey: string;
   agentId?: string;
+  getConfig: () => OpenClawConfig;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   const sessionRow = loadGatewaySessionRow(
     params.sessionKey,
@@ -85,8 +99,50 @@ function broadcastScheduledDailyReset(params: {
         }
       : {}),
   };
-  params.broadcast("sessions.changed", payload, { dropIfSlow: true });
-  params.nodeSendToSession(params.sessionKey, "sessions.changed", payload);
+  if (params.broadcastToConnIds && params.getSessionEventSubscriberConnIds) {
+    emitSessionsChanged(
+      {
+        broadcastToConnIds: params.broadcastToConnIds,
+        chatAbortControllers: params.chatAbortControllers,
+        getRuntimeConfig: params.getConfig,
+        getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
+      },
+      {
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        reason: "reset",
+      },
+    );
+  } else {
+    params.broadcast("sessions.changed", payload, { dropIfSlow: true });
+  }
+  for (const deliverySessionKey of resolveScheduledResetNodeDeliverySessionKeys({
+    cfg: params.getConfig(),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  })) {
+    params.nodeSendToSession(deliverySessionKey, "sessions.changed", payload);
+  }
+}
+
+function resolveScheduledResetNodeDeliverySessionKeys(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}): string[] {
+  if (params.sessionKey !== "global") {
+    return [params.sessionKey];
+  }
+  const scopedAgentId = params.agentId?.trim();
+  if (!scopedAgentId) {
+    return [params.sessionKey];
+  }
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const keys = [`agent:${scopedAgentId}:global`];
+  if (scopedAgentId === defaultAgentId) {
+    keys.push(params.sessionKey);
+  }
+  return keys;
 }
 
 export function startGatewayMaintenanceTimers(params: {
@@ -98,7 +154,17 @@ export function startGatewayMaintenanceTimers(params: {
       stateVersion?: { presence?: number; health?: number };
     },
   ) => void;
+  broadcastToConnIds?: (
+    event: string,
+    payload: unknown,
+    connIds: ReadonlySet<string>,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
+  getSessionEventSubscriberConnIds?: () => ReadonlySet<string>;
   getPresenceVersion: () => number;
   getHealthVersion: () => number;
   refreshGatewayHealthSnapshot: (opts?: {
@@ -361,15 +427,23 @@ export function startGatewayMaintenanceTimers(params: {
           getActiveSessionKeys: () =>
             new Set(
               [...params.chatAbortControllers.values()]
-                .map((entry) => entry.sessionKey)
+                .map((entry) =>
+                  entry.sessionKey === "global" && entry.agentId
+                    ? `agent:${entry.agentId}:main`
+                    : entry.sessionKey,
+                )
                 .filter((sessionKey) => sessionKey.trim()),
             ),
           onSuccessfulReset: ({ sessionKey, agentId }) => {
             broadcastScheduledDailyReset({
               broadcast: params.broadcast,
+              broadcastToConnIds: params.broadcastToConnIds,
+              getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
               nodeSendToSession: params.nodeSendToSession,
               sessionKey,
               agentId,
+              getConfig: params.getConfig ?? (() => params.cfg ?? {}),
+              chatAbortControllers: params.chatAbortControllers,
             });
           },
         })

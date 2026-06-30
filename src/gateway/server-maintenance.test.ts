@@ -172,12 +172,15 @@ describe("startGatewayMaintenanceTimers", () => {
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
       const deps = createMaintenanceTimerDeps();
       const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
       const nodeSendToAllSubscribed = vi.fn();
       const nodeSendToSession = vi.fn();
 
       const timers = startGatewayMaintenanceTimers({
         ...deps,
         broadcast,
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         nodeSendToSession,
         nodeSendToAllSubscribed,
         cfg: {
@@ -193,7 +196,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
       expect(startDailySessionResetSchedulerMock).toHaveBeenCalledOnce();
       expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("agent:main:main", undefined);
-      expect(broadcast).toHaveBeenCalledWith(
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -205,7 +208,13 @@ describe("startGatewayMaintenanceTimers", () => {
           model: "gpt-5",
           status: "idle",
         }),
+        new Set(["conn-1"]),
         { dropIfSlow: true },
+      );
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.anything(),
+        expect.anything(),
       );
       expect(nodeSendToSession).toHaveBeenCalledWith(
         "agent:main:main",
@@ -226,6 +235,78 @@ describe("startGatewayMaintenanceTimers", () => {
     } finally {
       vi.doUnmock("./session-daily-reset-scheduler.js");
       vi.doUnmock("./session-utils.js");
+      vi.resetModules();
+    }
+  });
+
+  it("fans selected-agent global scheduled resets to scoped and legacy global subscribers", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const startDailySessionResetSchedulerMock = vi.fn(
+      (params: {
+        onSuccessfulReset?: (payload: { sessionKey: string; agentId?: string }) => void;
+      }) => {
+        params.onSuccessfulReset?.({ sessionKey: "global", agentId: "main" });
+        return setInterval(() => {}, 60_000);
+      },
+    );
+    vi.doMock("./session-daily-reset-scheduler.js", () => ({
+      startDailySessionResetScheduler: startDailySessionResetSchedulerMock,
+    }));
+
+    try {
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const deps = createMaintenanceTimerDeps();
+      const broadcastToConnIds = vi.fn();
+      const nodeSendToSession = vi.fn();
+
+      const timers = startGatewayMaintenanceTimers({
+        ...deps,
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        nodeSendToSession,
+        cfg: {
+          session: {
+            scope: "global",
+            store: "/tmp/test-sessions.json",
+            reset: { mode: "daily", atHour: 4 },
+          },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "work" }],
+          },
+        },
+      });
+
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "global",
+          agentId: "main",
+          reason: "reset",
+        }),
+        new Set(["conn-1"]),
+        { dropIfSlow: true },
+      );
+      expect(nodeSendToSession).toHaveBeenCalledWith(
+        "agent:main:global",
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "global",
+          agentId: "main",
+        }),
+      );
+      expect(nodeSendToSession).toHaveBeenCalledWith(
+        "global",
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "global",
+          agentId: "main",
+        }),
+      );
+
+      stopMaintenanceTimers(timers);
+    } finally {
+      vi.doUnmock("./session-daily-reset-scheduler.js");
       vi.resetModules();
     }
   });

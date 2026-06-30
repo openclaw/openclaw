@@ -88,7 +88,9 @@ export async function startGatewayEarlyRuntime(params: {
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
+  broadcastToConnIds?: GatewayMaintenanceParams["broadcastToConnIds"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
+  getSessionEventSubscriberConnIds?: GatewayMaintenanceParams["getSessionEventSubscriberConnIds"];
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
   getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
   refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
@@ -174,7 +176,9 @@ export async function startGatewayEarlyRuntime(params: {
         cfg: params.getRuntimeConfig(),
         getConfig: params.getRuntimeConfig,
         broadcast: params.broadcast,
+        broadcastToConnIds: params.broadcastToConnIds,
         nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
+        getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
         getPresenceVersion: params.getPresenceVersion,
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,

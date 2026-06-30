@@ -12,8 +12,8 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -266,12 +266,15 @@ function hasActiveSessionTarget(params: {
     if (params.storeKeys.includes(activeKey)) {
       return true;
     }
-    const activeCanonicalKey = resolveSessionStoreKey({
+    const activeTarget = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
-      sessionKey: activeKey,
-      storeAgentId: params.agentId,
+      key: activeKey,
+      agentId: activeKey === "global" ? undefined : parseAgentSessionKey(activeKey)?.agentId,
     });
-    if (activeCanonicalKey === params.canonicalKey) {
+    if (activeTarget.canonicalKey !== params.canonicalKey) {
+      continue;
+    }
+    if (params.canonicalKey !== "global" || activeTarget.agentId === params.agentId) {
       return true;
     }
   }
