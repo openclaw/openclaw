@@ -312,9 +312,21 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
+  // The ratio-derived share (half the window) is the default prompt budget, but
+  // for small-context models it can drop below the absolute floor. Treat
+  // MIN_PROMPT_BUDGET_TOKENS as a true floor — but never let it claim more than
+  // the window itself minus one token, so a tiny window still leaves room for a
+  // reserve slot instead of collapsing the budget to zero. Without this floor,
+  // a 4 K-context model keeps only ~2 K for the prompt and every lightweight
+  // cron prompt overflows even when the session history is empty.
+  const ratioPromptBudget = Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO));
+  const windowBoundedFloor = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
+    Math.max(0, contextTokenBudget - 1),
+  );
+  const minPromptBudget = Math.max(
+    Math.min(MIN_PROMPT_BUDGET_TOKENS, ratioPromptBudget),
+    windowBoundedFloor,
   );
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(

@@ -346,6 +346,27 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
+  it("keeps almost the whole window for the prompt when the context window is below the budget floor", () => {
+    // Regression for #96658: a small-context model (e.g. phi3:mini at 4 096
+    // tokens) with the default 20 000 reserve floor previously kept only
+    // ~2 048 tokens for the prompt, so every lightweight cron prompt overflowed
+    // and compact_only had nothing to compact. The budget floor must be
+    // window-bounded so tiny windows still reserve almost all of their space
+    // for the prompt instead of collapsing to the ratio share.
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.promptBudgetBeforeReserve).toBe(4_095);
+    expect(result.effectiveReserveTokens).toBe(1);
+    expect(result.shouldCompact).toBe(false);
+    expect(result.route).toBe("fits");
+  });
+
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],
