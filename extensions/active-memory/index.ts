@@ -308,6 +308,12 @@ type ActiveMemoryTranscriptSource =
       sessionFile: string;
     };
 
+type ActiveMemorySqliteTranscriptMarker = {
+  agentId: string;
+  sessionId: string;
+  storePath: string;
+};
+
 type RecallSubagentResult = {
   rawReply: string;
   resultStatus?: "failed" | "unavailable";
@@ -1732,6 +1738,43 @@ function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource
   return { kind: "file", sessionFile };
 }
 
+function parseActiveMemorySqliteTranscriptMarker(
+  sessionFile: string | undefined,
+): ActiveMemorySqliteTranscriptMarker | undefined {
+  const marker = normalizeOptionalString(sessionFile);
+  if (!marker?.startsWith("sqlite:")) {
+    return undefined;
+  }
+  const match = /^sqlite:([^:]+):([^:]+):(.*)$/u.exec(marker);
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return undefined;
+  }
+  return {
+    agentId: match[1],
+    sessionId: match[2],
+    storePath: match[3],
+  };
+}
+
+function transcriptSourceFromReturnedSessionFile(params: {
+  sessionFile: string;
+  sessionKey: string;
+}): ActiveMemoryTranscriptSource {
+  const marker = parseActiveMemorySqliteTranscriptMarker(params.sessionFile);
+  if (!marker) {
+    return fileTranscriptSource(params.sessionFile);
+  }
+  return {
+    kind: "runtime",
+    target: {
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: marker.storePath,
+    },
+  };
+}
+
 function estimateTranscriptEventsBytes(events: readonly unknown[]): number {
   let total = 0;
   for (const event of events) {
@@ -3028,27 +3071,45 @@ function collectActiveMemoryTranscriptSources(params: {
   artifactSessionFile: string;
   runtimeSource: ActiveMemoryTranscriptSource;
   activeSessionFile?: string;
+  activeSessionKey: string;
 }): ActiveMemoryTranscriptSource[] {
   const sources: ActiveMemoryTranscriptSource[] = [params.runtimeSource];
   sources.push(fileTranscriptSource(params.artifactSessionFile));
   if (params.activeSessionFile && params.activeSessionFile !== params.artifactSessionFile) {
-    sources.push(fileTranscriptSource(params.activeSessionFile));
+    sources.push(
+      transcriptSourceFromReturnedSessionFile({
+        sessionFile: params.activeSessionFile,
+        sessionKey: params.activeSessionKey,
+      }),
+    );
   }
   return sources;
 }
 
 async function persistActiveMemoryTranscriptArtifact(params: {
-  source: ActiveMemoryTranscriptSource;
+  sources: readonly ActiveMemoryTranscriptSource[];
   sessionFile: string;
 }): Promise<void> {
-  if (params.source.kind !== "runtime") {
-    return;
-  }
-  let events: readonly unknown[];
-  try {
-    events = await readSessionTranscriptEvents(params.source.target);
-  } catch {
-    return;
+  const events: unknown[] = [];
+  const seen = new Set<string>();
+  for (const source of params.sources) {
+    if (source.kind !== "runtime") {
+      continue;
+    }
+    let sourceEvents: readonly unknown[];
+    try {
+      sourceEvents = await readSessionTranscriptEvents(source.target);
+    } catch {
+      continue;
+    }
+    for (const event of sourceEvents) {
+      const serialized = JSON.stringify(event);
+      if (seen.has(serialized)) {
+        continue;
+      }
+      seen.add(serialized);
+      events.push(event);
+    }
   }
   if (events.length === 0) {
     return;
@@ -3143,6 +3204,7 @@ async function runRecallSubagent(params: {
   let transcriptSources = collectActiveMemoryTranscriptSources({
     artifactSessionFile: sessionFile,
     runtimeSource,
+    activeSessionKey: subagentSessionKey,
   });
   params.onTranscriptSources?.(transcriptSources);
   if (persistedDir) {
@@ -3217,6 +3279,7 @@ async function runRecallSubagent(params: {
       artifactSessionFile: sessionFile,
       runtimeSource,
       activeSessionFile,
+      activeSessionKey: subagentSessionKey,
     });
     params.onTranscriptSources?.(transcriptSources);
     if (params.abortSignal?.aborted) {
@@ -3237,7 +3300,7 @@ async function runRecallSubagent(params: {
       .join("\n")
       .trim();
     if (params.config.persistTranscripts) {
-      await persistActiveMemoryTranscriptArtifact({ source: runtimeSource, sessionFile });
+      await persistActiveMemoryTranscriptArtifact({ sources: transcriptSources, sessionFile });
     }
     const transcriptState = await readMergedActiveMemoryTranscriptState({
       sources: transcriptSources,
