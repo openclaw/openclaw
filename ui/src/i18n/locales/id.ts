@@ -457,6 +457,13 @@ export const id: TranslationMap = {
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Aktivitas",
@@ -1379,6 +1386,7 @@ export const id: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Tutup error Talk",
       startTalk: "Start Talk",
       stillListening: "Masih mendengarkan",

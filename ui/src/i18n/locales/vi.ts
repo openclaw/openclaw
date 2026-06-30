@@ -458,6 +458,13 @@ export const vi: TranslationMap = {
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Hoạt động",
@@ -1371,6 +1378,7 @@ export const vi: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Bỏ qua lỗi Talk",
       startTalk: "Start Talk",
       stillListening: "Vẫn đang nghe",

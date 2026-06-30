@@ -456,6 +456,13 @@ export const ar: TranslationMap = {
       useCurrentChatTooltip:
         "إرسال طلبات المراجعة إلى جلسة المحادثة الحالية بدلاً من جلسة workshop الخاصة بالمقترح.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "النشاط",
@@ -1363,6 +1370,7 @@ export const ar: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "تجاهل خطأ Talk",
       startTalk: "Start Talk",
       stillListening: "لا يزال يستمع",

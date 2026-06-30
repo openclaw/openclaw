@@ -459,6 +459,13 @@ export const uk: TranslationMap = {
       useCurrentChatTooltip:
         "Надсилати запити на перегляд до поточної сесії чату замість сесії воркшопу пропозиції.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Активність",
@@ -1383,6 +1390,7 @@ export const uk: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Закрити помилку Talk",
       startTalk: "Start Talk",
       stillListening: "Все ще слухаємо",

@@ -455,6 +455,13 @@ export const ko: TranslationMap = {
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "활동",
@@ -1370,6 +1377,7 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talk 오류 닫기",
       startTalk: "Start Talk",
       stillListening: "계속 듣는 중",

@@ -458,6 +458,13 @@ export const pl: TranslationMap = {
       useCurrentChatTooltip:
         "Wysyłaj prośby o poprawki do bieżącej sesji czatu zamiast do sesji warsztatu propozycji.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Aktywność",
@@ -1384,6 +1391,7 @@ export const pl: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Odrzuć błąd Talk",
       startTalk: "Start Talk",
       stillListening: "Nadal słucham",

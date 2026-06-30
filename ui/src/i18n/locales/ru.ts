@@ -460,6 +460,13 @@ export const ru: TranslationMap = {
       useCurrentChatTooltip:
         "Отправлять запросы на доработку в текущую сессию чата вместо сессии мастерской предложения.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Сегодня",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Активность",
@@ -1389,6 +1396,7 @@ export const ru: TranslationMap = {
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
       attachFile: "Прикрепить файл",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Скрыть ошибку Talk",
       startTalk: "Начать Talk",
       stillListening: "Прослушивание продолжается",

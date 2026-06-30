@@ -455,6 +455,13 @@ export const en: TranslationMap = {
       useCurrentChatTooltip:
         "Send revision requests to the current chat session instead of the proposal's workshop session.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Activity",
@@ -1369,6 +1376,7 @@ export const en: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Dismiss Talk error",
       startTalk: "Start Talk",
       stillListening: "Still listening",

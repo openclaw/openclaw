@@ -454,6 +454,13 @@ export const th: TranslationMap = {
       useCurrentChatAria: "ใช้แชทปัจจุบันสำหรับคำขอแก้ไข",
       useCurrentChatTooltip: "ส่งคำขอแก้ไขไปยังเซสชันแชทปัจจุบันแทนเซสชัน workshop ของข้อเสนอ",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "กิจกรรม",
@@ -1347,6 +1354,7 @@ export const th: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "ปิดข้อผิดพลาด Talk",
       startTalk: "Start Talk",
       stillListening: "ยังฟังอยู่",

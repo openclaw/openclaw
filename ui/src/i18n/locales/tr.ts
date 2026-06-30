@@ -460,6 +460,13 @@ export const tr: TranslationMap = {
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Etkinlik",
@@ -1385,6 +1392,7 @@ export const tr: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talk hatasını kapat",
       startTalk: "Start Talk",
       stillListening: "Hâlâ dinliyor",

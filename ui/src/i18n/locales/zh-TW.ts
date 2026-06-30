@@ -453,6 +453,13 @@ export const zh_TW: TranslationMap = {
       useCurrentChatAria: "使用目前的對話進行修訂請求",
       useCurrentChatTooltip: "將修訂請求傳送至目前的對話工作階段，而非提案的工作坊工作階段。",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "活動",
@@ -1344,6 +1351,7 @@ export const zh_TW: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "關閉 Talk 錯誤",
       startTalk: "Start Talk",
       stillListening: "仍在聆聽",

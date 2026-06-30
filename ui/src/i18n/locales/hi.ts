@@ -456,6 +456,13 @@ export const hi: TranslationMap = {
       useCurrentChatAria: "संशोधन अनुरोधों के लिए वर्तमान चैट का उपयोग करें",
       useCurrentChatTooltip: "संशोधन अनुरोध प्रस्ताव के वर्कशॉप सेशन के बजाय वर्तमान चैट सेशन को भेजें।",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "आज",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "गतिविधि",
@@ -1365,6 +1372,7 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       attachFile: "फ़ाइल संलग्न करें",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talk त्रुटि खारिज करें",
       startTalk: "Talk शुरू करें",
       stillListening: "अभी भी सुन रहा है",

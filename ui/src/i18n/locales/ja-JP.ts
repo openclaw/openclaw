@@ -460,6 +460,13 @@ export const ja_JP: TranslationMap = {
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "アクティビティ",
@@ -1384,6 +1391,7 @@ export const ja_JP: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      cancelReply: "Cancel reply",
       dismissTalkError: "Talkエラーを閉じる",
       startTalk: "Start Talk",
       stillListening: "まだ聞いています",

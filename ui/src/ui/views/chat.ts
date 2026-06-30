@@ -2691,8 +2691,8 @@ export function renderChat(props: ChatProps) {
                 type="button"
                 class="chat-reply-preview__dismiss"
                 @click=${() => props.onClearReply?.()}
-                aria-label="Cancel reply"
-                title="Cancel reply"
+                aria-label=${t("chat.composer.cancelReply")}
+                title=${t("chat.composer.cancelReply")}
               >
                 ${icons.x}
               </button>
