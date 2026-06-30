@@ -30,6 +30,21 @@ describe("runPluginPayloadSmokeCheck", () => {
     }
   }
 
+  async function writeClaudeBundle(dir: string, manifest: Record<string, unknown> = {}) {
+    await fs.mkdir(path.join(dir, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Bundle",
+        skills: "skills",
+        ...manifest,
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(dir, "skills", "SKILL.md"), "# Skill\n", "utf8");
+  }
+
   function resolveTestHostRoot(): string {
     const hostRoot = resolveOpenClawPackageRootSync({
       argv1: process.argv[1],
@@ -95,6 +110,95 @@ describe("runPluginPayloadSmokeCheck", () => {
         detail: `package.json is missing under ${dir}`,
       },
     ]);
+  });
+
+  it("accepts bundle-format plugin records without package.json when the bundle manifest is valid", async () => {
+    const dir = path.join(tmpRoot, "claude-bundle");
+    await writeClaudeBundle(dir);
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "claude-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          format: "bundle",
+          bundleFormat: "claude",
+        } as never,
+      },
+      env: {},
+    });
+    expect(result.checked).toEqual(["claude-bundle"]);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("reports a bundle payload failure when a bundle-format record has no bundle manifest", async () => {
+    const dir = path.join(tmpRoot, "empty-bundle");
+    await fs.mkdir(dir, { recursive: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "empty-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          format: "bundle",
+        } as never,
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "empty-bundle",
+        installPath: dir,
+        reason: "missing-bundle-manifest",
+        detail: `Bundle manifest is missing under ${dir}`,
+      },
+    ]);
+  });
+
+  it("reports a bundle payload failure when a persisted bundle-format record has no supported capability markers", async () => {
+    const dir = path.join(tmpRoot, "empty-claude-bundle");
+    await fs.mkdir(dir, { recursive: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "empty-claude-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          format: "bundle",
+          bundleFormat: "claude",
+        } as never,
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "empty-claude-bundle",
+        installPath: dir,
+        reason: "invalid-bundle-manifest",
+        detail: `Bundle manifest has no supported capabilities under ${dir}`,
+      },
+    ]);
+  });
+
+  it("reports a bundle payload failure when the bundle manifest is invalid", async () => {
+    const dir = path.join(tmpRoot, "broken-bundle");
+    await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".codex-plugin", "plugin.json"), "not-json", "utf8");
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "broken-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          format: "bundle",
+          bundleFormat: "codex",
+        } as never,
+      },
+      env: {},
+    });
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "broken-bundle",
+      installPath: dir,
+      reason: "invalid-bundle-manifest",
+    });
+    expect(result.failures[0]?.detail).toContain("failed to parse plugin manifest:");
   });
 
   it("reports a failure when the main entry file is missing on disk", async () => {

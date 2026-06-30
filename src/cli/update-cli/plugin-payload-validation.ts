@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
@@ -10,6 +12,8 @@ import { resolveUserPath } from "../../utils.js";
 export type PluginPayloadSmokeFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
+  | "missing-bundle-manifest"
+  | "invalid-bundle-manifest"
   | "missing-package-json"
   | "invalid-package-json"
   | "missing-main-entry"
@@ -75,6 +79,19 @@ export async function runPluginPayloadSmokeCheck(params: {
         reason: "missing-package-dir",
         detail: `Install dir is missing: ${installPath}`,
       });
+      continue;
+    }
+
+    if (isBundleInstallRecord(record)) {
+      const bundleValidation = validateBundlePayload({ installPath, record });
+      if (bundleValidation) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: bundleValidation.reason,
+          detail: bundleValidation.detail,
+        });
+      }
       continue;
     }
 
@@ -168,6 +185,46 @@ export async function runPluginPayloadSmokeCheck(params: {
   }
 
   return { checked, failures };
+}
+
+function isBundleInstallRecord(record: PluginInstallRecord): boolean {
+  return (record as { format?: unknown }).format === "bundle";
+}
+
+function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | null {
+  const raw = (record as { bundleFormat?: unknown }).bundleFormat;
+  return raw === "codex" || raw === "claude" || raw === "cursor" ? raw : null;
+}
+
+function validateBundlePayload(params: {
+  installPath: string;
+  record: PluginInstallRecord;
+}): Pick<PluginPayloadSmokeFailure, "reason" | "detail"> | null {
+  const bundleFormat =
+    readBundleFormat(params.record) ?? detectBundleManifestFormat(params.installPath);
+  if (!bundleFormat) {
+    return {
+      reason: "missing-bundle-manifest",
+      detail: `Bundle manifest is missing under ${params.installPath}`,
+    };
+  }
+  const loaded = loadBundleManifest({
+    rootDir: params.installPath,
+    bundleFormat,
+  });
+  if (!loaded.ok) {
+    return {
+      reason: "invalid-bundle-manifest",
+      detail: loaded.error,
+    };
+  }
+  if (loaded.manifest.capabilities.length === 0) {
+    return {
+      reason: "invalid-bundle-manifest",
+      detail: `Bundle manifest has no supported capabilities under ${params.installPath}`,
+    };
+  }
+  return null;
 }
 
 function manifestDeclaresOpenClawPeer(manifest: PackageManifest): boolean {
