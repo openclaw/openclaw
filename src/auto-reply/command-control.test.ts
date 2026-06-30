@@ -1148,8 +1148,10 @@ describe("control command parsing", () => {
   it("detects inline command tokens", () => {
     expect(hasInlineCommandTokens("hello /status")).toBe(true);
     expect(hasInlineCommandTokens("hey /think high")).toBe(true);
-    expect(hasInlineCommandTokens("hey / pair qr")).toBe(true);
+    expect(hasInlineCommandTokens("/ pair qr")).toBe(true);
     expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(true);
+    expect(hasInlineCommandTokens("hey / pair qr")).toBe(false);
+    expect(hasInlineCommandTokens("option A / B")).toBe(false);
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);

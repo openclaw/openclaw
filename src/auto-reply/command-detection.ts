@@ -87,7 +87,10 @@ export function hasInlineCommandTokens(text?: string): boolean {
   if (!body.trim()) {
     return false;
   }
-  return /(?:^|\s)[/!]\s*[a-z]/i.test(body);
+  if (/^\/\s+[a-z]/i.test(body.trimStart())) {
+    return true;
+  }
+  return /(?:^|\s)[/!][a-z]/i.test(body);
 }
 
 /** Returns true when a message may need command authorization metadata. */
