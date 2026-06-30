@@ -48,6 +48,8 @@ export type ConfiguredProviderRequest = {
   auth?: ConfiguredProviderRequestAuth;
   proxy?: ConfiguredProviderRequestProxy;
   tls?: ConfiguredProviderRequestTls;
+  /** Per-request timeout in milliseconds. Overrides provider-level `timeoutSeconds` when set. */
+  timeoutMs?: number;
 };
 
 /** Model-provider request overrides plus the private-network opt-in used by model transports. */

@@ -387,6 +387,21 @@ function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | unde
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }
 
+function resolveProviderRequestTimeoutMsFromConfig(
+  providerConfig: { timeoutSeconds?: unknown; request?: { timeoutMs?: unknown } } | undefined,
+): number | undefined {
+  // request.timeoutMs (millisecond precision) takes precedence over timeoutSeconds
+  if (
+    providerConfig?.request?.timeoutMs !== undefined &&
+    typeof providerConfig.request.timeoutMs === "number" &&
+    Number.isFinite(providerConfig.request.timeoutMs) &&
+    providerConfig.request.timeoutMs > 0
+  ) {
+    return Math.floor(providerConfig.request.timeoutMs);
+  }
+  return resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+}
+
 function mergeModelMediaInput(
   base: ModelMediaInputConfig | undefined,
   override: ModelMediaInputConfig | undefined,
@@ -622,7 +637,7 @@ function applyConfiguredProviderOverrides(params: {
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMsFromConfig(providerConfig);
   const defaultModelParams = findConfiguredAgentModelParams({
     cfg: params.cfg,
     provider: params.provider,
@@ -898,7 +913,7 @@ function resolveExplicitModelWithRegistry(params: {
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMsFromConfig(providerConfig);
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
     provider,
@@ -1241,7 +1256,7 @@ function resolveConfiguredFallbackModel(params: {
 }): Model | undefined {
   const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMsFromConfig(providerConfig);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;

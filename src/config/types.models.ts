@@ -207,6 +207,18 @@ export type ModelDefinitionConfig = {
   metadataSource?: "models-add";
 };
 
+/** Retry configuration for model provider requests. */
+export type ModelProviderRetryConfig = {
+  /** Maximum number of retry attempts on transient failures (1–5). Default: 1. */
+  attempts?: number;
+  /** Minimum delay between retries in milliseconds. Default: 500. */
+  minDelayMs?: number;
+  /** Maximum delay between retries in milliseconds. Default: 5000. */
+  maxDelayMs?: number;
+  /** Whether to apply jitter to retry delays. Default: true. */
+  jitter?: boolean;
+};
+
 export type ModelProviderConfig = {
   /** Provider API base URL. */
   baseUrl: string;
@@ -239,6 +251,8 @@ export type ModelProviderConfig = {
   authHeader?: boolean;
   /** Provider request transport/retry overrides. */
   request?: ConfiguredModelProviderRequest;
+  /** Per-provider retry configuration for transient failures. */
+  retry?: ModelProviderRetryConfig;
   /** Model catalog entries exposed by this provider. */
   models: ModelDefinitionConfig[];
 };
