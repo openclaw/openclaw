@@ -96,6 +96,23 @@ describe("restart diagnostics", () => {
     expect(restartTesting.formatRestartSessionKeyForLog(undefined)).toBe("unspecified");
   });
 
+  it("keeps truncated restart audit payloads valid JSON", () => {
+    const serialized = restartTesting.serializeRestartAuditJson({
+      context: `quote-heavy:${'\\"'.repeat(15_000)}`,
+    });
+
+    expect(serialized).not.toBeNull();
+    expect(serialized?.length).toBeLessThanOrEqual(20_000);
+    expect(() => JSON.parse(serialized ?? "")).not.toThrow();
+    expect(JSON.parse(serialized ?? "")).toEqual(
+      expect.objectContaining({
+        truncated: true,
+        originalLength: expect.any(Number),
+        preview: expect.any(String),
+      }),
+    );
+  });
+
   it("redacts session keys in durable restart audit storage", () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-audit-test-"));
     const sessionKey = "agent:main:discord:channel:1515157916540211291";

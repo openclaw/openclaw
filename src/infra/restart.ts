@@ -373,13 +373,32 @@ function serializeRestartAuditJson(value: unknown): string | null {
   }
   try {
     const text = JSON.stringify(sanitizeRestartAuditValueForStorage(value));
-    return text.length > 20_000 ? `${text.slice(0, 20_000)}…` : text;
+    if (text.length <= 20_000) {
+      return text;
+    }
+    const envelope = (preview: string) =>
+      JSON.stringify({
+        truncated: true,
+        originalLength: text.length,
+        preview,
+      });
+    let low = 0;
+    let high = Math.min(text.length, 20_000);
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (envelope(text.slice(0, mid)).length <= 20_000) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return envelope(text.slice(0, low));
   } catch {
     return JSON.stringify({ error: "unserializable" });
   }
 }
 
-function writeGatewayRestartAuditEventSync(opts: {
+type RestartAuditEvent = {
   eventType: RestartAuditEventType;
   reason?: string;
   source?: string;
@@ -391,7 +410,15 @@ function writeGatewayRestartAuditEventSync(opts: {
   sessionKey?: string;
   audit?: RestartAuditInfo;
   preflight?: unknown;
-}): void {
+};
+
+let restartAuditWriterOverride: ((opts: RestartAuditEvent) => void) | null = null;
+
+function writeGatewayRestartAuditEventSync(opts: RestartAuditEvent): void {
+  if (restartAuditWriterOverride) {
+    restartAuditWriterOverride(opts);
+    return;
+  }
   const createdAt = Date.now();
   const eventKey = `${createdAt}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   const auditJson = serializeRestartAuditJson(opts.audit);
@@ -500,11 +527,6 @@ export function emitGatewayRestart(
   emittedRestartToken = cycleToken;
   emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
   emittedRestartIntent = intent;
-  writeGatewayRestartAuditEventSync({
-    eventType: "emit_requested",
-    reason: emittedRestartReason,
-    source: intent?.reason ?? reasonOverride,
-  });
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
@@ -528,16 +550,22 @@ export function emitGatewayRestart(
       process.kill(process.pid, "SIGUSR1");
     }
   } catch {
+    // Roll back first so audit storage cannot delay restart availability.
+    rollBackGatewayRestartEmission();
     writeGatewayRestartAuditEventSync({
       eventType: "emit_failed",
       reason: emittedRestartReason,
       source: intent?.reason ?? reasonOverride,
     });
-    // Roll back the cycle marker so future restart requests can still proceed.
-    rollBackGatewayRestartEmission();
     return false;
   }
   lastRestartEmittedAt = Date.now();
+  // Restart progress must never wait for the shared state database.
+  writeGatewayRestartAuditEventSync({
+    eventType: "emit_requested",
+    reason: emittedRestartReason,
+    source: intent?.reason ?? reasonOverride,
+  });
   return true;
 }
 
@@ -675,6 +703,7 @@ async function emitPreparedGatewayRestart(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
+  afterEmit?: () => void,
 ): Promise<void> {
   let nextHooks = hooks ?? pendingRestartEmitHooks;
   // Keep pendingRestartSessionKey alive across the await beforeEmit() window:
@@ -709,6 +738,7 @@ async function emitPreparedGatewayRestart(
   }
 
   const emitted = emitGatewayRestart(reasonOverride, intent);
+  afterEmit?.();
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
@@ -984,6 +1014,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const skipDeferral = opts?.skipDeferral === true;
   let nextPendingEmitHooks = opts?.emitHooks;
   let nextPendingSessionKey = opts?.sessionKey;
+  let rescheduleAudit: RestartAuditEvent | undefined;
 
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
@@ -1025,18 +1056,6 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   if (pendingRestartTimer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
     if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
-      writeGatewayRestartAuditEventSync({
-        eventType: "bypassed_deferral",
-        reason,
-        source: opts?.audit?.source,
-        mode,
-        delayMs: 0,
-        dueAt: nowMs,
-        cooldownMs: cooldownMsApplied,
-        coalesced: false,
-        sessionKey: opts?.sessionKey,
-        audit: opts?.audit,
-      });
       restartLog.warn(
         `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -1052,7 +1071,20 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartEmitHooks = opts?.emitHooks;
         pendingRestartSessionKey = opts?.sessionKey;
       }
-      void emitPreparedGatewayRestart(undefined, reason);
+      void emitPreparedGatewayRestart(undefined, reason, undefined, () => {
+        writeGatewayRestartAuditEventSync({
+          eventType: "bypassed_deferral",
+          reason,
+          source: opts?.audit?.source,
+          mode,
+          delayMs: 0,
+          dueAt: nowMs,
+          cooldownMs: cooldownMsApplied,
+          coalesced: false,
+          sessionKey: opts?.sessionKey,
+          audit: opts?.audit,
+        });
+      });
       return {
         ok: true,
         pid: process.pid,
@@ -1085,6 +1117,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
           clearTimeout(pendingRestartTimer);
         }
         pendingRestartTimer = null;
+        pendingRestartDueAt = requestedDueAt;
+        pendingRestartReason = reason;
+        pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
+        armPendingRestartTimer(requestedDueAt, nowMs);
         writeGatewayRestartAuditEventSync({
           eventType: "rescheduled",
           reason,
@@ -1097,10 +1133,6 @@ export function scheduleGatewaySigusr1Restart(opts?: {
           sessionKey: opts?.sessionKey,
           audit: opts?.audit,
         });
-        pendingRestartDueAt = requestedDueAt;
-        pendingRestartReason = reason;
-        pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
-        armPendingRestartTimer(requestedDueAt, nowMs);
         return {
           ok: true,
           pid: process.pid,
@@ -1115,7 +1147,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       }
       const preservedEmitHooks = preservePendingHooks ? pendingRestartEmitHooks : undefined;
       const preservedSessionKey = preservePendingHooks ? pendingRestartSessionKey : undefined;
-      writeGatewayRestartAuditEventSync({
+      rescheduleAudit = {
         eventType: "rescheduled",
         reason,
         source: opts?.audit?.source,
@@ -1126,7 +1158,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         coalesced: false,
         sessionKey: opts?.sessionKey,
         audit: opts?.audit,
-      });
+      };
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -1182,6 +1214,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartSkipDeferral = skipDeferral;
   armPendingRestartTimer(requestedDueAt, nowMs);
 
+  if (rescheduleAudit) {
+    writeGatewayRestartAuditEventSync(rescheduleAudit);
+  }
   writeGatewayRestartAuditEventSync({
     eventType: "scheduled",
     reason,
@@ -1209,7 +1244,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
 export const testing = {
   formatRestartSessionKeyForLog,
+  serializeRestartAuditJson,
+  setRestartAuditWriterOverride(writer: ((eventType: string) => void) | null) {
+    restartAuditWriterOverride = writer ? (opts) => writer(opts.eventType) : null;
+  },
   resetSigusr1State() {
+    restartAuditWriterOverride = null;
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
     sigusr1ExternalAllowed = false;
