@@ -293,9 +293,15 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    if (request.request.ask === "always") {
+      lines.push(
+        "Allow Always is unavailable because the effective policy requires approval every time.",
+      );
+    } else {
+      lines.push(
+        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
+      );
+    }
   }
   return lines.join("\n");
 }
