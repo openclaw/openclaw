@@ -196,19 +196,25 @@ export class TranscriptsStore {
     if (maxUtterances !== undefined) {
       const utterances: TranscriptUtterance[] = [];
       try {
+        const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
-          input: createReadStream(transcriptPath, { encoding: "utf8" }),
+          input: stream,
           crlfDelay: Infinity,
         });
-        for await (const line of lines) {
-          if (!line) {
-            continue;
+        try {
+          for await (const line of lines) {
+            if (!line) {
+              continue;
+            }
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+            if (utterances.length > maxUtterances) {
+              // Stream and keep only the tail so large transcripts do not require full-file memory.
+              utterances.shift();
+            }
           }
-          utterances.push(JSON.parse(line) as TranscriptUtterance);
-          if (utterances.length > maxUtterances) {
-            // Stream and keep only the tail so large transcripts do not require full-file memory.
-            utterances.shift();
-          }
+        } finally {
+          lines.close();
+          stream.destroy();
         }
       } catch (err) {
         if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
