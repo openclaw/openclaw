@@ -203,6 +203,67 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
+    val cases =
+      listOf(
+        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
+        "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+        "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
+        "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
+        "DEVICE_IDENTITY_REQUIRED" to "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
+      )
+
+    cases.forEach { (code, expected) ->
+      assertEquals(
+        expected,
+        recoveryGatewayAuthDetail(
+          GatewayConnectionProblem(
+            code = code,
+            message = "authentication needed",
+            reason = null,
+            requestId = null,
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
+    assertEquals(
+      "Gateway authentication is not configured. Edit this connection and try again.",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "UNKNOWN",
+          message = "authentication needed",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = "update_auth_configuration",
+          pauseReconnect = true,
+          retryable = false,
+        ),
+      ),
+    )
+    assertEquals(
+      "gateway says no",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "UNKNOWN",
+          message = "gateway says no",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun showsFinishingStateWhileGatewayConnectionSettles() {
     assertEquals(
       GatewayRecoveryUiState.Finishing,
