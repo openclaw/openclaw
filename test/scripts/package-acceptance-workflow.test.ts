@@ -2137,7 +2137,10 @@ describe("package artifact reuse", () => {
       "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
     );
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@28409ee6ce9d088c9ddf0d6913cde6597f83f362",
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
+    );
+    expect(clawHubWorkflow).toContain(
+      "family: ${{ contains(fromJson('[\"@openclaw/acpx\",\"@openclaw/diffs\",\"@openclaw/feishu\",\"@openclaw/qqbot\"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}",
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
