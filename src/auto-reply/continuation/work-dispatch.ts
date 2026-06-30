@@ -8,6 +8,7 @@ import {
 import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { evaluateNoOpRearmAdmission, type NoOpRearmDecision } from "../reply/no-op-rearm-guard.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
 import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
@@ -38,6 +39,9 @@ const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
 const CONTINUATION_TURN_DRAINING_REASON = "draining";
+// Non-retryable: the no-op replay guard tripped (#1138/#1142). The row is
+// terminal-parked (superseded) so the self-rearm loop stops; never requeued.
+const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 // #986 Guard 2: a matured backlog member is "stale" (superseded-eligible) when it
@@ -168,6 +172,13 @@ function isRetryableContinuationSkipReason(reason: string): boolean {
     reason === CONTINUATION_TURN_DRAINING_REASON ||
     reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON
   );
+}
+
+/** Emit the guard's single per-episode suppression diagnostic, when present. */
+function emitNoOpRearmBlockedDiagnostic(decision: NoOpRearmDecision): void {
+  if (!decision.admit && decision.diagnostic) {
+    log.warn(decision.diagnostic.message);
+  }
 }
 
 /**
@@ -476,6 +487,24 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: "missing-session" };
   }
 
+  // Pre-provider no-op replay guard (#1138/#1142). A durable continuation work row
+  // is a same-session self-rearm wake; do not buy a provider turn when this
+  // session's no-op streak is tripped. Keyed by sessionKey (not flowId/chainId) to
+  // stay consistent with the post-turn recording site, which runs through the
+  // shared per-session reply path (getReplyFromConfig -> runReplyAgent). A concrete
+  // awaited completion resets the streak via its own inter-session wake; if a
+  // structured same-session awaited-completion exception is ever needed, add a
+  // structured field to PendingContinuationWork rather than parsing reason text.
+  const admission = evaluateNoOpRearmAdmission({
+    sessionKey: work.sessionKey,
+    isContinuationWake: true,
+    ...(work.parentRunId ? { parentRunId: work.parentRunId } : {}),
+  });
+  if (!admission.admit) {
+    emitNoOpRearmBlockedDiagnostic(admission);
+    return { status: "skipped", reason: CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON };
+  }
+
   const reply = await getReplyFromConfig(
     {
       Body: wakeText,
@@ -688,6 +717,18 @@ export async function dispatchPendingContinuationWork(params: {
       log.warn(
         `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason} reasonCategory=${reasonCategory}`,
       );
+      if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
+        // No-op replay guard tripped (#1138/#1142): terminal-park the row cleanly so
+        // the self-rearm loop stops re-arming. Supersede semantics intentionally skip
+        // the system-warning + retry of the failure path, which would re-wake the
+        // session. The guard already emitted its single trusted diagnostic.
+        markPendingWorkSuperseded(
+          work,
+          `No-op replay guard suppressed continuation turn (${skippedReason}).`,
+        );
+        failed++;
+        continue;
+      }
       if (isRetryableContinuationSkipReason(skippedReason)) {
         // #990 bucket-1: a busy-defer is the storm symptom. Before parking for
         // idle-event retry with a slow hedge, check whether

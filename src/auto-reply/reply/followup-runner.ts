@@ -86,6 +86,11 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import {
+  evaluateNoOpRearmAdmission,
+  type NoOpRearmWakeClass,
+  recordNoOpRearmOutcome,
+} from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   completeFollowupRunLifecycle,
@@ -698,6 +703,31 @@ export function createFollowupRunner(params: {
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });
+      }
+
+      // Pre-provider no-op replay guard (#1138/#1142). Followup turns bypass
+      // runReplyAgent and are the primary stale room-event backlog storm path, so
+      // admission must be decided here before any provider-bound work (including
+      // preflight compaction, which can itself call the model). A suppressed wake
+      // releases the run cleanly via the finally block; it never calls the provider.
+      const noOpRearmWake = {
+        sessionKey: replySessionKey ?? run.sessionKey ?? "",
+        provenance: run.inputProvenance,
+        inboundEventKind: queued.currentInboundEventKind,
+        messageId: resolveFollowupCurrentMessageId() ?? queued.messageId,
+        isHeartbeat: opts?.isHeartbeat === true,
+      };
+      let noOpRearmWakeClass: NoOpRearmWakeClass | undefined;
+      if (noOpRearmWake.sessionKey) {
+        const admission = evaluateNoOpRearmAdmission(noOpRearmWake);
+        noOpRearmWakeClass = admission.wake;
+        if (!admission.admit) {
+          if (admission.diagnostic) {
+            defaultRuntime.log(admission.diagnostic.message);
+          }
+          clearAgentRunContext(runId, lifecycleGeneration);
+          return;
+        }
       }
       const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
       let preflightCompactionApplied;
@@ -1363,6 +1393,18 @@ export function createFollowupRunner(params: {
       }
 
       await drainProgressDeliveries();
+
+      // Post-turn no-op replay outcome recording (#1138/#1142). Record before any
+      // continuation/followup scheduling so a no-op self-rearm turn increments the
+      // streak before it can schedule the next same-family wake. Idempotent per runId.
+      if (noOpRearmWakeClass && (replySessionKey ?? run.sessionKey)) {
+        recordNoOpRearmOutcome({
+          sessionKey: replySessionKey ?? run.sessionKey ?? "",
+          wakeClass: noOpRearmWakeClass,
+          runId,
+          result: runResult,
+        });
+      }
 
       let continuationChainStateAfterDelegateDispatch: ChainState | undefined;
       // Consume and dispatch continue_delegate queue enqueued during this

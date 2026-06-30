@@ -372,8 +372,13 @@ export type NoOpRearmGuardOptions = {
   staleHumanEdgeAfterMs?: number;
 };
 
-/** Window for the defensive backstop to treat a session as "just evaluated". */
-const PROVIDER_GUARD_ASSERT_WINDOW_MS = 5_000;
+/**
+ * Window for the defensive backstop to treat a session as "just evaluated".
+ * Generous because the explicit gate can sit ahead of slow pre-provider work
+ * (e.g. preflight compaction) in the same turn; the backstop is a best-effort
+ * tripwire, never a blocker.
+ */
+const PROVIDER_GUARD_ASSERT_WINDOW_MS = 60_000;
 
 type LedgerEntry = {
   streak: number;
