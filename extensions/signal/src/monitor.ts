@@ -3,7 +3,10 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ReplyToMode,
+  SignalReactionNotificationMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import {
   detectMime,
   estimateBase64DecodedBytes,
@@ -17,6 +20,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
+  createReplyReferencePlanner,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -371,9 +375,15 @@ export async function deliverReplies(params: {
   textLimit: number;
   chunkMode: "length" | "newline";
   replyContext?: SignalNativeReplyContext;
+  chatType?: "direct" | "group";
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
+  const replyToMode = resolveSignalReplyToMode({
+    cfg: params.cfg,
+    accountId,
+    chatType: params.chatType,
+  });
   for (const payload of replies) {
     const deliveryResults: Array<{
       channel: "signal";
@@ -405,9 +415,10 @@ export async function deliverReplies(params: {
         });
       }
     };
-    const nativeReply = resolveSignalNativeReplyOptions({
+    const nextNativeReply = createSignalNativeReplyResolver({
       payload: deliveredPayload,
       replyContext: params.replyContext,
+      replyToMode,
     });
     const delivered = await deliverTextOrMediaReply({
       payload: deliveredPayload,
@@ -421,7 +432,7 @@ export async function deliverReplies(params: {
             account,
             maxBytes,
             accountId,
-            ...nativeReply,
+            ...nextNativeReply(),
           }),
           chunk,
         );
@@ -436,7 +447,7 @@ export async function deliverReplies(params: {
             mediaUrl,
             maxBytes,
             accountId,
-            ...nativeReply,
+            ...nextNativeReply(),
           }),
           visibleText,
         );
@@ -468,19 +479,92 @@ function resolveSignalNativeReplyOptions(params: {
   }
   const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
   const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
-  const replyToId = payloadReplyToId ?? contextReplyToId;
-  if (!replyToId || !contextReplyToId || replyToId !== contextReplyToId) {
+  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
     return {};
   }
   const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
   if (!replyToAuthor) {
-    return { replyToId };
+    return { replyToId: payloadReplyToId };
   }
   return {
-    replyToId,
+    replyToId: payloadReplyToId,
     replyToAuthor,
     replyToBody: params.replyContext?.body ?? "",
   };
+}
+
+function createSignalNativeReplyResolver(params: {
+  payload: ReplyPayload;
+  replyContext?: SignalNativeReplyContext;
+  replyToMode: ReplyToMode;
+}): () => Pick<
+  Parameters<typeof sendMessageSignal>[2],
+  "replyToId" | "replyToAuthor" | "replyToBody"
+> {
+  const nativeReply = resolveSignalNativeReplyOptions(params);
+  if (!nativeReply.replyToId) {
+    return () => ({});
+  }
+  const isExplicitReply =
+    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  if (isExplicitReply) {
+    return () => nativeReply;
+  }
+  const planner = createReplyReferencePlanner({
+    replyToMode: params.replyToMode,
+    existingId: nativeReply.replyToId,
+  });
+  return () => {
+    const replyToId = planner.use();
+    return replyToId ? { ...nativeReply, replyToId } : {};
+  };
+}
+
+function normalizeSignalReplyToMode(value: unknown): ReplyToMode | undefined {
+  return value === "off" || value === "first" || value === "all" || value === "batched"
+    ? value
+    : undefined;
+}
+
+function resolveSignalReplyToMode(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  chatType?: "direct" | "group";
+}): ReplyToMode {
+  const signalConfig = params.cfg.channels?.signal as
+    | {
+        replyToMode?: unknown;
+        replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", unknown>>;
+        accounts?: Record<
+          string,
+          {
+            replyToMode?: unknown;
+            replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", unknown>>;
+          }
+        >;
+      }
+    | undefined;
+  const accountConfig = params.accountId ? signalConfig?.accounts?.[params.accountId] : undefined;
+  const chatType = params.chatType;
+  if (chatType) {
+    const accountScoped = normalizeSignalReplyToMode(
+      accountConfig?.replyToModeByChatType?.[chatType],
+    );
+    if (accountScoped) {
+      return accountScoped;
+    }
+    const channelScoped = normalizeSignalReplyToMode(
+      signalConfig?.replyToModeByChatType?.[chatType],
+    );
+    if (channelScoped) {
+      return channelScoped;
+    }
+  }
+  return (
+    normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
+    normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
+    "all"
+  );
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {

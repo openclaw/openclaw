@@ -503,6 +503,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             author: entry.senderRecipient,
             body: entry.nativeReplyBody ?? entry.bodyText,
           },
+          chatType: entry.isGroup ? "group" : "direct",
         });
       },
       onError: (err, info) => {

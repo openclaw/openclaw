@@ -122,6 +122,7 @@ export type SignalEventHandlerDeps = {
     maxBytes: number;
     textLimit: number;
     replyContext?: SignalNativeReplyContext;
+    chatType?: "direct" | "group";
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

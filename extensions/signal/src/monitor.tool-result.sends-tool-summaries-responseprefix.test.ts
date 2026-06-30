@@ -171,6 +171,46 @@ describe("monitorSignalProvider tool results", () => {
     });
   });
 
+  it("uses native quote metadata only on the first implicit chunk when configured", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "first",
+        textChunkLimit: 8,
+      }),
+    );
+    replyMock.mockResolvedValue({ text: "chunked Signal reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "quote me",
+    });
+    for (const call of sendMock.mock.calls.slice(1)) {
+      expect(call[2]).not.toHaveProperty("replyToId");
+      expect(call[2]).not.toHaveProperty("replyToAuthor");
+      expect(call[2]).not.toHaveProperty("replyToBody");
+    }
+  });
+
   it("passes inbound Signal quote metadata to media replies", async () => {
     replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
 
@@ -228,6 +268,35 @@ describe("monitorSignalProvider tool results", () => {
 
   it("does not attach native quote metadata when the reply opts out of the current message", async () => {
     replyMock.mockResolvedValue({ text: "status reply", replyToCurrent: false });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("does not reconstruct native quote metadata when replyToMode strips threading", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({ autoStart: false, replyToMode: "off" }),
+    );
+    replyMock.mockResolvedValue({ text: "final reply" });
 
     await receiveSignalPayloads({
       payloads: [
