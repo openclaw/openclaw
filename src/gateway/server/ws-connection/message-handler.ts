@@ -2271,7 +2271,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         error?: ErrorShape,
         meta?: Record<string, unknown>,
       ) => {
-        send({ type: "res", id: req.id, ok, payload, error });
+        send({ type: "res", id: req.id, ok, payload, error, ...(meta ? { meta } : {}) });
         const unauthorizedRoleError = isUnauthorizedRoleError(error);
         let logMeta = meta;
         if (unauthorizedRoleError) {
