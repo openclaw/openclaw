@@ -79,6 +79,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "memory",
+    description: "Maintain per-agent conversational memory",
+    hasSubcommands: true,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,
