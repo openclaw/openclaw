@@ -26,7 +26,7 @@ overrides:
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
   qs: 6.15.2
-  node-domexception: npm:@nolyfill/domexception@1.0.28
+  node-domexception: 1.0.0
   typebox: 1.1.39
   tar: 7.5.16
   tough-cookie: 4.1.3
@@ -3116,8 +3116,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@nolyfill/domexception@1.0.28':
-    resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
+  node-domexception@1.0.0:
+    resolution: {integrity: sha512-/oIFwvryp/vqGbzRWH6RbD6YyAMzNYPuhFJknJhcXOcx6oZe1zYHeT0LWmDbjLQdN70CTq/10RsiPqtR4Ll7nA==}
     engines: {node: '>=12.4.0'}
 
   '@openai/codex@0.139.0':
@@ -9208,7 +9208,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@nolyfill/domexception@1.0.28': {}
+  node-domexception@1.0.0: {}
 
   '@openai/codex@0.139.0':
     optionalDependencies:
@@ -11363,7 +11363,7 @@ snapshots:
 
   fetch-blob@3.2.0:
     dependencies:
-      node-domexception: '@nolyfill/domexception@1.0.28'
+      node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
   file-type@22.0.1:

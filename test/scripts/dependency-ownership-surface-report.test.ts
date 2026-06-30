@@ -87,22 +87,22 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       alias-domexception:
-        specifier: npm:@nolyfill/domexception@1.0.0
-        version: npm:@nolyfill/domexception@1.0.0
+        specifier: 1.0.0
+        version: 1.0.0
 packages:
   core-lib@1.0.0: {}
   transitive-native@1.0.0:
     requiresBuild: true
   missing-owner@2.0.0: {}
-  '@nolyfill/domexception@1.0.0': {}
+  'node-domexception@1.0.0': {}
 snapshots:
   core-lib@1.0.0:
     dependencies:
       transitive-native: 1.0.0
-      alias-domexception: '@nolyfill/domexception@1.0.0'
+      alias-domexception: 1.0.0
   transitive-native@1.0.0: {}
   missing-owner@2.0.0: {}
-  '@nolyfill/domexception@1.0.0': {}
+  'node-domexception@1.0.0': {}
 `,
     );
     writeRepoFile(

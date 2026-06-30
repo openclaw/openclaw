@@ -2252,10 +2252,9 @@
       }
     },
     "node_modules/node-domexception": {
-      "name": "@nolyfill/domexception",
-      "version": "1.0.28",
-      "resolved": "https://registry.npmjs.org/@nolyfill/domexception/-/domexception-1.0.28.tgz",
-      "integrity": "sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==",
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz",
+      "integrity": "sha512-/oIFwvryp/vqGbzRWH6RbD6YyAMzNYPuhFJknJhcXOcx6oZe1zYHeT0LWmDbjLQdN70CTq/10RsiPqtR4Ll7nA==",
       "license": "MIT",
       "engines": {
         "node": ">=12.4.0"

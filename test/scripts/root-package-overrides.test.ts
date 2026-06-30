@@ -58,7 +58,7 @@ describe("root package override guardrails", () => {
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const pnpmOverride = pnpmWorkspace.overrides?.["node-domexception"];
 
-    expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
+    expect(pnpmOverride).toBe("1.0.0");
     expect(manifest.overrides).toBeUndefined();
   });
 

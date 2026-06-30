@@ -135,7 +135,7 @@ describe("list-prod-store-packages", () => {
         "    resolution: {integrity: sha512-test}",
         "  fetch-blob@3.2.0:",
         "    resolution: {integrity: sha512-test}",
-        "  '@nolyfill/domexception@1.0.28':",
+        "  'node-domexception@1.0.0':",
         "    resolution: {integrity: sha512-test}",
         "",
         "snapshots:",
@@ -148,8 +148,8 @@ describe("list-prod-store-packages", () => {
         "  source-map@0.6.1: {}",
         "  fetch-blob@3.2.0:",
         "    dependencies:",
-        "      node-domexception: '@nolyfill/domexception@1.0.28'",
-        "  '@nolyfill/domexception@1.0.28': {}",
+        "      node-domexception: 1.0.0",
+        "  'node-domexception@1.0.0': {}",
         "",
       ].join("\n"),
     );
@@ -160,7 +160,7 @@ describe("list-prod-store-packages", () => {
       [
         "@homebridge/ciao@1.3.9",
         "fetch-blob@3.2.0",
-        "@nolyfill/domexception@1.0.28",
+        "node-domexception@1.0.0",
         "source-map-support@0.5.21",
         "source-map@0.6.1",
       ].toSorted((a, b) => a.localeCompare(b)),
