@@ -24,7 +24,7 @@ scenario:
     - scripts/e2e/lib/update-channel-switch/assertions.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing update-channel-switch Docker E2E lane and records QA Lab evidence for install-kind switching and update status coverage.
     args:
       - --lane
