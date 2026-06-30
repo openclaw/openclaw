@@ -1,4 +1,5 @@
 // Discord provider module implements model/runtime integration.
+import type { DiscordSlashCommandDeployMode } from "openclaw/plugin-sdk/config-contracts";
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, type RequestClient } from "../internal/discord.js";
@@ -12,10 +13,13 @@ import {
   isDiscordDeployDailyCreateLimit,
 } from "./provider.deploy-errors.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
+import { mergeDiscordSlashCommandDeployHashes } from "./slash-command-deploy-state.js";
 
 type RestMethodName = "get" | "post" | "put" | "patch" | "delete";
 type RestMethod = RequestClient[RestMethodName];
 type RestMethodMap = Record<RestMethodName, RestMethod>;
+
+let discordCommandDeployQueue: Promise<void> = Promise.resolve();
 
 function readDeployRequestBody(data?: unknown): unknown {
   return data && typeof data === "object" && "body" in data
@@ -122,6 +126,9 @@ async function deployDiscordCommands(params: {
   runtime: RuntimeEnv;
   enabled: boolean;
   accountId?: string;
+  applicationId?: string;
+  slashCommandDeployMode?: DiscordSlashCommandDeployMode;
+  deployHashStoreEnv?: NodeJS.ProcessEnv;
   startupStartedAt?: number;
   shouldLogVerbose: () => boolean;
 }) {
@@ -140,6 +147,18 @@ async function deployDiscordCommands(params: {
   try {
     try {
       await params.client.deployCommands({ mode: "reconcile" });
+      if (
+        params.slashCommandDeployMode === "changed-only" &&
+        params.applicationId &&
+        params.accountId
+      ) {
+        await mergeDiscordSlashCommandDeployHashes({
+          applicationId: params.applicationId,
+          accountId: params.accountId,
+          hashes: params.client.snapshotCommandDeployHashes(),
+          env: params.deployHashStoreEnv,
+        });
+      }
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(
@@ -172,6 +191,9 @@ export function runDiscordCommandDeployInBackground(params: {
   runtime: RuntimeEnv;
   enabled: boolean;
   accountId: string;
+  applicationId: string;
+  slashCommandDeployMode: DiscordSlashCommandDeployMode;
+  deployHashStoreEnv?: NodeJS.ProcessEnv;
   startupStartedAt: number;
   shouldLogVerbose: () => boolean;
   isVerbose: () => boolean;
@@ -184,10 +206,24 @@ export function runDiscordCommandDeployInBackground(params: {
     accountId: params.accountId,
     phase: "deploy-commands:scheduled",
     startAt: params.startupStartedAt,
-    details: "mode=reconcile background=true",
+    details: `mode=reconcile background=true slashCommandDeploy=${params.slashCommandDeployMode}`,
     isVerbose: params.isVerbose,
   });
-  void deployDiscordCommands(params)
+  const runDeploy = async () => {
+    await deployDiscordCommands({
+      client: params.client,
+      runtime: params.runtime,
+      enabled: true,
+      accountId: params.accountId,
+      applicationId: params.applicationId,
+      slashCommandDeployMode: params.slashCommandDeployMode,
+      deployHashStoreEnv: params.deployHashStoreEnv,
+      startupStartedAt: params.startupStartedAt,
+      shouldLogVerbose: params.shouldLogVerbose,
+    });
+  };
+  discordCommandDeployQueue = discordCommandDeployQueue.catch(() => undefined).then(runDeploy);
+  void discordCommandDeployQueue
     .then(() => {
       logDiscordStartupPhase({
         runtime: params.runtime,
