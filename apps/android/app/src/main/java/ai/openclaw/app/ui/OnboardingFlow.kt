@@ -13,6 +13,7 @@ import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextField
@@ -25,6 +26,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
@@ -79,6 +81,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -181,6 +184,14 @@ fun OnboardingFlow(
     val qrScanner = remember(context, qrScannerOptions) { GmsBarcodeScanning.getClient(context, qrScannerOptions) }
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
+    val cameraPermissionLauncher =
+      rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        setupError =
+          handleGatewayScannerPermissionResult(
+            granted = granted,
+            updateCameraPermission = permissionState.updateCameraPermission,
+          )
+      }
 
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
@@ -254,6 +265,7 @@ fun OnboardingFlow(
           discoveryStatusText = discoveryStatusText,
           discoveryStarted = runtimeInitialized,
           error = setupError,
+          showCameraSettingsAction = gatewaySetupErrorShowsCameraSettings(setupError),
           onBack = { step = OnboardingStep.Welcome },
           onScan = {
             setupError = null
@@ -270,7 +282,16 @@ fun OnboardingFlow(
                   return@addOnSuccessListener
                 }
                 setupCode = scanned.setupCode
-              }.addOnFailureListener { setupError = "Could not open the scanner." }
+              }.addOnFailureListener {
+                val cameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA)
+                setupError = gatewayScannerFailureMessage(cameraPermissionGranted)
+                if (!cameraPermissionGranted) {
+                  cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+              }
+          },
+          onOpenCameraSettings = {
+            openAppSettings(context)
           },
           onSetupCodeChange = {
             setupCode = it
@@ -493,8 +514,10 @@ private fun GatewaySetupScreen(
   discoveryStatusText: String,
   discoveryStarted: Boolean,
   error: String?,
+  showCameraSettingsAction: Boolean,
   onBack: () -> Unit,
   onScan: () -> Unit,
+  onOpenCameraSettings: () -> Unit,
   onSetupCodeChange: (String) -> Unit,
   onManualHostChange: (String) -> Unit,
   onManualPortChange: (String) -> Unit,
@@ -566,6 +589,18 @@ private fun GatewaySetupScreen(
             ClawErrorState(
               title = "Setup code issue",
               body = message,
+              action =
+                if (showCameraSettingsAction) {
+                  {
+                    ClawSecondaryButton(
+                      text = "Open app settings",
+                      icon = Icons.Default.Settings,
+                      onClick = onOpenCameraSettings,
+                    )
+                  }
+                } else {
+                  null
+                },
             )
           }
         }
@@ -1295,6 +1330,7 @@ private data class PermissionRowModel(
 private class PermissionState(
   val rows: List<PermissionRowModel>,
   val applyToViewModel: () -> Unit,
+  val updateCameraPermission: (Boolean) -> Unit,
 )
 
 /** Onboarding finishes only after the gateway resolves node capability approval. */
@@ -1315,6 +1351,34 @@ internal fun canFinishOnboarding(
       GatewayNodeApprovalState.Unsupported,
       -> true
     }
+
+internal fun gatewayScannerFailureMessage(cameraPermissionGranted: Boolean): String =
+  if (cameraPermissionGranted) {
+    "Could not open the scanner. You can paste the setup code instead."
+  } else {
+    "Camera permission is required to scan setup codes. Grant Camera permission, then try again."
+  }
+
+internal fun gatewayScannerFailureShowsAppSettings(cameraPermissionGranted: Boolean): Boolean = !cameraPermissionGranted
+
+internal fun gatewayScannerPermissionResultMessage(granted: Boolean): String? =
+  if (granted) {
+    null
+  } else {
+    "Camera permission is required to scan setup codes. Open Android app settings to grant Camera permission, then try again."
+  }
+
+internal fun handleGatewayScannerPermissionResult(
+  granted: Boolean,
+  updateCameraPermission: (Boolean) -> Unit,
+): String? {
+  updateCameraPermission(granted)
+  return gatewayScannerPermissionResultMessage(granted)
+}
+
+internal fun gatewaySetupErrorShowsCameraSettings(error: String?): Boolean =
+  error == gatewayScannerFailureMessage(cameraPermissionGranted = false) ||
+    error == gatewayScannerPermissionResultMessage(granted = false)
 
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
@@ -1361,6 +1425,7 @@ private fun rememberPermissionState(
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
           notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
+          cameraGranted = hasPermission(context, Manifest.permission.CAMERA)
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -1455,6 +1520,9 @@ private fun rememberPermissionState(
       viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
       viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
     },
+    updateCameraPermission = { granted ->
+      cameraGranted = granted
+    },
   )
 }
 
@@ -1462,6 +1530,16 @@ private fun hasPermission(
   context: Context,
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+/** Opens this app's Android settings page for permissions that require system UI. */
+private fun openAppSettings(context: Context) {
+  val intent =
+    Intent(
+      Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+      Uri.fromParts("package", context.packageName, null),
+    )
+  context.startActivity(intent)
+}
 
 /** Returns true when Android exposes any motion sensor that can back node motion commands. */
 private fun hasMotionCapabilities(context: Context): Boolean {

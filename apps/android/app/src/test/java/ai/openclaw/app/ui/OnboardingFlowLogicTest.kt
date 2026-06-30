@@ -58,6 +58,71 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun scannerFailureKeepsGenericCopyWhenCameraPermissionIsGranted() {
+    assertEquals(
+      "Could not open the scanner. You can paste the setup code instead.",
+      gatewayScannerFailureMessage(cameraPermissionGranted = true),
+    )
+    assertFalse(gatewayScannerFailureShowsAppSettings(cameraPermissionGranted = true))
+  }
+
+  @Test
+  fun scannerFailureNamesCameraPermissionWhenDenied() {
+    assertEquals(
+      "Camera permission is required to scan setup codes. Grant Camera permission, then try again.",
+      gatewayScannerFailureMessage(cameraPermissionGranted = false),
+    )
+    assertTrue(gatewayScannerFailureShowsAppSettings(cameraPermissionGranted = false))
+  }
+
+  @Test
+  fun deniedScannerPermissionResultKeepsSettingsRecoveryVisible() {
+    assertEquals(
+      "Camera permission is required to scan setup codes. Open Android app settings to grant Camera permission, then try again.",
+      gatewayScannerPermissionResultMessage(granted = false),
+    )
+    assertEquals(null, gatewayScannerPermissionResultMessage(granted = true))
+  }
+
+  @Test
+  fun cameraSettingsRecoveryOnlyShowsForCameraErrors() {
+    assertTrue(gatewaySetupErrorShowsCameraSettings(gatewayScannerFailureMessage(cameraPermissionGranted = false)))
+    assertTrue(gatewaySetupErrorShowsCameraSettings(gatewayScannerPermissionResultMessage(granted = false)))
+    assertFalse(gatewaySetupErrorShowsCameraSettings(gatewayScannerFailureMessage(cameraPermissionGranted = true)))
+    assertFalse(gatewaySetupErrorShowsCameraSettings("Enter a setup code or a valid gateway URL."))
+    assertFalse(gatewaySetupErrorShowsCameraSettings(null))
+  }
+
+  @Test
+  fun grantedScannerPermissionResultUpdatesCameraState() {
+    var cameraGranted = false
+
+    val message =
+      handleGatewayScannerPermissionResult(granted = true) {
+        cameraGranted = it
+      }
+
+    assertEquals(null, message)
+    assertTrue(cameraGranted)
+  }
+
+  @Test
+  fun deniedScannerPermissionResultKeepsCameraDisabled() {
+    var cameraGranted = true
+
+    val message =
+      handleGatewayScannerPermissionResult(granted = false) {
+        cameraGranted = it
+      }
+
+    assertEquals(
+      "Camera permission is required to scan setup codes. Open Android app settings to grant Camera permission, then try again.",
+      message,
+    )
+    assertFalse(cameraGranted)
+  }
+
+  @Test
   fun nearbyGatewayFoundStateIsConnectable() {
     assertEquals(
       NearbyGatewayUiState(subtitle = "Studio Gateway", status = "Found", canConnect = true),
