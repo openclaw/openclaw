@@ -1,6 +1,7 @@
 // Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
 import {
+  countProviderNativeToolsForPrecheck,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -45,6 +46,41 @@ describe("resolveAttemptStreamAuthProfileId", () => {
         } as never,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("countProviderNativeToolsForPrecheck", () => {
+  const openAIResponsesModel = {
+    api: "openai-responses",
+    id: "gpt-5.5",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+  };
+
+  it.each([
+    ["eligible OpenAI Responses", {}, openAIResponsesModel, 1],
+    [
+      "disabled web search",
+      { tools: { web: { search: { enabled: false } } } },
+      openAIResponsesModel,
+      0,
+    ],
+    ["proxied base URL", {}, { ...openAIResponsesModel, baseUrl: "https://proxy.test/v1" }, 0],
+    ["denied web_search policy", { tools: { deny: ["web_search"] } }, openAIResponsesModel, 0],
+    [
+      "different search provider",
+      { tools: { web: { search: { provider: "brave" } } } },
+      openAIResponsesModel,
+      0,
+    ],
+  ])("%s", (_name, config, model, expectedCount) => {
+    expect(
+      countProviderNativeToolsForPrecheck({
+        config,
+        model,
+        nativeWebSearchPolicyContext: {},
+      }),
+    ).toBe(expectedCount);
   });
 });
 

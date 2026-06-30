@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Resolves per-attempt runtime decisions from config and channel context.
  */
@@ -7,7 +8,65 @@ import {
   resolveSessionWriteLockOptions,
 } from "../../session-write-lock.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { resolveWebSearchToolPolicy } from "../../web-search-tool-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type ProviderNativeToolPolicyContext = Omit<
+  Parameters<typeof resolveWebSearchToolPolicy>[0],
+  "agentId" | "config" | "modelId" | "modelProvider"
+>;
+
+function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefined): boolean {
+  const provider = config?.tools?.web?.search?.provider;
+  if (typeof provider !== "string") {
+    return true;
+  }
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "" || normalized === "auto" || normalized === "openai";
+}
+
+function isOpenAIResponsesNativeWebSearchEligibleModel(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  const provider = typeof model.provider === "string" ? model.provider : undefined;
+  if (model.api !== "openai-responses" || !provider || normalizeProviderId(provider) !== "openai") {
+    return false;
+  }
+  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl.trim() : undefined;
+  return !baseUrl || /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(baseUrl);
+}
+
+export function countProviderNativeToolsForPrecheck(params: {
+  agentId?: string;
+  config?: OpenClawConfig;
+  model: { api?: unknown; id?: unknown; provider?: unknown; baseUrl?: unknown };
+  nativeWebSearchPolicyContext?: ProviderNativeToolPolicyContext;
+}): number {
+  if (
+    params.config?.tools?.web?.search?.enabled === false ||
+    !shouldUseOpenAINativeWebSearchProvider(params.config) ||
+    !isOpenAIResponsesNativeWebSearchEligibleModel(params.model)
+  ) {
+    return 0;
+  }
+
+  if (
+    params.nativeWebSearchPolicyContext &&
+    !resolveWebSearchToolPolicy({
+      config: params.config,
+      modelProvider: typeof params.model.provider === "string" ? params.model.provider : undefined,
+      modelId: typeof params.model.id === "string" ? params.model.id : undefined,
+      agentId: params.agentId,
+      ...params.nativeWebSearchPolicyContext,
+    }).allowed
+  ) {
+    return 0;
+  }
+
+  return 1;
+}
 
 /**
  * Builds the session write-lock timing for a live embedded attempt. The lock is

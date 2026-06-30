@@ -412,6 +412,7 @@ import {
 } from "./attempt.prompt-helpers.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import {
+  countProviderNativeToolsForPrecheck,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -4627,7 +4628,15 @@ export async function runEmbeddedAttempt(
               prompt: llmBoundaryPromptForPrecheck,
               contextMode: params.bootstrapContextMode,
               promptImageCount: imageResult.images.length,
-              toolCount: effectiveTools.length + clientToolDefs.length,
+              toolCount:
+                effectiveTools.length +
+                clientToolDefs.length +
+                countProviderNativeToolsForPrecheck({
+                  config: params.config,
+                  model: params.model,
+                  agentId: sessionAgentId,
+                  nativeWebSearchPolicyContext,
+                }),
               contextTokenBudget,
               reserveTokens,
               toolResultMaxChars: promptToolResultMaxChars,
