@@ -2338,16 +2338,18 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
-                  onCommentaryText:
-                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
-                      ? async (payload) => {
-                          await params.opts?.onItemEvent?.({
-                            itemId: payload.itemId,
-                            kind: "preamble",
-                            progressText: payload.text,
-                          });
+                  onCommentaryText: params.opts?.onItemEvent
+                    ? async (payload) => {
+                        if (params.opts?.commentaryProgressEnabled !== true) {
+                          return;
                         }
-                      : undefined,
+                        await params.opts?.onItemEvent?.({
+                          itemId: payload.itemId,
+                          kind: "preamble",
+                          progressText: payload.text,
+                        });
+                      }
+                    : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
                   },

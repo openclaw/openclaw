@@ -43,7 +43,19 @@ import {
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
+  if (resolveAssistantMessagePhase(message) === "commentary") {
+    return true;
+  }
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  if (resolveAssistantMessagePhase(message)) {
+    return false;
+  }
+  const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason)
+    ?.trim()
+    .toLowerCase();
+  return stopReason === "tooluse" || stopReason === "tool_use" || stopReason === "tool_calls";
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
+import { resolveTelegramBlockStreamingEnabled } from "./preview-streaming.js";
 
 describe("resolveTelegramStreamMode", () => {
   it("defaults to partial when telegram streaming is unset", () => {
@@ -23,6 +24,59 @@ describe("resolveTelegramStreamMode", () => {
 
   it("preserves unified progress mode on Telegram", () => {
     expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
+  });
+});
+
+describe("resolveTelegramBlockStreamingEnabled", () => {
+  it("lets live preview modes override the legacy global block default", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "partial" } },
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(false);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "progress" } },
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(false);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "block" } },
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves the legacy global block default when Telegram streaming is implicit", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: {},
+        streamMode: "partial",
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(true);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        legacyBlockStreamingDefault: "on",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps explicit Telegram block streaming ahead of preview mode", () => {
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "partial", block: { enabled: true } } },
+        legacyBlockStreamingDefault: "off",
+      }),
+    ).toBe(true);
+    expect(
+      resolveTelegramBlockStreamingEnabled({
+        account: { streaming: { mode: "block", block: { enabled: true } } },
+        legacyBlockStreamingDefault: "off",
+      }),
+    ).toBe(true);
   });
 });
 
