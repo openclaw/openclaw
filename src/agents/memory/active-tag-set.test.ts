@@ -3,10 +3,17 @@
 // turns are the only thing "moving on". Manual-expand head bumps keep a box live.
 // Pure: data in → collapse decisions out (applyAutoCollapse is the I/O wrapper).
 import { describe, expect, it } from "vitest";
-import { ACTIVE_SET_CARDINALITY_FLOOR, COLLAPSE_DWELL_TURNS } from "./accordion-constants.js";
 import {
+  ACTIVE_SET_CARDINALITY_FLOOR,
+  ACTIVE_WINDOW_TURNS,
+  COLLAPSE_DWELL_TURNS,
+  JACCARD_LIVE_CUTOFF,
+} from "./accordion-constants.js";
+import {
+  DEFAULT_PARAMS,
   decideAutoCollapse,
   type BoxLike,
+  type CollapseParams,
   type SpanLike,
   type TurnLike,
 } from "./active-tag-set.js";
@@ -111,5 +118,74 @@ describe("active-tag-set auto-collapse", () => {
     const { turns, spans } = topicSwitch(2, COLLAPSE_DWELL_TURNS + 1);
     const boxes = [box("box-voice", { state: "collapsed" }), box("box-empty")];
     expect(decideAutoCollapse({ turns, spans, boxes })).toEqual([]);
+  });
+});
+
+// Phase 4 (04-01): the rule shape + thresholds are injected so the tuning harness can
+// sweep candidates without mutating module state. DEFAULT_PARAMS must reproduce the
+// shipped jaccard-distance decisions; the two candidate shapes must diverge on a shared
+// fixture and be deterministic across repeated calls (no hidden global state).
+
+// box-A owns {t2@seq1, t1@seq2}; box-B owns t3..t13 (seqs 3..13). t1 sits inside the
+// last-12 active window so it joins the active set (partial overlap with box-A), but
+// box-A's newest owned turn (seq 2) is 11 non-noise turns behind the head → past the
+// dwell. grok-1 (jaccard < cutoff) collapses box-A; gemini-1 (any overlap = live) keeps
+// it. box-B fully overlaps the active set and stays live under both.
+function partialOverlap() {
+  const turns: TurnLike[] = [turn(1), turn(2)];
+  const spans: SpanLike[] = [span(1, "t2", "box-A"), span(2, "t1", "box-A")];
+  for (let seq = 3; seq <= 13; seq += 1) {
+    turns.push(turn(seq));
+    spans.push(span(seq, `t${seq}`, "box-B"));
+  }
+  return { turns, spans, boxes: [box("box-A"), box("box-B")] };
+}
+
+const GROK_1: CollapseParams = {
+  mode: "jaccard-distance",
+  activeWindowTurns: 12,
+  jaccardLiveCutoff: 0.3,
+  collapseDwellTurns: 6,
+  activeSetCardinalityFloor: 2,
+};
+const GEMINI_1: CollapseParams = {
+  mode: "zero-intersection",
+  activeWindowTurns: 12,
+  zeroIntersectionDwellTurns: 5,
+  activeSetCardinalityFloor: 2,
+};
+
+describe("decideAutoCollapse params (04-01)", () => {
+  it("DEFAULT_PARAMS mirrors the shipped accordion constants (jaccard-distance shape)", () => {
+    expect(DEFAULT_PARAMS).toEqual({
+      mode: "jaccard-distance",
+      activeWindowTurns: ACTIVE_WINDOW_TURNS,
+      jaccardLiveCutoff: JACCARD_LIVE_CUTOFF,
+      collapseDwellTurns: COLLAPSE_DWELL_TURNS,
+      activeSetCardinalityFloor: ACTIVE_SET_CARDINALITY_FLOOR,
+    });
+  });
+
+  it("default-arg parity: omitting params equals passing DEFAULT_PARAMS", () => {
+    for (const codeTurns of [COLLAPSE_DWELL_TURNS - 1, COLLAPSE_DWELL_TURNS + 1]) {
+      const { turns, spans, boxes } = topicSwitch(2, codeTurns);
+      expect(decideAutoCollapse({ turns, spans, boxes })).toEqual(
+        decideAutoCollapse({ turns, spans, boxes }, DEFAULT_PARAMS),
+      );
+    }
+  });
+
+  it("switching params alone changes which boxes collapse for identical input", () => {
+    const input = partialOverlap();
+    expect(decideAutoCollapse(input, GROK_1)).toEqual(["box-A"]);
+    expect(decideAutoCollapse(input, GEMINI_1)).toEqual([]);
+  });
+
+  it("each candidate is deterministic across repeated calls (no global state)", () => {
+    const input = partialOverlap();
+    expect(decideAutoCollapse(input, GROK_1)).toEqual(decideAutoCollapse(input, GROK_1));
+    expect(decideAutoCollapse(input, GEMINI_1)).toEqual(decideAutoCollapse(input, GEMINI_1));
+    // The two shapes diverge on at least this fixture — the sweep is live.
+    expect(decideAutoCollapse(input, GROK_1)).not.toEqual(decideAutoCollapse(input, GEMINI_1));
   });
 });
