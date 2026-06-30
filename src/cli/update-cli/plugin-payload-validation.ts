@@ -6,6 +6,7 @@ import { resolvePackageExtensionEntries, type PackageManifest } from "../../plug
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolvePluginInstallPayloadKind } from "./plugin-payload-kind.js";
 
 export type PluginPayloadSmokeFailureReason =
   | "missing-install-path"
@@ -66,6 +67,10 @@ export async function runPluginPayloadSmokeCheck(params: {
     }
     const installPath = resolveUserPath(rawInstallPath, params.env);
     checked.push(pluginId);
+
+    if (resolvePluginInstallPayloadKind(installPath) === "bundle") {
+      continue;
+    }
 
     const dirStat = await safeStat(installPath);
     if (!dirStat?.isDirectory()) {

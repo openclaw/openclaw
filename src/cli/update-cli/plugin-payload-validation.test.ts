@@ -64,6 +64,22 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.checked).toEqual(["discord"]);
   });
 
+  it("accepts bundle-format plugins without a package.json", async () => {
+    const dir = path.join(tmpRoot, "claude-bundle");
+    await fs.mkdir(path.join(dir, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "claude-bundle" }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: { "claude-bundle": { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["claude-bundle"]);
+  });
+
   it("reports a failure when the package directory is missing", async () => {
     const dir = path.join(tmpRoot, "brave");
     const result = await runPluginPayloadSmokeCheck({
