@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Qqbot tests cover message queue plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
@@ -303,5 +304,36 @@ describe("engine/gateway/message-queue", () => {
       expect(cmdCall?.content).toBe("/stop");
       expect(cmdCall).not.toHaveProperty("merge");
     });
+  });
+});
+
+describe("message-queue command-content log preview UTF-16 truncation", () => {
+  // Mirrors the call at extensions/qqbot/src/engine/gateway/message-queue.ts:248 —
+  // `truncateUtf16Safe((cmd.content ?? "").trim(), 50)` for the per-command debug log.
+  // The helper-only tests below verify the SDK helper keeps the boundary safe so a
+  // lone surrogate never lands in the agent-facing log preview.
+  const emoji = "🎉"; // U+1F389, surrogate pair 0xd83c 0xdf89
+
+  it("drops a trailing surrogate straddling the 50-char boundary", () => {
+    const input = "a".repeat(49) + emoji;
+    const out = truncateUtf16Safe(input.trim(), 50);
+    expect(out.length).toBe(49);
+    expect(out.charCodeAt(out.length - 1)).toBeLessThan(0xd800);
+  });
+
+  it("passes plain ASCII under the cap through unchanged", () => {
+    const input = "x".repeat(40);
+    expect(truncateUtf16Safe(input.trim(), 50)).toBe(input);
+  });
+
+  it("stays empty for empty input", () => {
+    expect(truncateUtf16Safe("", 50)).toBe("");
+  });
+
+  it("preserves an emoji fully inside the 50-char window (no false-positive drop)", () => {
+    const input = emoji + "a".repeat(48);
+    const out = truncateUtf16Safe(input.trim(), 50);
+    expect(out.startsWith(emoji)).toBe(true);
+    expect(out.length).toBe(50);
   });
 });

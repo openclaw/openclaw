@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Qqbot tests cover inbound attachments plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { processAttachments, type AudioConvertPort } from "./inbound-attachments.js";
@@ -128,5 +129,36 @@ describe("engine/gateway/inbound-attachments", () => {
     expect(result.voiceTranscripts).toEqual(["platform text"]);
     expect(result.voiceTranscriptSources).toEqual(["asr"]);
     expect(result.attachmentLocalPaths).toEqual([null]);
+  });
+});
+
+describe("inbound-attachments STT transcript log preview UTF-16 truncation", () => {
+  // Mirrors the call at extensions/qqbot/src/engine/gateway/inbound-attachments.ts:334 —
+  // `truncateUtf16Safe(transcript, 100)` for the debug log preview. Helper-only tests
+  // verify the SDK helper drops a trailing surrogate that would otherwise produce a
+  // lone 0xd83c in the agent-facing log.
+  const emoji = "🎉"; // U+1F389, surrogate pair 0xd83c 0xdf89
+
+  it("drops a trailing surrogate straddling the 100-char boundary", () => {
+    const input = "a".repeat(99) + emoji;
+    const out = truncateUtf16Safe(input, 100);
+    expect(out.length).toBe(99);
+    expect(out.charCodeAt(out.length - 1)).toBeLessThan(0xd800);
+  });
+
+  it("passes plain ASCII under the cap through unchanged", () => {
+    const input = "x".repeat(60);
+    expect(truncateUtf16Safe(input, 100)).toBe(input);
+  });
+
+  it("stays empty for empty input", () => {
+    expect(truncateUtf16Safe("", 100)).toBe("");
+  });
+
+  it("preserves an emoji fully inside the 100-char window (no false-positive drop)", () => {
+    const input = emoji + "a".repeat(98);
+    const out = truncateUtf16Safe(input, 100);
+    expect(out.startsWith(emoji)).toBe(true);
+    expect(out.length).toBe(100);
   });
 });
