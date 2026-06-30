@@ -2895,7 +2895,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "💬 _Checking the current weather source before summarizing clearly._",
+      "💬 Checking the current weather source before summarizing clearly.",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");
@@ -3059,7 +3059,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["💬 _Checking source data._"]);
+    expect(updates).toEqual(["💬 Checking source data."]);
     expectProgressSummaryEdit();
     expectFreshFinalText("done");
   });
