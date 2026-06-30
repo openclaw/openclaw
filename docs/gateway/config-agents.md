@@ -408,7 +408,6 @@ Time format in system prompt. Default: `auto` (OS preference).
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 3,
@@ -420,6 +419,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.
   - Object form sets primary plus ordered failover models.
+- `timeoutSeconds`: when omitted, whole-agent runs use the runtime default of `172800` seconds (48 hours). Set this only when you intentionally want a
+  shorter global ceiling for every agent run.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
