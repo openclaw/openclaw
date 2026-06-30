@@ -286,6 +286,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionPendingFiles = new Set<string>();
   protected override sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   private indexIdentityDirty = false;
+  private sessionStartupDirtyDetectionPromise: Promise<string[]> | null = null;
   protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
@@ -435,6 +436,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();
+      } else if (params.purpose === "status") {
+        // Status mode skips the full catch-up sync to stay light, but still
+        // detects on-disk session drift so status() does not report a false
+        // clean state when unindexed transcripts exist. See #97814.
+        this.sessionStartupDirtyDetectionPromise = this.detectSessionStartupDirtyFilesForStatus();
       }
     } catch (err) {
       closeMemoryDatabase(this.db);
@@ -1109,6 +1115,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       from: params.from,
       lines: params.lines,
     });
+  }
+
+  /**
+   * Runs session-drift detection without triggering a sync, so status mode
+   * reports dirty=true when unindexed transcripts exist on disk. Awaits the
+   * detection started in the constructor; safe to call from status-path CLI
+   * commands before reading {@link status}. See #97814.
+   */
+  async refreshSessionStartupDirtyDetection(): Promise<void> {
+    if (this.sessionStartupDirtyDetectionPromise) {
+      await this.sessionStartupDirtyDetectionPromise;
+    }
+  }
+
+  private async detectSessionStartupDirtyFilesForStatus(): Promise<string[]> {
+    if (this.closed || !this.sources.has("sessions")) {
+      return [];
+    }
+    try {
+      return await this.markSessionStartupCatchupDirtyFiles();
+    } catch (err) {
+      log.warn("memory status session drift detection failed: " + String(err));
+      return [];
+    }
   }
 
   status(): MemoryProviderStatus {

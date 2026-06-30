@@ -1240,6 +1240,49 @@ describe("memory index", () => {
     }
   });
 
+  it("reports dirty in status mode when an unindexed session transcript exists (#97814)", async () => {
+    try {
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-status-session-drift"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "session-status-drift.jsonl"),
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-status-drift",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "user",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Status drift marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
+      const manager = await getFreshManager(cfg, "status");
+      try {
+        await (
+          manager as unknown as {
+            refreshSessionStartupDirtyDetection: () => Promise<void>;
+          }
+        ).refreshSessionStartupDirtyDetection();
+        const status = manager.status();
+        expect(status.dirty).toBe(true);
+      } finally {
+        await manager.close?.();
+      }
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));

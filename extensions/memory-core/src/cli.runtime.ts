@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
@@ -10,7 +11,6 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
@@ -720,6 +720,18 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       agentId,
       purpose: managerPurpose,
       run: async (manager) => {
+        // For plain status (no --index), ensure session-drift detection from
+        // the constructor has settled before reading status, so unindexed
+        // transcripts surface as dirty=true instead of a false-clean state.
+        // The builtin MemoryIndexManager exposes this; other backends do not.
+        if (!opts.index) {
+          const refresher = (
+            manager as { refreshSessionStartupDirtyDetection?: () => Promise<void> }
+          ).refreshSessionStartupDirtyDetection;
+          if (typeof refresher === "function") {
+            await refresher.call(manager);
+          }
+        }
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
         let indexError: string | undefined;
