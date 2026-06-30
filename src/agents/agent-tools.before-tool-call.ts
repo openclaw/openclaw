@@ -701,6 +701,7 @@ async function requestPluginToolApproval(params: {
       id?: string;
       status?: string;
       decision?: string | null;
+      deliveryRoute?: string;
     } = await callGatewayTool(
       "plugin.approval.request",
       // Buffer beyond the approval timeout so the gateway can clean up
@@ -823,11 +824,18 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
+    const timeoutReason =
+      requestResult?.deliveryRoute === "turn-source"
+        ? buildPluginApprovalFailureReason({
+            fallbackReason: "Approval timed out",
+            ctx: params.ctx,
+          })
+        : "Approval timed out";
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Approval timed out",
+      reason: timeoutReason,
       params: params.baseParams,
     };
   } catch (err) {
