@@ -332,7 +332,7 @@ export function createCronToolSchema(): TSchema {
       sessionKey: Type.Optional(
         Type.String({
           description:
-            'Wake target override for `action: "wake"`: route the event to the named session rather than the calling agent\'s current session. Defaults to the resolved calling-session key when omitted.',
+            'Wake target override for `action: "wake"`: route the event to another session owned by the calling agent. Defaults to the resolved calling-session key when omitted.',
         }),
       ),
     },
@@ -858,7 +858,7 @@ ACTIONS:
 - remove: delete job; needs jobId
 - run: run only if due by default; needs jobId; pass runMode="force" to trigger now
 - runs: run history; needs jobId
-- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
+- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane owned by the calling agent.
 
 JOB SCHEMA (for add action):
 {
@@ -1226,12 +1226,20 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             // upstream half of openclaw/openclaw#46886 (#64556 — agentId/
             // sessionKey silently ignored for `action: "wake"`). Explicit
             // params on the tool call still take precedence over the inferred
-            // value, so call sites that want to wake a different session can
-            // pass `sessionKey` / `agentId` directly.
+            // value, so call sites can wake a different session owned by the
+            // calling agent.
             const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const explicitSessionKey = readStringParam(params, "sessionKey");
             const explicitAgentId = readStringParam(params, "agentId");
+            if (callerScope) {
+              assertCronToolAgentFieldMatchesScope({
+                value: explicitAgentId,
+                field: "wake agentId",
+                callerScope,
+              });
+              assertCronToolSessionRefsMatchScope({ sessionKey: explicitSessionKey }, callerScope);
+            }
             const inferredSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
@@ -1266,6 +1274,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               );
             }
             const agentId =
+              callerScope?.agentId ??
               explicitAgentId ??
               (explicitSessionKey ? agentIdFromExplicitSessionKey : inferredAgentId);
             return jsonResult(

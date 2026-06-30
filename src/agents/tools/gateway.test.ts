@@ -346,6 +346,21 @@ describe("gateway tool defaults", () => {
     expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
   });
 
+  it("marks local wake calls from trusted tool context with agent runtime identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+      async () => {
+        await callGatewayTool("wake", {}, { mode: "now", text: "ping" });
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("wake");
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
   it("explains stale gateway cron connection metadata rejections", async () => {
     mocks.callGateway.mockRejectedValueOnce(
       new Error(

@@ -473,7 +473,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
 
 /** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
-  wake: ({ params, respond, context }) => {
+  wake: ({ params, respond, context, client }) => {
     if (!validateWakeParams(params)) {
       respond(
         false,
@@ -516,6 +516,27 @@ export const cronHandlers: GatewayRequestHandlers = {
     const sessionKeyAgentId = sessionKey
       ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
       : undefined;
+    const callerScope = readCronCallerScope(client);
+    if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wake agentId outside caller scope"),
+      );
+      return;
+    }
+    if (
+      callerScope &&
+      sessionKeyAgentId &&
+      normalizeAgentId(sessionKeyAgentId) !== callerScope.agentId
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wake sessionKey outside caller scope"),
+      );
+      return;
+    }
     if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
       respond(
         false,
@@ -531,7 +552,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       mode: p.mode,
       text: p.text,
       ...(sessionKey ? { sessionKey } : {}),
-      ...(agentId ? { agentId } : {}),
+      ...(callerScope ? { agentId: callerScope.agentId } : agentId ? { agentId } : {}),
     });
     respond(true, result, undefined);
   },
