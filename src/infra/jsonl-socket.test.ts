@@ -191,6 +191,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       }
 
       try {
+        const startMs = Date.now();
         const result = await requestJsonlSocket({
           socketPath,
           requestLine: "{}",
@@ -198,6 +199,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           accept: () => undefined,
         });
         expect(result).toBeNull();
+        expect(Date.now() - startMs).toBeLessThan(250);
       } finally {
         server.close();
       }
