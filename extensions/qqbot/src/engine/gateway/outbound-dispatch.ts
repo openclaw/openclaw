@@ -75,6 +75,35 @@ type ReplyDeliverPayload = {
   isError?: boolean;
 };
 
+/**
+ * Detect a partial-mode block deliver that still carries a literal `MEDIA:`
+ * directive. Core keeps `extractMediaDirectives: false` during block streaming
+ * (see src/auto-reply/reply/reply-delivery.ts:141) so the directive is left in
+ * the text for the final payload to strip. qqbot would otherwise send this
+ * block verbatim, leaking `MEDIA:<path>` to the user ahead of the final reply.
+ *
+ * Match mirrors splitMediaFromOutput's line-start semantics (src/media/parse.ts:543):
+ * only treat `MEDIA:` as a directive when it begins a line, so inline prose
+ * like "do not use MEDIA: in text" stays deliverable.
+ */
+function isPartialBlockWithMediaDirective(
+  payload: ReplyDeliverPayload,
+  info: { kind: string },
+  useOfficialC2cStream: boolean,
+): boolean {
+  if (info.kind !== "block") {
+    return false;
+  }
+  if (useOfficialC2cStream) {
+    return false;
+  }
+  const text = payload.text;
+  if (typeof text !== "string" || !text) {
+    return false;
+  }
+  return /(^|\n)\s*MEDIA:/i.test(text);
+}
+
 function shouldDeliverToolProgressImmediately(
   account: GatewayAccount,
   useOfficialC2cStream: boolean,
@@ -450,6 +479,18 @@ export async function dispatchOutbound(
               responsePrefix: messagesConfig.responsePrefix,
               deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
                 hasResponse = true;
+
+                // Partial streaming mode: core leaves literal `MEDIA:` directives in
+                // block delivers (extractMediaDirectives: false) for the final
+                // payload to strip. Drop the block here so we don't leak the raw
+                // directive text; the final deliver will carry the stripped text
+                // and mediaUrls.
+                if (isPartialBlockWithMediaDirective(payload, info, useOfficialC2cStream)) {
+                  log?.info(
+                    "Skip partial block deliver: contains MEDIA: directive (awaiting final deliver)",
+                  );
+                  return;
+                }
 
                 // ---- Tool deliver ----
                 if (info.kind === "tool") {
