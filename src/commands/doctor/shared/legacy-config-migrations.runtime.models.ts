@@ -1,4 +1,5 @@
 // Legacy model runtime config migrations for stale model refs, compat fields, and catalog data.
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -848,51 +849,84 @@ function rewriteModelRefString(value: string, path: string, changes: string[]): 
   return upgraded;
 }
 
-function mergeModelRefMapEntries(
-  existing: unknown,
-  incoming: unknown,
-): { value: unknown; conflicts: string[] } {
-  const existingRecord = getRecord(existing);
-  const incomingRecord = getRecord(incoming);
-  if (!existingRecord || !incomingRecord) {
-    return { value: existing, conflicts: existingRecord || incomingRecord ? ["value"] : [] };
-  }
-  const merged: Record<string, unknown> = {};
-  for (const [field, existingValue] of Object.entries(existingRecord)) {
-    if (isBlockedObjectKey(field)) {
-      continue;
-    }
-    merged[field] = existingValue;
-  }
-  const conflicts: string[] = [];
-  for (const [field, incomingValue] of Object.entries(incomingRecord)) {
-    if (incomingValue === undefined || isBlockedObjectKey(field)) {
-      continue;
-    }
-    if (!hasOwnDefinedProperty(existingRecord, field)) {
-      merged[field] = incomingValue;
-      continue;
-    }
-    const existingField = getRecord(existingRecord[field]);
-    const incomingField = getRecord(incomingValue);
-    if (existingField && incomingField) {
-      const nested = mergeModelRefMapEntries(existingField, incomingField);
-      merged[field] = nested.value;
-      conflicts.push(...nested.conflicts.map((c) => `${field}.${c}`));
-      continue;
-    }
-    conflicts.push(field);
-  }
-  return { value: merged, conflicts };
-}
-
-function setModelRefMapEntry(record: Record<string, unknown>, key: string, value: unknown): void {
+function setRecordEntry(record: Record<string, unknown>, key: string, value: unknown): void {
+  // Config dictionaries can contain hostile keys; define own properties so
+  // rebuilding or copying them never invokes Object.prototype setters.
   Object.defineProperty(record, key, {
     configurable: true,
     enumerable: true,
     value,
     writable: true,
   });
+}
+
+function sanitizeModelRefMapEntry(value: unknown): unknown {
+  // Collisions combine both entries before recursive ref rewriting, so blocked
+  // keys must be removed at every depth on both sides of the merge.
+  if (Array.isArray(value)) {
+    return value.map(sanitizeModelRefMapEntry);
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return value;
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [field, child] of Object.entries(record)) {
+    if (!isBlockedObjectKey(field)) {
+      setRecordEntry(sanitized, field, sanitizeModelRefMapEntry(child));
+    }
+  }
+  return sanitized;
+}
+
+function modelRefValuesAreEqual(existing: unknown, incoming: unknown, path: string): boolean {
+  if (isDeepStrictEqual(existing, incoming)) {
+    return true;
+  }
+  const normalizedExisting = rewriteKnownModelRefs(existing, path, []).value;
+  const normalizedIncoming = rewriteKnownModelRefs(incoming, path, []).value;
+  return isDeepStrictEqual(normalizedExisting, normalizedIncoming);
+}
+
+function mergeModelRefMapEntries(
+  existing: unknown,
+  incoming: unknown,
+  path: string,
+): { value: unknown; conflicts: string[] } {
+  const existingRecord = getRecord(existing);
+  const incomingRecord = getRecord(incoming);
+  if (!existingRecord || !incomingRecord) {
+    return {
+      value: sanitizeModelRefMapEntry(existing),
+      conflicts: modelRefValuesAreEqual(existing, incoming, path) ? [] : ["value"],
+    };
+  }
+  const merged = sanitizeModelRefMapEntry(existingRecord) as Record<string, unknown>;
+  const conflicts: string[] = [];
+  for (const [field, incomingValue] of Object.entries(incomingRecord)) {
+    if (incomingValue === undefined || isBlockedObjectKey(field)) {
+      continue;
+    }
+    if (!hasOwnDefinedProperty(existingRecord, field)) {
+      setRecordEntry(merged, field, sanitizeModelRefMapEntry(incomingValue));
+      continue;
+    }
+    const existingValue = existingRecord[field];
+    const fieldPath = `${path}.${field}`;
+    if (modelRefValuesAreEqual(existingValue, incomingValue, fieldPath)) {
+      continue;
+    }
+    const existingField = getRecord(existingValue);
+    const incomingField = getRecord(incomingValue);
+    if (existingField && incomingField) {
+      const nested = mergeModelRefMapEntries(existingField, incomingField, fieldPath);
+      setRecordEntry(merged, field, nested.value);
+      conflicts.push(...nested.conflicts.map((c) => `${field}.${c}`));
+      continue;
+    }
+    conflicts.push(field);
+  }
+  return { value: merged, conflicts };
 }
 
 function rewriteModelRefMapKeys(
@@ -902,46 +936,40 @@ function rewriteModelRefMapKeys(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = {};
-  const canonicalKeys = new Set<string>();
-  const retiredSourceKeys = new Map<string, string>();
+  const consumedCanonicalKeys = new Set<string>();
   for (const [key, child] of Object.entries(record)) {
     const upgradedKey = upgradeRetiredModelRef(key);
     const nextKey = upgradedKey ?? key;
-    const isCanonicalEntry = !upgradedKey;
+    if (!upgradedKey && consumedCanonicalKeys.has(key)) {
+      continue;
+    }
     if (upgradedKey) {
       changes.push(
         `Upgraded ${path} key from ${JSON.stringify(key)} to ${JSON.stringify(upgradedKey)}.`,
       );
       changed = true;
     }
+    if (upgradedKey && !Object.hasOwn(next, nextKey) && Object.hasOwn(record, nextKey)) {
+      // Seed the canonical entry before its retired aliases so canonical conflict
+      // precedence and per-alias change reporting do not depend on authored key order.
+      setRecordEntry(next, nextKey, record[nextKey]);
+      consumedCanonicalKeys.add(nextKey);
+    }
     if (Object.hasOwn(next, nextKey)) {
       const existing = next[nextKey];
-      const canonicalWins = isCanonicalEntry && !canonicalKeys.has(nextKey);
-      const { value, conflicts } = canonicalWins
-        ? mergeModelRefMapEntries(child, existing)
-        : mergeModelRefMapEntries(existing, child);
-      setModelRefMapEntry(next, nextKey, value);
-      const sourceKey = canonicalWins ? (retiredSourceKeys.get(nextKey) ?? key) : key;
-      if (conflicts.length > 0) {
+      const { value, conflicts } = mergeModelRefMapEntries(existing, child, `${path}.${nextKey}`);
+      setRecordEntry(next, nextKey, value);
+      const sortedConflicts = conflicts.toSorted();
+      if (sortedConflicts.length > 0) {
         changes.push(
-          `Merged ${path} key ${JSON.stringify(sourceKey)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`,
+          `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${sortedConflicts.join(", ")}.`,
         );
       } else {
-        changes.push(
-          `Merged ${path} key ${JSON.stringify(sourceKey)} into ${JSON.stringify(nextKey)}.`,
-        );
-      }
-      if (isCanonicalEntry) {
-        canonicalKeys.add(nextKey);
+        changes.push(`Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`);
       }
       continue;
     }
-    setModelRefMapEntry(next, nextKey, child);
-    if (isCanonicalEntry) {
-      canonicalKeys.add(nextKey);
-    } else {
-      retiredSourceKeys.set(nextKey, key);
-    }
+    setRecordEntry(next, nextKey, child);
   }
   return { value: changed ? next : record, changed };
 }
@@ -990,7 +1018,7 @@ function rewriteKnownModelRefs(
   for (const [childKey, child] of Object.entries(working)) {
     const rewritten = rewriteKnownModelRefs(child, `${path}.${childKey}`, changes);
     changed ||= rewritten.changed;
-    next[childKey] = rewritten.value;
+    setRecordEntry(next, childKey, rewritten.value);
   }
   return { value: changed ? next : value, changed };
 }
@@ -1408,13 +1436,16 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
     legacyRules: RETIRED_MODEL_REF_RULES,
     apply: (raw, changes) => {
       const rewritten = rewriteKnownModelRefs(raw, "config", changes);
-      if (!rewritten.changed || !getRecord(rewritten.value)) {
+      const rewrittenRecord = getRecord(rewritten.value);
+      if (!rewritten.changed || !rewrittenRecord) {
         return;
       }
       for (const key of Object.keys(raw)) {
         delete raw[key];
       }
-      Object.assign(raw, rewritten.value);
+      for (const [key, value] of Object.entries(rewrittenRecord)) {
+        setRecordEntry(raw, key, value);
+      }
     },
   }),
   defineLegacyConfigMigration({
