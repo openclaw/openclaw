@@ -1143,6 +1143,106 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("rejects a stale injected checkpoint when the locked row's session changed (#81108)", async () => {
+    const discoverySessionId = "11111111-1111-4111-8111-111111111111";
+    const changedSessionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    // Disk-discovered at the gateway for the row as it was at discovery time.
+    const staleInjectedCheckpoint = {
+      checkpointId: "checkpoint-1",
+      sessionKey: "agent:main:main",
+      sessionId: discoverySessionId,
+      createdAt: 10,
+      reason: "manual",
+      preCompaction: {
+        sessionId: discoverySessionId,
+        sessionFile: path.join(tempDir, "stale.jsonl"),
+        leafId: "stale-leaf",
+      },
+      postCompaction: { sessionId: discoverySessionId },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    // The row changed identity before the writer-locked mutation and carries no
+    // checkpoint metadata for this id.
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: { sessionId: changedSessionId, updatedAt: 99 },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch-stale",
+      checkpointId: "checkpoint-1",
+      checkpoint: staleInjectedCheckpoint,
+      forkTranscriptFromCheckpoint: async () => {
+        throw new Error("fork must not run for a rejected stale checkpoint");
+      },
+      buildEntry: ({ currentEntry }) => currentEntry,
+    });
+
+    // The stale checkpoint must not drive the mutation; with no stored metadata for
+    // the id on the changed row, the mutation fails safe before forking.
+    expect(result).toEqual({ status: "missing-checkpoint" });
+  });
+
+  it("heals from an injected disk checkpoint when the locked entry has no metadata (#81108)", async () => {
+    const sourceSessionId = "11111111-1111-4111-8111-111111111111";
+    const branchSessionId = "22222222-2222-4222-8222-222222222222";
+    const branchPath = path.join(tempDir, "branch-heal.jsonl");
+    fs.writeFileSync(branchPath, `{"type":"session","id":"${branchSessionId}"}\n`, "utf8");
+    const diskCheckpoint = {
+      checkpointId: "checkpoint-disk",
+      sessionKey: "agent:main:main",
+      sessionId: sourceSessionId,
+      createdAt: 10,
+      reason: "manual",
+      preCompaction: { sessionId: sourceSessionId, leafId: "disk-leaf" },
+      postCompaction: { sessionId: "33333333-3333-4333-8333-333333333333" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    // Session row with valid disk checkpoint files but no compactionCheckpoints metadata.
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: { sessionId: sourceSessionId, updatedAt: 10 },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch-heal",
+      checkpointId: "checkpoint-disk",
+      checkpoint: diskCheckpoint,
+      forkTranscriptFromCheckpoint: async (selectedCheckpoint) => {
+        expect(selectedCheckpoint).toEqual(diskCheckpoint);
+        return {
+          status: "created",
+          transcript: { sessionFile: branchPath, sessionId: branchSessionId },
+        };
+      },
+      buildEntry: ({ currentEntry, forkedTranscript }) => ({
+        ...currentEntry,
+        sessionFile: forkedTranscript.sessionFile,
+        sessionId: forkedTranscript.sessionId,
+      }),
+    });
+
+    expect(result).toMatchObject({ status: "created", checkpoint: diskCheckpoint });
+  });
+
   it("does not persist checkpoint restores when the transcript boundary is missing", async () => {
     fs.writeFileSync(
       storePath,
