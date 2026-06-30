@@ -666,6 +666,9 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
     expect(settings.theme).toBe("claw");
     expect(settings.sessionKey).toBe("main");
+    console.log(
+      `[gateway-proof] same-origin legacy fallback rejected: stored=wss://gateway.example:8443/gateway-a loaded=${settings.gatewayUrl}`,
+    );
   });
 
   it("preserves a legacy custom remote gatewayUrl on first load after upgrade", () => {
@@ -696,6 +699,9 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.themeMode).toBe("dark");
     expect(settings.chatShowThinking).toBe(false);
     expect(settings.sessionKey).toBe("remote-session");
+    console.log(
+      `[gateway-proof] remote legacy fallback preserved: loaded=${settings.gatewayUrl} session=${settings.sessionKey}`,
+    );
   });
 
   it("does not write to the legacy unscoped settings key when saving", () => {
@@ -901,5 +907,8 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settingsB.chatAutoScroll).toBe("near-bottom");
     expect(settingsB.navCollapsed).toBe(false);
     expect(settingsB.navWidth).toBe(300);
+    console.log(
+      `[gateway-proof] same-origin isolation: basePath A=/gateway-a -> ${settingsA.gatewayUrl}, basePath B=/gateway-b -> ${settingsB.gatewayUrl}`,
+    );
   });
 });
