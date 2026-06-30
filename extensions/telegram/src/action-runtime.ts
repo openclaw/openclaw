@@ -3,6 +3,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   jsonResult,
+  readNumberParam,
   readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
@@ -44,11 +45,15 @@ import {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  forwardMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
+  sendLocationTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  sendVenueTelegram,
+  sendVideoNoteTelegram,
 } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
@@ -61,14 +66,18 @@ export const telegramActionRuntime = {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  forwardMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
   reactMessageTelegram,
   searchStickers,
   sendDurableMessageBatch,
+  sendLocationTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  sendVenueTelegram,
+  sendVideoNoteTelegram,
 };
 
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
@@ -85,8 +94,11 @@ const TELEGRAM_ACTION_ALIASES = {
   react: "react",
   searchSticker: "searchSticker",
   send: "sendMessage",
+  sendLocation: "sendLocation",
   sendMessage: "sendMessage",
   sendSticker: "sendSticker",
+  sendVenue: "sendVenue",
+  sendVideoNote: "sendVideoNote",
   sticker: "sendSticker",
   stickerCacheStats: "stickerCacheStats",
   "sticker-search": "searchSticker",
@@ -885,6 +897,147 @@ export async function handleTelegramAction(
       }
     }
     return jsonResult(result);
+  }
+
+  if (action === "sendLocation") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const latitude = readNumberParam(params, "latitude", { required: true });
+    const longitude = readNumberParam(params, "longitude", { required: true });
+    const horizontalAccuracy = readNumberParam(params, "horizontalAccuracy");
+    const replyToMessageId = readTelegramReplyToMessageId(params);
+    const messageThreadId = readTelegramThreadId(params);
+    const silent = readBooleanParam(params, "silent");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.sendLocationTelegram(
+      to,
+      { latitude, longitude, ...(horizontalAccuracy != null ? { horizontalAccuracy } : {}) },
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        replyToMessageId: replyToMessageId ?? undefined,
+        messageThreadId: messageThreadId ?? undefined,
+        silent: silent ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
+      },
+    );
+    notifyVisibleOutboundSuccess(to, messageThreadId);
+    return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
+  }
+
+  if (action === "sendVenue") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const latitude = readNumberParam(params, "latitude", { required: true });
+    const longitude = readNumberParam(params, "longitude", { required: true });
+    const title = readStringParam(params, "title", { required: true });
+    const address = readStringParam(params, "address", { required: true });
+    const foursquareId = readStringParam(params, "foursquareId");
+    const googlePlaceId = readStringParam(params, "googlePlaceId");
+    const replyToMessageId = readTelegramReplyToMessageId(params);
+    const messageThreadId = readTelegramThreadId(params);
+    const silent = readBooleanParam(params, "silent");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.sendVenueTelegram(
+      to,
+      {
+        latitude,
+        longitude,
+        title,
+        address,
+        ...(foursquareId ? { foursquareId } : {}),
+        ...(googlePlaceId ? { googlePlaceId } : {}),
+      },
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        replyToMessageId: replyToMessageId ?? undefined,
+        messageThreadId: messageThreadId ?? undefined,
+        silent: silent ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
+      },
+    );
+    notifyVisibleOutboundSuccess(to, messageThreadId);
+    return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
+  }
+
+  if (action === "sendVideoNote") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const mediaUrl =
+      readStringParam(params, "mediaUrl") ??
+      readStringParam(params, "media") ??
+      readStringParam(params, "fileUrl", { required: true, label: "mediaUrl" });
+    const replyToMessageId = readTelegramReplyToMessageId(params);
+    const messageThreadId = readTelegramThreadId(params);
+    const silent = readBooleanParam(params, "silent");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.sendVideoNoteTelegram(to, mediaUrl, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+      silent: silent ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
+      ...(options?.mediaLocalRoots ? { mediaLocalRoots: options.mediaLocalRoots } : {}),
+      ...(options?.mediaReadFile ? { mediaReadFile: options.mediaReadFile } : {}),
+    });
+    notifyVisibleOutboundSuccess(to, messageThreadId);
+    return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
+  }
+
+  if (action === "forwardMessage") {
+    const fromChatId = readTelegramChatId(params);
+    const messageId = readPositiveIntegerParam(params, "messageId", {
+      message: "messageId must be a positive integer.",
+      required: true,
+    });
+    const toChatId = readStringOrNumberParam(params, "to", {
+      required: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.forwardMessageTelegram(
+      fromChatId,
+      messageId,
+      toChatId,
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
+      },
+    );
+    notifyVisibleOutboundSuccess(String(toChatId));
+    return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
   }
 
   throw new Error(`Unsupported Telegram action: ${String(action)}`);

@@ -20,7 +20,12 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
+import {
+  createTelegramButtonsExtraToolSchemas,
+  createTelegramLocationExtraToolSchemas,
+  createTelegramMediaExtraToolSchemas,
+  createTelegramPollExtraToolSchemas,
+} from "./message-tool-schema.js";
 
 let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
 
@@ -41,9 +46,13 @@ export const telegramMessageActionRuntime = {
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
   edit: "editMessage",
+  forward: "forwardMessage",
   poll: "poll",
   react: "react",
   send: "sendMessage",
+  sendLocation: "sendLocation",
+  sendVenue: "sendVenue",
+  sendVideoNote: "sendVideoNote",
   sticker: "sendSticker",
   "sticker-search": "searchSticker",
   "topic-create": "createForumTopic",
@@ -57,11 +66,16 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
   "edit",
   "editForumTopic",
   "editMessage",
+  "forward",
+  "forwardMessage",
   "poll",
   "react",
   "send",
+  "sendLocation",
   "sendMessage",
   "sendSticker",
+  "sendVenue",
+  "sendVideoNote",
   "sticker",
   "topic-create",
   "topic-edit",
@@ -165,10 +179,31 @@ function describeTelegramMessageTool({
   if (discovery.isEnabled("editForumTopic")) {
     actions.add("topic-edit");
   }
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("sendLocation");
+    actions.add("sendVenue");
+    actions.add("sendVideoNote");
+  }
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
+  schema.push({
+    properties: createTelegramMediaExtraToolSchemas(),
+    visibility: "all-configured",
+  });
+  if (discovery.isEnabled("sendMessage")) {
+    schema.push({
+      properties: createTelegramLocationExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
+  if (discovery.buttonsEnabled) {
+    schema.push({
+      properties: createTelegramButtonsExtraToolSchemas(),
       visibility: "all-configured",
     });
   }

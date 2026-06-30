@@ -1,5 +1,5 @@
 {
-  "originHash" : "be13c4e768c90bbea0fd647d27f5900702a82c39b9affde238d77edf40c8d97c",
+  "originHash" : "2969b1abfff06da74884bdb3dc18197cb21a2e753a2a1d99bcd615e1f98ba129",
   "pins" : [
     {
       "identity" : "commander",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "ae2ce746b386ff94b26648cfe5625cfa8d02639b",
         "version" : "0.2.2"
+      }
+    },
+    {
+      "identity" : "elevenlabskit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/steipete/ElevenLabsKit",
+      "state" : {
+        "revision" : "0f1e4c039bd0e22b03c0cb7f43c00c1865858f0b",
+        "version" : "0.1.1"
       }
     },
     {
@@ -26,6 +35,15 @@
       "state" : {
         "revision" : "70eff261d7f462cad1fff51e05bcc74aa0b0f420",
         "version" : "6.3.2"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stasel/WebRTC.git",
+      "state" : {
+        "revision" : "e8b5efb9d921a7d3044d3928ae235b8846436e41",
+        "version" : "147.0.0"
       }
     }
   ],

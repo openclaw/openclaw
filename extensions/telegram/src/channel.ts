@@ -43,6 +43,7 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
+import { createTelegramLocationTools } from "./agent-tools-location.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
@@ -76,6 +77,7 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
@@ -92,7 +94,6 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -1193,4 +1194,5 @@ export const telegramPlugin = createChatChannelPlugin({
     },
   },
   outbound: telegramChannelOutbound,
+  agentTools: ({ cfg }) => createTelegramLocationTools(cfg ?? ({} as OpenClawConfig)),
 });

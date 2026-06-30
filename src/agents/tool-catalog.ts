@@ -368,7 +368,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
   },
   messaging: {
-    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
+    // group:plugins covers channel agent tools (telegram_send_location etc.) and
+    // any other plugin-contributed tools active for the current session.
+    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp", "group:plugins"],
   },
   full: {
     allow: ["*"],

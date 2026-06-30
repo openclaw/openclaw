@@ -3273,7 +3273,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
-    expect(payload.ReplyToId).toBe("9003");
+    expect(payload.ReplyToId).toBe("9004");
     expect(payload.ReplyToBody).toBe("forwarded text");
     expect(payload.ReplyToSender).toBe("Ada");
     expect(payload.ReplyToForwardedFrom).toBeUndefined();

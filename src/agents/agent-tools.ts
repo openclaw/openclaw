@@ -62,7 +62,7 @@ import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
-import { listChannelAgentTools } from "./channel-tools.js";
+import { getChannelAgentToolMeta, listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import {
@@ -1132,7 +1132,15 @@ export function createOpenClawCodingTools(options?: {
   // comes from configured tool policies, not per-turn sender ownership.
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsForModelProvider,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: (tool) => {
+      const pluginMeta = getPluginToolMeta(tool);
+      if (pluginMeta) return pluginMeta;
+      // Channel agent tools (registered via agentTools in channel plugins) carry
+      // channelId metadata instead of pluginId. Surfacing them as plugin-group
+      // members lets group:plugins and messaging profile allow-lists cover them.
+      const channelMeta = getChannelAgentToolMeta(tool);
+      return channelMeta ? { pluginId: `channel:${channelMeta.channelId}` } : undefined;
+    },
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({

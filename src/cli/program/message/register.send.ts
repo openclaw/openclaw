@@ -35,6 +35,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           "--silent",
           "Send message silently without notification (Telegram + Discord)",
           false,
+        )
+        .option(
+          "--as-voice",
+          "Send audio as a Telegram voice message with waveform (OGG/Opus or MP3 via --media).",
+          false,
         ),
     )
     .action(async (opts) => {
