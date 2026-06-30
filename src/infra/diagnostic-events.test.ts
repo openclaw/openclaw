@@ -801,6 +801,33 @@ describe("diagnostic-events", () => {
     expect(internalEvents).toEqual(["log.record"]);
   });
 
+  it("exposes exec approval timeout suppression events on the public diagnostic stream", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(123);
+    const events: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    emitDiagnosticEvent({
+      type: "exec.approval.timeout-suppressed",
+      approvalId: "req-timeout-1",
+      source: "gateway-preflight",
+      reason: "session-rebound",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(events).toEqual([
+      {
+        type: "exec.approval.timeout-suppressed",
+        approvalId: "req-timeout-1",
+        source: "gateway-preflight",
+        reason: "session-rebound",
+        seq: 1,
+        ts: 123,
+      },
+    ]);
+  });
+
   it("keeps trusted private data off shared internal diagnostic listeners", async () => {
     const internalEvents: DiagnosticEventPayload[] = [];
     const trustedEvents: Array<{

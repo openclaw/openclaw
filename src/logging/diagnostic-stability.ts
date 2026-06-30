@@ -39,6 +39,7 @@ export type DiagnosticStabilityEventRecord = {
   pairedToolName?: string;
   provider?: string;
   model?: string;
+  approvalId?: string;
   durationMs?: number;
   requestBytes?: number;
   responseBytes?: number;
@@ -430,6 +431,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.timedOut = event.timedOut;
       record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
+      break;
+    case "exec.approval.timeout-suppressed":
+      record.approvalId = event.approvalId;
+      record.source = event.source;
+      assignReasonCode(record, event.reason);
       break;
     case "run.started":
       record.provider = event.provider;

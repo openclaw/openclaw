@@ -514,6 +514,13 @@ export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
     | "runtime-error";
 };
 
+export type DiagnosticExecApprovalTimeoutSuppressedEvent = DiagnosticBaseEvent & {
+  type: "exec.approval.timeout-suppressed";
+  approvalId: string;
+  source: "agent-direct" | "gateway-preflight";
+  reason: "session-rebound";
+};
+
 type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
   runId: string;
   sessionKey?: string;
@@ -769,6 +776,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionBlockedEvent
   | DiagnosticSkillUsedEvent
   | DiagnosticExecProcessCompletedEvent
+  | DiagnosticExecApprovalTimeoutSuppressedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticHarnessRunStartedEvent
@@ -863,6 +871,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.blocked",
   "skill.used",
   "exec.process.completed",
+  "exec.approval.timeout-suppressed",
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",

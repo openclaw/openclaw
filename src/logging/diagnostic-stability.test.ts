@@ -144,6 +144,31 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("projects exec approval timeout suppression events with approval id and timestamp", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "exec.approval.timeout-suppressed",
+      approvalId: "req-timeout-2",
+      source: "gateway-preflight",
+      reason: "session-rebound",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.summary.byType, {
+      "exec.approval.timeout-suppressed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "exec.approval.timeout-suppressed",
+      approvalId: "req-timeout-2",
+      source: "gateway-preflight",
+      reason: "session-rebound",
+    });
+    expect(snapshot.events[0]?.ts).toEqual(expect.any(Number));
+  });
+
   it("summarizes inbound delivery proof events without message content", () => {
     startDiagnosticStabilityRecorder();
 

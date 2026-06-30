@@ -81,6 +81,7 @@ import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -1516,6 +1517,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         context.logGateway.info(
           `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
         );
+        emitDiagnosticEvent({
+          type: "exec.approval.timeout-suppressed",
+          approvalId: execApprovalFollowupApprovalId,
+          source: "gateway-preflight",
+          reason: "session-rebound",
+        });
         const droppedPayload = {
           runId,
           status: "ok" as const,

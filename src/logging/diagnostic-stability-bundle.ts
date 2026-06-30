@@ -688,6 +688,7 @@ function readStabilityEventRecord(
   };
 
   assignOptionalCodeString(sanitized, "channel", record.channel, `${label}.channel`);
+  assignOptionalCodeString(sanitized, "approvalId", record.approvalId, `${label}.approvalId`);
   assignOptionalCodeString(sanitized, "pluginId", record.pluginId, `${label}.pluginId`);
   assignOptionalCodeString(sanitized, "source", record.source, `${label}.source`);
   assignOptionalCodeString(sanitized, "surface", record.surface, `${label}.surface`);

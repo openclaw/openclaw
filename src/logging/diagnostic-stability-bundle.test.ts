@@ -334,6 +334,57 @@ describe("diagnostic stability bundles", () => {
     }
   });
 
+  it("preserves safe approval ids when reading imported stability events", () => {
+    const file = path.join(tempDir, "imported-approval-id.json");
+    const bundle = createImportedBundle();
+    const snapshot = bundle.snapshot as Record<string, unknown>;
+    Object.assign(snapshot, {
+      count: 2,
+      events: [
+        {
+          seq: 1,
+          ts: 1,
+          type: "exec.approval.timeout-suppressed",
+          approvalId: "req-timeout-1",
+          source: "gateway-preflight",
+          reason: "session-rebound",
+        },
+        {
+          seq: 2,
+          ts: 2,
+          type: "exec.approval.timeout-suppressed",
+          approvalId: "req timeout secret",
+          source: "agent-direct",
+          reason: "session-rebound",
+        },
+      ],
+      summary: { byType: { "exec.approval.timeout-suppressed": 2 } },
+    });
+    fs.writeFileSync(file, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      return;
+    }
+    expect(result.bundle.snapshot.events[0]).toEqual({
+      seq: 1,
+      ts: 1,
+      type: "exec.approval.timeout-suppressed",
+      approvalId: "req-timeout-1",
+      source: "gateway-preflight",
+      reason: "session-rebound",
+    });
+    expect(result.bundle.snapshot.events[1]).toEqual({
+      seq: 2,
+      ts: 2,
+      type: "exec.approval.timeout-suppressed",
+      source: "agent-direct",
+      reason: "session-rebound",
+    });
+  });
+
   it("rejects malformed bundle files", () => {
     const file = path.join(tempDir, "invalid.json");
     fs.writeFileSync(file, "{}\n", "utf8");

@@ -15,6 +15,12 @@ import {
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
 import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -34,6 +40,18 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function collectApprovalSuppressionEvents() {
+  const events: Array<
+    Extract<DiagnosticEventPayload, { type: "exec.approval.timeout-suppressed" }>
+  > = [];
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "exec.approval.timeout-suppressed") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -599,6 +617,7 @@ async function invokeAgentIdentityGet(
 describe("gateway agent handler", () => {
   afterEach(() => {
     envSnapshot.restore();
+    resetDiagnosticEventsForTest();
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
@@ -3214,37 +3233,53 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+    resetDiagnosticEventsForTest();
+    const { events, stop } = collectApprovalSuppressionEvents();
 
-    const respond = await invokeAgent(
-      {
-        message: "exec followup",
-        sessionKey: "agent:main:telegram:direct:123",
-        channel: "telegram",
-        idempotencyKey: registration.idempotencyKey,
-        internalRuntimeHandoffId: registration.handoffId,
-        execApprovalFollowupExpectedSessionId: "approval-time-session-id",
-      },
-      {
-        reqId: "exec-followup-rebound-drop",
-        client: backendGatewayClient(),
-        context,
-        flushDispatch: false,
-      },
-    );
+    try {
+      const respond = await invokeAgent(
+        {
+          message: "exec followup",
+          sessionKey: "agent:main:telegram:direct:123",
+          channel: "telegram",
+          idempotencyKey: registration.idempotencyKey,
+          internalRuntimeHandoffId: registration.handoffId,
+          execApprovalFollowupExpectedSessionId: "approval-time-session-id",
+        },
+        {
+          reqId: "exec-followup-rebound-drop",
+          client: backendGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      );
+      await waitForDiagnosticEventsDrained();
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      runId: registration.idempotencyKey,
-      status: "ok",
-      summary: expect.stringContaining("exec approval followup dropped"),
-    });
-    expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
-    expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
-    const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
-    expect(dedupeEntry?.ok).toBe(true);
-    expect(dedupeEntry?.payload).toMatchObject({
-      status: "ok",
-      summary: expect.stringContaining("exec approval followup dropped"),
-    });
+      expect(mockCallArg(respond, 0, 1)).toMatchObject({
+        runId: registration.idempotencyKey,
+        status: "ok",
+        summary: expect.stringContaining("exec approval followup dropped"),
+      });
+      expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
+      expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
+      const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
+      expect(dedupeEntry?.ok).toBe(true);
+      expect(dedupeEntry?.payload).toMatchObject({
+        status: "ok",
+        summary: expect.stringContaining("exec approval followup dropped"),
+      });
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: "exec.approval.timeout-suppressed",
+          approvalId: "req-rebound-followup",
+          source: "gateway-preflight",
+          reason: "session-rebound",
+          ts: expect.any(Number),
+        }),
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   it("does not honor caller-supplied exec approval runtime handoff ids without registry state", async () => {

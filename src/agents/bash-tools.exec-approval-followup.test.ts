@@ -3,7 +3,7 @@
  * Covers denied prompts, agent-session resume, wait handling, direct fallback,
  * and elevated runtime handoff routing.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async () => ({ status: "ok" })),
@@ -18,6 +18,12 @@ import os from "node:os";
 import path from "node:path";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -26,6 +32,18 @@ import {
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
+
+function collectApprovalSuppressionEvents() {
+  const events: Array<
+    Extract<DiagnosticEventPayload, { type: "exec.approval.timeout-suppressed" }>
+  > = [];
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "exec.approval.timeout-suppressed") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
 
 // Seed the same JSON session store path the runtime reads; mocking this
 // boundary would hide stale-session regressions in shared workers.
@@ -37,8 +55,13 @@ function writeTempSessionStore(entries: Record<string, { sessionId: string }>): 
   return storePath;
 }
 
+beforeEach(() => {
+  resetDiagnosticEventsForTest();
+});
+
 afterEach(() => {
   vi.resetAllMocks();
+  resetDiagnosticEventsForTest();
   clearSessionStoreCacheForTest();
   while (tempStoreDirs.length > 0) {
     const dir = tempStoreDirs.pop();
@@ -171,21 +194,36 @@ describe("exec approval followup", () => {
     const sessionStore = writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
+    const { events, stop } = collectApprovalSuppressionEvents();
 
-    const result = await sendExecApprovalFollowup({
-      approvalId: "req-denied-rebound",
-      sessionKey: "agent:main:main",
-      expectedSessionId: "session-original",
-      sessionStore,
-      direct: true,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      resultText: "Exec denied (gateway id=req-denied-rebound, user-denied): uname -a",
-    });
+    try {
+      const result = await sendExecApprovalFollowup({
+        approvalId: "req-denied-rebound",
+        sessionKey: "agent:main:main",
+        expectedSessionId: "session-original",
+        sessionStore,
+        direct: true,
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123",
+        resultText: "Exec denied (gateway id=req-denied-rebound, user-denied): uname -a",
+      });
+      await waitForDiagnosticEventsDrained();
 
-    expect(result).toBe(false);
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: "exec.approval.timeout-suppressed",
+          approvalId: "req-denied-rebound",
+          source: "agent-direct",
+          reason: "session-rebound",
+          ts: expect.any(Number),
+        }),
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   it("delivers a denied direct followup when the key still resolves to the approval-time session", async () => {
