@@ -17,6 +17,7 @@ import {
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
@@ -125,9 +126,22 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const ids = loadAgentModelIds();
-  const ttsIds = opts.audioSpeechEnabled
-    ? loadTtsModelIds(resolveAgentIdForRequest({ req, model: undefined }))
-    : [];
+  let ttsIds: string[] = [];
+  if (opts.audioSpeechEnabled) {
+    // A bad explicit agent selector must surface as an OpenAI-compatible JSON 400,
+    // matching `/v1/audio/speech` and the sibling routes, not the Gateway 500.
+    let agentId: string;
+    try {
+      agentId = resolveAgentIdForRequest({ req, model: undefined });
+    } catch (err) {
+      if (isUnknownGatewayAgentError(err)) {
+        sendInvalidRequest(res, err.message);
+        return true;
+      }
+      throw err;
+    }
+    ttsIds = loadTtsModelIds(agentId);
+  }
   if (requestPath === "/v1/models") {
     sendJson(res, 200, {
       object: "list",

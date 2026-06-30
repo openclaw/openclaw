@@ -19,11 +19,13 @@ When the Gateway's OpenAI-compatible HTTP surface is enabled, it also serves:
 - `POST /v1/embeddings`
 - `POST /v1/responses`
 
+Under the hood, `/v1/chat/completions` and `/v1/responses` are executed as a normal Gateway agent run (same codepath as `openclaw agent`), so routing/permissions/config match your Gateway.
+
 A separate, also disabled-by-default endpoint exposes OpenAI-compatible text-to-speech:
 
 - `POST /v1/audio/speech` (enabled via `gateway.http.endpoints.audioSpeech.enabled`)
 
-Under the hood, requests are executed as a normal Gateway agent run (same codepath as `openclaw agent`), so routing/permissions/config match your Gateway.
+This route does not start an agent run. It synthesizes audio directly through your configured TTS provider, so it has no session, history, or tool semantics.
 
 ## Authentication
 

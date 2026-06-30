@@ -23,6 +23,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendInvalidRequest, sendJson } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
@@ -151,7 +152,18 @@ export async function handleOpenAiAudioSpeechHttpRequest(
   }
 
   const cfg = getRuntimeConfig();
-  const agentId = resolveAgentIdForRequest({ req, model: undefined });
+  // A bad explicit agent selector must surface as an OpenAI-compatible JSON 400,
+  // matching sibling routes (embeddings/responses/chat), not the Gateway 500.
+  let agentId: string;
+  try {
+    agentId = resolveAgentIdForRequest({ req, model: undefined });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendInvalidRequest(res, err.message);
+      return true;
+    }
+    throw err;
+  }
   const ttsConfig = resolveTtsConfig(cfg, agentId);
 
   // Resolve the concrete provider so synthesis never silently falls back to a
