@@ -7,7 +7,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
-  - "@openclaw/crabline@0.1.0"
+  - "@openclaw/crabline@0.1.5"
   - "@openclaw/fs-safe@0.3.0"
   - "@openclaw/proxyline@0.3.3"
   - "acpx"

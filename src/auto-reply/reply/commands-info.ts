@@ -15,7 +15,7 @@ import {
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
@@ -347,6 +347,10 @@ export const handleExportTrajectoryCommand: CommandHandler = async (params, allo
   const unauthorized = rejectUnauthorizedCommand(params, "/export-trajectory");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-trajectory");
+  if (nonOwner) {
+    return nonOwner;
   }
   return { shouldContinue: false, reply: await buildExportTrajectoryCommandReply(params) };
 };
