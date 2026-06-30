@@ -10,7 +10,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 type ManifestRuntimeSlashCommandReservation = {
@@ -63,7 +69,30 @@ function resolveManifestRuntimeSlashCommandReservation(params: {
   if (!snapshot) {
     return undefined;
   }
+  const pluginsConfig = normalizePluginsConfig(params.cfg.plugins);
+  const activationSource = createPluginActivationSource({
+    config: params.cfg,
+    plugins: pluginsConfig,
+  });
   for (const plugin of snapshot.plugins) {
+    // Metadata snapshots intentionally include disabled manifests; only active
+    // runtime plugins may reserve fail-closed slash command names.
+    const activationState = resolveEffectivePluginActivationState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: pluginsConfig,
+      rootConfig: params.cfg,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      activationSource,
+    });
+    if (
+      !activationState.enabled ||
+      (plugin.origin !== "bundled"
+        ? !activationState.explicitlyEnabled
+        : activationState.source !== "explicit" && activationState.source !== "default")
+    ) {
+      continue;
+    }
     for (const alias of plugin.commandAliases ?? []) {
       if (alias.kind !== "runtime-slash") {
         continue;

@@ -47,6 +47,19 @@ function buildPluginParams(
   } as unknown as HandleCommandsParams;
 }
 
+function mockDevicePairRuntimeSlashPlugin() {
+  getCurrentPluginMetadataSnapshotMock.mockReturnValue({
+    plugins: [
+      {
+        id: "device-pair",
+        origin: "bundled",
+        enabledByDefault: true,
+        commandAliases: [{ name: "pair", kind: "runtime-slash" }],
+      },
+    ],
+  });
+}
+
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -203,14 +216,7 @@ describe("handlePluginCommand", () => {
     "does not let manifest-declared plugin slash commands fall through to the agent: %s",
     async (commandBody) => {
       matchPluginCommandMock.mockReturnValue(null);
-      getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-        plugins: [
-          {
-            id: "device-pair",
-            commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-          },
-        ],
-      });
+      mockDevicePairRuntimeSlashPlugin();
 
       const result = await handlePluginCommand(
         buildPluginParams(commandBody, {
@@ -228,6 +234,55 @@ describe("handlePluginCommand", () => {
             "in this gateway process. Try again after plugins finish loading or restart the gateway.",
         },
       });
+      expect(executePluginCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      "global plugin disablement",
+      {
+        enabled: false,
+      },
+    ],
+    [
+      "denylist",
+      {
+        deny: ["device-pair"],
+      },
+    ],
+    [
+      "allowlist omission",
+      {
+        allow: ["browser"],
+      },
+    ],
+    [
+      "per-plugin disablement",
+      {
+        entries: {
+          "device-pair": {
+            enabled: false,
+          },
+        },
+      },
+    ],
+  ] as const)(
+    "does not reserve manifest slash commands when plugin policy blocks %s",
+    async (_name, plugins) => {
+      matchPluginCommandMock.mockReturnValue(null);
+      mockDevicePairRuntimeSlashPlugin();
+
+      const result = await handlePluginCommand(
+        buildPluginParams("/pair qr", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          plugins,
+        } as OpenClawConfig),
+        true,
+      );
+
+      expect(result).toBeNull();
       expect(executePluginCommandMock).not.toHaveBeenCalled();
     },
   );
