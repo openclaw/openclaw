@@ -1,3 +1,6 @@
+/**
+ * Channel health monitor regression tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
@@ -449,6 +452,34 @@ describe("channel-health-monitor", () => {
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("continues pending recovery on the next check without waiting for cooldown", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    await advanceHealthCheck();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();
   });

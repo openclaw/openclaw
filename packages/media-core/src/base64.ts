@@ -1,3 +1,4 @@
+/** Estimates decoded bytes without allocating a cleaned copy of the base64 payload. */
 export function estimateBase64DecodedBytes(base64: string): number {
   // Avoid `trim()`/`replace()` here: they allocate a second (potentially huge) string.
   // We only need a conservative decoded-size estimate to enforce budgets before Buffer.from(..., "base64").
@@ -47,8 +48,8 @@ function isBase64DataChar(code: number): boolean {
 }
 
 /**
- * Normalize and validate a base64 string.
- * Returns canonical base64 (no whitespace) or undefined when invalid.
+ * Normalizes and validates a base64 string, returning canonical no-whitespace
+ * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
   let cleaned = "";
@@ -73,8 +74,15 @@ export function canonicalizeBase64(base64: string): string | undefined {
     }
     cleaned += base64[i];
   }
-  if (!cleaned || cleaned.length % 4 !== 0) {
+  if (!cleaned) {
     return undefined;
+  }
+  const remainder = cleaned.length % 4;
+  if (remainder !== 0) {
+    if (sawPadding || remainder === 1) {
+      return undefined;
+    }
+    cleaned += "=".repeat(4 - remainder);
   }
   return cleaned;
 }

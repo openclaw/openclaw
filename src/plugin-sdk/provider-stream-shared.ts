@@ -1,4 +1,6 @@
+// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -7,21 +9,30 @@ import {
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
+import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
+export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
 
+type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
+
+/** Optional provider stream decorator factory used by shared provider wrappers. */
 export type ProviderStreamWrapperFactory =
-  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
-  | null
-  | undefined
-  | false;
+  /** Wrapper factory that can decorate, replace, or omit a provider stream function. */
+  ((streamFn: StreamFn | undefined) => StreamFn | undefined) | null | undefined | false;
 
+/** Compose stream wrapper factories from left to right around a base stream function. */
 export function composeProviderStreamWrappers(
+  /** Base provider stream function to pass through the wrapper chain. */
   baseStreamFn: StreamFn | undefined,
+  /** Ordered wrapper factories; falsey entries are skipped. */
   ...wrappers: ProviderStreamWrapperFactory[]
 ): StreamFn | undefined {
   return wrappers.reduce(
@@ -127,6 +138,7 @@ function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCal
 
 function normalizeProviderDoneMessage(
   message: unknown,
+  reason: unknown,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
 ): PlainTextToolCallMessageNormalization {
@@ -137,6 +149,11 @@ function normalizeProviderDoneMessage(
   });
   if (scrubbedMessage) {
     return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  // Token-limit and error terminals can leave complete-looking tool syntax.
+  // Only normal completion or explicit tool use may promote it into an executable call.
+  if (reason !== "stop" && reason !== "toolUse") {
+    return undefined;
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
@@ -173,8 +190,8 @@ function wrapPlainTextToolCallStream(
             return events;
           },
           matcher,
-          normalizeDoneMessage: ({ message }) =>
-            normalizeProviderDoneMessage(message, toolNames, matcher),
+          normalizeDoneMessage: ({ message, reason }) =>
+            normalizeProviderDoneMessage(message, reason, toolNames, matcher),
           stopAfterDone: true,
         },
       );
@@ -204,7 +221,10 @@ function wrapPlainTextToolCallStream(
  * Provider stream wrapper for local/proxy providers that sometimes emit a
  * standalone textual tool-call block even when native tool calling is enabled.
  */
-export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createPlainTextToolCallCompatWrapper(
+  /** Provider stream function to wrap; defaults to the simple stream implementation. */
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const maybeStream = underlying(model, context, options);
@@ -219,6 +239,7 @@ export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | un
 
 /** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
 export function defaultToolStreamExtraParams(
+  /** Existing provider extra params; explicit tool_stream values are preserved. */
   extraParams?: Record<string, unknown>,
 ): Record<string, unknown> {
   if (extraParams?.tool_stream !== undefined) {
@@ -230,18 +251,27 @@ export function defaultToolStreamExtraParams(
   };
 }
 
+/** Wrap a provider stream so callers can patch the outbound provider payload once. */
 export function createPayloadPatchStreamWrapper(
+  /** Provider stream function whose outbound payload should be patched. */
   baseStreamFn: StreamFn | undefined,
   patchPayload: (params: {
+    /** Mutable provider payload immediately before the underlying stream dispatches it. */
     payload: Record<string, unknown>;
+    /** Model selected for the stream call. */
     model: Parameters<StreamFn>[0];
+    /** Stream context passed by the runtime. */
     context: Parameters<StreamFn>[1];
+    /** Stream options passed by the runtime. */
     options: Parameters<StreamFn>[2];
   }) => void,
   wrapperOptions?: {
     shouldPatch?: (params: {
+      /** Model selected for the stream call. */
       model: Parameters<StreamFn>[0];
+      /** Stream context passed by the runtime. */
       context: Parameters<StreamFn>[1];
+      /** Stream options passed by the runtime. */
       options: Parameters<StreamFn>[2];
     }) => boolean;
   },
@@ -254,6 +284,44 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (!("reasoning_effort" in payload)) {
+        return;
+      }
+      const disabled = resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: resolveOpenAIReasoningEffortMap({
+          provider: typeof model.provider === "string" ? model.provider : null,
+          id: typeof model.id === "string" ? model.id : null,
+          compat: model.compat,
+        }),
+      });
+      if (disabled) {
+        payload.reasoning_effort = disabled;
+      } else {
+        delete payload.reasoning_effort;
+      }
+    });
   };
 }
 
@@ -348,6 +416,56 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   }
   const normalized = raw.trim().toLowerCase();
   return normalized !== "off" && normalized !== "none";
+}
+
+/** Applies the shared reasoning payload policy used by OpenAI-compatible proxy providers. */
+export function normalizeOpenAICompatibleReasoningPayload(
+  payload: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
+): void {
+  delete payload.reasoning_effort;
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payload.reasoning;
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoning = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoning) && !("effort" in reasoning)) {
+      reasoning.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payload.reasoning = {
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
+/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
+export function setQwenChatTemplateThinking(
+  payload: Record<string, unknown>,
+  enabled: boolean,
+): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -601,7 +719,10 @@ export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function resolveGoogleGemini3ThinkingLevel(params: {
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
@@ -672,7 +793,10 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   return "HIGH";
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Removes `thinkingBudget=0` only for Gemini models that reject disabled thinking.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function stripInvalidGoogleThinkingBudget(params: {
   thinkingConfig: Record<string, unknown>;
   modelId?: string;
@@ -728,7 +852,10 @@ function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | unde
   }
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Normalizes Google thinking config across SDK payload shapes before provider transport.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -766,6 +893,8 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
 
   if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
+    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
+    // inputs before deleting the unsupported numeric field.
     const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
     const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
     const disabledViaBudget =
@@ -810,6 +939,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     typeof params.modelId === "string" &&
     isGoogleGemini3ThinkingLevelModel(params.modelId)
   ) {
+    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
     delete thinkingConfigObj.thinkingBudget;
     delete thinkingConfigObj.thinkingLevel;
     if (Object.keys(thinkingConfigObj).length === 0) {
@@ -826,6 +956,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     });
     delete thinkingConfigObj.thinkingBudget;
     if (mappedLevel) {
+      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
       thinkingConfigObj.thinkingLevel = mappedLevel;
     }
     if (Object.keys(thinkingConfigObj).length === 0) {

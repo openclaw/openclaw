@@ -1,3 +1,8 @@
+/**
+ * External CLI auth scope tests.
+ * Verifies config/model signals narrow external credential discovery to the
+ * providers and profile ids relevant for the current agent.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
@@ -103,5 +108,21 @@ describe("external CLI auth scope", () => {
     });
 
     expect(scope?.providerIds).toContain("claude-cli");
+  });
+
+  it("includes Gemini CLI when it is the configured Google model runtime", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              agentRuntime: { id: "google-gemini-cli" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("google-gemini-cli");
   });
 });

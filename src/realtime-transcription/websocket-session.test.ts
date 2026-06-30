@@ -1,3 +1,4 @@
+// Realtime transcription websocket tests cover websocket session lifecycle.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -223,6 +224,49 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     }
   });
 
+  it("preserves connect failures when the error callback throws", async () => {
+    vi.useFakeTimers();
+    const previousDebugProxyEnabled = process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    const onError = vi.fn((_error: Error) => {
+      throw new Error("error observer failed");
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: () => new Promise<string>(() => {}),
+      connectTimeoutMs: 10,
+      connectTimeoutMessage: "test realtime transcription connection timeout",
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    try {
+      const connecting = session.connect();
+      const timeoutAssertion = expect(connecting).rejects.toThrow(
+        "test realtime transcription connection timeout",
+      );
+      await vi.advanceTimersByTimeAsync(10);
+
+      await timeoutAssertion;
+      expect(session.isConnected()).toBe(false);
+      expect(onError).toHaveBeenCalledTimes(1);
+      const timeoutError = requireFirstMockArg(onError, "connect timeout error");
+      expect(timeoutError).toBeInstanceOf(Error);
+      expect(timeoutError.message).toBe("test realtime transcription connection timeout");
+    } finally {
+      session.close();
+      if (previousDebugProxyEnabled === undefined) {
+        delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
+      } else {
+        process.env.OPENCLAW_DEBUG_PROXY_ENABLED = previousDebugProxyEnabled;
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it("does not open a socket when closed while async connection resolves", async () => {
     const seenAuthHeaders: Array<string | string[] | undefined> = [];
     let resolveUrl!: (url: string) => void;
@@ -305,6 +349,35 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const parseError = requireFirstMockArg(onError, "malformed websocket json error");
     expect(parseError).toBeInstanceOf(Error);
     expect(parseError.message).toBe("Realtime transcription websocket received malformed JSON.");
+    session.close();
+  });
+
+  it("keeps error callback failures inside websocket message dispatch", async () => {
+    const server = await createRealtimeServer({ initialText: "{not json" });
+    const onError = vi.fn((_error: Error) => {
+      throw new Error("error observer failed");
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      readyOnOpen: true,
+      onMessage: () => {
+        throw new Error("malformed payload should not reach provider handler");
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    const parseError = requireFirstMockArg(onError, "malformed websocket json error");
+    expect(parseError).toBeInstanceOf(Error);
+    expect(parseError.message).toBe("Realtime transcription websocket received malformed JSON.");
+    expect(session.isConnected()).toBe(true);
     session.close();
   });
 

@@ -1,3 +1,5 @@
+// Interpreter inline-eval detection recognizes flags and positional program
+// forms that execute command text without reading a script file.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 
@@ -32,6 +34,8 @@ type PositionalInterpreterSpec = {
   flag: "<command>" | "<program>";
 };
 
+const VERSION_SUFFIX_PATTERN = /-?\d+(?:\.\d+)*$/;
+
 const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["python", "python2", "python3", "pypy", "pypy3"], exactFlags: new Set(["-c"]) },
   {
@@ -45,7 +49,16 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   },
   { names: ["ruby"], exactFlags: new Set(["-e"]) },
   { names: ["perl"], exactFlags: new Set(["-e", "-E"]) },
-  { names: ["php"], exactFlags: new Set(["-r"]) },
+  {
+    names: ["php"],
+    exactFlags: new Set(["-r"]),
+    rawExactFlags: new Map([
+      ["-B", "-B"],
+      ["-E", "-E"],
+      ["-R", "-R"],
+    ]),
+  },
+  { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -152,10 +165,28 @@ const INTERPRETER_ALLOWLIST_NAMES = new Set(
   ),
 );
 
+function stripInterpreterVersionSuffix(value: string): string {
+  const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
+  return stripped.length > 0 ? stripped : value;
+}
+
+function interpreterNameVariants(value: string): readonly string[] {
+  const stripped = stripInterpreterVersionSuffix(value);
+  // Do not synthesize one-letter interpreter names: commands like r2 can use
+  // their own eval flags and must not be mistaken for R inline execution.
+  return stripped === value || stripped.length < 2 ? [value] : [value, stripped];
+}
+
+function specNamesInclude(names: readonly string[], normalizedExecutable: string): boolean {
+  return interpreterNameVariants(normalizedExecutable).some((candidate) =>
+    names.includes(candidate),
+  );
+}
+
 function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (spec.names.includes(normalized)) {
+    if (specNamesInclude(spec.names, normalized)) {
       return spec;
     }
   }
@@ -165,7 +196,7 @@ function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
 function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
-    if (spec.names.includes(normalized)) {
+    if (specNamesInclude(spec.names, normalized)) {
       return spec;
     }
   }
@@ -297,11 +328,17 @@ export function isInterpreterLikeAllowlistPattern(pattern: string | undefined | 
     return false;
   }
   const normalized = normalizeExecutableToken(trimmed);
-  if (INTERPRETER_ALLOWLIST_NAMES.has(normalized)) {
+  if (
+    interpreterNameVariants(normalized).some((candidate) =>
+      INTERPRETER_ALLOWLIST_NAMES.has(candidate),
+    )
+  ) {
     return true;
   }
   const basename = trimmed.replace(/\\/g, "/").split("/").pop() ?? trimmed;
   const withoutExe = basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
-  const strippedWildcards = withoutExe.replace(/[*?[\]{}()]/g, "");
-  return INTERPRETER_ALLOWLIST_NAMES.has(strippedWildcards);
+  const strippedWildcards = withoutExe.replace(/[*?[\]{}()]/g, "").replace(/[.-]+$/, "");
+  return interpreterNameVariants(strippedWildcards).some((candidate) =>
+    INTERPRETER_ALLOWLIST_NAMES.has(candidate),
+  );
 }

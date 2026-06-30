@@ -1,4 +1,7 @@
+/** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type {
@@ -12,6 +15,20 @@ const MAX_ENTRIES = 10;
 const MAX_ENTRY_CHARS = 1_000;
 const MAX_SUMMARY_CHARS = 2_000;
 const EXEC_DIAGNOSTIC_TAIL_CHARS = 2_000;
+const WEB_SEARCH_TOOL_NAME = "web_search";
+
+export const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
+
+export function toolsAllowRequestsWebSearch(toolsAllow?: string[]): boolean {
+  const explicitAllow = (toolsAllow ?? []).filter(
+    (entry) => normalizePolicyToolName(entry) !== "*",
+  );
+  return (
+    explicitAllow.length > 0 &&
+    isToolAllowedByPolicyName(WEB_SEARCH_TOOL_NAME, { allow: explicitAllow })
+  );
+}
 
 function normalizeSeverity(value: unknown): CronRunDiagnosticSeverity {
   return value === "info" || value === "warn" || value === "error" ? value : "error";
@@ -226,6 +243,35 @@ export function createCronRunDiagnosticsFromError(
       ],
     },
     opts,
+  );
+}
+
+/** Reports a cron preflight warning for an explicitly allowed web_search with no provider. */
+export function createCronRunDiagnosticsFromMissingWebSearchProvider(params: {
+  toolsAllow?: string[];
+  hasWebSearchProvider: boolean;
+  nowMs?: () => number;
+}): CronRunDiagnostics | undefined {
+  if (params.hasWebSearchProvider || !params.toolsAllow || params.toolsAllow.length === 0) {
+    return undefined;
+  }
+  if (!toolsAllowRequestsWebSearch(params.toolsAllow)) {
+    return undefined;
+  }
+  return normalizeCronRunDiagnostics(
+    {
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: params.nowMs?.() ?? Date.now(),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: WEB_SEARCH_TOOL_NAME,
+        },
+      ],
+    },
+    { nowMs: params.nowMs },
   );
 }
 

@@ -1,3 +1,4 @@
+// Defines the TUI backend contract and backend event shapes.
 import type {
   CommandEntry,
   CommandsListParams,
@@ -5,8 +6,11 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
+// Transport-agnostic backend contract consumed by the TUI runtime.
+/** Options for sending one chat turn through a TUI backend. */
 export type ChatSendOptions = {
   sessionKey: string;
   agentId?: string;
@@ -18,18 +22,26 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+export type TuiChatSendResult = {
+  runId: string;
+  status?: string;
+};
+
+/** Options for forwarding a goal command to a backend session. */
 export type TuiGoalCommandOptions = {
   sessionKey: string;
   agentId?: string;
   command: string;
 };
 
+/** Event envelope delivered from Gateway or the embedded backend into the TUI. */
 export type TuiEvent = {
   event: string;
   payload?: unknown;
   seq?: number;
 };
 
+/** Session-list payload rendered by session pickers and status surfaces. */
 export type TuiSessionList = {
   ts: number;
   path: string;
@@ -56,6 +68,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -63,7 +76,7 @@ export type TuiSessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
-      fastMode?: boolean;
+      fastMode?: FastMode;
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;
@@ -87,6 +100,7 @@ export type TuiSessionList = {
   >;
 };
 
+/** Agent-list payload used by TUI agent switching. */
 export type TuiAgentsList = {
   defaultId: string;
   mainKey: string;
@@ -97,6 +111,7 @@ export type TuiAgentsList = {
   }>;
 };
 
+/** Model choice payload shown by TUI model pickers. */
 export type TuiModelChoice = {
   id: string;
   name: string;
@@ -105,6 +120,7 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+/** Result shape returned by session mutation commands. */
 export type TuiSessionMutationResult = {
   ok?: boolean;
   key?: string;
@@ -118,6 +134,7 @@ export type TuiSessionMutationResult = {
   };
 };
 
+/** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
     url: string;
@@ -130,7 +147,8 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
-  sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
+  subscribeSessionEvents?: () => Promise<unknown>;
+  sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   abortChat: (opts: {
     sessionKey: string;
     agentId?: string;

@@ -1,3 +1,4 @@
+// Openrouter provider module implements model/runtime integration.
 import path from "node:path";
 import {
   describeImageWithModel,
@@ -9,6 +10,7 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -147,7 +149,10 @@ export async function transcribeOpenRouterAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter audio transcription failed");
-    const payload = (await response.json()) as OpenRouterSttResponse;
+    const payload = await readProviderJsonResponse<OpenRouterSttResponse>(
+      response,
+      "openrouter.stt",
+    );
     return {
       text: requireTranscriptionText(
         payload.text,

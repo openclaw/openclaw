@@ -1,3 +1,4 @@
+// Discovers, validates, and loads plugin metadata and runtime entrypoints.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -64,8 +66,7 @@ import {
   restoreRegisteredEmbeddingProviders,
 } from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { toSafeImportPath } from "./import-specifier.js";
+import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
@@ -97,6 +98,10 @@ import {
   markPluginActivationDisabled,
   recordPluginError,
 } from "./loader-records.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  resolveManifestOwnerBasePolicyBlock,
+} from "./manifest-owner-policy.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
@@ -263,6 +268,86 @@ function resolveDreamingSidecarEngineId(params: {
   return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
 }
 
+type AuthorizedDreamingSidecar = {
+  engineId: string;
+  selectedMemoryPluginId: string;
+};
+
+function resolveAuthorizedDreamingSidecar(params: {
+  cfg: OpenClawConfig;
+  normalized: NormalizedPluginsConfig;
+  activationSource: PluginActivationConfigSource;
+  manifestRegistry: PluginManifestRegistry;
+  memorySlot: string | null | undefined;
+}): AuthorizedDreamingSidecar | null {
+  const engineId = resolveDreamingSidecarEngineId({
+    cfg: params.cfg,
+    memorySlot: params.memorySlot,
+  });
+  if (!engineId || !params.normalized.enabled || !params.activationSource.plugins.enabled) {
+    return null;
+  }
+  const selectedMemoryPluginId = normalizeLowercaseStringOrEmpty(params.memorySlot);
+  if (!selectedMemoryPluginId || selectedMemoryPluginId === engineId) {
+    return null;
+  }
+  if (
+    params.normalized.deny.includes(engineId) ||
+    params.activationSource.plugins.deny.includes(engineId) ||
+    params.normalized.entries[engineId]?.enabled === false ||
+    params.activationSource.plugins.entries[engineId]?.enabled === false
+  ) {
+    return null;
+  }
+  const selectedMemoryPlugin = params.manifestRegistry.plugins.find(
+    (plugin) => plugin.id === selectedMemoryPluginId,
+  );
+  const sidecarPlugin = params.manifestRegistry.plugins.find((plugin) => plugin.id === engineId);
+  if (
+    !selectedMemoryPlugin ||
+    !sidecarPlugin ||
+    !hasKind(selectedMemoryPlugin.kind, "memory") ||
+    !hasKind(sidecarPlugin.kind, "memory")
+  ) {
+    return null;
+  }
+  const selectedEnableState = resolveEffectiveEnableState({
+    id: selectedMemoryPlugin.id,
+    origin: selectedMemoryPlugin.origin,
+    config: params.normalized,
+    rootConfig: params.cfg,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedMemoryPlugin),
+    activationSource: params.activationSource,
+  });
+  return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
+}
+
+function isAuthorizedDreamingSidecarPlugin(params: {
+  sidecar: AuthorizedDreamingSidecar | null;
+  pluginId: string;
+}): boolean {
+  return params.sidecar?.engineId === params.pluginId;
+}
+
+function matchesScopedPluginOrDreamingSidecar(params: {
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  pluginId: string;
+  sidecar: AuthorizedDreamingSidecar | null;
+}): boolean {
+  if (
+    matchesScopedPluginRequest({
+      onlyPluginIdSet: params.onlyPluginIdSet,
+      pluginId: params.pluginId,
+    })
+  ) {
+    return true;
+  }
+  return (
+    params.pluginId === params.sidecar?.engineId &&
+    params.onlyPluginIdSet?.has(params.sidecar.selectedMemoryPluginId) === true
+  );
+}
+
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
@@ -393,6 +478,7 @@ type PluginRegistrySnapshot = {
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
+    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
@@ -438,6 +524,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
+      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
@@ -482,6 +569,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
+  registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
@@ -1682,6 +1770,28 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function pushPluginValidationError(params: {
+  registry: PluginRegistry;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  pluginId: string;
+  origin: PluginRecord["origin"];
+  record: PluginRecord;
+  message: string;
+}) {
+  params.record.status = "error";
+  params.record.error = params.message;
+  params.record.failedAt = new Date();
+  params.record.failurePhase = "validation";
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.pluginId, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    message: params.record.error,
+  });
+}
+
 function maybeThrowOnPluginLoadError(
   registry: PluginRegistry,
   throwOnLoadError: boolean | undefined,
@@ -1701,14 +1811,11 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
-  const preserveGatewayHookRunner =
-    runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
-    getGlobalHookRunner() !== null;
+  // Always re-initialize: the global runner resolves hooks from the live
+  // registry set (active + pinned surfaces), so activation order and scope
+  // cannot drop hooks the way the old preserve-one-runner gate did (#91918).
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  if (!preserveGatewayHookRunner) {
-    initializeGlobalHookRunner(registry);
-  }
+  initializeGlobalHookRunner(registry);
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
@@ -1971,7 +2078,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const memorySlot = normalized.slots.memory;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
-    const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
+    const dreamingSidecar = resolveAuthorizedDreamingSidecar({
+      cfg,
+      normalized,
+      activationSource,
+      manifestRegistry,
+      memorySlot,
+    });
     const pluginLoadStartMs = performance.now();
     let pluginLoadAttemptCount = 0;
 
@@ -1981,24 +2094,37 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
       const pluginId = manifestRecord.id;
-      const matchesRequestedScope = matchesScopedPluginRequest({
+      const matchesRequestedScope = matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
         pluginId,
+        sidecar: dreamingSidecar,
       });
       // Filter again at import time as a final guard. The earlier manifest filter keeps
       // warnings scoped; this one prevents loading/registering anything outside the scope.
       if (!matchesRequestedScope) {
         continue;
       }
-      const activationState = resolveEffectivePluginActivationState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: normalized,
-        rootConfig: cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource,
-        autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+      const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+        sidecar: dreamingSidecar,
+        pluginId,
       });
+      const activationState = isDreamingSidecar
+        ? {
+            enabled: true,
+            activated: true,
+            explicitlyEnabled: false,
+            source: "auto" as const,
+            reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+          }
+        : resolveEffectivePluginActivationState({
+            id: pluginId,
+            origin: candidate.origin,
+            config: normalized,
+            rootConfig: cfg,
+            enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+            activationSource,
+            autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+          });
       const existingOrigin = seenIds.get(pluginId);
       if (existingOrigin) {
         const record = createPluginRecord({
@@ -2031,14 +2157,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const enableState = resolveEffectiveEnableState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: normalized,
-        rootConfig: cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource,
-      });
+      const enableState = isDreamingSidecar
+        ? { enabled: true }
+        : resolveEffectiveEnableState({
+            id: pluginId,
+            origin: candidate.origin,
+            config: normalized,
+            rootConfig: cfg,
+            enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+            activationSource,
+          });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
         id: pluginId,
@@ -2066,20 +2194,49 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.kind = manifestRecord.kind;
       record.configUiHints = manifestRecord.configUiHints;
       record.configJsonSchema = manifestRecord.configSchema;
-      const pushPluginLoadError = (message: string) => {
-        record.status = "error";
-        record.error = message;
-        record.failedAt = new Date();
-        record.failurePhase = "validation";
-        registry.plugins.push(record);
-        seenIds.set(pluginId, candidate.origin);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: record.error,
+      const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: pluginId },
+        normalizedConfig: normalized,
+      });
+      const trustedLocalScopedChannelSetupImport =
+        localSetupBasePolicyBlock === null &&
+        (hasExplicitManifestOwnerTrust({
+          plugin: { id: pluginId },
+          normalizedConfig: normalized,
+        }) ||
+          (candidate.origin === "workspace" && activationState.source === "auto"));
+      // Scoped setup-only loads intentionally bypass normal activation so setup
+      // can reach explicitly trusted local plugins. Reapply the non-bundled
+      // trust boundary here so default-only workspace/config/global plugins never import.
+      const blockUntrustedLocalScopedChannelSetupImport =
+        includeSetupOnlyChannelPlugins &&
+        !validateOnly &&
+        Boolean(onlyPluginIdSet) &&
+        manifestRecord.channels.length > 0 &&
+        candidate.origin !== "bundled" &&
+        !trustedLocalScopedChannelSetupImport;
+      const pushPluginLoadError = (message: string) =>
+        pushPluginValidationError({
+          registry,
+          seenIds,
+          pluginId,
+          origin: candidate.origin,
+          record,
+          message,
         });
-      };
+      if (blockUntrustedLocalScopedChannelSetupImport) {
+        record.status = "disabled";
+        record.error =
+          activationState.reason ??
+          enableState.reason ??
+          "local plugin requires explicit trust for setup";
+        markPluginActivationDisabled(record, record.error);
+        // Manifest-registry duplicate resolution already canonicalizes same-id
+        // plugin shadows before this load loop. Do not claim `seenIds` here:
+        // different-id trusted fallbacks still need a chance to load later.
+        registry.plugins.push(record);
+        continue;
+      }
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
       const runtimeCandidateEntry = resolvePreferredBuiltRuntimeArtifact({
         source: candidate.source,
@@ -2208,7 +2365,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         candidate.origin === "bundled" &&
         hasKind(manifestRecord.kind, "memory")
       ) {
-        if (pluginId !== dreamingEngineId) {
+        if (!isDreamingSidecar) {
           const earlyMemoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: manifestRecord.kind,
@@ -2240,7 +2397,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           selectedId: selectedMemoryPluginId,
         });
 
-        if (!memoryDecision.enabled && pluginId !== dreamingEngineId) {
+        if (!memoryDecision.enabled && !isDreamingSidecar) {
           record.enabled = false;
           record.status = "disabled";
           record.error = memoryDecision.reason;
@@ -2355,6 +2512,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             error: setupRegistration.loadError,
             logPrefix: `[plugins] ${record.id} failed to load setup entry from ${record.source}: `,
             diagnosticMessagePrefix: "failed to load setup entry: ",
+            diagnosticCode: "channel-setup-failure",
           });
           continue;
         }
@@ -2430,6 +2588,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: err,
                 logPrefix: `[plugins] ${record.id} failed to load setup-runtime entry from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to load setup-runtime entry: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2456,6 +2615,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                   error: err,
                   logPrefix: `[plugins] ${record.id} failed to apply setup-runtime channel runtime from ${record.source}: `,
                   diagnosticMessagePrefix: "failed to apply setup-runtime channel runtime: ",
+                  diagnosticCode: "channel-setup-failure",
                 });
                 continue;
               }
@@ -2475,6 +2635,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: runtimePluginRegistration.loadError,
                 logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2530,6 +2691,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: err,
                 logPrefix: `[plugins] ${record.id} failed to apply setup channel runtime from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2557,6 +2719,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                   logPrefix: `[plugins] ${record.id} failed to register setup-runtime channel side effects from ${record.source}: `,
                   diagnosticMessagePrefix:
                     "failed to register setup-runtime channel side effects: ",
+                  diagnosticCode: "channel-setup-failure",
                 });
                 continue;
               }
@@ -2576,6 +2739,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               error: err,
               logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
               diagnosticMessagePrefix: "failed to register setup channel: ",
+              diagnosticCode: "channel-setup-failure",
             });
             continue;
           }
@@ -2616,7 +2780,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (registrationPlan.runRuntimeCapabilityPolicy) {
-        if (pluginId !== dreamingEngineId) {
+        if (!isDreamingSidecar) {
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: record.kind,
@@ -2900,7 +3064,13 @@ export async function loadOpenClawPluginCliRegistry(
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
-  const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
+  const dreamingSidecar = resolveAuthorizedDreamingSidecar({
+    cfg,
+    normalized,
+    activationSource,
+    manifestRegistry,
+    memorySlot,
+  });
 
   for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -2909,22 +3079,35 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const pluginId = manifestRecord.id;
     if (
-      !matchesScopedPluginRequest({
+      !matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
         pluginId,
+        sidecar: dreamingSidecar,
       })
     ) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
-      id: pluginId,
-      origin: candidate.origin,
-      config: normalized,
-      rootConfig: cfg,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-      activationSource,
-      autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+    const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+      sidecar: dreamingSidecar,
+      pluginId,
     });
+    const activationState = isDreamingSidecar
+      ? {
+          enabled: true,
+          activated: true,
+          explicitlyEnabled: false,
+          source: "auto" as const,
+          reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+        }
+      : resolveEffectivePluginActivationState({
+          id: pluginId,
+          origin: candidate.origin,
+          config: normalized,
+          rootConfig: cfg,
+          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          activationSource,
+          autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+        });
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
       const record = createPluginRecord({
@@ -2957,14 +3140,16 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    const enableState = resolveEffectiveEnableState({
-      id: pluginId,
-      origin: candidate.origin,
-      config: normalized,
-      rootConfig: cfg,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-      activationSource,
-    });
+    const enableState = isDreamingSidecar
+      ? { enabled: true }
+      : resolveEffectiveEnableState({
+          id: pluginId,
+          origin: candidate.origin,
+          config: normalized,
+          rootConfig: cfg,
+          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          activationSource,
+        });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
       id: pluginId,
@@ -2992,20 +3177,15 @@ export async function loadOpenClawPluginCliRegistry(
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
-    const pushPluginLoadError = (message: string) => {
-      record.status = "error";
-      record.error = message;
-      record.failedAt = new Date();
-      record.failurePhase = "validation";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
+    const pushPluginLoadError = (message: string) =>
+      pushPluginValidationError({
+        registry,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        record,
+        message,
       });
-    };
 
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -3119,7 +3299,7 @@ export async function loadOpenClawPluginCliRegistry(
     }
     record.kind = definition?.kind ?? record.kind;
 
-    if (pluginId !== dreamingEngineId) {
+    if (!isDreamingSidecar) {
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,

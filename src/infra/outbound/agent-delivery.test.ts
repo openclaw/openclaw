@@ -1,7 +1,18 @@
+// Covers agent delivery planning from explicit inputs, session history,
+// turn-source overrides, and route-aware target normalization.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
+  resolveChannelTarget: vi.fn<() => Promise<unknown>>(async () => ({
+    ok: true,
+    target: {
+      to: "+1999",
+      kind: "group",
+      source: "normalized",
+      resolutionSource: "normalized",
+    },
+  })),
   resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(
     () => ({ ok: true, to: "+1999" }),
   ),
@@ -80,11 +91,16 @@ vi.mock("./outbound-session.js", () => ({
   resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
 }));
 
+vi.mock("./target-resolver.js", () => ({
+  resolveChannelTarget: mocks.resolveChannelTarget,
+}));
+
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
-  isDeliverableMessageChannel: (channel: string) => ["directchat", "workspace"].includes(channel),
+  isDeliverableMessageChannel: (channel: string) =>
+    ["directchat", "workspace", "telegram"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "webchat"].includes(channel),
+    ["directchat", "workspace", "telegram", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
 }));
 
@@ -104,7 +120,18 @@ beforeAll(async () => {
 beforeEach(() => {
   mocks.resolveOutboundChannelPlugin.mockReset();
   mocks.resolveOutboundChannelPlugin.mockReturnValue(null);
-  mocks.resolveOutboundTarget.mockClear();
+  mocks.resolveChannelTarget.mockReset();
+  mocks.resolveChannelTarget.mockResolvedValue({
+    ok: true,
+    target: {
+      to: "+1999",
+      kind: "group",
+      source: "normalized",
+      resolutionSource: "normalized",
+    },
+  });
+  mocks.resolveOutboundTarget.mockReset();
+  mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "+1999" });
   mocks.resolveOutboundSessionRoute.mockReset();
   mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
   mocks.resolveSessionDeliveryTarget.mockClear();
@@ -309,6 +336,181 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
     expect(plan.resolvedTo).toBe("1470130713209602050");
+  });
+
+  it("resolves reserved explicit targets through directory-capable resolution before session routing", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error('Reserved target "current" for Telegram'),
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:telegram:group:-1002458651455",
+      baseSessionKey: "agent:telegram:group:-1002458651455",
+      peer: { kind: "group", id: "-1002458651455" },
+      chatType: "group",
+      from: "telegram:group:-1002458651455",
+      to: "telegram:-1002458651455",
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: undefined,
+      requestedChannel: "telegram",
+      explicitTo: "current",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "telegram",
+      input: "current",
+      accountId: "work",
+      unknownTargetMode: "normalized",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
+      },
+    });
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "telegram",
+      agentId: "agent",
+      accountId: "work",
+      target: "telegram:-1002458651455",
+      resolvedTarget: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+      currentSessionKey: "agent:main",
+      threadId: undefined,
+    });
+    expect(plan.resolvedTo).toBe("telegram:-1002458651455");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("keeps reserved explicit target errors when directory-capable resolution misses", async () => {
+    const reservedError = new Error('Reserved target "current" for Telegram');
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: reservedError,
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: false,
+      error: reservedError,
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      sessionEntry: undefined,
+      requestedChannel: "telegram",
+      explicitTo: "current",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "telegram",
+      input: "current",
+      accountId: undefined,
+      unknownTargetMode: "normalized",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
+      },
+    });
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(plan.resolvedTo).toBe("current");
+    expect(plan.targetResolutionError).toBe(reservedError);
+  });
+
+  it("keeps directory-resolved reserved explicit targets when session-route canonicalization misses", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error('Reserved target "current" for Telegram'),
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: undefined,
+      requestedChannel: "telegram",
+      explicitTo: "current",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "telegram",
+      agentId: "agent",
+      accountId: "work",
+      target: "telegram:-1002458651455",
+      resolvedTarget: {
+        to: "telegram:-1002458651455",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+      currentSessionKey: "agent:main",
+      threadId: undefined,
+    });
+    expect(plan.resolvedTo).toBe("telegram:-1002458651455");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
+    const targetResolutionError = new Error('reserved target "current"');
+
+    const resolved = resolveAgentOutboundTarget({
+      cfg: {} as OpenClawConfig,
+      plan: {
+        baseDelivery: { mode: "explicit" },
+        resolvedChannel: "workspace",
+        resolvedTo: "current",
+        deliveryTargetMode: "explicit",
+        targetResolutionError,
+      },
+      targetMode: "explicit",
+      validateExplicitTarget: false,
+    });
+
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(resolved.resolvedTarget).toEqual({ ok: false, error: targetResolutionError });
+    expect(resolved.resolvedTo).toBeUndefined();
   });
 
   it("falls back to the original plan when session-route canonicalization fails", async () => {

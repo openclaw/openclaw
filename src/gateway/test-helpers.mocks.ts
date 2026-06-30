@@ -1,3 +1,5 @@
+// Gateway integration test module mocks.
+// Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
 import {
@@ -97,10 +99,13 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-model-discovery.js")>(
     "../agents/agent-model-discovery.js",
   );
+  const modelSessions = await vi.importActual<typeof import("../agents/sessions/index.js")>(
+    "../agents/sessions/index.js",
+  );
 
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
     const modelsFile = path.join(args[1], "models.json");
-    const Registry = actual.ModelRegistry as unknown as {
+    const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
         authStorage: unknown,
         modelsFile: string,
@@ -325,14 +330,5 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => getTestPluginRegistry(),
   };
 });
-vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
-  sendWebChannelMessage: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-}));
-vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
-  sendWebChannelMessage: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-}));
-
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

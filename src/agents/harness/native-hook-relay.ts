@@ -1,3 +1,6 @@
+/**
+ * Bridges native harness hook events through registered relay processes.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -22,6 +25,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -108,7 +112,10 @@ export type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
-  commandForEvent: (event: NativeHookRelayEvent) => string;
+  commandForEvent: (
+    event: NativeHookRelayEvent,
+    options?: NativeHookRelayCommandForEventOptions,
+  ) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
 };
@@ -134,6 +141,10 @@ export type NativeHookRelayCommandOptions = {
   executable?: string;
   nice?: number | false;
   nodeExecutable?: string;
+  timeoutMs?: number;
+};
+
+export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
@@ -433,7 +444,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-    commandForEvent: (event) =>
+    commandForEvent: (event, options) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
         relayId,
@@ -444,7 +455,10 @@ export function registerNativeHookRelay(
             ? "noop"
             : undefined,
         nice: params.command?.nice,
-        timeoutMs: params.command?.timeoutMs,
+        timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
+          params.command?.timeoutMs,
+          options?.timeoutMs,
+        ),
         executable: params.command?.executable,
         nodeExecutable: params.command?.nodeExecutable,
       }),
@@ -514,6 +528,21 @@ function resolveNativeHookRelayNicePrefix(value: number | false | undefined): st
     return [];
   }
   return ["nice", "-n", String(nice)];
+}
+
+function resolveNativeHookRelayCommandTimeoutMs(
+  configuredTimeoutMs: number | undefined,
+  overrideTimeoutMs: number | undefined,
+): number | undefined {
+  const configured = normalizeOptionalPositiveInteger(configuredTimeoutMs);
+  const override = normalizeOptionalPositiveInteger(overrideTimeoutMs);
+  if (configured === undefined) {
+    return override;
+  }
+  if (override === undefined) {
+    return configured;
+  }
+  return Math.min(configured, override);
 }
 
 export function buildNativeHookRelayCommand(params: {
@@ -1207,7 +1236,7 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       }
     };
     const req = httpRequest(
@@ -2032,10 +2061,10 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2152,6 +2181,12 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : fallback;
+}
+
+function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function shellQuoteArgs(args: readonly string[]): string {
@@ -2346,17 +2381,3 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

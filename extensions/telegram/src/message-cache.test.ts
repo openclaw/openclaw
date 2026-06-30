@@ -1,3 +1,4 @@
+// Telegram tests cover message cache plugin behavior.
 import { rm, writeFile } from "node:fs/promises";
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
@@ -556,6 +557,49 @@ describe("telegram message cache", () => {
     expect(recent.map((entry) => entry.messageId)).toEqual(["42", "43"]);
   });
 
+  it("preserves rich-message placeholders in subsequent conversation context", async () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "private", first_name: "Nora" } as const;
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 45,
+        date: 1736380745,
+        rich_message: { blocks: [{ type: "paragraph" }] },
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 46,
+        date: 1736380746,
+        text: "What did I just send?",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "46",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+
+    expect(context).toHaveLength(1);
+    expect(context[0]?.node).toMatchObject({
+      messageId: "45",
+      body: "[unsupported Telegram rich_message received]",
+    });
+  });
+
   it("returns nearby messages around a stale reply target", async () => {
     const cache = createTelegramMessageCache();
     for (const id of [100, 101, 102, 200, 201]) {
@@ -669,6 +713,49 @@ describe("telegram message cache", () => {
     expect(context.find((entry) => entry.node.messageId === "34477")).toBeUndefined();
   });
 
+  it("filters conversation context nodes when an include predicate is supplied", async () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    for (const msg of [
+      {
+        chat,
+        message_id: 600,
+        date: 1736380600,
+        text: "ambient setup chatter",
+        from: { id: 111, is_bot: false, first_name: "Requester" },
+      },
+      {
+        chat,
+        message_id: 601,
+        date: 1736380660,
+        text: "@openclaw_bot please check this",
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+      },
+      {
+        chat,
+        message_id: 602,
+        date: 1736380720,
+        text: "@openclaw_bot Hello",
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+      },
+    ] satisfies Message[]) {
+      await cache.record({ accountId: "default", chatId: 7, msg });
+    }
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "602",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+      includeNode: (node) => node.body?.includes("@openclaw_bot") === true,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["601"]);
+  });
+
   it("does not select messages before the latest session reset command", async () => {
     const cache = createTelegramMessageCache();
     const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");
@@ -758,6 +845,45 @@ describe("telegram message cache", () => {
 
     expect(context.map((entry) => entry.node.messageId)).toEqual(["87183", "87184"]);
     expect(context.map((entry) => entry.node.body)).not.toContain(staleInstruction);
+  });
+
+  it("uses the current reset command as the session boundary", async () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 100,
+        date: 1736380800,
+        text: "stale context",
+        from: { id: 100, is_bot: false, first_name: "Requester" },
+      } as Message,
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 101,
+        date: 1736380860,
+        text: "/new",
+        from: { id: 101, is_bot: false, first_name: "Requester" },
+      } as Message,
+    });
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "101",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+    });
+
+    expect(context).toEqual([]);
   });
 
   it("does not select messages before the persisted session start when the reset command is absent", async () => {

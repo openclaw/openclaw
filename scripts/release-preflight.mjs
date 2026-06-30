@@ -1,16 +1,13 @@
 #!/usr/bin/env node
+// Checks or refreshes generated release artifacts before a release publish.
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
-const args = new Set(process.argv.slice(2));
-const fix = args.has("--fix");
-
-if (fix && args.has("--check")) {
-  console.error("Use either --fix or --check, not both.");
-  process.exit(1);
-}
+const parsedArgs = parseArgs(process.argv.slice(2));
+const fix = parsedArgs.fix;
 
 const fixCommands = [
   { name: "plugin versions", args: ["plugins:sync"] },
+  { name: "npm shrinkwraps", args: ["deps:shrinkwrap:changed:generate"] },
   { name: "plugin inventory", args: ["plugins:inventory:gen"] },
   { name: "base config schema", args: ["config:schema:gen"] },
   { name: "bundled channel config metadata", args: ["config:channels:gen"] },
@@ -21,6 +18,7 @@ const fixCommands = [
 
 const checkCommands = [
   { name: "root dependency ownership", args: ["deps:root-ownership:check"] },
+  { name: "npm shrinkwraps", args: ["deps:shrinkwrap:check"] },
   { name: "plugin versions", args: ["plugins:sync:check"] },
   { name: "plugin inventory", args: ["plugins:inventory:check"] },
   { name: "base config schema", args: ["config:schema:check"] },
@@ -28,6 +26,7 @@ const checkCommands = [
   { name: "config docs baseline", args: ["config:docs:check"] },
   { name: "plugin SDK exports", args: ["plugin-sdk:check-exports"] },
   { name: "plugin SDK API baseline", args: ["plugin-sdk:api:check"] },
+  { name: "plugin SDK surface budget", args: ["plugin-sdk:surface:check"] },
 ];
 
 if (fix) {
@@ -91,4 +90,38 @@ function printFailures(title, failures) {
   for (const failure of failures) {
     console.error(`- ${failure.name}: exit ${failure.status} (pnpm ${failure.args.join(" ")})`);
   }
+}
+
+function parseArgs(argv) {
+  let check = false;
+  let wantsFix = false;
+  for (const arg of argv) {
+    if (arg === "--help") {
+      printUsage(console.log);
+      process.exit(0);
+    }
+    if (arg === "--check") {
+      check = true;
+      continue;
+    }
+    if (arg === "--fix") {
+      wantsFix = true;
+      continue;
+    }
+    console.error(`Unknown release preflight argument: ${arg}`);
+    printUsage(console.error);
+    process.exit(1);
+  }
+  if (wantsFix && check) {
+    console.error("Use either --fix or --check, not both.");
+    process.exit(1);
+  }
+  return { fix: wantsFix };
+}
+
+function printUsage(writeLine) {
+  writeLine("Usage: node scripts/release-preflight.mjs [--check|--fix]");
+  writeLine("");
+  writeLine("  --check  verify generated release artifacts without writing changes (default)");
+  writeLine("  --fix    refresh generated release artifacts, then verify them");
 }

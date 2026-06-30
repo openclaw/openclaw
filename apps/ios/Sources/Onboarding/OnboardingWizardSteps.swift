@@ -7,9 +7,7 @@ struct OnboardingIntroStep: View {
         VStack(spacing: 0) {
             Spacer()
 
-            Image(systemName: UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone.gen3")
-                .font(.system(size: 60, weight: .semibold))
-                .foregroundStyle(.tint)
+            OpenClawProMark(size: 64, shadowRadius: 14)
                 .padding(.bottom, 18)
 
             Text("Welcome to OpenClaw")
@@ -42,7 +40,7 @@ struct OnboardingIntroStep: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(OpenClawBrand.warn)
                     .frame(width: 24)
                     .padding(.top, 2)
 
@@ -179,8 +177,9 @@ struct OnboardingModeRow: View {
                 }
                 Spacer()
                 Image(systemName: self.selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(self.selected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(self.selected ? OpenClawBrand.accent : Color.secondary)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

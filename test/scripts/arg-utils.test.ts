@@ -1,5 +1,7 @@
+// Arg Utils tests cover arg utils script behavior.
 import { describe, expect, it } from "vitest";
 import {
+  booleanFlag,
   floatFlag,
   intFlag,
   parseFlagArgs,
@@ -42,6 +44,44 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(parsed.match).toEqual(["alpha", "beta"]);
   });
 
+  it("rejects duplicate single-value flags", () => {
+    expect(() =>
+      parseFlagArgs(["--label", "first", "--label=second"], { label: "" }, [
+        stringFlag("--label", "label"),
+      ]),
+    ).toThrow("--label was provided more than once");
+    expect(() =>
+      parseFlagArgs(["--limit", "1", "--limit=2"], { limit: 10 }, [
+        intFlag("--limit", "limit", { min: 1 }),
+      ]),
+    ).toThrow("--limit was provided more than once");
+    expect(() =>
+      parseFlagArgs(["--json", "--json"], { json: false }, [booleanFlag("--json", "json")]),
+    ).toThrow("--json was provided more than once");
+  });
+
+  it("requires custom specs to declare consumed flags", () => {
+    expect(() =>
+      parseFlagArgs(
+        ["--custom"],
+        {},
+        [
+          {
+            consume(argv, index) {
+              if (argv[index] !== "--custom") {
+                return null;
+              }
+              return {
+                nextIndex: index,
+                apply() {},
+              };
+            },
+          },
+        ],
+      ),
+    ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
+  });
+
   it("rejects missing string flag values before consuming the next option", () => {
     expect(() =>
       parseFlagArgs(["--base", "--head", "HEAD"], { base: "origin/main", head: "HEAD" }, [
@@ -68,6 +108,18 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--limit"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
     ).toThrow("--limit requires a value");
+    expect(() =>
+      parseFlagArgs(["--limit", "--factor", "1.5"], { factor: 1, limit: 10 }, [
+        intFlag("--limit", "limit", { min: 1 }),
+        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
+      ]),
+    ).toThrow("--limit requires a value");
+    expect(() =>
+      parseFlagArgs(["--factor", "--limit", "2"], { factor: 1, limit: 10 }, [
+        intFlag("--limit", "limit", { min: 1 }),
+        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
+      ]),
+    ).toThrow("--factor requires a value");
     expect(() =>
       parseFlagArgs(["--limit", "20files"], { limit: 10 }, [
         intFlag("--limit", "limit", { min: 1 }),

@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway behavior.
 import { EventEmitter } from "node:events";
 import {
   GatewayCloseCodes,
@@ -459,18 +460,6 @@ export class GatewayPlugin extends Plugin {
 
   getRateLimitStatus() {
     return this.outboundLimiter.getStatus();
-  }
-
-  getIntentsInfo() {
-    const intents = this.options.intents ?? 0;
-    return {
-      intents,
-      hasGuilds: this.hasIntent(GatewayIntentBits.Guilds),
-      hasGuildMembers: this.hasIntent(GatewayIntentBits.GuildMembers),
-      hasGuildPresences: this.hasIntent(GatewayIntentBits.GuildPresences),
-      hasGuildMessages: this.hasIntent(GatewayIntentBits.GuildMessages),
-      hasMessageContent: this.hasIntent(GatewayIntentBits.MessageContent),
-    };
   }
 
   hasIntent(intent: number): boolean {

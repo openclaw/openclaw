@@ -12,6 +12,22 @@ NET_NAME="openclaw-net-e2e-$$"
 GW_NAME="openclaw-gateway-e2e-$$"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_DOCKER_COMMAND_TIMEOUT:-600s}"
 CLIENT_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_CLIENT_TIMEOUT:-90s}"
+CLIENT_LIMIT_ENV_ARGS=()
+if [[ -n "${OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS+x}" ]]; then
+  CLIENT_CONNECT_TIMEOUT_MS="$(
+    docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS 80000
+  )"
+  CLIENT_LIMIT_ENV_ARGS+=(
+    -e "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS=$CLIENT_CONNECT_TIMEOUT_MS"
+  )
+elif [[ -n "${OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS+x}" ]]; then
+  CONNECT_READY_TIMEOUT_MS="$(
+    docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS 80000
+  )"
+  CLIENT_LIMIT_ENV_ARGS+=(
+    -e "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS=$CONNECT_READY_TIMEOUT_MS"
+  )
+fi
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
@@ -39,7 +55,7 @@ docker_e2e_docker_cmd run -d \
   bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
-if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT || grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
+if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT"; then
   echo "Gateway failed to start"
   docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/gateway-net-e2e.log 120
   exit 1
@@ -49,6 +65,7 @@ echo "Running client container (connect + health)..."
 DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --network "$NET_NAME" \
+  "${CLIENT_LIMIT_ENV_ARGS[@]}" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \

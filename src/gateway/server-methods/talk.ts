@@ -1,3 +1,5 @@
+// Gateway RPC handlers for Talk voice, transcription, and speech synthesis surfaces.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -44,7 +46,6 @@ import {
 } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { asRecord } from "./record-shared.js";
 import { talkClientHandlers } from "./talk-client.js";
 import { talkSessionHandlers } from "./talk-session.js";
 import {
@@ -71,7 +72,7 @@ function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null):
 }
 
 function asStringRecord(value: unknown): Record<string, string> | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
@@ -112,12 +113,12 @@ function withTalkBaseTtsSpeakerSelectionCompat(
   baseTts: Record<string, unknown>,
 ): Record<string, unknown> {
   const next = withSpeakerSelectionCompat(baseTts);
-  const providers = asRecord(baseTts.providers);
+  const providers = asOptionalRecord(baseTts.providers);
   if (providers) {
     next.providers = Object.fromEntries(
       Object.entries(providers).map(([providerId, providerConfig]) => [
         providerId,
-        withSpeakerSelectionCompat(asRecord(providerConfig) ?? {}),
+        withSpeakerSelectionCompat(asOptionalRecord(providerConfig) ?? {}),
       ]),
     );
   }
@@ -125,7 +126,7 @@ function withTalkBaseTtsSpeakerSelectionCompat(
     if (key === "providers") {
       continue;
     }
-    const record = asRecord(value);
+    const record = asOptionalRecord(value);
     if (record) {
       next[key] = withSpeakerSelectionCompat(record);
     }
@@ -156,7 +157,7 @@ function buildTalkTtsConfig(
   }
 
   const baseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asRecord(config.messages?.tts) ?? {},
+    asOptionalRecord(config.messages?.tts) ?? {},
   ) as TtsConfig;
   const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
   const resolvedProviderConfig =
@@ -171,7 +172,7 @@ function buildTalkTtsConfig(
     auto: "always",
     provider,
     providers: {
-      ...((asRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      ...((asOptionalRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
       [provider]: resolvedProviderConfig,
     },
   };
@@ -424,10 +425,10 @@ function resolveTalkResponseFromConfig(params: {
 
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
   const sourceBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asRecord(params.sourceConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.sourceConfig.messages?.tts) ?? {},
   );
   const runtimeBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asRecord(params.runtimeConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.runtimeConfig.messages?.tts) ?? {},
   );
   const sourceProviderConfig = withSpeakerSelectionFallbackCompat(sourceResolved?.config);
   const runtimeProviderConfig = withSpeakerSelectionFallbackCompat(runtimeResolved?.config);
@@ -473,7 +474,7 @@ function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderCo
 function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
   base: Record<string, unknown>,
 ): Record<string, unknown> {
-  const providers = asRecord(base.providers);
+  const providers = asOptionalRecord(base.providers);
   if (!providers) {
     return base;
   }
@@ -485,7 +486,7 @@ function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
   // they're already validated upstream.
   const cleaned: Record<string, unknown> = Object.create(null);
   for (const [providerId, providerConfig] of Object.entries(providers)) {
-    const cfg = asRecord(providerConfig);
+    const cfg = asOptionalRecord(providerConfig);
     if (!cfg) {
       cleaned[providerId] = providerConfig;
       continue;
@@ -512,6 +513,7 @@ function stripUnresolvedSecretApiKeyFromRecord(
   return rest;
 }
 
+/** Gateway request handlers for Talk config, catalog, mode, sessions, and speech. */
 export const talkHandlers: GatewayRequestHandlers = {
   ...talkSessionHandlers,
   ...talkClientHandlers,

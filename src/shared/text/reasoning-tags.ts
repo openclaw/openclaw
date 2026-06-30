@@ -1,11 +1,16 @@
+// Reasoning tag helpers find and remove model reasoning tag blocks from text.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
+export type ReasoningTagScope = "all" | "leading";
 
-const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
+// Reasoning tags may carry a model-specific namespace prefix (e.g. Anthropic's
+// `antml:`, MiniMax's `mm:`). Accept the known prefixes so namespaced variants
+// like `<mm:think>` are stripped instead of leaking into visible output.
+const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
 const THINKING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -25,12 +30,31 @@ export function hasOrphanReasoningCloseBoundary(params: {
   return params.before.trim().length > 0 && params.after.trim().length > 0;
 }
 
+function hasReasoningCloseTagAfter(
+  text: string,
+  start: number,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+) {
+  for (const match of text.slice(start).matchAll(THINKING_TAG_RE)) {
+    const idx = start + (match.index ?? 0);
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    if (match[1] === "/") {
+      return true;
+    }
+  }
+  THINKING_TAG_RE.lastIndex = 0;
+  return false;
+}
+
 /** Strips model reasoning/final tags from visible text while preserving literal code examples. */
 export function stripReasoningTagsFromText(
   text: string,
   options?: {
     mode?: ReasoningTagMode;
     trim?: ReasoningTagTrim;
+    scope?: ReasoningTagScope;
   },
 ): string {
   if (!text) {
@@ -42,6 +66,7 @@ export function stripReasoningTagsFromText(
 
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
+  const scope = options?.scope ?? "all";
 
   let cleaned = text;
   const matches = findFinalTagMatches(cleaned);
@@ -88,6 +113,14 @@ export function stripReasoningTagsFromText(
     }
 
     if (thinkingDepth === 0) {
+      if (
+        scope === "leading" &&
+        !isClose &&
+        (result + cleaned.slice(lastIndex, idx)).trim().length > 0 &&
+        !hasReasoningCloseTagAfter(cleaned, idx + match[0].length, codeRegions)
+      ) {
+        return applyTrim(result + cleaned.slice(lastIndex), trimMode);
+      }
       if (isClose) {
         const afterIndex = idx + match[0].length;
         const before = cleaned.slice(lastIndex, idx);

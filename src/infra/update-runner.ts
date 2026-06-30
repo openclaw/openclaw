@@ -1,3 +1,4 @@
+// Runs OpenClaw package update checks, package steps, and restart handoff.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,10 @@ import {
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
-import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import {
+  runGlobalPackageUpdateSteps,
+  type PackageUpdateStepAdvisory,
+} from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -41,6 +45,8 @@ import {
   type UpdatePackageManagerFailureReason,
 } from "./update-package-manager.js";
 
+export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+
 export type UpdateStepResult = {
   name: string;
   command: string;
@@ -49,6 +55,10 @@ export type UpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateRunResult = {
@@ -86,6 +96,14 @@ export type UpdateRunResult = {
           message: string;
           currentVersion?: string;
           nextVersion?: string;
+          channelFallback?: {
+            requestedSpec: string;
+            usedSpec: string;
+            requestedLabel: string;
+            usedLabel: string;
+            reason: "unavailable" | "failed";
+            message: string;
+          };
         }>;
       };
       integrityDrifts: Array<{
@@ -104,7 +122,14 @@ export type UpdateRunResult = {
 type CommandRunner = (
   argv: string[],
   options: CommandOptions,
-) => Promise<{ stdout: string; stderr: string; code: number | null }>;
+) => Promise<{
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}>;
 
 export type UpdateStepInfo = {
   name: string;
@@ -117,6 +142,10 @@ export type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateStepProgress = {
@@ -131,6 +160,7 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
+  beforeGitMutation?: () => Promise<void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -417,6 +447,9 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     durationMs,
     exitCode: result.code,
     stderrTail,
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
   });
 
   return {
@@ -427,6 +460,9 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     exitCode: result.code,
     stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
     stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
   };
 }
 
@@ -578,10 +614,17 @@ function isSupersededInstallFailure(
   return steps.some((candidate) => candidate.name === retryName && candidate.exitCode === 0);
 }
 
+function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
+  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+    step.name,
+  );
+}
+
 function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
   return steps.find(
     (step, index) =>
       step.exitCode !== 0 &&
+      !isPreflightCandidateFailure(step) &&
       !isSupersededInstallFailure(step, steps) &&
       !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
   );
@@ -593,8 +636,16 @@ function isSupersededTargetRefFailure(
 ): boolean {
   const isTargetRefProbe = step.name.startsWith("git rev-parse ");
   const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
-  if (!isTargetRefProbe && !isTargetTagFetch) {
+  const isUpstreamProbe = step.name === "upstream check";
+  const isLocalDevBranchProbe = step.name === `git show-ref ${DEV_BRANCH}`;
+  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe && !isLocalDevBranchProbe) {
     return false;
+  }
+  if (isLocalDevBranchProbe) {
+    return followingSteps.some(
+      (candidate) =>
+        candidate.name.startsWith(`git checkout -B ${DEV_BRANCH} `) && candidate.exitCode === 0,
+    );
   }
   return followingSteps.some(
     (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
@@ -663,7 +714,7 @@ async function buildUpdateCommandRunner(
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
       });
-      return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+      return res;
     },
   };
 }
@@ -793,6 +844,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    let gitMutationPrepared = false;
+    let createdDevBranchDuringUpdate = false;
+    let localDevBranchExists: boolean | null = null;
+    const prepareGitMutation = async () => {
+      if (gitMutationPrepared) {
+        return;
+      }
+      await opts.beforeGitMutation?.();
+      gitMutationPrepared = true;
+    };
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
       status: "error",
       mode: "git",
@@ -848,6 +909,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             "--hard",
             beforeSha,
           ]);
+          if (createdDevBranchDuringUpdate) {
+            await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
+              "git",
+              "-C",
+              gitRoot,
+              "branch",
+              "-D",
+              DEV_BRANCH,
+            ]);
+          }
         }
         return;
       }
@@ -859,6 +930,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         "--detach",
         beforeSha,
       ]);
+      if (createdDevBranchDuringUpdate) {
+        await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "branch",
+          "-D",
+          DEV_BRANCH,
+        ]);
+      }
     };
     const buildGitErrorResultWithRollback = async (reason: string): Promise<UpdateRunResult> => {
       await rollbackGitCheckout();
@@ -888,17 +969,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
 
     if (channel === "dev") {
-      if (needsCheckoutMain) {
-        const failure = await runRequiredGitStep(
-          `git checkout ${DEV_BRANCH}`,
-          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-          "checkout-failed",
-        );
-        if (failure) {
-          return failure;
-        }
-      }
-
       const fetchFailure = await runRequiredGitStep(
         "git fetch",
         ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
@@ -909,6 +979,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
       let preflightBaseSha: string | null;
       let candidatesLocal: string[];
+      let selectedDevUpstream: string | null = null;
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
@@ -966,23 +1037,78 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         preflightBaseSha = targetSha;
         candidatesLocal = [targetSha];
       } else {
-        const upstreamStep = await runStep(
-          step(
-            "upstream check",
-            [
-              "git",
-              "-C",
+        if (needsCheckoutMain) {
+          const localMainStep = await runStep(
+            step(
+              `git show-ref ${DEV_BRANCH}`,
+              ["git", "-C", gitRoot, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
               gitRoot,
-              "rev-parse",
-              "--abbrev-ref",
-              "--symbolic-full-name",
-              "@{upstream}",
-            ],
-            gitRoot,
-          ),
-        );
-        steps.push(upstreamStep);
-        if (upstreamStep.exitCode !== 0) {
+            ),
+          );
+          steps.push(localMainStep);
+          localDevBranchExists = localMainStep.exitCode === 0;
+        }
+        let remoteBranchRefs: string[] = [];
+        if (needsCheckoutMain && localDevBranchExists === false) {
+          const remoteStep = await runStep(
+            step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+          );
+          steps.push(remoteStep);
+          if (remoteStep.exitCode === 0) {
+            remoteBranchRefs = normalizeStringEntries(
+              (remoteStep.stdoutTail ?? "").split("\n"),
+            ).map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
+          }
+        }
+        const upstreamRefs = needsCheckoutMain
+          ? [`${DEV_BRANCH}@{upstream}`, ...remoteBranchRefs]
+          : ["@{upstream}"];
+        let upstreamSha: string | null = null;
+        let sawResolvableUpstreamRef = false;
+        for (const upstreamRef of upstreamRefs) {
+          if (upstreamRef.endsWith("@{upstream}")) {
+            const upstreamStep = await runStep(
+              step(
+                "upstream check",
+                [
+                  "git",
+                  "-C",
+                  gitRoot,
+                  "rev-parse",
+                  "--abbrev-ref",
+                  "--symbolic-full-name",
+                  upstreamRef,
+                ],
+                gitRoot,
+              ),
+            );
+            steps.push(upstreamStep);
+            if (upstreamStep.exitCode !== 0) {
+              continue;
+            }
+            sawResolvableUpstreamRef = true;
+          }
+
+          const upstreamShaStep = await runStep(
+            step(
+              `git rev-parse ${upstreamRef}`,
+              ["git", "-C", gitRoot, "rev-parse", upstreamRef],
+              gitRoot,
+            ),
+          );
+          steps.push(upstreamShaStep);
+          const candidateSha = upstreamShaStep.stdoutTail?.trim();
+          if (upstreamShaStep.exitCode === 0 && candidateSha) {
+            upstreamSha = candidateSha;
+            const remoteBranchMatch = /^refs\/remotes\/(.+)$/u.exec(upstreamRef);
+            selectedDevUpstream = remoteBranchMatch?.[1] ?? null;
+            break;
+          }
+          if (upstreamShaStep.exitCode === 0) {
+            sawResolvableUpstreamRef = true;
+          }
+        }
+        if (!upstreamSha && !sawResolvableUpstreamRef) {
           return {
             status: "skipped",
             mode: "git",
@@ -993,17 +1119,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             durationMs: Date.now() - startedAt,
           };
         }
-
-        const upstreamShaStep = await runStep(
-          step(
-            "git rev-parse @{upstream}",
-            ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
-            gitRoot,
-          ),
-        );
-        steps.push(upstreamShaStep);
-        const upstreamSha = upstreamShaStep.stdoutTail?.trim();
-        if (!upstreamShaStep.stdoutTail || !upstreamSha) {
+        if (!upstreamSha) {
           return {
             status: "error",
             mode: "git",
@@ -1061,24 +1177,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await resolveUpdateBuildManager(
-        (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
-        gitRoot,
-        timeoutMs,
-        defaultCommandEnv,
-        "require-preferred",
-      );
-      if (manager.kind === "missing-required") {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: mapManagerResolutionFailure(manager.reason),
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
       const preflightRoot = await createPreflightRoot();
       const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
       const worktreeStep = await runStep(
@@ -1103,6 +1201,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       let selectedSha: string | null = null;
+      let preflightManagerFailureReason: NonNullable<UpdateRunResult["reason"]> | null = null;
+      let sawNonManagerPreflightFailure = false;
       try {
         for (const sha of candidatesLocal) {
           const shortSha = sha.slice(0, 8);
@@ -1115,79 +1215,108 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           );
           steps.push(checkoutStep);
           if (checkoutStep.exitCode !== 0) {
+            sawNonManagerPreflightFailure = true;
             continue;
           }
 
-          const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
-            manager.manager,
+          const manager = await resolveUpdateBuildManager(
+            (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+            worktreeDir,
+            timeoutMs,
+            defaultCommandEnv,
+            "require-preferred",
           );
-          const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-          const depsStepArgv =
-            preflightIgnoreScripts && preflightIgnoreScriptsArgv
-              ? preflightIgnoreScriptsArgv
-              : managerInstallArgs(manager.manager, {
-                  compatFallback: manager.fallback && manager.manager === "npm",
-                });
-          const depsStepName = preflightIgnoreScripts
-            ? `preflight deps install (ignore scripts) (${shortSha})`
-            : `preflight deps install (${shortSha})`;
-          const installEnv = resolveInstallEnv(manager.manager, manager.env);
-          const depsStep = await runStep(step(depsStepName, depsStepArgv, worktreeDir, installEnv));
-          steps.push(depsStep);
-          let finalDepsStep = depsStep;
-          if (
-            depsStep.exitCode !== 0 &&
-            !preflightIgnoreScripts &&
-            shouldRetryWindowsInstallIgnoringScripts(manager.manager)
-          ) {
-            const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-            if (retryArgv) {
-              const retryStep = await runStep(
-                step(
-                  `preflight deps install (ignore scripts) (${shortSha})`,
-                  retryArgv,
-                  worktreeDir,
-                  installEnv,
-                ),
-              );
-              steps.push(retryStep);
-              finalDepsStep = retryStep;
-            }
-          }
-          if (finalDepsStep.exitCode !== 0) {
+          if (manager.kind === "missing-required") {
+            preflightManagerFailureReason = mapManagerResolutionFailure(manager.reason);
+            steps.push({
+              name: `preflight package manager (${shortSha})`,
+              command: `resolve ${manager.preferred} package manager`,
+              cwd: worktreeDir,
+              durationMs: 0,
+              exitCode: 1,
+              stderrTail: preflightManagerFailureReason,
+            });
             continue;
           }
-
-          const buildStep = await runStep(
-            step(
-              `preflight build (${shortSha})`,
-              managerScriptArgs(manager.manager, "build"),
-              worktreeDir,
-              resolveBuildEnv(manager.env),
-            ),
-          );
-          steps.push(buildStep);
-          if (buildStep.exitCode !== 0) {
-            continue;
-          }
-
-          if (shouldRunDevPreflightLint()) {
-            const lintStep = await runStep(
-              step(
-                `preflight lint (${shortSha})`,
-                managerScriptArgs(manager.manager, "lint"),
-                worktreeDir,
-                resolveDevPreflightLintEnv(manager.env),
-              ),
+          try {
+            const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
+              manager.manager,
             );
-            steps.push(lintStep);
-            if (lintStep.exitCode !== 0) {
+            const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+            const depsStepArgv =
+              preflightIgnoreScripts && preflightIgnoreScriptsArgv
+                ? preflightIgnoreScriptsArgv
+                : managerInstallArgs(manager.manager, {
+                    compatFallback: manager.fallback && manager.manager === "npm",
+                  });
+            const depsStepName = preflightIgnoreScripts
+              ? `preflight deps install (ignore scripts) (${shortSha})`
+              : `preflight deps install (${shortSha})`;
+            const installEnv = resolveInstallEnv(manager.manager, manager.env);
+            const depsStep = await runStep(
+              step(depsStepName, depsStepArgv, worktreeDir, installEnv),
+            );
+            steps.push(depsStep);
+            let finalDepsStep = depsStep;
+            if (
+              depsStep.exitCode !== 0 &&
+              !preflightIgnoreScripts &&
+              shouldRetryWindowsInstallIgnoringScripts(manager.manager)
+            ) {
+              const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+              if (retryArgv) {
+                const retryStep = await runStep(
+                  step(
+                    `preflight deps install (ignore scripts) (${shortSha})`,
+                    retryArgv,
+                    worktreeDir,
+                    installEnv,
+                  ),
+                );
+                steps.push(retryStep);
+                finalDepsStep = retryStep;
+              }
+            }
+            if (finalDepsStep.exitCode !== 0) {
+              sawNonManagerPreflightFailure = true;
               continue;
             }
-          }
 
-          selectedSha = sha;
-          break;
+            const buildStep = await runStep(
+              step(
+                `preflight build (${shortSha})`,
+                managerScriptArgs(manager.manager, "build"),
+                worktreeDir,
+                resolveBuildEnv(manager.env),
+              ),
+            );
+            steps.push(buildStep);
+            if (buildStep.exitCode !== 0) {
+              sawNonManagerPreflightFailure = true;
+              continue;
+            }
+
+            if (shouldRunDevPreflightLint()) {
+              const lintStep = await runStep(
+                step(
+                  `preflight lint (${shortSha})`,
+                  managerScriptArgs(manager.manager, "lint"),
+                  worktreeDir,
+                  resolveDevPreflightLintEnv(manager.env),
+                ),
+              );
+              steps.push(lintStep);
+              if (lintStep.exitCode !== 0) {
+                sawNonManagerPreflightFailure = true;
+                continue;
+              }
+            }
+
+            selectedSha = sha;
+            break;
+          } finally {
+            await manager.cleanup?.();
+          }
         }
       } finally {
         const removeStep = await runStep({
@@ -1218,7 +1347,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           timeoutMs,
         }).catch(() => null);
         await removePathRecursive(preflightRoot);
-        await manager.cleanup?.();
       }
 
       if (!selectedSha) {
@@ -1226,7 +1354,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "preflight-no-good-commit",
+          reason:
+            preflightManagerFailureReason && !sawNonManagerPreflightFailure
+              ? preflightManagerFailureReason
+              : "preflight-no-good-commit",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
@@ -1234,6 +1365,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
+        await prepareGitMutation();
         const failure = await runRequiredGitStep(
           `git checkout ${selectedSha}`,
           ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
@@ -1243,33 +1375,81 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return failure;
         }
       } else {
-        const rebaseStep = await runStep(
-          step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
-        );
-        steps.push(rebaseStep);
-        if (rebaseStep.exitCode !== 0) {
-          const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
-            cwd: gitRoot,
-            timeoutMs,
-          });
+        await prepareGitMutation();
+        let checkedOutSelectedSha = false;
+        if (needsCheckoutMain) {
+          const hasLocalDevBranch = localDevBranchExists !== false;
+          const failure = await runRequiredGitStep(
+            hasLocalDevBranch
+              ? `git checkout ${DEV_BRANCH}`
+              : `git checkout -B ${DEV_BRANCH} ${selectedSha}`,
+            hasLocalDevBranch
+              ? ["git", "-C", gitRoot, "checkout", DEV_BRANCH]
+              : ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, selectedSha],
+            "checkout-failed",
+          );
+          if (failure) {
+            return failure;
+          }
+          checkedOutSelectedSha = !hasLocalDevBranch;
+          createdDevBranchDuringUpdate = checkedOutSelectedSha;
+          if (checkedOutSelectedSha && selectedDevUpstream) {
+            const upstreamFailure = await runRequiredGitStep(
+              `git branch --set-upstream-to ${selectedDevUpstream} ${DEV_BRANCH}`,
+              [
+                "git",
+                "-C",
+                gitRoot,
+                "branch",
+                "--set-upstream-to",
+                selectedDevUpstream,
+                DEV_BRANCH,
+              ],
+              "checkout-failed",
+            );
+            if (upstreamFailure) {
+              return await buildGitErrorResultWithRollback("checkout-failed");
+            }
+          }
+        }
+        if (checkedOutSelectedSha) {
           steps.push({
-            name: "git rebase --abort",
-            command: "git rebase --abort",
+            name: "git rebase",
+            command: `git rebase ${selectedSha}`,
             cwd: gitRoot,
             durationMs: 0,
-            exitCode: abortResult.code,
-            stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
-            stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+            exitCode: 0,
+            stdoutTail: `skipped; ${DEV_BRANCH} was created at selected preflight SHA`,
           });
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "rebase-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        } else {
+          const rebaseStep = await runStep(
+            step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
+          );
+          steps.push(rebaseStep);
+          if (rebaseStep.exitCode !== 0) {
+            const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
+              cwd: gitRoot,
+              timeoutMs,
+            });
+            steps.push({
+              name: "git rebase --abort",
+              command: "git rebase --abort",
+              cwd: gitRoot,
+              durationMs: 0,
+              exitCode: abortResult.code,
+              stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
+              stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+            });
+            return {
+              status: "error",
+              mode: "git",
+              root: gitRoot,
+              reason: "rebase-failed",
+              before: { sha: beforeSha, version: beforeVersion },
+              steps,
+              durationMs: Date.now() - startedAt,
+            };
+          }
         }
       }
     } else {
@@ -1295,6 +1475,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
+      await prepareGitMutation();
       const failure = await runRequiredGitStep(
         `git checkout ${tag}`,
         ["git", "-C", gitRoot, "checkout", "--detach", tag],

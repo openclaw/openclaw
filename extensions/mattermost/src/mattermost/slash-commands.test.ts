@@ -1,3 +1,4 @@
+// Mattermost tests cover slash commands plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
@@ -105,6 +106,15 @@ describe("slash-commands", () => {
         (spec) => spec.trigger === "oc_model" || spec.trigger === "oc_models",
       ).map((spec) => spec.trigger),
     ).toEqual(["oc_model", "oc_models"]);
+  });
+
+  it("registers the queue command mapped to the core /queue directive", () => {
+    const queueSpec = DEFAULT_COMMAND_SPECS.find((spec) => spec.trigger === "oc_queue");
+    expect(queueSpec?.originalName).toBe("queue");
+    const triggerMap = new Map<string, string>([["oc_queue", "queue"]]);
+    expect(resolveCommandText("oc_queue", " collect drop:summarize ", triggerMap)).toBe(
+      "/queue collect drop:summarize",
+    );
   });
 
   it("normalizes callback path in slash config", () => {

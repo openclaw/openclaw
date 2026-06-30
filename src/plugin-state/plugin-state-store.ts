@@ -1,3 +1,4 @@
+// Plugin state store exposes persisted per-plugin state operations.
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   clearPluginStateDatabaseForTests,
@@ -21,6 +22,8 @@ import type {
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
+// Public plugin-state facade over the sqlite-backed store. It validates plugin
+// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
@@ -34,7 +37,6 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateDatabase,
-  closePluginStateSqliteStore,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
@@ -170,6 +172,8 @@ function assertPlainJsonValue(
       throw invalidInput(`plugin state object at ${path} must be a plain object`);
     }
 
+    // Reject accessors, symbols, sparse arrays, and non-enumerable state so stored
+    // values cannot execute code or round-trip differently through JSON.
     const descriptorEntries = Object.entries(Object.getOwnPropertyDescriptors(objectValue));
     const enumerableKeys = Object.keys(objectValue);
     if (Object.getOwnPropertySymbols(objectValue).length > 0) {
@@ -223,6 +227,25 @@ function prepareRegisterParams(
   };
 }
 
+function prepareUpdateValueJson<T>(
+  key: string,
+  updateValue: (current: T | undefined) => T | undefined,
+  defaultTtlMs?: number,
+  opts?: { ttlMs?: number },
+): (current: unknown) => { valueJson: string; ttlMs?: number } | undefined {
+  return (current) => {
+    const next = updateValue(current as T | undefined);
+    if (next === undefined) {
+      return undefined;
+    }
+    const prepared = prepareRegisterParams(key, next, defaultTtlMs, opts);
+    return {
+      valueJson: prepared.valueJson,
+      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
+    };
+  };
+}
+
 function assertConsistentOptions(
   pluginId: string,
   namespace: string,
@@ -238,6 +261,8 @@ function assertConsistentOptions(
     existing.maxEntries !== signature.maxEntries ||
     existing.defaultTtlMs !== signature.defaultTtlMs
   ) {
+    // A namespace is a shared storage contract. Reopening it with different
+    // limits would make eviction/TTL behavior depend on call order.
     throw invalidInput(
       `plugin state namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
       "open",
@@ -287,17 +312,7 @@ function createKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: (current) => {
-          const next = updateValue(current as T | undefined);
-          if (next === undefined) {
-            return undefined;
-          }
-          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
-          return {
-            valueJson: params.valueJson,
-            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-          };
-        },
+        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
         ...(env ? { env } : {}),
       });
     },
@@ -383,17 +398,7 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         maxEntries,
-        updateValueJson: (current) => {
-          const next = updateValue(current as T | undefined);
-          if (next === undefined) {
-            return undefined;
-          }
-          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
-          return {
-            valueJson: params.valueJson,
-            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-          };
-        },
+        updateValueJson: prepareUpdateValueJson(normalizedKey, updateValue, defaultTtlMs, opts),
         ...(env ? { env } : {}),
       });
     },
@@ -437,6 +442,7 @@ function createSyncKeyedStoreForPluginId<T>(
   };
 }
 
+/** Opens an async plugin-state namespace for a non-core plugin id. */
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -447,6 +453,7 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+/** Opens a sync plugin-state namespace for a non-core plugin id. */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -457,23 +464,20 @@ export function createPluginStateSyncKeyedStore<T>(
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
 }
 
-export function createCorePluginStateKeyedStore<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
-): PluginStateKeyedStore<T> {
-  return createKeyedStoreForPluginId<T>(options.ownerId, options);
-}
-
+/** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
 ): PluginStateSyncKeyedStore<T> {
   return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
+/** Clears plugin-state rows and option signatures for tests. */
 export function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
 
+/** Resets plugin-state module/database state for isolated tests. */
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
     closePluginStateDatabase();

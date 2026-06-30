@@ -1,3 +1,6 @@
+/**
+ * Rewrites transcript entries in session managers, states, and files.
+ */
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -18,13 +21,44 @@ import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
+  type TranscriptPersistedEntry,
 } from "./transcript-file-state.js";
+import {
+  persistRuntimeTranscriptStateMutation,
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
+}
+
+function findTranscriptRewriteMatches(
+  branch: readonly SessionBranchEntry[],
+  replacementsById: ReadonlyMap<string, AgentMessage>,
+): { matchedIndices: number[]; bytesFreed: number } {
+  const matchedIndices: number[] = [];
+  let bytesFreed = 0;
+
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      continue;
+    }
+    const originalBytes = estimateMessageBytes(entry.message);
+    const replacementBytes = estimateMessageBytes(replacement);
+    matchedIndices.push(index);
+    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+  }
+
+  return { matchedIndices, bytesFreed };
 }
 
 function remapEntryId(
@@ -177,23 +211,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const matchedIndices: number[] = [];
-  let bytesFreed = 0;
-
-  for (let index = 0; index < branch.length; index++) {
-    const entry = branch[index];
-    if (entry.type !== "message") {
-      continue;
-    }
-    const replacement = replacementsById.get(entry.id);
-    if (!replacement) {
-      continue;
-    }
-    const originalBytes = estimateMessageBytes(entry.message);
-    const replacementBytes = estimateMessageBytes(replacement);
-    matchedIndices.push(index);
-    bytesFreed += Math.max(0, originalBytes - replacementBytes);
-  }
+  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
 
   if (matchedIndices.length === 0) {
     return {
@@ -253,7 +271,7 @@ export function rewriteTranscriptEntriesInState(params: {
   state: TranscriptFileState;
   replacements: TranscriptRewriteReplacement[];
   allowedRewriteSuffixEntryIds?: string[];
-}): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
+}): TranscriptRewriteResult & { appendedEntries: TranscriptPersistedEntry[] } {
   const replacementsById = new Map(
     params.replacements
       .filter((replacement) => replacement.entryId.trim().length > 0)
@@ -269,7 +287,58 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
-  const branch = params.state.getBranch();
+  const originalLeafId = params.state.getLeafId();
+  const originalAppendParentId = params.state.getAppendParentId();
+  const originalAppendMode = params.state.getAppendMode();
+  const activeBranch = params.state.getBranch();
+  const allEntries = params.state.getEntries();
+  let branch = activeBranch;
+  let restoreOriginalNavigation = false;
+  const replacementIdsOnBranch = (candidate: readonly SessionBranchEntry[]): Set<string> =>
+    new Set(
+      candidate
+        .filter((entry) => entry.type === "message" && replacementsById.has(entry.id))
+        .map((entry) => entry.id),
+    );
+  const activeReplacementIds = replacementIdsOnBranch(activeBranch);
+  if (activeReplacementIds.size > 0 && activeReplacementIds.size < replacementsById.size) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "rewrite targets span multiple branches",
+      appendedEntries: [],
+    };
+  }
+  const activeBranchHasEveryReplacement = activeReplacementIds.size === replacementsById.size;
+  if (!activeBranchHasEveryReplacement && params.allowedRewriteSuffixEntryIds) {
+    const allowedIds = new Set(params.allowedRewriteSuffixEntryIds);
+    const sideBranch = allEntries
+      .toReversed()
+      .filter((entry) => allowedIds.has(entry.id))
+      .map((entry) => params.state.getBranch(entry.id))
+      .find((candidate) => replacementIdsOnBranch(candidate).size === replacementsById.size);
+    if (sideBranch) {
+      branch = sideBranch;
+      restoreOriginalNavigation = true;
+    }
+  }
+  if (
+    !activeBranchHasEveryReplacement &&
+    !restoreOriginalNavigation &&
+    activeReplacementIds.size === 0 &&
+    params.replacements.some((replacement) =>
+      allEntries.some((entry) => entry.id === replacement.entryId),
+    )
+  ) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "rewrite targets span multiple branches",
+      appendedEntries: [],
+    };
+  }
   if (branch.length === 0) {
     return {
       changed: false,
@@ -280,23 +349,7 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
-  const matchedIndices: number[] = [];
-  let bytesFreed = 0;
-
-  for (let index = 0; index < branch.length; index++) {
-    const entry = branch[index];
-    if (entry.type !== "message") {
-      continue;
-    }
-    const replacement = replacementsById.get(entry.id);
-    if (!replacement) {
-      continue;
-    }
-    const originalBytes = estimateMessageBytes(entry.message);
-    const replacementBytes = estimateMessageBytes(replacement);
-    matchedIndices.push(index);
-    bytesFreed += Math.max(0, originalBytes - replacementBytes);
-  }
+  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
 
   if (matchedIndices.length === 0) {
     return {
@@ -343,7 +396,7 @@ export function rewriteTranscriptEntriesInState(params: {
     params.state.branch(firstMatchedEntry.parentId);
   }
 
-  const appendedEntries: SessionBranchEntry[] = [];
+  const appendedEntries: TranscriptPersistedEntry[] = [];
   const rewrittenEntryIds = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
@@ -359,6 +412,15 @@ export function rewriteTranscriptEntriesInState(params: {
     rewrittenEntryIds.set(entry.id, newEntry.id);
     appendedEntries.push(newEntry);
   }
+  if (restoreOriginalNavigation) {
+    appendedEntries.push(
+      params.state.appendLeafControl({
+        targetId: originalLeafId,
+        appendParentId: originalAppendParentId,
+        ...(originalAppendMode ? { appendMode: originalAppendMode } : {}),
+      }),
+    );
+  }
 
   return {
     changed: true,
@@ -369,8 +431,70 @@ export function rewriteTranscriptEntriesInState(params: {
 }
 
 /**
- * Open a transcript file, rewrite message entries on the active branch, and
- * emit a transcript update when the active branch changed.
+ * Rewrites message entries for a runtime transcript without using the
+ * file-backed path as caller identity.
+ */
+export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  request: TranscriptRewriteRequest;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<TranscriptRewriteResult> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+  try {
+    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: target.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config),
+    });
+    const state = await readTranscriptFileState(target.sessionFile);
+    const result = rewriteTranscriptEntriesInState({
+      state,
+      replacements: params.request.replacements,
+      ...(params.request.allowedRewriteSuffixEntryIds
+        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
+        : {}),
+    });
+    if (result.changed) {
+      await persistRuntimeTranscriptStateMutation({
+        target,
+        state,
+        appendedEntries: result.appendedEntries,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: target.sessionFile,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        target: {
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+        },
+      });
+      log.info(
+        `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
+          `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
+          `bytesFreed=${result.bytesFreed} ` +
+          `sessionKey=${target.sessionKey}`,
+      );
+    }
+    return result;
+  } catch (err) {
+    const reason = formatErrorMessage(err);
+    log.warn(`[transcript-rewrite] failed: ${reason}`);
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason,
+    };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
+/**
+ * Rewrites a named transcript file artifact. Runtime callers should prefer
+ * rewriteTranscriptEntriesInRuntimeTranscript with agent/session scope.
  */
 export async function rewriteTranscriptEntriesInSessionFile(params: {
   sessionFile: string;
@@ -404,6 +528,15 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionId && params.sessionKey && params.agentId
+          ? {
+              target: {
+                agentId: params.agentId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+              },
+            }
+          : {}),
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

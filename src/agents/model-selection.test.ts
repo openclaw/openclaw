@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+// Exercises core model selection, aliases, thinking defaults, and visibility policy.
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -113,6 +114,11 @@ vi.mock("./model-selection-cli.js", () => ({
   isCliProvider: () => false,
 }));
 
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
+});
+
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
     defaults: {
@@ -175,6 +181,8 @@ const CLAUDE_CLI_OPUS_48_CATALOG = [
 ];
 
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  // Helper keeps thinking-default assertions focused on config differences
+  // while using the same catalog metadata shape as production selection.
   return resolveThinkingDefault({
     cfg,
     provider: "anthropic",
@@ -224,6 +232,7 @@ function createAgentFallbackConfig(params: {
   fallbacks?: string[];
   agentFallbacks?: string[];
 }) {
+  // Compact fixture for primary/fallback allowlist tests.
   return {
     agents: {
       defaults: {
@@ -878,6 +887,31 @@ describe("model-selection", () => {
       );
       expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
       expect(model?.reasoning).toBe(true);
+    });
+
+    it("carries configured model params into catalog entries for provider policy", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: "company-fable",
+                  name: "Company Fable",
+                  params: {
+                    canonicalModelId: "claude-fable-5",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "amazon-bedrock" && entry.id === "company-fable",
+      );
+      expect(model?.params).toEqual({ canonicalModelId: "claude-fable-5" });
     });
 
     it("does not infer reasoning from non-vLLM thinking compat", () => {

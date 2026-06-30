@@ -1,21 +1,11 @@
+// Config fixture writer commands for E2E scenarios.
 import path from "node:path";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 import { requireArg, writeJson } from "./common.mjs";
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 function writeConfig(kind) {
   const configPath = requireArg(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
-  const port = readPositiveIntEnv("PORT", 18789);
+  const port = readTcpPortEnv("PORT", 18789);
   const config =
     kind === "config-reload"
       ? {
@@ -46,7 +36,7 @@ function writeConfig(kind) {
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {
                 "docker-cdp": {
-                  cdpUrl: `http://127.0.0.1:${readPositiveIntEnv("CDP_PORT", 19222)}`,
+                  cdpUrl: `http://127.0.0.1:${readTcpPortEnv("CDP_PORT", 19222)}`,
                   color: "#FF4500",
                 },
               },

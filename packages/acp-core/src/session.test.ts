@@ -1,3 +1,4 @@
+// ACP Core tests cover session behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemorySessionStore } from "./session.js";
 
@@ -31,6 +32,19 @@ describe("acp session manager", () => {
     const cancelled = store.cancelActiveRun(session.sessionId);
     expect(cancelled).toBe(true);
     expect(store.getSessionByRunId("run-1")).toBeUndefined();
+  });
+
+  it("removes stale run lookup entries when rebinding an active run", () => {
+    const session = store.createSession({
+      sessionKey: "acp:rebind",
+      cwd: "/tmp",
+    });
+
+    store.setActiveRun(session.sessionId, "run-old", new AbortController());
+    store.setActiveRun(session.sessionId, "run-new", new AbortController());
+
+    expect(store.getSessionByRunId("run-old")).toBeUndefined();
+    expect(store.getSessionByRunId("run-new")?.sessionId).toBe(session.sessionId);
   });
 
   it("deletes sessions and aborts active runs on close", () => {

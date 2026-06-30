@@ -1,7 +1,12 @@
-import { spawn } from "node:child_process";
+// Prepares declaration and entry-shim artifacts that prove plugin package
+// boundary imports resolve through public package surfaces.
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -13,6 +18,7 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
 const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGHUP", 129],
@@ -238,6 +244,22 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
+const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
+
+/**
+ * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
+ */
+export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
+  const entries =
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
+  return [
+    ...entries.flatMap((entry) => [
+      `dist/plugin-sdk/${entry}.d.ts`,
+      `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+    ]),
+    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
+  ].toSorted((a, b) => a.localeCompare(b));
+}
 
 function isRelevantTypeInput(filePath) {
   const basename = path.basename(filePath);
@@ -247,6 +269,9 @@ function isRelevantTypeInput(filePath) {
   return TYPE_INPUT_EXTENSIONS.has(path.extname(filePath));
 }
 
+/**
+ * Parses the artifact preparation mode from CLI arguments.
+ */
 export function parseMode(argv = process.argv.slice(2)) {
   const modeArg = argv.find((arg) => arg.startsWith("--mode="));
   const mode = modeArg?.slice("--mode=".length) ?? "all";
@@ -256,13 +281,15 @@ export function parseMode(argv = process.argv.slice(2)) {
   return mode;
 }
 
+/**
+ * Reads the root shim timeout override for long package-boundary builds.
+ */
 export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
-  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
+  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
+  if (!raw) {
     return 300_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
+  return parsePositiveInt(raw, "OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS");
 }
 
 function collectNewestMtime(paths, params = {}) {
@@ -309,6 +336,9 @@ function collectOldestMtime(paths, params = {}) {
   return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
 }
 
+/**
+ * Compares input and output mtimes to skip fresh generated artifacts.
+ */
 export function isArtifactSetFresh(params) {
   const newestInputMtimeMs = collectNewestMtime(params.inputPaths, {
     rootDir: params.rootDir,
@@ -335,6 +365,9 @@ function writeStampFile(relativePath) {
   fs.writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
+/**
+ * Prefixes streamed child output line-by-line without breaking partial chunks.
+ */
 export function createPrefixedOutputWriter(label, target) {
   let buffered = "";
   const prefix = `[${label}] `;
@@ -368,13 +401,38 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function signalNodeStep(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalNodeStep(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // The child process group can already be gone by the time cleanup runs.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   child.kill(signal);
@@ -412,7 +470,19 @@ function installNodeStepParentSignalForwarders() {
   });
 }
 
+function resolveNodeStepTimerTimeoutMs(valueMs) {
+  const value = Number(valueMs);
+  if (!Number.isFinite(value)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+/**
+ * Runs one artifact step with timeout, abort propagation, and prefixed output.
+ */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
+  const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
   installNodeStepParentSignalForwarders();
@@ -427,9 +497,44 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
     let settled = false;
     let canceled = false;
     let killTimer;
+    let killDeadlineAt = 0;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-    const killNodeStep = (signal) => signalNodeStep(child, signal);
+    const useProcessGroup = process.platform !== "win32";
+    const killNodeStep = (signal) => signalNodeStep(child, signal, { useProcessGroup });
+    const processGroupAlive = () => {
+      if (!useProcessGroup || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return Boolean(error && error.code === "EPERM");
+      }
+    };
+    const waitForProcessGroupExit = async (waitMs) => {
+      const deadlineAt = Date.now() + waitMs;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, 25);
+        });
+      }
+      return !processGroupAlive();
+    };
+    const waitForCanceledStepTeardown = async () => {
+      const remainingGraceMs = Math.max(0, killDeadlineAt - Date.now());
+      if (remainingGraceMs > 0) {
+        await waitForProcessGroupExit(remainingGraceMs);
+      }
+      if (processGroupAlive()) {
+        killNodeStep("SIGKILL");
+        await waitForProcessGroupExit(100);
+      }
+    };
     ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
     const abortStep = () => {
       if (settled || canceled) {
@@ -437,6 +542,7 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       }
       canceled = true;
       killNodeStep("SIGTERM");
+      killDeadlineAt = Date.now() + NODE_STEP_ABORT_KILL_GRACE_MS;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         killNodeStep("SIGKILL");
@@ -459,8 +565,8 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      rejectPromise(new Error(`${label} timed out after ${resolvedTimeoutMs}ms`));
+    }, resolvedTimeoutMs);
     abortController?.signal.addEventListener("abort", abortStep, { once: true });
 
     child.stdout.setEncoding("utf8");
@@ -491,31 +597,36 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      settled = true;
-      stdoutWriter.flush();
-      stderrWriter.flush();
-      if (exitingAfterParentSignal) {
-        killNodeStep("SIGKILL");
+      void (async () => {
+        settled = true;
+        stdoutWriter.flush();
+        stderrWriter.flush();
+        if (exitingAfterParentSignal) {
+          killNodeStep("SIGKILL");
+          cleanup();
+          return;
+        }
+        if (canceled) {
+          await waitForCanceledStepTeardown();
+          cleanup();
+          rejectPromise(new Error(`${label} canceled after sibling failure`));
+          return;
+        }
         cleanup();
-        return;
-      }
-      if (canceled) {
-        killNodeStep("SIGKILL");
-        cleanup();
-        rejectPromise(new Error(`${label} canceled after sibling failure`));
-        return;
-      }
-      cleanup();
-      if (code === 0) {
-        resolvePromise();
-        return;
-      }
-      abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
+        if (code === 0) {
+          resolvePromise();
+          return;
+        }
+        abortSiblingSteps(abortController);
+        rejectPromise(new Error(`${label} failed with exit code ${code ?? 1}`));
+      })();
     });
   });
 }
 
+/**
+ * Runs independent artifact steps together and aborts siblings on first failure.
+ */
 export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
@@ -529,6 +640,9 @@ export async function runNodeStepsInParallel(steps) {
   }
 }
 
+/**
+ * Chooses serial or parallel artifact execution based on local heavy-check policy.
+ */
 export async function runNodeSteps(steps, env = process.env) {
   if (!isLocalCheckEnabled(env)) {
     await runNodeStepsInParallel(steps);
@@ -561,7 +675,10 @@ async function main(argv = process.argv.slice(2)) {
         "dist/plugin-sdk/.tsbuildinfo",
         "packages/plugin-sdk/dist/.tsbuildinfo",
       ],
-      outputPaths: ["dist/plugin-sdk/.boundary-entry-shims.stamp"],
+      outputPaths: [
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        ...resolveBoundaryEntryShimRequiredOutputs(),
+      ],
     });
     const qaChannelDtsFresh =
       isArtifactSetFresh({

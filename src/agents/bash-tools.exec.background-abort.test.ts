@@ -1,3 +1,8 @@
+/**
+ * Exec background abort tests.
+ * Ensures agent-turn aborts stop foreground execs but do not kill already
+ * backgrounded sessions.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { killProcessTree } from "../process/kill-tree.js";
 
@@ -58,7 +63,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };

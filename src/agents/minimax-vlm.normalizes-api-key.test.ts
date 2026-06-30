@@ -1,3 +1,5 @@
+// Covers MiniMax VLM auth/header normalization and provider-specific routing.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
@@ -21,6 +23,8 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   async function runNormalizationCase(apiKey: string) {
+    // Headers must be Latin-1 and line-break free; normalize user/API-key
+    // input before constructing the Authorization header.
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
       expect(auth).toBe("Bearer minimax-test-key");
@@ -154,7 +158,57 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
   });
 
+  it("uses the default request timeout for non-positive caller timeouts", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchSpy = vi.fn(async () => {
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+        timeoutMs: 0,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+  });
+
+  it("clamps oversized caller request timeouts before creating the abort signal", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchSpy = vi.fn(async () => {
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("bounds large provider error response bodies", async () => {
+    // Provider error bodies can be large. Read enough for diagnostics, then
+    // cancel the stream so failures stay bounded.
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {

@@ -1,5 +1,7 @@
+// Microsoft Foundry setup module handles plugin onboarding behavior.
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
@@ -22,10 +24,16 @@ import {
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
+  requiresFoundryEntraIdClaudeAuth,
+  requiresFoundryMandatoryAdaptiveClaudeThinking,
+  ANTHROPIC_MESSAGES_API,
   DEFAULT_API,
   DEFAULT_GPT5_API,
+  FOUNDRY_ANTHROPIC_SCOPE,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
+
+const FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 export { listSubscriptions } from "./cli.js";
 
@@ -165,23 +173,24 @@ export async function selectFoundryDeployment(
   ctx: ProviderAuthContext,
   resource: FoundryResourceOption,
   deployments: AzDeploymentSummary[],
-): Promise<AzDeploymentSummary> {
-  if (deployments.length === 0) {
+): Promise<{ selected: AzDeploymentSummary; supported: AzDeploymentSummary[] }> {
+  const supported = deployments;
+  if (supported.length === 0) {
     throw new Error(
       [
         `No model deployments were found in ${resource.accountName}.`,
-        "Deploy a model in Azure AI Foundry or Azure OpenAI, then rerun onboard.",
+        "Deploy a model in Microsoft Foundry or Azure OpenAI, then rerun onboard.",
       ].join("\n"),
     );
   }
-  if (deployments.length === 1) {
-    const only = deployments[0];
+  if (supported.length === 1) {
+    const only = supported[0];
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
-    return only;
+    return { selected: only, supported };
   }
   const selectedDeploymentName = await ctx.prompter.select({
     message: "Select model deployment",
-    options: deployments.map((deployment) => ({
+    options: supported.map((deployment) => ({
       value: deployment.name,
       label: deployment.name,
       hint: [deployment.modelName, deployment.modelVersion, deployment.sku]
@@ -189,9 +198,9 @@ export async function selectFoundryDeployment(
         .join(" | "),
     })),
   });
-  return (
-    deployments.find((deployment) => deployment.name === selectedDeploymentName) ?? deployments[0]
-  );
+  const selected =
+    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
+  return { selected, supported };
 }
 
 async function promptFoundryApi(
@@ -201,6 +210,11 @@ async function promptFoundryApi(
   return await ctx.prompter.select({
     message: "Select request API",
     options: [
+      {
+        value: ANTHROPIC_MESSAGES_API,
+        label: "Anthropic Messages API",
+        hint: "Use for Claude deployments through Microsoft Foundry /anthropic",
+      },
       {
         value: DEFAULT_GPT5_API,
         label: "Responses API",
@@ -216,18 +230,34 @@ async function promptFoundryApi(
   });
 }
 
-type ManualFoundryModelFamilyChoice = "reasoning-family" | "other-chat";
+type ManualFoundryModelFamilyChoice = "claude" | "reasoning-family" | "mai-image" | "other-chat";
+type ManualFoundryMaiImageModel =
+  | "MAI-Image-2.5-Flash"
+  | "MAI-Image-2.5"
+  | "MAI-Image-2e"
+  | "MAI-Image-2";
 
 async function promptFoundryModelFamily(
   ctx: ProviderAuthContext,
+  initialValue: ManualFoundryModelFamilyChoice,
 ): Promise<ManualFoundryModelFamilyChoice> {
   return await ctx.prompter.select({
     message: "Model family",
     options: [
       {
+        value: "claude",
+        label: "Claude",
+        hint: "Use for Anthropic Claude deployments",
+      },
+      {
         value: "reasoning-family",
         label: "GPT-5 series / o-series / Codex",
         hint: "Use for Azure OpenAI reasoning and Codex deployments",
+      },
+      {
+        value: "mai-image",
+        label: "MAI image model",
+        hint: "Use for Microsoft MAI image deployments",
       },
       {
         value: "other-chat",
@@ -235,8 +265,65 @@ async function promptFoundryModelFamily(
         hint: "Use for other chat/completions style Foundry models",
       },
     ],
-    initialValue: "reasoning-family",
+    initialValue,
   });
+}
+
+async function promptFoundryMaiImageModel(
+  ctx: ProviderAuthContext,
+): Promise<ManualFoundryMaiImageModel> {
+  return await ctx.prompter.select({
+    message: "MAI image base model",
+    options: [
+      {
+        value: "MAI-Image-2.5-Flash",
+        label: "MAI-Image-2.5-Flash",
+        hint: "Latest fast MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2.5",
+        label: "MAI-Image-2.5",
+        hint: "Latest MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2e",
+        label: "MAI-Image-2e",
+        hint: "Efficient MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2",
+        label: "MAI-Image-2",
+        hint: "MAI image deployment",
+      },
+    ],
+    initialValue: "MAI-Image-2.5-Flash",
+  });
+}
+
+async function promptFoundryClaudeModel(
+  ctx: ProviderAuthContext,
+  options?: { allowEntraOnlyModels?: boolean },
+): Promise<string> {
+  return (
+    await ctx.prompter.text({
+      message: "Claude base model",
+      initialValue: "claude-fable-5",
+      placeholder: "claude-fable-5",
+      validate: (v) => {
+        const val = normalizeStringifiedOptionalString(v) ?? "";
+        if (!val) {
+          return "Claude base model is required";
+        }
+        if (!val.toLowerCase().startsWith("claude-")) {
+          return "Use a Claude model name such as claude-fable-5";
+        }
+        if (options?.allowEntraOnlyModels === false && requiresFoundryEntraIdClaudeAuth(val)) {
+          return "Claude Mythos deployments require Microsoft Entra ID auth; choose Entra ID auth or use a Claude model that supports API-key auth.";
+        }
+        return undefined;
+      },
+    })
+  ).trim();
 }
 
 async function promptEndpointAndModelBase(
@@ -244,12 +331,14 @@ async function promptEndpointAndModelBase(
   options?: {
     endpointInitialValue?: string;
     modelInitialValue?: string;
+    modelFamilyInitialValue?: ManualFoundryModelFamilyChoice;
+    allowEntraOnlyClaudeModels?: boolean;
   },
 ): Promise<FoundrySelection> {
   const endpoint = (
     await ctx.prompter.text({
       message: "Microsoft Foundry endpoint URL",
-      placeholder: "https://xxx.openai.azure.com or https://xxx.services.ai.azure.com",
+      placeholder: "https://xxx.services.ai.azure.com or https://xxx.openai.azure.com",
       ...(options?.endpointInitialValue ? { initialValue: options.endpointInitialValue } : {}),
       validate: (v) => {
         const val = normalizeStringifiedOptionalString(v) ?? "";
@@ -264,7 +353,7 @@ async function promptEndpointAndModelBase(
     await ctx.prompter.text({
       message: "Default model/deployment name",
       ...(options?.modelInitialValue ? { initialValue: options.modelInitialValue } : {}),
-      placeholder: "gpt-4o",
+      placeholder: "claude-fable-5",
       validate: (v) => {
         const val = normalizeStringifiedOptionalString(v) ?? "";
         if (!val) {
@@ -274,7 +363,28 @@ async function promptEndpointAndModelBase(
       },
     })
   ).trim();
-  const familyChoice = await promptFoundryModelFamily(ctx);
+  const familyChoice = await promptFoundryModelFamily(
+    ctx,
+    options?.modelFamilyInitialValue ?? "claude",
+  );
+  if (familyChoice === "mai-image") {
+    return {
+      endpoint,
+      modelId,
+      modelNameHint: await promptFoundryMaiImageModel(ctx),
+      api: DEFAULT_API,
+    };
+  }
+  if (familyChoice === "claude") {
+    return {
+      endpoint,
+      modelId,
+      modelNameHint: await promptFoundryClaudeModel(ctx, {
+        allowEntraOnlyModels: options?.allowEntraOnlyClaudeModels ?? true,
+      }),
+      api: ANTHROPIC_MESSAGES_API,
+    };
+  }
   const resolvedModelName =
     familyChoice === "reasoning-family"
       ? usesFoundryResponsesByDefault(modelId) || requiresFoundryMaxCompletionTokens(modelId)
@@ -305,6 +415,8 @@ export async function promptApiKeyEndpointAndModel(
   return promptEndpointAndModelBase(ctx, {
     endpointInitialValue: process.env.AZURE_OPENAI_ENDPOINT,
     modelInitialValue: "gpt-4o",
+    modelFamilyInitialValue: "other-chat",
+    allowEntraOnlyClaudeModels: false,
   });
 }
 
@@ -327,6 +439,19 @@ export function buildFoundryConnectionTest(params: {
         model: params.modelId,
         input: "hi",
         max_output_tokens: 16,
+      },
+    };
+  }
+  if (params.api === ANTHROPIC_MESSAGES_API) {
+    return {
+      url: `${baseUrl}/v1/messages`,
+      body: {
+        model: params.modelId,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 1,
+        ...(requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
+          ? { thinking: { type: "adaptive" } }
+          : {}),
       },
     };
   }
@@ -458,6 +583,7 @@ export async function testFoundryConnection(params: {
 }): Promise<void> {
   try {
     const { accessToken } = getAccessTokenResult({
+      scope: params.api === ANTHROPIC_MESSAGES_API ? FOUNDRY_ANTHROPIC_SCOPE : undefined,
       subscriptionId: params.subscriptionId,
       tenantId: params.tenantId,
     });
@@ -474,6 +600,7 @@ export async function testFoundryConnection(params: {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
+          ...(params.api === ANTHROPIC_MESSAGES_API ? { "anthropic-version": "2023-06-01" } : {}),
         },
         body: JSON.stringify(testRequest.body),
       },
@@ -481,13 +608,19 @@ export async function testFoundryConnection(params: {
     });
     try {
       if (res.status === 400) {
-        const body = await res.text().catch(() => "");
+        const body = await readResponseTextLimited(
+          res,
+          FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
+        ).catch(() => "");
         await params.ctx.prompter.note(
           `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${body.slice(0, 200)}`,
           "Connection Test",
         );
       } else if (!res.ok) {
-        const body = await res.text().catch(() => "");
+        const body = await readResponseTextLimited(
+          res,
+          FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
+        ).catch(() => "");
         await params.ctx.prompter.note(
           `Warning: test request returned ${res.status}. ${body.slice(0, 200)}\nProceeding anyway - you can fix the endpoint later.`,
           "Connection Test",

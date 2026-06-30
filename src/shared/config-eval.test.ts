@@ -1,3 +1,4 @@
+// Config eval tests cover dynamic config loading and evaluation guards.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,6 +59,19 @@ describe("config-eval helpers", () => {
     expect(resolveConfigPath("not-an-object", "browser.enabled")).toBeUndefined();
   });
 
+  it("blocks prototype keys while resolving config paths", () => {
+    const config = {
+      safe: {
+        enabled: true,
+      },
+    };
+
+    expect(resolveConfigPath(config, "safe.enabled")).toBe(true);
+    expect(resolveConfigPath(config, "__proto__")).toBeUndefined();
+    expect(resolveConfigPath(config, "constructor.name")).toBeUndefined();
+    expect(resolveConfigPath(config, "prototype.polluted")).toBeUndefined();
+  });
+
   it("uses defaults only when config paths are unresolved", () => {
     const config = {
       browser: {
@@ -72,6 +86,12 @@ describe("config-eval helpers", () => {
       isConfigPathTruthyWithDefaults(config, "browser.missing", { "browser.missing": true }),
     ).toBe(true);
     expect(isConfigPathTruthyWithDefaults(config, "browser.other", {})).toBe(false);
+  });
+
+  it("does not use inherited defaults for blocked config paths", () => {
+    expect(isConfigPathTruthyWithDefaults({}, "constructor", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "__proto__.enabled", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "prototype.enabled", {})).toBe(false);
   });
 
   it("returns the active runtime platform", () => {

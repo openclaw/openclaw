@@ -1,3 +1,5 @@
+// Buffers streaming reply blocks before coalesced final delivery.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -8,6 +10,7 @@ import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
+/** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
@@ -16,15 +19,18 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
 };
 
-export type BlockReplyBuffer = {
+/** Optional buffering strategy used before payloads enter block delivery. */
+type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
   onEnqueue?: (payload: ReplyPayload) => void;
   finalize?: (payload: ReplyPayload) => ReplyPayload;
 };
 
+/** Buffers audio payloads so final delivery can preserve voice presentation. */
 export function createAudioAsVoiceBuffer(params: {
   isAudioPayload: (payload: ReplyPayload) => boolean;
 }): BlockReplyBuffer {
@@ -40,6 +46,7 @@ export function createAudioAsVoiceBuffer(params: {
   };
 }
 
+/** Creates a stable duplicate key for a complete outbound payload. */
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
@@ -53,6 +60,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   });
 }
 
+/** Creates a duplicate key that ignores reply target for final suppression. */
 export function createBlockReplyContentKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   // Content-only key used for final-payload suppression after block streaming.
@@ -88,6 +96,11 @@ const withTimeout = async <T>(
   }
 };
 
+function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
+  return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
+}
+
+/** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
@@ -97,7 +110,8 @@ export function createBlockReplyPipeline(params: {
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, coalescing, buffer } = params;
+  const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
   const sentMediaUrls = new Set<string>();
@@ -106,7 +120,7 @@ export function createBlockReplyPipeline(params: {
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
-  const streamedTextFragments: string[] = [];
+  const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
   let bufferedAssistantMessageIndex: number | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
@@ -138,6 +152,7 @@ export function createBlockReplyPipeline(params: {
     }
     pendingKeys.add(payloadKey);
 
+    // Preserve outbound order by chaining sends; abort after timeout to avoid stale blocks.
     const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
     const abortController = new AbortController();
     sendChain = sendChain
@@ -171,7 +186,10 @@ export function createBlockReplyPipeline(params: {
           sentMediaUrls.add(mediaUrl);
         }
         if (!isStatusNotice && reply.trimmedText) {
-          streamedTextFragments.push(reply.trimmedText);
+          const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+          const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
+          fragments.push(reply.trimmedText);
+          streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
         }
         if (!isStatusNotice) {
           didStream = true;
@@ -307,12 +325,13 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);
       if (sentContentKeys.has(payloadKey)) {
         return true;
       }
-      if (!didStream || streamedTextFragments.length === 0) {
+      if (!didStream) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
@@ -320,7 +339,13 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const normalize = (text: string) => text.replace(/\s+/g, "");
-      return normalize(streamedTextFragments.join("")) === normalize(reply.trimmedText);
+      const target = normalize(reply.trimmedText);
+      for (const fragments of streamedTextFragmentsByMessage.values()) {
+        if (fragments.length > 0 && normalize(fragments.join("")) === target) {
+          return true;
+        }
+      }
+      return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
   };

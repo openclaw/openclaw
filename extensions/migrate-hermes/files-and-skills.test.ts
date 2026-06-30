@@ -1,5 +1,8 @@
+// Migrate Hermes tests cover files and skills plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
@@ -139,14 +142,32 @@ describe("Hermes migration file and skill items", () => {
     );
     const copiedAgentsItem = result.items.find((item) => item.id === "workspace:AGENTS.md");
     expect(String(copiedAgentsItem?.details?.backupPath)).toContain("AGENTS.md");
-    const authStore = JSON.parse(
-      await fs.readFile(
-        path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-        "utf8",
-      ),
-    ) as { profiles?: Record<string, { key?: string; provider?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]?.provider).toBe("openai");
-    expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-hermes");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    try {
+      const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
+        expect.objectContaining({
+          type: "api_key",
+          provider: "openai",
+          key: "sk-hermes",
+        }),
+      );
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+    }
   });
 
   it("archives unsupported Hermes state without copying raw auth credentials", async () => {
@@ -181,6 +202,75 @@ describe("Hermes migration file and skill items", () => {
     );
     await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
     await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
+  });
+
+  it("archives committed Hermes SQLite WAL state", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    const stateDbPath = path.join(source, "state.db");
+    await fs.mkdir(source, { recursive: true });
+
+    const sourceDb = new DatabaseSync(stateDbPath);
+    try {
+      sourceDb.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE marker(value TEXT NOT NULL);
+        PRAGMA wal_checkpoint(TRUNCATE);
+      `);
+      sourceDb.prepare("INSERT INTO marker(value) VALUES (?)").run("committed-only-in-wal");
+      expect((await fs.stat(`${stateDbPath}-wal`)).size).toBeGreaterThan(0);
+
+      const provider = buildHermesMigrationProvider();
+      const result = await provider.apply(
+        makeContext({ source, stateDir, workspaceDir, reportDir }),
+      );
+
+      const archivedState = itemById(result.items, "archive:state.db");
+      const archivedStatePath = path.join(reportDir, "archive", "state.db");
+      expect(archivedState?.status).toBe("migrated");
+      expect(archivedState?.source).toBe(stateDbPath);
+      expect(archivedState?.target).toBe(archivedStatePath);
+
+      const archivedDb = new DatabaseSync(archivedStatePath, { readOnly: true });
+      try {
+        expect(archivedDb.prepare("SELECT value FROM marker").all()).toEqual([
+          { value: "committed-only-in-wal" },
+        ]);
+        expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+      } finally {
+        archivedDb.close();
+      }
+    } finally {
+      sourceDb.close();
+    }
+  });
+
+  it("preserves raw Hermes state when SQLite snapshotting fails", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(root, "report");
+    const stateDbPath = path.join(source, "state.db");
+    const archivedStatePath = path.join(reportDir, "archive", "state.db");
+    await writeFile(stateDbPath, "legacy non-SQLite Hermes state\n");
+
+    const provider = buildHermesMigrationProvider();
+    const result = await provider.apply(makeContext({ source, stateDir, workspaceDir, reportDir }));
+
+    const archivedState = itemById(result.items, "archive:state.db");
+    expect(archivedState?.status).toBe("error");
+    expect(archivedState?.target).toBe(archivedStatePath);
+    expect(archivedState?.reason).toContain(
+      "SQLite snapshot failed; raw state.db preserved for manual review",
+    );
+    expect(await fs.readFile(archivedStatePath, "utf8")).toBe("legacy non-SQLite Hermes state\n");
+    expect(result.summary.errors).toBe(1);
   });
 
   it("reports legacy Hermes OpenAI auth.json OAuth state as manual reauth work", async () => {

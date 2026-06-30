@@ -1,3 +1,4 @@
+// Discord tests cover message handler.process.abort skip plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatDiscordReplySkip } from "./message-handler.process.js";
 
@@ -15,16 +16,16 @@ describe("formatDiscordReplySkip", () => {
     );
   });
 
-  it("renders the reasoning-payload reason with the same shape", () => {
+  it("renders the internal-only-payload reason with the same shape", () => {
     expect(
       formatDiscordReplySkip({
         kind: "block",
-        reason: "reasoning payload",
+        reason: "internal-only payload",
         target: "channel:456",
         sessionKey: "agent:friday:discord:channel:456",
       }),
     ).toBe(
-      "discord block reply skipped (reasoning payload): target=channel:456 session=agent:friday:discord:channel:456",
+      "discord block reply skipped (internal-only payload): target=channel:456 session=agent:friday:discord:channel:456",
     );
   });
 
@@ -42,11 +43,11 @@ describe("formatDiscordReplySkip", () => {
     expect(
       formatDiscordReplySkip({
         kind: "tool",
-        reason: "reasoning payload",
+        reason: "internal-only payload",
         target: "channel:c1",
         sessionKey: "",
       }),
-    ).toBe("discord tool reply skipped (reasoning payload): target=channel:c1");
+    ).toBe("discord tool reply skipped (internal-only payload): target=channel:c1");
   });
 
   it("preserves the kind discriminant in the message prefix", () => {

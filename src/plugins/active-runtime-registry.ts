@@ -1,7 +1,9 @@
+// Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  collectLivePluginRegistries,
   getActivePluginChannelRegistry,
   getActivePluginHttpRouteRegistry,
   getActivePluginRegistry,
@@ -12,6 +14,24 @@ export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-ro
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
+}
+
+// Plugin ids confirmed loaded across every live runtime registry surface
+// (active plus any pinned http-route/channel/session-extension registry), via
+// the canonical collectLivePluginRegistries() set. A plugin can stay live via a
+// pinned surface that diverged from the active registry, so reading "loaded"
+// from the active registry alone would mislabel it. No-op when the surfaces are
+// synced to the active registry (the common case).
+export function listLoadedRuntimePluginIdsAcrossSurfaces(): string[] {
+  const loaded: string[] = [];
+  for (const registry of collectLivePluginRegistries()) {
+    for (const plugin of registry.plugins ?? []) {
+      if (plugin.status === "loaded") {
+        loaded.push(plugin.id);
+      }
+    }
+  }
+  return normalizeSortedUniqueStringEntries(loaded);
 }
 
 function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {

@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager status state behavior.
 import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -19,9 +20,9 @@ type StatusAggregateDb = {
 };
 
 export const MEMORY_STATUS_AGGREGATE_SQL =
-  `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1__FILTER__ GROUP BY source\n` +
+  `SELECT 'files' AS kind, source, COUNT(*) as c FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
   `UNION ALL\n` +
-  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1__FILTER__ GROUP BY source`;
+  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;
 
 export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;

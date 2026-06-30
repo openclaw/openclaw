@@ -1,3 +1,8 @@
+/**
+ * Guarded fetch wrappers for web tools.
+ *
+ * Applies SSRF policy, timeout normalization, and trusted/self-hosted endpoint modes.
+ */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
@@ -45,6 +50,7 @@ function resolveTimeoutMs(params: {
   return undefined;
 }
 
+/** Runs a guarded fetch with strict or trusted-env-proxy web tool policy. */
 export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
@@ -72,6 +78,7 @@ async function withWebToolsNetworkGuard<T>(
   }
 }
 
+/** Runs a fetch for trusted endpoints, allowing env proxy with pinned-host policy. */
 export async function withTrustedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
@@ -87,6 +94,7 @@ export async function withTrustedWebToolsEndpoint<T>(
   );
 }
 
+/** Runs a fetch for configured self-hosted endpoints with private-network access allowed. */
 export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
@@ -101,6 +109,7 @@ export async function withSelfHostedWebToolsEndpoint<T>(
   );
 }
 
+/** Runs a fetch under strict SSRF protection without env proxy trust. */
 export async function withStrictWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,

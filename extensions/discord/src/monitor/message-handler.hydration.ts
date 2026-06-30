@@ -1,4 +1,9 @@
-import type { APIMessage, APIUser } from "discord-api-types/v10";
+import {
+  MessageReferenceType,
+  MessageType,
+  type APIMessage,
+  type APIUser,
+} from "discord-api-types/v10";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getChannelMessage, Message as DiscordMessage, type Message } from "../internal/discord.js";
@@ -146,6 +151,9 @@ function copyRuntimeMessageFields(source: Message, target: Message): void {
 }
 
 function shouldHydrateDiscordMessage(params: { message: Message }) {
+  if (hasMissingReferencedMessagePayload(params.message)) {
+    return true;
+  }
   let currentText;
   try {
     currentText = resolveDiscordMessageText(params.message, {
@@ -165,6 +173,20 @@ function shouldHydrateDiscordMessage(params: { message: Message }) {
     return false;
   }
   return /<@!?\d+>|<@&\d+>|@everyone|@here/u.test(currentText);
+}
+
+function hasMissingReferencedMessagePayload(message: Message): boolean {
+  const reference = message.messageReference;
+  if (!reference?.message_id) {
+    return false;
+  }
+  if (reference.type != null && reference.type !== MessageReferenceType.Default) {
+    return false;
+  }
+  if (message.type != null && message.type !== MessageType.Reply) {
+    return false;
+  }
+  return !Object.hasOwn(readMessageRawData(message), "referenced_message");
 }
 
 export async function hydrateDiscordMessageIfNeeded(params: {

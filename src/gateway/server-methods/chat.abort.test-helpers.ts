@@ -1,5 +1,9 @@
+/**
+ * Shared helpers for chat abort gateway method tests.
+ */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ChatAbortMarker } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 export function createActiveRun(
@@ -34,7 +38,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   dedupe: Map<string, unknown>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, unknown>;
-  chatAbortedRuns: Map<string, number>;
+  chatAbortedRuns: Map<string, ChatAbortMarker>;
   clearChatRunState: (runId: string) => void;
   removeChatRun: (
     ...args: unknown[]
@@ -59,7 +63,7 @@ export function createChatAbortContext(
     dedupe: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map<string, number>(),
+    chatAbortedRuns: new Map<string, ChatAbortMarker>(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),

@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
@@ -14,11 +15,12 @@ import { isRecord, readString } from "./comment-shared.js";
 import {
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
-  warmupDedupFromDisk,
+  warmupDedupFromPluginState,
 } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
@@ -142,6 +144,7 @@ export async function resolveReactionSyntheticEvent(
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      typing_target_message_id: messageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
@@ -168,6 +171,12 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  /**
+   * Optional status sink. When provided, the message handler will publish
+   * `lastEventAt` on every inbound message for message recency. Transport
+   * liveness is published by the transport layer.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
@@ -235,7 +244,9 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   );
   const tag = readString(action.tag);
   const actionValue = action.value;
-  const openMessageId = firstString(value.open_message_id, context.open_message_id);
+  // Prefer context.open_message_id (original card message) over value.open_message_id
+  // which may be a temporary card-action-c-* ID that is not a valid Feishu message ID.
+  const openMessageId = firstString(context.open_message_id, value.open_message_id);
   const contextOpenId = firstString(context.open_id, openId);
   const contextUserId = firstString(context.user_id, userId);
   const chatId = firstString(context.chat_id, context.open_chat_id);
@@ -300,9 +311,13 @@ function registerEventHandlers(
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
+      ...(context.statusSink ? { statusSink: context.statusSink } : {}),
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
+    },
+    "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
+      // Ignore p2p chat entry notifications — no action needed
     },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
@@ -442,6 +457,12 @@ export type MonitorSingleAccountParams = {
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
   fireAndForget?: boolean;
+  /**
+   * Optional status sink for Feishu channel health. When provided, it is
+   * propagated to the event dispatcher for message recency and the transport
+   * layer for lifecycle status.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -469,9 +490,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
   }
 
-  const warmupCount = await warmupDedupFromDisk(accountId, log);
+  const warmupCount = await warmupDedupFromPluginState(accountId, log);
   if (warmupCount > 0) {
-    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
+    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from plugin state`);
   }
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
@@ -488,12 +509,27 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
     if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+      return await monitorWebhook({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher,
+        ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+      });
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return await monitorWebSocket({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+    });
   } finally {
     threadBindingManager?.stop();
   }

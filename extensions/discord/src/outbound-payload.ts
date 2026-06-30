@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound payload behavior.
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
@@ -83,13 +84,15 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
+    // audioAsVoice emits one logical Discord reply across voice/text/media sends.
+    // Capture before helper calls consume implicit single-use reply targets.
+    const voiceReplyTo = sendContext.resolveReplyTo();
     let lastResult = await sendContext.withRetry(
       async () =>
-        await sendContext.sendVoice(
-          sendContext.target,
-          mediaUrls[0],
-          resolveDiscordDeliveryOptions(ctx, sendContext),
-        ),
+        await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+          ...resolveDiscordDeliveryOptions(ctx, sendContext),
+          replyTo: voiceReplyTo,
+        }),
     );
     if (payload.text?.trim()) {
       lastResult = await sendContext.withRetry(
@@ -97,6 +100,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            replyTo: voiceReplyTo,
           }),
       );
     }
@@ -106,6 +110,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, "", {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+            replyTo: voiceReplyTo,
           }),
       );
     }

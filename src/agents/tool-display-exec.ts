@@ -1,4 +1,11 @@
+/**
+ * Exec tool display summaries.
+ *
+ * Turns common shell commands into short redacted labels for tool timelines and transcripts.
+ */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import {
   binaryName,
   firstPositional,
@@ -12,7 +19,6 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
-import { asRecord } from "./tool-display-record.js";
 
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {
@@ -437,7 +443,27 @@ function compactRawCommand(raw: string, maxLength = 120): string {
     return oneLine;
   }
   const half = Math.floor((maxLength - 1) / 2);
-  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
+  return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
+}
+
+function wrapRawExecCode(value: string): string {
+  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
+  }
+  return longest;
 }
 
 export type ToolDetailMode = "explain" | "raw";
@@ -489,7 +515,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · \`${compact}\``;
+    return `${displaySummary}${nodeFragment} · ${wrapRawExecCode(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

@@ -1,3 +1,4 @@
+// Runtime Postbuild tests cover runtime postbuild script behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -496,6 +497,40 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "text-transforms.runtime-NewHash.js"),
+      "export const n = true;\nexport const t = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "provider-runtime-NewHash.js"),
+      [
+        'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.js";',
+        "export { applyPluginTextReplacements };",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "provider-runtime-NewHash.js"), "utf8")).toBe(
+      [
+        'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.js";',
+        "export { applyPluginTextReplacements };",
+        "",
+      ].join("\n"),
+    );
+    expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
+      'export * from "./text-transforms.runtime-NewHash.js";\n',
+    );
+  });
+
   it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -725,6 +760,26 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "install.runtime-CNHwKOIb.js"), "utf8")).toBe(
       'export * from "./install.runtime-NewPluginHash.js";\n',
     );
+  });
+
+  it("writes compatibility aliases for previous text-transform runtime chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "text-transforms.runtime.js"),
+      'export * from "./text-transforms.runtime-NewHash.js";\n',
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(
+      await fs.readFile(path.join(distDir, "text-transforms.runtime-D9-SpAmI.js"), "utf8"),
+    ).toBe('export * from "./text-transforms.runtime.js";\n');
+    expect(
+      await fs.readFile(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js"), "utf8"),
+    ).toBe('export * from "./text-transforms.runtime.js";\n');
   });
 
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {

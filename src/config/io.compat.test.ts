@@ -1,21 +1,13 @@
+// Verifies config IO compatibility loading and migration behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
-  try {
-    await run(home);
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
 
 async function writeConfig(
   home: string,
@@ -32,7 +24,7 @@ async function writeConfig(
 
 function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
   return createConfigIO({
-    env,
+    env: { HOME: home, ...env },
     homedir: () => home,
   });
 }
@@ -122,7 +114,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
@@ -157,7 +149,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
@@ -195,7 +187,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: { OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
+        env: { HOME: home, OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });

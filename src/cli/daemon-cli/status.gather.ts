@@ -1,3 +1,4 @@
+// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
@@ -13,13 +14,20 @@ import type {
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
+import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
+import {
+  ALL_GATEWAY_SECRET_INPUT_PATHS,
+  readGatewaySecretInputValue,
+} from "../../gateway/secret-input-paths.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
@@ -164,6 +172,7 @@ function hasOwnKey(value: unknown, key: string): boolean {
 }
 
 function needsFullStatusConfigRead(raw: string, parsed: unknown): boolean {
+  // Fast reads skip config expansion; includes/env placeholders require full config IO.
   return raw.includes("$include") || raw.includes("${") || hasOwnKey(parsed, "env");
 }
 
@@ -499,12 +508,44 @@ async function inspectEstablishedGatewayClients(params: {
   };
 }
 
+function hasActiveGatewayExecProbeCredential(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  explicitAuth: { token?: string; password?: string };
+  mode: "local" | "remote";
+}): boolean {
+  const cfg = resolveGatewayProbeCredentialConfig({
+    cfg: params.cfg,
+    mode: params.mode,
+  });
+  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
+    if (
+      !gatewaySecretInputPathCanWin({
+        config: cfg,
+        env: params.env,
+        explicitAuth: params.explicitAuth,
+        modeOverride: params.mode,
+        path,
+        remoteTokenFallback: "remote-only",
+      })
+    ) {
+      return false;
+    }
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(cfg, path),
+      defaults: cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+}
+
 export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
     probe: boolean;
     requireRpc?: boolean;
     deep?: boolean;
+    allowExecSecretRefs?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
@@ -586,22 +627,40 @@ export async function gatherDaemonStatus(
     : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
+  let allowRpcConfigCredentials = true;
+  let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-    const probeAuthResolution = await loadGatewayProbeAuthModule().then(
-      ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
-        resolveGatewayProbeAuthSafeWithSecretInputs({
-          cfg: daemonCfg,
-          mode: probeMode,
-          env: mergedDaemonEnv as NodeJS.ProcessEnv,
-          explicitAuth: {
-            token: opts.rpc.token,
-            password: opts.rpc.password,
-          },
-        }),
-    );
-    daemonProbeAuth = probeAuthResolution.auth;
-    rpcAuthWarning = probeAuthResolution.warning;
+    const explicitAuth = {
+      token: opts.rpc.token,
+      password: opts.rpc.password,
+    };
+    const canResolveProbeAuth =
+      opts.allowExecSecretRefs !== false ||
+      !hasActiveGatewayExecProbeCredential({
+        cfg: daemonCfg,
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+        explicitAuth,
+        mode: probeMode,
+      });
+    if (canResolveProbeAuth) {
+      const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+        ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
+          resolveGatewayProbeAuthSafeWithSecretInputs({
+            cfg: daemonCfg,
+            mode: probeMode,
+            env: mergedDaemonEnv as NodeJS.ProcessEnv,
+            explicitAuth,
+          }),
+      );
+      daemonProbeAuth = probeAuthResolution.auth;
+      rpcAuthWarning = probeAuthResolution.warning;
+    } else {
+      allowRpcConfigCredentials = false;
+      skippedProbeAuthForDisabledExecSecretRef = true;
+      rpcAuthWarning =
+        "Gateway probe auth skipped because gateway credentials use an exec SecretRef and exec SecretRefs are disabled for this status request.";
+    }
   }
 
   const rpc = opts.probe
@@ -619,11 +678,12 @@ export async function gatherDaemonStatus(
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
+          allowRpcConfigCredentials,
           configPath: daemonConfigSummary.path,
         }),
       )
     : undefined;
-  if (rpc?.ok) {
+  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
     rpcAuthWarning = undefined;
   }
   const health =

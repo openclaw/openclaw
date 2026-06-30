@@ -1,3 +1,4 @@
+// Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
@@ -325,6 +326,7 @@ export type PerformCatchupParams = {
   now?: number;
   fetch: CatchupFetchFn;
   dispatch: CatchupDispatchFn;
+  observeSkippedFromMe?: (row: IMessageCatchupRow) => Promise<void> | void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -461,6 +463,13 @@ export async function performIMessageCatchup(
       continue;
     }
     if (row.isFromMe) {
+      try {
+        await params.observeSkippedFromMe?.(row);
+      } catch (err) {
+        params.warn?.(
+          `imessage catchup: from-me observer failed for guid=${row.guid}: ${String(err)}`,
+        );
+      }
       summary.skippedFromMe += 1;
       highWatermarkMs = Math.max(highWatermarkMs, row.date);
       highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);

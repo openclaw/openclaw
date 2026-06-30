@@ -1,4 +1,6 @@
+// Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
@@ -16,6 +18,9 @@ import type {
 
 const options = workerData as TelegramIngressWorkerOptions;
 const pollLimit = 100;
+// getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
+// Telegram Bot API response will reach, guarding against misbehaving/hostile endpoints.
+const TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const retryInitialMs = 1000;
 const retryMaxMs = 30_000;
 let stopped = false;
@@ -48,6 +53,26 @@ function formatErrorMessage(err: unknown): string {
     return err.message || err.name;
   }
   return String(err);
+}
+
+function readTelegramErrorCode(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "error_code" in err) {
+    const code = (err as { error_code: unknown }).error_code;
+    if (typeof code === "number") {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function postPollError(err: unknown): void {
+  const errorCode = readTelegramErrorCode(err);
+  post({
+    type: "poll-error",
+    message: formatErrorMessage(err),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    finishedAt: Date.now(),
+  });
 }
 
 function resolveBackoff(attempt: number): number {
@@ -119,17 +144,27 @@ async function fetchJson(params: {
       body: JSON.stringify(params.body),
       signal: controller.signal,
     });
-    const json = (await response.json()) as {
+    const json = JSON.parse(
+      (await readResponseWithLimit(response, TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES)).toString(
+        "utf8",
+      ),
+    ) as {
       ok?: unknown;
+      error_code?: unknown;
       result?: unknown;
       description?: unknown;
     };
     if (!response.ok || json.ok !== true) {
-      throw new Error(
+      const message =
         typeof json.description === "string"
           ? json.description
-          : `Telegram getUpdates failed with HTTP ${response.status}`,
-      );
+          : `Telegram getUpdates failed with HTTP ${response.status}`;
+      // Preserve the Bot API error_code across the worker boundary so the
+      // parent session can distinguish getUpdates conflicts (409) from fatal
+      // errors (401) without parsing description strings.
+      throw typeof json.error_code === "number"
+        ? Object.assign(new Error(message), { error_code: json.error_code })
+        : new Error(message);
     }
     return json.result;
   } finally {
@@ -194,11 +229,7 @@ async function main(): Promise<void> {
           break;
         }
         failures += 1;
-        post({
-          type: "poll-error",
-          message: formatErrorMessage(err),
-          finishedAt: Date.now(),
-        });
+        postPollError(err);
         if (!isRecoverableTelegramNetworkError(err, { context: "polling" })) {
           throw err;
         }
@@ -215,7 +246,7 @@ main()
     parentPort?.close();
   })
   .catch((err: unknown) => {
-    post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
+    postPollError(err);
     parentPort?.close();
     process.exitCode = stopped ? 0 : 1;
   });

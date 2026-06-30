@@ -1,8 +1,15 @@
+// WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HealthSummary } from "../../../commands/health.types.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../../../infra/diagnostic-events.js";
+import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -71,6 +78,9 @@ import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
+} as const satisfies Record<string, unknown>;
+const NODE_PAIR_REMOVE_PARAMS = {
+  nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
 
 function createLogger() {
@@ -152,11 +162,28 @@ function createSetCloseCauseMock() {
   return vi.fn<SetCloseCause>();
 }
 
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 function attachGatewayHarness(options: {
   connId: string;
   connectNonce: string;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
   requestOrigin?: string;
+  requestHost?: string;
+  remoteAddr?: string;
+  localAddr?: string;
+  resolvedAuth?: ResolvedGatewayAuth;
   client?: unknown;
   close?: CloseGatewayConnection;
   isClosed?: () => boolean;
@@ -178,7 +205,10 @@ function attachGatewayHarness(options: {
   } as unknown as WebSocket;
   const send = vi.fn();
   let client: unknown = options.client ?? null;
-  const resolvedAuth: ResolvedGatewayAuth = {
+  const requestHost = options.requestHost ?? "127.0.0.1:19001";
+  const remoteAddr = options.remoteAddr ?? "127.0.0.1";
+  const localAddr = options.localAddr ?? "127.0.0.1";
+  const resolvedAuth: ResolvedGatewayAuth = options.resolvedAuth ?? {
     mode: "none",
     allowTailscale: false,
   };
@@ -186,15 +216,15 @@ function attachGatewayHarness(options: {
     socket,
     upgradeReq: {
       headers: {
-        host: "127.0.0.1:19001",
+        host: requestHost,
         ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
       },
-      socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
     connId: options.connId,
-    remoteAddr: "127.0.0.1",
-    localAddr: "127.0.0.1",
-    requestHost: "127.0.0.1:19001",
+    remoteAddr,
+    localAddr,
+    requestHost,
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
@@ -255,6 +285,7 @@ function attachGatewayHarness(options: {
 
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     vi.clearAllMocks();
   });
 
@@ -322,6 +353,48 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
     expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
       reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("waits for device-backed node removal before dispatching later queued requests", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({ connId: "conn-node-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("node.pair.remove");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-pair-removed";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-node-invalidating",
+      connectNonce: "nonce-node-invalidating",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-pair-removed",
       method: "status.summary",
     });
   });
@@ -395,30 +468,120 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       refreshHealthSnapshot,
       isClosed,
     });
+    const captured = captureSecurityEvents();
 
-    harness.sendConnect("connect-1", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "openclaw-control-ui",
-        version: "dev",
-        platform: "test",
-        mode: "ui",
-      },
-      role: "operator",
-      caps: [],
-    });
+    try {
+      harness.sendConnect("connect-1", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "openclaw-control-ui",
+          version: "dev",
+          platform: "test",
+          mode: "ui",
+        },
+        role: "operator",
+        caps: [],
+      });
 
-    await vi.waitFor(() => {
-      expect(harness.socketSend).toHaveBeenCalled();
-    });
+      await vi.waitFor(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+      });
+    } finally {
+      captured.stop();
+    }
     const hello = JSON.parse(harness.socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "gateway.auth.succeeded",
+      outcome: "success",
+      severity: "low",
+      actor: { kind: "operator", role: "operator" },
+      target: { kind: "gateway", name: "websocket" },
+      policy: { id: "gateway.websocket-auth", decision: "allow" },
+      control: { id: "gateway.ws.connect", family: "auth" },
+      attributes: {
+        auth_mode: "none",
+        auth_method: "none",
+        auth_provided: "none",
+        client_mode: "ui",
+        has_device_identity: false,
+        scope_count: 0,
+      },
+    });
 
     await vi.waitFor(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
+  });
+
+  it("emits a security event for rejected gateway auth", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-auth-failed",
+      connectNonce: "nonce-auth-failed",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      close,
+    });
+    const captured = captureSecurityEvents();
+
+    try {
+      harness.sendConnect("connect-auth-failed", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+        caps: [],
+        auth: { token: "wrong-token" },
+      });
+
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("unauthorized"));
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "gateway.auth.failed",
+      outcome: "denied",
+      severity: "medium",
+      reason: "token_mismatch",
+      actor: { kind: "operator", role: "operator" },
+      target: { kind: "gateway", name: "websocket" },
+      policy: {
+        id: "gateway.websocket-auth",
+        decision: "deny",
+        reason: "token_mismatch",
+      },
+      control: { id: "gateway.ws.connect", family: "auth" },
+      attributes: {
+        auth_mode: "token",
+        auth_method: "token",
+        auth_provided: "token",
+        client_mode: "backend",
+        has_device_identity: false,
+        scope_count: 0,
+        rate_limited: false,
+      },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
+    expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
@@ -490,6 +653,178 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       internal?: { approvalRuntime?: boolean };
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).toBe(true);
+  });
+
+  it("does not trust approval runtime tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-approval-runtime-token",
+      connectNonce: "nonce-remote-approval-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-approval-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+  });
+
+  it("marks local backend clients with a valid agent runtime identity token", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-agent-runtime-token",
+      connectNonce: "nonce-agent-runtime-token",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: {
+        agentRuntimeIdentity?: { agentId?: string; sessionKey?: string };
+      };
+    } | null;
+    expect(connectedClient?.internal?.agentRuntimeIdentity).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("rejects agent runtime identity tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-agent-runtime-token",
+      connectNonce: "nonce-remote-agent-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-remote-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(
+        1008,
+        "agent runtime identity token is only accepted from local backend gateway clients",
+      );
+    });
+    expect(harness.client).toBeNull();
+  });
+
+  it("rejects invalid local agent runtime identity tokens", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-invalid-agent-runtime-token",
+      connectNonce: "nonce-invalid-agent-runtime-token",
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-invalid-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: "not-a-valid-token",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
+    });
+    expect(harness.client).toBeNull();
   });
 });
 

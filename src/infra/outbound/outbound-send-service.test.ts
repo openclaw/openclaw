@@ -1,3 +1,5 @@
+// Covers outbound send service plugin/core routing, media access scoping,
+// transcript mirroring, and poll fallback.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -726,6 +728,8 @@ describe("executeSendAction", () => {
       },
       to: "channel:123",
       message: "hello",
+      replyToId: "reply-1",
+      threadId: "thread-1",
     });
 
     expect(prepareSendPayload).toHaveBeenCalledWith(
@@ -740,6 +744,8 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
+      replyToId: "reply-1",
+      threadId: "thread-1",
     });
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {

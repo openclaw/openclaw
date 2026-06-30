@@ -1,3 +1,6 @@
+/**
+ * HTTP server session fixtures shared by gateway session tests.
+ */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -35,6 +38,28 @@ export async function getGatewayConfigModule() {
 
 export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;
+}
+
+export function createLinearSessionTranscript(sessionId: string, contents: string[]): string {
+  const records: Array<Record<string, unknown>> = [
+    {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-06-19T12:00:00.000Z",
+      cwd: "/tmp",
+    },
+  ];
+  for (const [index, content] of contents.entries()) {
+    records.push({
+      type: "message",
+      id: `${sessionId}-entry-${index}`,
+      parentId: index === 0 ? null : `${sessionId}-entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`,
+      message: { role: "user", content, timestamp: index + 1 },
+    });
+  }
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }
 
 export function createDeferred<T>() {
@@ -359,8 +384,16 @@ export function setupGatewaySessionsTestHarness() {
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
     if (withTranscripts) {
-      await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
-      await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+      await fs.writeFile(
+        mainTranscript,
+        createLinearSessionTranscript("sess-main-global", ["main one", "main two"]),
+        "utf-8",
+      );
+      await fs.writeFile(
+        workTranscript,
+        createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+        "utf-8",
+      );
     }
     await fs.writeFile(
       mainStorePath,

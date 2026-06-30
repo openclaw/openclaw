@@ -1,15 +1,18 @@
+// Verifies generated talk default config stays aligned with schema.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FIELD_HELP } from "./schema.help.js";
-import {
-  describeTalkSilenceTimeoutDefaults,
-  TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM,
-} from "./talk-defaults.js";
+import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM = {
+  macos: 700,
+  android: 700,
+  ios: 900,
+} as const;
 
 function readRepoFile(relativePath: string): string {
   try {
@@ -44,13 +47,13 @@ describe("talk silence timeout defaults", () => {
     );
 
     expect(macDefaults).toContain(
-      `static let silenceTimeoutMs = ${TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.macos}`,
+      `static let silenceTimeoutMs = ${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.macos}`,
     );
     expect(iosDefaults).toContain(
-      `static let silenceTimeoutMs = ${TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.ios}`,
+      `static let silenceTimeoutMs = ${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.ios}`,
     );
     expect(androidDefaults).toContain(
-      `const val defaultSilenceTimeoutMs = ${TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.android}L`,
+      `const val defaultSilenceTimeoutMs = ${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.android}L`,
     );
   });
 });

@@ -1,19 +1,20 @@
+// Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import http from "node:http";
-import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
   readBody,
+  writeRequestLogEntryOrFail,
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
 
 const port =
   process.env.MOCK_PORT != null
-    ? readPositiveIntEnv("MOCK_PORT")
-    : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
+    ? readTcpPortEnv("MOCK_PORT")
+    : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
 
@@ -320,15 +321,17 @@ const server = http.createServer((req, res) => {
     } catch {
       body = {};
     }
-    if (requestLog) {
-      fs.appendFileSync(
+    if (
+      writeRequestLogEntryOrFail(res, {
         requestLog,
-        `${JSON.stringify({
+        entry: {
           method: req.method,
           path: url.pathname,
           body: boundedRequestLogBody(bodyText, bodyText),
-        })}\n`,
-      );
+        },
+      })
+    ) {
+      return;
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
@@ -392,7 +395,15 @@ const server = http.createServer((req, res) => {
     writeJson(res, 404, {
       error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
     });
-  })();
+  })().catch((/** @type {unknown} */ error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`mock-openai request handler failed: ${message}`);
+    if (!res.headersSent) {
+      writeJson(res, 500, { error: { message: `mock OpenAI handler failed: ${message}` } });
+      return;
+    }
+    res.destroy(error instanceof Error ? error : new Error(message));
+  });
 });
 
 server.listen(port, "127.0.0.1", () => {

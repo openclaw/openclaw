@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.transport behavior.
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
@@ -11,9 +12,10 @@ import {
   safeEqualSecret,
   type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import {
-  botNames,
-  botOpenIds,
+  clearFeishuBotIdentityState,
+  closeTrackedFeishuHttpServer,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
@@ -29,6 +31,12 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  /**
+   * Optional status sink for Feishu health tracking. Lifecycle callbacks
+   * publish connected state; validated inbound webhook requests publish
+   * transport activity.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
@@ -172,8 +180,7 @@ function cleanupFeishuWsClient(params: {
   }
   wsClients.delete(accountId);
   if (clearIdentity) {
-    botOpenIds.delete(accountId);
-    botNames.delete(accountId);
+    clearFeishuBotIdentityState(accountId);
   }
 }
 
@@ -216,6 +223,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -242,9 +250,28 @@ export async function monitorWebSocket({
           `feishu[${accountId}]: WebSocket SDK reported recoverable error: ${formatFeishuWsErrorForLog(err)}`,
         );
       };
+      const publishWsConnected = () => {
+        const connectedAt = Date.now();
+        statusSink?.({
+          connected: true,
+          lastConnectedAt: connectedAt,
+          lastEventAt: connectedAt,
+          lastError: null,
+        });
+      };
+      const publishWsReconnecting = () => {
+        const reconnectingAt = Date.now();
+        statusSink?.({
+          connected: false,
+          lastEventAt: reconnectingAt,
+        });
+      };
       log(`feishu[${accountId}]: starting WebSocket connection...`);
       wsClient = await createFeishuWSClient(account, {
         onError: handleWsError,
+        onReady: publishWsConnected,
+        onReconnected: publishWsConnected,
+        onReconnecting: publishWsReconnecting,
       });
       if (abortSignal?.aborted) {
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
@@ -266,6 +293,14 @@ export async function monitorWebSocket({
         break;
       }
 
+      // WS cycle ended via terminal error (not abort) — publish disconnected
+      // so the health monitor can flag the channel before the next reconnect.
+      const disconnectedAt = Date.now();
+      statusSink?.({
+        connected: false,
+        lastEventAt: disconnectedAt,
+      });
+
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
       error(
@@ -280,6 +315,13 @@ export async function monitorWebSocket({
       if (abortSignal?.aborted) {
         break;
       }
+
+      // WS start failed (e.g. handshake / auth) — publish disconnected.
+      const failedAt = Date.now();
+      statusSink?.({
+        connected: false,
+        lastEventAt: failedAt,
+      });
 
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
@@ -301,6 +343,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -320,6 +363,17 @@ export async function monitorWebhook({
   server.on("request", (req, res) => {
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
+      // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
+      // response so the gateway health monitor sees inbound activity. Non-2xx
+      // (e.g. 401 invalid signature, 400 invalid JSON, 429 rate-limited) is
+      // intentionally NOT counted as transport activity.
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        const inboundAt = Date.now();
+        statusSink?.({
+          lastEventAt: inboundAt,
+          lastTransportActivityAt: inboundAt,
+        });
+      }
     });
 
     const rateLimitKey = buildFeishuWebhookRateLimitKey({
@@ -415,23 +469,23 @@ export async function monitorWebhook({
 
   httpServers.set(accountId, server);
 
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      server.close();
-      httpServers.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+  return await new Promise<void>((resolve, reject) => {
+    let cleanupStarted = false;
+    const cleanup = async () => {
+      if (cleanupStarted) {
+        return;
+      }
+      cleanupStarted = true;
+      await closeTrackedFeishuHttpServer(accountId, server);
     };
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
     };
 
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
       return;
     }
 
@@ -439,6 +493,16 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      // Publish connected + lastEventAt once the server is listening. Without
+      // this, the gateway health monitor has no transport signal for webhook
+      // mode and will not detect a server crash. See PROPOSAL.md.
+      const webhookConnectedAt = Date.now();
+      statusSink?.({
+        connected: true,
+        lastConnectedAt: webhookConnectedAt,
+        lastEventAt: webhookConnectedAt,
+        lastError: null,
+      });
     });
 
     server.on("error", (err) => {

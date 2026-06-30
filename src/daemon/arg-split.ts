@@ -1,7 +1,9 @@
+/** Shared argument splitter for service command lines rendered by platform adapters. */
 type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
 type ArgSplitQuoteChar = '"' | "'";
 type ArgSplitQuoteStart = "anywhere" | "item-start";
 
+/** Splits service command strings while preserving quoted arguments across platform parsers. */
 export function splitArgsPreservingQuotes(
   value: string,
   options?: {
@@ -20,6 +22,7 @@ export function splitArgsPreservingQuotes(
   for (let i = 0; i < value.length; i++) {
     const char = value[i];
     if (escapeMode === "backslash" && char === "\\") {
+      // POSIX-style service parsers consume any escaped next byte.
       if (i + 1 < value.length) {
         current += value[i + 1];
         i++;
@@ -32,6 +35,8 @@ export function splitArgsPreservingQuotes(
       i + 1 < value.length &&
       value[i + 1] === '"'
     ) {
+      // Windows cmd scripts escape only renderer-inserted quotes here; paths keep
+      // their backslashes literal.
       current += '"';
       i++;
       continue;

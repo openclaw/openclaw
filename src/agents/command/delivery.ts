@@ -1,3 +1,6 @@
+/**
+ * Normalizes and delivers agent command results to outbound channels.
+ */
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -12,7 +15,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -32,14 +35,41 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
 
-export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
+function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
+  signal?: AbortSignal;
+  dispose: () => void;
+} {
+  if (!source) {
+    return { dispose: () => {} };
+  }
+  const controller = new AbortController();
+  const onAbort = () => {
+    if (isAgentRunRestartAbortReason(source.reason)) {
+      controller.abort(source.reason);
+    }
+  };
+  if (source.aborted) {
+    onAbort();
+  } else {
+    source.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => source.removeEventListener("abort", onAbort),
+  };
+}
 
-export type AgentCommandDeliveryPayloadOutcome = {
+/** Per-payload durable delivery status. */
+type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
+
+/** Delivery outcome for one normalized outbound payload. */
+type AgentCommandDeliveryPayloadOutcome = {
   index: number;
   status: AgentCommandDeliveryPayloadStatus;
   reason?: string;
@@ -53,7 +83,8 @@ export type AgentCommandDeliveryPayloadOutcome = {
   };
 };
 
-export type AgentCommandDeliveryStatus = {
+/** Aggregate delivery status for an agent command result. */
+type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
   status: "sent" | "suppressed" | "partial_failed" | "failed";
@@ -68,7 +99,8 @@ export type AgentCommandDeliveryStatus = {
   payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
 };
 
-export type AgentCommandDeliveryResult = {
+/** Agent command result after payload normalization and optional delivery. */
+type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
   meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;
@@ -102,6 +134,7 @@ type DeliverAgentCommandResultParams = {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: RunResult["payloads"];
+  assertDeliveryCurrent?: () => void;
 } & FreshSessionDeliveryRefreshParams;
 
 function normalizeDeliverySessionId(value: string | undefined): string | undefined {
@@ -343,6 +376,7 @@ async function normalizeReplyMediaPathsForDelivery(params: {
   return result;
 }
 
+/** Normalizes reply payloads and media paths before delivery. */
 export function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
@@ -414,9 +448,11 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
+/** Delivers an agent command result or records why delivery was skipped. */
 export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
 ): Promise<AgentCommandDeliveryResult> {
+  params.assertDeliveryCurrent?.();
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliveryAgentId =
@@ -449,10 +485,12 @@ export async function deliverAgentCommandResult(
       turnSourceAccountId,
       turnSourceThreadId,
     });
+    params.assertDeliveryCurrent?.();
     let deliveryChannel = deliveryPlan.resolvedChannel;
     if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
+        params.assertDeliveryCurrent?.();
         deliveryChannel = selection.channel;
       } catch {
         // Keep the internal channel marker; error handling below reports the failure.
@@ -550,8 +588,10 @@ export async function deliverAgentCommandResult(
   };
 
   let deliveryRouting = await resolveDeliveryRouting(sessionEntry);
+  params.assertDeliveryCurrent?.();
   if (isRetryableFreshSessionRoutingFailure(deliveryRouting)) {
     const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
+    params.assertDeliveryCurrent?.();
     const expectedFreshSessionId =
       params.expectedSessionIdForFreshDelivery ?? sessionEntry?.sessionId;
     if (
@@ -560,6 +600,7 @@ export async function deliverAgentCommandResult(
       isFreshDeliverySessionMatch(freshSessionEntry, expectedFreshSessionId)
     ) {
       const freshRouting = await resolveDeliveryRouting(freshSessionEntry);
+      params.assertDeliveryCurrent?.();
       if (!deliveryRoutingFailureReason(freshRouting)) {
         if (!opts.json) {
           runtime.log(
@@ -643,6 +684,7 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
         })
       : normalizedReplyPayloads;
+  params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
@@ -660,7 +702,7 @@ export async function deliverAgentCommandResult(
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
-    throw toLintErrorObject(strictPreDeliveryError, "Non-Error thrown");
+    throw toErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -701,21 +743,33 @@ export async function deliverAgentCommandResult(
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
-      const send = await sendDurableMessageBatch({
-        cfg,
-        channel: deliveryChannel,
-        to: deliveryTarget,
-        accountId: resolvedAccountId,
-        payloads: deliveryPayloads,
-        session: outboundSession,
-        replyToId: resolvedReplyToId ?? null,
-        threadId: resolvedThreadTarget ?? null,
-        bestEffort: bestEffortDeliver,
-        durability: bestEffortDeliver ? "best_effort" : "required",
-        onError: logDeliveryError,
-        onPayload: logPayload,
-        deps: createOutboundSendDeps(deps),
-      });
+      params.assertDeliveryCurrent?.();
+      const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
+      let send: DurableSendResult;
+      try {
+        send = await sendDurableMessageBatch({
+          cfg,
+          channel: deliveryChannel,
+          to: deliveryTarget,
+          accountId: resolvedAccountId,
+          payloads: deliveryPayloads,
+          session: outboundSession,
+          replyToId: resolvedReplyToId ?? null,
+          threadId: resolvedThreadTarget ?? null,
+          bestEffort: bestEffortDeliver,
+          durability: bestEffortDeliver ? "best_effort" : "required",
+          signal: restartAbort.signal,
+          onDeliveryIntent: restartAbort.dispose,
+          onError: logDeliveryError,
+          onPayload: logPayload,
+          deps: createOutboundSendDeps(deps),
+        });
+      } finally {
+        restartAbort.dispose();
+      }
+      if (restartAbort.signal?.aborted && send.status === "failed") {
+        throw restartAbort.signal.reason;
+      }
       deliveryStatus = deliveryStatusFromDurableSend(send);
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
         emitJsonEnvelope(deliveryStatus);
@@ -747,18 +801,4 @@ export async function deliverAgentCommandResult(
     deliverySucceeded,
     deliveryStatus,
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

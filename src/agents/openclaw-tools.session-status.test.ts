@@ -1,3 +1,4 @@
+// Verifies session status output across scoped stores, tasks, and runtime hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -54,6 +55,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
+  // Two stores simulate per-agent session files merged by gateway status paths.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -71,6 +73,7 @@ function createScopedSessionStores() {
 }
 
 function installScopedSessionStores(syncUpdates = false) {
+  // Tests choose whether session-store writes should mutate the backing map.
   const stores = createScopedSessionStores();
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
@@ -96,9 +99,77 @@ function installScopedSessionStores(syncUpdates = false) {
 async function createSessionsModuleMock() {
   const actual =
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
+    opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json";
+  const cloneEntry = (entry: SessionEntry): SessionEntry => structuredClone(entry);
   return {
     ...actual,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+    patchSessionEntryWithKey: async (
+      scope: { agentId?: string; sessionKey: string; storePath?: string },
+      update: (
+        entry: SessionEntry,
+        context: { existingEntry?: SessionEntry },
+      ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+      options?: { fallbackEntry?: SessionEntry; replaceEntry?: boolean },
+    ) => {
+      const storePath =
+        scope.storePath ?? resolveMockStorePath(undefined, { agentId: scope.agentId });
+      const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
+      const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+      const existing = resolved.existing ?? options?.fallbackEntry;
+      if (!existing) {
+        return null;
+      }
+      const patch = await update(cloneEntry(existing), {
+        existingEntry: resolved.existing ? cloneEntry(resolved.existing) : undefined,
+      });
+      if (!patch) {
+        return { sessionKey: resolved.normalizedKey, entry: cloneEntry(existing) };
+      }
+      const next = options?.replaceEntry
+        ? cloneEntry(patch as SessionEntry)
+        : actual.mergeSessionEntry(existing, patch);
+      store[resolved.normalizedKey] = next;
+      updateSessionStoreMock(storePath, store);
+      return { sessionKey: resolved.normalizedKey, entry: cloneEntry(next) };
+    },
+    resolveSessionEntryCandidateTarget: (scope: {
+      agentId: string;
+      candidateKeys: readonly string[];
+      cfg: { session?: { store?: string } };
+      fallback?: { sessionKey: string; entry: SessionEntry };
+    }) => {
+      const storePath = resolveMockStorePath(scope.cfg.session?.store, { agentId: scope.agentId });
+      const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
+      const candidates = [...new Set(scope.candidateKeys.map((key) => key.trim()))];
+      for (const candidateKey of candidates) {
+        if (!candidateKey) {
+          continue;
+        }
+        const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+        if (!resolved.existing) {
+          continue;
+        }
+        return {
+          agentId: scope.agentId,
+          candidateKey,
+          entry: cloneEntry(resolved.existing),
+          persisted: true,
+          sessionKey: resolved.normalizedKey,
+        };
+      }
+      const fallbackKey = scope.fallback?.sessionKey.trim();
+      return fallbackKey && scope.fallback
+        ? {
+            agentId: scope.agentId,
+            candidateKey: fallbackKey,
+            entry: cloneEntry(scope.fallback.entry),
+            persisted: false,
+            sessionKey: fallbackKey,
+          }
+        : null;
+    },
     updateSessionStore: async (
       storePath: string,
       mutator: (store: Record<string, unknown>) => Promise<void> | void,
@@ -108,8 +179,7 @@ async function createSessionsModuleMock() {
       updateSessionStoreMock(storePath, store);
       return store;
     },
-    resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
-      opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
+    resolveStorePath: resolveMockStorePath,
   };
 }
 
@@ -196,6 +266,7 @@ function formatStatusLines(primary: string, taskLineOverride: string | undefined
 }
 
 function createCommandsStatusRuntimeModuleMock() {
+  // Status text mock keeps model/task/session routing observable in one place.
   return {
     buildStatusText: async (params: {
       sessionKey: string;
@@ -532,6 +603,99 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("resolves webchat sessionKey=current to the full requester main key (#89773)", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-fallback-main",
+        updatedAt: 5,
+        thinkingLevel: "high",
+      },
+      "agent:admin:main": {
+        sessionId: "s-admin-main",
+        updatedAt: 10,
+        thinkingLevel: "low",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:admin:main",
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-webchat-main", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:admin:main");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    expectRecordFields(statusArg.sessionEntry, {
+      sessionId: "s-admin-main",
+      thinkingLevel: "low",
+    });
+  });
+
+  it("resolves whitespace-decorated webchat sessionKey=current to the full requester main key (#89800)", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-fallback-main",
+        updatedAt: 5,
+        thinkingLevel: "high",
+      },
+      "agent:admin:main": {
+        sessionId: "s-admin-main",
+        updatedAt: 10,
+        thinkingLevel: "low",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:admin:main",
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-webchat-main-spaced", {
+      sessionKey: " current ",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:admin:main");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    expectRecordFields(statusArg.sessionEntry, {
+      sessionId: "s-admin-main",
+      thinkingLevel: "low",
+    });
+  });
+
+  it("synthesizes webchat sessionKey=current from the full requester main key (#89773)", async () => {
+    resetSessionStore({});
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:admin:main",
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-webchat-main-unpersisted", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:admin:main");
+    expect(details.statusText).toContain("OpenClaw");
   });
 
   it("uses runSessionKey thinking level for implicit no-arg status lookups (#82669)", async () => {
@@ -1092,6 +1256,41 @@ describe("session_status tool", () => {
       liveModelSwitchPending: true,
     });
     expect(saved.sessionId).toMatch(UUID_RE);
+  });
+
+  it("preserves an existing legacy main row when implicit fallback mutates model state", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "legacy-main-session",
+        updatedAt: 10,
+        label: "Legacy Main",
+        lastChannel: "telegram",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call-legacy-main-fallback-model", {
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      modelOverride?: string | null;
+    };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("main");
+    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(savedStore.main).toMatchObject({
+      sessionId: "legacy-main-session",
+      label: "Legacy Main",
+      lastChannel: "telegram",
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
   });
 
   it("fires session:patch when session_status changes the persisted session model", async () => {

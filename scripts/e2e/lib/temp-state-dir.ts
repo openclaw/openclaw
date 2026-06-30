@@ -1,3 +1,4 @@
+// Temp State Dir script supports OpenClaw repository automation.
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -24,8 +25,8 @@ export async function createE2eStateDir(prefix: string, env = process.env): Prom
 
   const cleanup = () => {
     if (created && !cleaned) {
-      cleaned = true;
       rmSync(stateDir, { force: true, recursive: true });
+      cleaned = true;
     }
   };
 

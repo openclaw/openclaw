@@ -1,3 +1,7 @@
+/**
+ * Ensures runtime plugin registries are loaded for agent execution. Startup
+ * plugin IDs from metadata scope the load when available.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -28,6 +32,7 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
+/** Ensure standalone runtime plugins are loaded for the current agent context. */
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
@@ -53,6 +58,7 @@ export function ensureRuntimePluginsLoaded(params: {
       config: params.config,
       workspaceDir,
       ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
       runtimeOptions: allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,

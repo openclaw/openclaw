@@ -1,3 +1,4 @@
+// Defines MCP server and tool approval configuration types.
 export type McpCodexToolApprovalMode = "auto" | "prompt" | "approve";
 
 export type McpServerCodexConfig = {
@@ -35,8 +36,8 @@ export type McpServerConfig = {
   workingDirectory?: string;
   /** HTTP transport: URL of the remote MCP server (http or https). */
   url?: string;
-  /** HTTP transport type for remote MCP servers. */
-  transport?: "sse" | "streamable-http";
+  /** Transport type — "stdio" for command-bearing servers, "sse" or "streamable-http" for remote URLs. */
+  transport?: "stdio" | "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */

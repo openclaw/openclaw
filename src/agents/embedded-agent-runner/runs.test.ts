@@ -1,3 +1,5 @@
+// Embedded run registry tests cover active run handles, queueing, abort/drain,
+// abandonment tracking, diagnostics, and snapshots.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,8 +22,8 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedRunAbandonment,
-  consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
@@ -29,7 +31,6 @@ import {
   markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
-  requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -49,6 +50,8 @@ function createRunHandle(
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
+  // Minimal handle fixture with overrideable lifecycle probes for registry
+  // behavior; individual tests supply queue/abort behavior when needed.
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
@@ -61,6 +64,8 @@ function createRunHandle(
 
 describe("embedded-agent runner run registry", () => {
   afterEach(() => {
+    // Registry state is process-global so imported module instances can share
+    // it; every test must reset both embedded and reply-run registries.
     testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetDiagnosticSessionStateForTest();
@@ -85,6 +90,20 @@ describe("embedded-agent runner run registry", () => {
     expect(abortNormal).not.toHaveBeenCalled();
   });
 
+  it("keeps queued reply operations out of compact abort checks", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(true);
+  });
+
   it("aborts every active run in all mode", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
@@ -99,7 +118,17 @@ describe("embedded-agent runner run registry", () => {
     expect(abortB).toHaveBeenCalledTimes(1);
   });
 
+  it("passes restart ownership to every aborted run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-restart", createRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
+    expect(abort).toHaveBeenCalledWith("restart");
+  });
+
   it("resolves active embedded runs by canonical session file", async () => {
+    // Session-file lookup canonicalizes symlinks so heartbeat/diagnostic callers
+    // can find the active handle from the file path they observe.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-registry-"));
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
@@ -279,6 +308,8 @@ describe("embedded-agent runner run registry", () => {
   });
 
   it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
+    // Some callers queue through the broader reply-run operation when the
+    // embedded handle cannot prove transcript commit support directly.
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -459,6 +490,8 @@ describe("embedded-agent runner run registry", () => {
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+    // Abandonment markers must catch retries addressed by any durable identity,
+    // then clear once a new run owns the same session key/file.
     const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
     const handle = createRunHandle();
 
@@ -556,33 +589,4 @@ describe("embedded-agent runner run registry", () => {
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
 
-  it("stores and consumes pending live model switch requests", () => {
-    expect(
-      requestEmbeddedRunModelSwitch("session-switch", {
-        provider: "openai",
-        model: "gpt-5.4",
-      }),
-    ).toBe(true);
-
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toEqual({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toBeUndefined();
-  });
-
-  it("drops pending live model switch requests when the run clears", () => {
-    const handle = createRunHandle();
-    setActiveEmbeddedRun("session-clear-switch", handle);
-    requestEmbeddedRunModelSwitch("session-clear-switch", {
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    clearActiveEmbeddedRun("session-clear-switch", handle);
-
-    expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
-  });
 });

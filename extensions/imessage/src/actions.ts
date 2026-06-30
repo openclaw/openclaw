@@ -1,3 +1,4 @@
+// Imessage plugin module implements actions behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
@@ -40,6 +41,14 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   ...IMESSAGE_ACTION_NAMES,
   "upload-file",
 ]);
+const GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
+  "renameGroup",
+  "setGroupIcon",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+]);
+
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
@@ -387,14 +396,29 @@ function assertActionEnabled(
 export const imessageMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeIMessageMessageTool,
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
+    GROUP_MANAGEMENT_ACTIONS.has(action),
   messageActionTargetAliases: {
     react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
     unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    reply: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    sendWithEffect: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    sendAttachment: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    reply: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendWithEffect: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendAttachment: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    "upload-file": {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
     renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
@@ -402,7 +426,24 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    toolContext,
+    senderIsOwner,
+    gatewayClientScopes,
+  }) => {
+    // Group administration mutates the host's Messages identity, so model-driven
+    // actions need owner provenance or an admin-scoped Gateway caller.
+    if (
+      GROUP_MANAGEMENT_ACTIONS.has(action) &&
+      senderIsOwner !== true &&
+      !gatewayClientScopes?.includes("operator.admin")
+    ) {
+      throw new Error("iMessage group management requires an owner or operator.admin requester.");
+    }
     const runtime = await loadIMessageActionsRuntime();
     const account = resolveIMessageAccount({
       cfg,
@@ -429,11 +470,17 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // disappeared — they only see "channel: running" in `channels status`.
         // Common cause: gateway restart un-injects the imsg-bridge-helper.dylib
         // from Messages.app while imsg rpc keeps running.
+        // imsg's status message names the actual blocker (SIP, library
+        // validation, macOS 26 AMFI gate) — append it so the operator isn't
+        // told to "run imsg launch" when the OS is rejecting the dylib.
+        const reason = privateApiStatus?.statusMessage
+          ? ` imsg reports: ${privateApiStatus.statusMessage}`
+          : "";
         log.warn(
-          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.`,
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.${reason}`,
         );
         throw new Error(
-          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
+          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.${reason}`,
         );
       }
     };

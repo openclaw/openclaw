@@ -1,3 +1,4 @@
+// Control UI module implements app gateway behavior.
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -9,6 +10,7 @@ import {
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
+  recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
@@ -130,6 +132,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   serverVersion: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   sessionsShowArchived: boolean;
@@ -148,7 +151,11 @@ type GatewayHost = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  currentSessionId?: string | null;
+  reconnectResumeSessionId?: string | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  realtimeTalkOptionsOpen?: boolean;
+  fetchRealtimeTalkCatalog?: () => Promise<void>;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
 };
@@ -177,6 +184,16 @@ type GatewayHostWithSideResults = GatewayHost & {
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
 const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
+const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
+const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_POLL_MS = 1_000;
+const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+const PENDING_UPDATE_HANDOFF_REASONS = new Set([
+  UPDATE_HANDOFF_STARTED_REASON,
+  UPDATE_RESTART_HEALTH_PENDING_REASON,
+]);
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -279,15 +296,41 @@ function resolvePostRestartUpdateBanner(reason: string | null | undefined): {
   };
 }
 
+function resolvePendingUpdateHandoffTimeoutBanner(): {
+  tone: "danger";
+  text: string;
+} {
+  return {
+    tone: "danger",
+    text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+  };
+}
+
+function isPendingUpdateHandoffSentinel(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): boolean {
+  const reason = sentinel?.stats?.reason;
+  return (
+    sentinel?.kind === "update" &&
+    sentinel.status === "skipped" &&
+    typeof reason === "string" &&
+    PENDING_UPDATE_HANDOFF_REASONS.has(reason)
+  );
+}
+
 async function verifyPendingUpdateVersion(
   host: GatewayHost,
   client: GatewayBrowserClient,
 ): Promise<void> {
   const expectedVersion = host.pendingUpdateExpectedVersion?.trim();
-  if (!expectedVersion) {
+  const pendingHandoff = host.pendingUpdateHandoff;
+  if (!expectedVersion && !pendingHandoff) {
     return;
   }
-  const deadline = Date.now() + 10_000;
+  const deadline =
+    Date.now() +
+    (pendingHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
+  const pollMs = pendingHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
   while (host.client === client && host.connected && Date.now() < deadline) {
     let response: UpdateRestartStatusResponse | null;
     try {
@@ -296,14 +339,33 @@ async function verifyPendingUpdateVersion(
       response = null;
     }
     const sentinel = response?.sentinel;
+    if (isPendingUpdateHandoffSentinel(sentinel)) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, pollMs);
+      });
+      continue;
+    }
+    if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
+      host.pendingUpdateExpectedVersion = null;
+      host.pendingUpdateHandoff = false;
+      host.updateStatusBanner = resolvePostRestartUpdateBanner(sentinel.stats?.reason ?? null);
+      return;
+    }
     const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
+    if (
+      sentinel?.kind === "update" &&
+      sentinel.status === "ok" &&
+      !actualVersion &&
+      !expectedVersion
+    ) {
+      host.pendingUpdateExpectedVersion = null;
+      host.pendingUpdateHandoff = false;
+      return;
+    }
     if (sentinel?.kind === "update" && actualVersion) {
       host.pendingUpdateExpectedVersion = null;
-      if (sentinel.status && sentinel.status !== "ok") {
-        host.updateStatusBanner = resolvePostRestartUpdateBanner(sentinel.stats?.reason ?? null);
-        return;
-      }
-      if (actualVersion !== expectedVersion) {
+      host.pendingUpdateHandoff = false;
+      if (expectedVersion && actualVersion !== expectedVersion) {
         host.updateStatusBanner = resolveUpdateVerificationBanner({
           expectedVersion,
           actualVersion,
@@ -312,7 +374,7 @@ async function verifyPendingUpdateVersion(
       return;
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, pollMs);
     });
   }
   if (host.client !== client || !host.connected) {
@@ -320,11 +382,14 @@ async function verifyPendingUpdateVersion(
   }
   const currentVersion = host.hello?.server?.version?.trim() || null;
   host.pendingUpdateExpectedVersion = null;
-  if (currentVersion !== expectedVersion) {
+  host.pendingUpdateHandoff = false;
+  if (expectedVersion && currentVersion !== expectedVersion) {
     host.updateStatusBanner = resolveUpdateVerificationBanner({
       expectedVersion,
       actualVersion: currentVersion,
     });
+  } else if (pendingHandoff) {
+    host.updateStatusBanner = resolvePendingUpdateHandoffTimeoutBanner();
   }
 }
 
@@ -685,11 +750,10 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
-async function loadAgentsThenRefreshActiveTabAfterBootstrap(
+async function loadAgentsThenRefreshActiveTabForClient(
   host: GatewayHost,
   client: GatewayBrowserClient,
 ) {
-  await host.controlUiBootstrapReady?.catch(() => undefined);
   if (host.client !== client) {
     return;
   }
@@ -750,6 +814,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.chatError = null;
       host.hello = hello;
+      if (host.realtimeTalkOptionsOpen) {
+        void host.fetchRealtimeTalkCatalog?.();
+      }
       applySnapshot(host, hello);
       prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
@@ -822,7 +889,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAgentsThenRefreshActiveTabAfterBootstrap(host, client);
+      void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
           return;
@@ -846,6 +913,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      const currentSessionId =
+        typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
+      if (currentSessionId) {
+        host.reconnectResumeSessionId = currentSessionId;
+      }
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );
@@ -1116,6 +1188,12 @@ function handleSessionMessageGatewayEvent(
   // chatStream, which delays the user message card from appearing until the
   // first LLM delta arrives.
   if (host.chatRunId) {
+    // Gateway confirms the run is still active (plugin hook window, etc.).
+    // Skip reload — the pending chat terminal owns history reconciliation.
+    if ((payload as Record<string, unknown> | null)?.hasActiveRun === true) {
+      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+      return;
+    }
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     const refreshStartedAt = Date.now();
     const runIdBeforeRefresh = host.chatRunId;
@@ -1220,6 +1298,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.send_timing") {
+    recordChatSendServerTiming(
+      host as unknown as Parameters<typeof recordChatSendServerTiming>[0],
+      evt.payload,
+    );
     return;
   }
 

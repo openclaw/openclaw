@@ -1,3 +1,4 @@
+// File context helpers build user-visible context for media file references.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 
@@ -25,6 +26,7 @@ function sanitizeFileName(value: string | null | undefined, fallbackName: string
   return sanitizeUntrustedFileName(normalized, fallbackName);
 }
 
+/** Renders sanitized attachment text as a model-visible file block without allowing file-tag injection. */
 export function renderFileContextBlock(params: {
   filename?: string | null;
   fallbackName?: string;

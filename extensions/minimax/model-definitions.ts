@@ -1,3 +1,4 @@
+// Minimax plugin module implements model definitions behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
@@ -7,7 +8,6 @@ export const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = MINIMAX_DEFAULT_MODEL_ID;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
-export const MINIMAX_M3_CONTEXT_WINDOW = 1_000_000;
 export const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
 
 export const MINIMAX_API_COST = {

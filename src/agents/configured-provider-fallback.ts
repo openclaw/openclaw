@@ -1,3 +1,7 @@
+/**
+ * Chooses a configured provider/model fallback when defaults are absent from
+ * the user's model config.
+ */
 import type { OpenClawConfig } from "../config/types.js";
 
 type ProviderModelRef = {
@@ -5,6 +9,7 @@ type ProviderModelRef = {
   model: string;
 };
 
+/** Resolve the first configured provider/model that can replace a missing default. */
 export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
   defaultProvider: string;
@@ -24,6 +29,8 @@ export function resolveConfiguredProviderFallback(params: {
   if (defaultProviderConfig && (!defaultModel || defaultProviderHasDefaultModel)) {
     return null;
   }
+  // Fall back to the first provider with at least one configured model, preserving
+  // config insertion order as operator preference.
   const availableProvider = Object.entries(configuredProviders).find(
     ([, providerCfg]) =>
       providerCfg &&

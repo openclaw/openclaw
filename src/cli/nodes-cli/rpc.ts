@@ -1,3 +1,4 @@
+// Gateway RPC helpers for node CLI commands, including lazy runtime loading and option parsing.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -22,6 +23,58 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
+const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
+  "AUTH_REQUIRED",
+  "AUTH_UNAUTHORIZED",
+  "AUTH_TOKEN_MISMATCH",
+  "AUTH_DEVICE_TOKEN_MISMATCH",
+  "AUTH_SCOPE_MISMATCH",
+  "PAIRING_REQUIRED",
+]);
+
+function readGatewayClientRequestDetailCode(value: unknown): string | null {
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return null;
+  }
+  const details = (value as Error & { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const code = (details as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
+  if (
+    value instanceof Error &&
+    (value.name === "GatewayCredentialsRequiredError" ||
+      value.name === "GatewayStoredDeviceAuthUnavailableError" ||
+      value.name === "GatewayLocalBackendSharedAuthUnavailableError")
+  ) {
+    return true;
+  }
+  const detailCode = readGatewayClientRequestDetailCode(value);
+  if (detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode)) {
+    return true;
+  }
+  return (
+    value instanceof Error &&
+    value.name === "GatewayClientRequestError" &&
+    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    value.message.includes("missing scope: operator.read")
+  );
+}
+
+function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
+  return (
+    value instanceof Error &&
+    value.name === "GatewayClientRequestError" &&
+    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    value.message.includes(`unknown method: ${method}`)
+  );
+}
+
+/** Attach shared Gateway connection/json options to a node command. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -29,16 +82,53 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
+/** Call a Gateway method through the lazily loaded node CLI RPC runtime. */
 export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    transportTimeoutMs?: number;
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
+  },
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
+export const callNodeDiagnosticsGatewayCli = async (
+  method: "node.list" | "node.describe",
+  opts: NodesRpcOpts,
+  params?: unknown,
+) => {
+  try {
+    return await callGatewayCli(method, opts, params, {
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    });
+  } catch (error) {
+    if (!isDiagnosticsAuthFallbackError(error)) {
+      throw error;
+    }
+  }
+  try {
+    return await callGatewayCli(method, opts, params, {
+      scopes: ["operator.read", "operator.pairing"],
+      useLocalBackendSharedAuth: true,
+    });
+  } catch (error) {
+    if (!isDiagnosticsAuthFallbackError(error)) {
+      throw error;
+    }
+  }
+  return await callGatewayCli(method, opts, params);
+};
+
+/** Call pairing approval methods with explicit operator scopes. */
 export const callNodePairApprovalGatewayCli = async (
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,
@@ -49,6 +139,7 @@ export const callNodePairApprovalGatewayCli = async (
   return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Build a node.invoke payload with an idempotency key and optional timeout. */
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
@@ -72,6 +163,7 @@ function hasOptionalValue(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
+/** Parse an optional positive integer node CLI flag. */
 export function parseOptionalNodePositiveInteger(value: unknown, flag: string): number | undefined {
   if (!hasOptionalValue(value)) {
     return undefined;
@@ -83,6 +175,7 @@ export function parseOptionalNodePositiveInteger(value: unknown, flag: string): 
   return parsed;
 }
 
+/** Parse an optional non-negative integer node CLI flag. */
 export function parseOptionalNodeNonNegativeInteger(
   value: unknown,
   flag: string,
@@ -97,6 +190,7 @@ export function parseOptionalNodeNonNegativeInteger(
   return parsed;
 }
 
+/** Parse an optional finite number node CLI flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -125,6 +219,7 @@ export function parseOptionalNodeFiniteNumber(
   return parsed;
 }
 
+/** Return the local-development hint for known unsigned Peekaboo bridge authorization failures. */
 export function unauthorizedHintForMessage(message: string): string | null {
   const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
@@ -141,10 +236,25 @@ export function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Resolve a node query to a node id via live node list or paired-node fallback. */
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   return (await resolveNode(opts, query)).nodeId;
 }
 
+/** Resolve a node through the pairing-aware diagnostics view when available. */
+export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string) {
+  try {
+    const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+    return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
+  } catch (error) {
+    if (!isUnknownGatewayMethodError(error, "node.list")) {
+      throw error;
+    }
+    return await resolveNodeId(opts, query);
+  }
+}
+
+/** Resolve a node query to the best available node record. */
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

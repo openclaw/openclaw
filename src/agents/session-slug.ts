@@ -1,3 +1,8 @@
+/**
+ * Human-readable session slug generator.
+ * Produces short adjective/noun IDs with numbered and random fallbacks when
+ * collisions are reported by the session store.
+ */
 import { generateSecureInt } from "../infra/secure-random.js";
 
 const SLUG_ADJECTIVES = [
@@ -143,6 +148,7 @@ function createAvailableSlug(
   return undefined;
 }
 
+/** Creates a human-readable unique session slug with numbered and random fallbacks. */
 export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   const isIdTaken = isTaken ?? (() => false);
   const twoWord = createAvailableSlug(2, isIdTaken);

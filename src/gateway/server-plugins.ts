@@ -1,3 +1,5 @@
+// Gateway plugin runtime adapter.
+// Loads plugin registries and builds fallback request context for non-WS paths.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -16,25 +18,20 @@ import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { PluginLogger } from "../plugins/types.js";
+import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-// ── Fallback gateway context for non-WS paths (Telegram, WhatsApp, etc.) ──
-// The WS path sets a per-request scope via AsyncLocalStorage, but channel
-// adapters (Telegram polling, etc.) invoke the agent directly without going
-// through handleGatewayRequest. We store the gateway context at startup so
-// dispatchGatewayMethod can use it as a fallback.
 
 const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.fallbackGatewayContextState",
@@ -51,6 +48,7 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
+/** Set the process fallback gateway context for channel adapters outside WS requests. */
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
@@ -81,6 +79,7 @@ export function setFallbackGatewayContextResolver(
   };
 }
 
+/** Clear the fallback gateway context installed for non-WS dispatch paths. */
 export function clearFallbackGatewayContext(): void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = undefined;
@@ -91,6 +90,10 @@ function getFallbackGatewayContext(): GatewayRequestContext | undefined {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   const resolved = fallbackGatewayContextState.resolveContext?.();
   return resolved ?? fallbackGatewayContextState.context;
+}
+
+export function hasInProcessGatewayContext(): boolean {
+  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
 }
 
 type PluginSubagentOverridePolicy = {
@@ -287,6 +290,52 @@ function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boo
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
+function normalizeRuntimeNodeInvokeScopes(
+  scopes: string[] | undefined,
+): OperatorScope[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized: OperatorScope[] = [];
+  for (const scope of scopes) {
+    if (isOperatorScope(scope) && !normalized.includes(scope)) {
+      normalized.push(scope);
+    }
+  }
+  return normalized;
+}
+
+function canTrustedOfficialPluginRequestScopes(params: {
+  pluginId?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
+}): boolean {
+  if (!params.pluginId) {
+    return false;
+  }
+  if (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) {
+    return true;
+  }
+  const registry = getActivePluginRegistry();
+  const record = registry?.plugins.find((entry) => entry.id === params.pluginId);
+  return record?.origin === "bundled" || record?.trustedOfficialInstall === true;
+}
+
+function resolveRuntimeNodeInvokeSyntheticScopes(params: {
+  pluginId?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
+  requestedScopes?: OperatorScope[];
+}): OperatorScope[] | undefined {
+  if (!params.requestedScopes) {
+    return undefined;
+  }
+  if (!canTrustedOfficialPluginRequestScopes(params)) {
+    return undefined;
+  }
+  return params.requestedScopes;
+}
+
 function mergeGatewayClientInternal(
   client: GatewayRequestOptions["client"] | undefined,
   internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
@@ -332,6 +381,49 @@ function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
+function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? resolveSafeTimeoutDelayMs(timeoutMs)
+    : undefined;
+}
+
+function resolveInProcessDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
+  return safeTimeoutMs === undefined ? undefined : Date.now() + safeTimeoutMs;
+}
+
+function resolveRemainingInProcessDispatchTimeoutMs(deadlineMs?: number): number | undefined {
+  return deadlineMs === undefined
+    ? undefined
+    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+}
+
+async function waitForInProcessDispatch<T>(
+  method: string,
+  promise: Promise<T>,
+  deadlineMs?: number,
+): Promise<T> {
+  const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
+  if (remainingTimeoutMs === undefined) {
+    return await promise;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`gateway request timeout for ${method}`));
+        }, remainingTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
   params: unknown,
@@ -353,7 +445,16 @@ export async function dispatchGatewayMethodInProcessRaw(
 
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
+  let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFirstResponse: ((err: Error) => void) | undefined;
   let resolveFinalResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFinalResponse: ((err: Error) => void) | undefined;
+  let postFirstResponseError: Error | undefined;
+  const firstResponsePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+    resolveFirstResponse = resolve;
+    rejectFirstResponse = reject;
+  });
+  const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -377,7 +478,7 @@ export async function dispatchGatewayMethodInProcessRaw(
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
-  await handleGatewayRequest({
+  void handleGatewayRequest({
     req: {
       type: "req",
       id: `plugin-subagent-${randomUUID()}`,
@@ -393,6 +494,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       const response = { ok, payload, error, ...(meta ? { meta } : {}) };
       if (!firstResponse) {
         firstResponse = response;
+        resolveFirstResponse?.(response);
         return;
       }
       if (!finalResponse) {
@@ -401,40 +503,63 @@ export async function dispatchGatewayMethodInProcessRaw(
       }
     },
     context,
-  });
+  })
+    .then(() => {
+      if (!firstResponse) {
+        rejectFirstResponse?.(
+          new Error(`Gateway method "${method}" completed without a response.`),
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (!firstResponse) {
+        rejectFirstResponse?.(error);
+        return;
+      }
+      postFirstResponseError = error;
+      rejectFinalResponse?.(error);
+    });
 
-  if (!firstResponse) {
-    throw new Error(`Gateway method "${method}" completed without a response.`);
-  }
+  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
+  }
+  if (postFirstResponseError) {
+    throw postFirstResponseError;
   }
   const final =
     finalResponse ??
     (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
       resolveFinalResponse = resolve;
-      const timeoutMs =
-        typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-          ? resolveSafeTimeoutDelayMs(options.timeoutMs)
-          : undefined;
+      const timeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
       const timeout =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
               reject(new Error(`gateway request timeout for ${method}`));
             }, timeoutMs);
-      if (finalResponse) {
+      const clearFinalTimeout = () => {
         if (timeout) {
           clearTimeout(timeout);
         }
+      };
+      rejectFinalResponse = (err) => {
+        clearFinalTimeout();
+        reject(err);
+      };
+      if (postFirstResponseError) {
+        rejectFinalResponse(postFirstResponseError);
+        return;
+      }
+      if (finalResponse) {
+        clearFinalTimeout();
         resolve(finalResponse);
         return;
       }
       resolveFinalResponse = (response) => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearFinalTimeout();
         resolve(response);
       };
     }));
@@ -458,11 +583,20 @@ export async function dispatchGatewayMethodInProcess<T>(
   return await dispatchGatewayMethod<T>(method, params, options);
 }
 
+const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
+
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const limit =
+      params.limit == null || !Number.isFinite(params.limit)
+        ? undefined
+        : Math.min(
+            PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT,
+            Math.max(1, Math.floor(params.limit)),
+          );
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
-      ...(params.limit != null && { limit: params.limit }),
+      ...(limit != null && { limit }),
     });
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -530,13 +664,20 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
         },
       );
-      const status = payload?.status;
+      let status = payload?.status;
+      if (status === "completed" || status === "succeeded") {
+        status = "ok";
+      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
+        status = "ok";
+      }
       if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
+        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
       }
       return {
         status,
-        ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(status !== "ok" &&
+          typeof payload?.error === "string" &&
+          payload.error && { error: payload.error }),
       };
     },
     getSessionMessages,
@@ -591,13 +732,31 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
       };
     },
     async invoke(params) {
-      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
-        nodeId: params.nodeId,
-        command: params.command,
-        ...(params.params !== undefined && { params: params.params }),
-        timeoutMs: params.timeoutMs,
-        idempotencyKey: params.idempotencyKey || randomUUID(),
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId =
+        typeof scope?.pluginId === "string" && scope.pluginId.trim()
+          ? scope.pluginId.trim()
+          : undefined;
+      const syntheticScopes = resolveRuntimeNodeInvokeSyntheticScopes({
+        pluginId,
+        pluginOrigin: scope?.pluginOrigin,
+        pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
+        requestedScopes: normalizeRuntimeNodeInvokeScopes(params.scopes),
       });
+      const payload = await dispatchGatewayMethod<unknown>(
+        "node.invoke",
+        {
+          nodeId: params.nodeId,
+          command: params.command,
+          ...(params.params !== undefined && { params: params.params }),
+          timeoutMs: params.timeoutMs,
+          idempotencyKey: params.idempotencyKey || randomUUID(),
+        },
+        {
+          ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+          ...(syntheticScopes ? { syntheticScopes } : {}),
+        },
+      );
       return payload;
     },
   };

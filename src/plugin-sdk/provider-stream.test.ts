@@ -1,3 +1,4 @@
+// Provider stream tests cover shared stream-wrapper families and payload compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -61,6 +62,37 @@ function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
   expect(thinkingConfig.thinkingBudget).toBe(-1);
 }
 
+describe("createMoonshotThinkingWrapper", () => {
+  it("sanitizes K2.7 after an async caller replaces the payload", async () => {
+    let finalPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = async (model, _context, options) => {
+      const payload = { model: model.id };
+      const replacement = await options?.onPayload?.(payload, model);
+      finalPayload = requireRecord(replacement ?? payload, "final payload");
+      return {} as never;
+    };
+    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
+
+    await wrapped({ api: "openai-completions", id: "kimi-k2.7-code" } as never, {} as never, {
+      onPayload: async () => ({
+        model: "kimi-k2.7-code",
+        thinking: { type: "disabled" },
+        reasoning_effort: "low",
+        temperature: 0,
+        top_p: 0.5,
+        tool_choice: "required",
+      }),
+    });
+
+    const payload = requirePayload(finalPayload);
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(payload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload.tool_choice).toBe("auto");
+  });
+});
+
 describe("composeProviderStreamWrappers", () => {
   it("re-exports the shared wrapper composer", () => {
     expect(composeProviderStreamWrappers).toBe(composeProviderStreamWrappersShared);
@@ -108,11 +140,15 @@ describe("buildProviderStreamFamilyHooks", () => {
   it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
+    let capturedModelReasoning: boolean | undefined;
     let capturedHeaders: Record<string, string> | undefined;
+    let capturedReasoning: string | undefined;
     let payloadSeed: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = model.id;
+      capturedModelReasoning = model.reasoning;
+      capturedReasoning = options?.reasoning;
       const payload = {
         model: model.id,
         config: { thinkingConfig: { thinkingBudget: -1 } },
@@ -256,6 +292,33 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(moonshotToolChoiceThinking.type).toBe("disabled");
     expect(moonshotToolChoiceThinking).not.toHaveProperty("keep");
+
+    payloadSeed = {
+      tool_choice: { type: "tool", name: "read" },
+      temperature: 0,
+      top_p: 0.5,
+      n: 2,
+      presence_penalty: 1,
+      frequency_penalty: 1,
+      reasoning_effort: "low",
+    };
+    await moonshotKeepStream(
+      { api: "openai-completions", id: "kimi-k2.7-code", reasoning: false } as never,
+      {} as never,
+      {},
+    );
+    const moonshotK27Payload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotK27Payload);
+    expect(moonshotK27Payload).not.toHaveProperty("thinking");
+    expect(moonshotK27Payload).not.toHaveProperty("reasoning_effort");
+    expect(moonshotK27Payload.tool_choice).toBe("auto");
+    expect(moonshotK27Payload).not.toHaveProperty("temperature");
+    expect(moonshotK27Payload).not.toHaveProperty("top_p");
+    expect(moonshotK27Payload).not.toHaveProperty("n");
+    expect(moonshotK27Payload).not.toHaveProperty("presence_penalty");
+    expect(moonshotK27Payload).not.toHaveProperty("frequency_penalty");
+    expect(capturedReasoning).toBe("low");
+    expect(capturedModelReasoning).toBe(true);
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     void requireStreamFn(

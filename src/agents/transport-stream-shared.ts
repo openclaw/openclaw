@@ -1,3 +1,8 @@
+/**
+ * Shared transport-stream normalization helpers.
+ *
+ * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
+ */
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
@@ -122,7 +127,7 @@ export function finalizeTransportStream(params: {
     throw new Error("Request was aborted");
   }
   if (output.stopReason === "aborted" || output.stopReason === "error") {
-    throw new Error("An unknown error occurred");
+    throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
   stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
   stream.end();
@@ -173,6 +178,21 @@ function stringifyErrorBody(value: unknown): string | undefined {
   }
 }
 
+function stringifyTransportErrorMessage(value: unknown): string | undefined {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  const encoded = stringifyErrorBody(value);
+  if (encoded !== undefined) {
+    return encoded;
+  }
+  try {
+    return String(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeTransportErrorBody(value: unknown): string | undefined {
   const text = stringifyErrorBody(value);
   if (!text?.trim()) {
@@ -181,7 +201,7 @@ function normalizeTransportErrorBody(value: unknown): string | undefined {
   return truncateErrorDetail(redactSensitiveText(text), 500);
 }
 
-export function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
+function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
   const errorObject = error && typeof error === "object" ? error : undefined;
   const nestedError = readObjectProperty(errorObject, "error");
   const errorCode =
@@ -211,7 +231,7 @@ export function assignTransportErrorDetails(
   signal?: AbortSignal,
 ): void {
   output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  output.errorMessage = stringifyTransportErrorMessage(error);
   Object.assign(output, extractTransportErrorDetails(error));
 }
 

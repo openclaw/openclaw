@@ -1,3 +1,4 @@
+// Media Generation Core tests cover catalog behavior.
 import { describe, expect, it } from "vitest";
 import {
   listMediaGenerationProviderModels,
@@ -53,5 +54,28 @@ describe("media-generation catalog", () => {
         models: ["video-default", "video-pro"],
       }),
     ).toEqual(["video-default", "video-pro"]);
+  });
+
+  it("marks a trimmed default model as the catalog default", () => {
+    expect(
+      synthesizeMediaGenerationCatalogEntries({
+        kind: "video_generation",
+        provider: {
+          id: "example",
+          defaultModel: " video-default ",
+          models: ["video-default"],
+          capabilities: {},
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "video_generation",
+        provider: "example",
+        model: "video-default",
+        source: "static",
+        default: true,
+        capabilities: {},
+      },
+    ]);
   });
 });

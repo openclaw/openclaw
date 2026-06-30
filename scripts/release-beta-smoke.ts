@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Release Beta Smoke script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -116,23 +117,36 @@ const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
   10 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS",
 );
 const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
   30_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS",
 );
 const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
   4 * 60 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS",
 );
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
+export function readPositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  label = "value",
+): number {
   const text = (raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
 export function run(command: string, args: string[], input?: RunOptions): string {
@@ -250,74 +264,17 @@ export function parseWorkflowRunIdFromOutput(output: string): string | undefined
   return /\/actions\/runs\/(\d+)/u.exec(output)?.[1];
 }
 
-type WorkflowRunListEntry = {
-  createdAt?: string;
-  created_at?: string;
-  databaseId?: number | string;
-  id?: number | string;
-};
-
-function normalizeRunId(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
+export function requireWorkflowRunIdFromOutput(output: string, workflow: string): string {
+  const runId = parseWorkflowRunIdFromOutput(output);
+  if (!runId) {
+    throw new Error(
+      `gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs`,
+    );
   }
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return undefined;
-}
-
-export function selectNewestDispatchedRunId(params: {
-  beforeIds: ReadonlySet<string>;
-  runs: readonly WorkflowRunListEntry[];
-}): string | undefined {
-  return params.runs
-    .filter((entry) => {
-      const id = normalizeRunId(entry.databaseId ?? entry.id);
-      return id !== undefined && !params.beforeIds.has(id);
-    })
-    .toSorted((a, b) =>
-      (b.createdAt ?? b.created_at ?? "").localeCompare(a.createdAt ?? a.created_at ?? ""),
-    )
-    .map((entry) => normalizeRunId(entry.databaseId ?? entry.id))
-    .find((id): id is string => id !== undefined);
-}
-
-function listWorkflowDispatchRuns(repo: string, workflow: string): WorkflowRunListEntry[] {
-  const encodedWorkflow = encodeURIComponent(workflow);
-  const response = ghJson(
-    repo,
-    `actions/workflows/${encodedWorkflow}/runs?event=workflow_dispatch&per_page=50`,
-  ) as { workflow_runs?: WorkflowRunListEntry[] };
-  return response.workflow_runs ?? [];
-}
-
-async function findDispatchedWorkflowRunId(params: {
-  beforeIds: ReadonlySet<string>;
-  repo: string;
-  workflow: string;
-}): Promise<string> {
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const runId = selectNewestDispatchedRunId({
-      beforeIds: params.beforeIds,
-      runs: listWorkflowDispatchRuns(params.repo, params.workflow),
-    });
-    if (runId) {
-      return runId;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5_000);
-    });
-  }
-  throw new Error(`could not find dispatched run for ${params.workflow}`);
+  return runId;
 }
 
 async function dispatchTelegram(options: Options, packageSpec: string): Promise<string> {
-  const beforeIds = new Set(
-    listWorkflowDispatchRuns(options.repo, TELEGRAM_BETA_WORKFLOW_FILE)
-      .map((entry) => normalizeRunId(entry.databaseId ?? entry.id))
-      .filter((id): id is string => id !== undefined),
-  );
   const output = run(
     "gh",
     [
@@ -337,15 +294,7 @@ async function dispatchTelegram(options: Options, packageSpec: string): Promise<
     ],
     { capture: true },
   );
-  const runId = parseWorkflowRunIdFromOutput(output);
-  if (runId) {
-    return runId;
-  }
-  return await findDispatchedWorkflowRunId({
-    beforeIds,
-    repo: options.repo,
-    workflow: TELEGRAM_BETA_WORKFLOW_FILE,
-  });
+  return requireWorkflowRunIdFromOutput(output, TELEGRAM_BETA_WORKFLOW_FILE);
 }
 
 export async function pollRun(
@@ -494,7 +443,7 @@ async function main(): Promise<void> {
   }
 
   if (!options.skipParallels) {
-    runParallels(options.beta, options.model);
+    runParallels(version, options.model);
   }
 
   if (telegramRunId) {

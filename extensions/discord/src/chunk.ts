@@ -1,3 +1,4 @@
+// Discord plugin module implements chunk behavior.
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
@@ -206,8 +207,12 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       }
     }
 
-    const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
-    const reserveLines = nextOpenFence ? 1 : 0;
+    // A flush can fire mid-line, before `openFence` advances to `nextOpenFence` below, so it closes
+    // against the still-open `openFence`. A fence-closing line that also carries trailing text would
+    // otherwise reserve 0 yet still get a closing fence appended on flush, overflowing maxChars.
+    const fenceToReserve = nextOpenFence ?? openFence;
+    const reserveChars = fenceToReserve ? closeFenceLine(fenceToReserve).length + 1 : 0;
+    const reserveLines = fenceToReserve ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;

@@ -1,12 +1,15 @@
-import { describe, expect, it } from "vitest";
+// Control UI tests cover format behavior.
+import { afterEach, describe, expect, it } from "vitest";
 import {
   formatDateTimeMs,
   formatDateMs,
   formatMs,
   formatRelativeTimestamp,
   formatTimeMs,
+  formatTokens,
   formatUnknownText,
   parseSessionKeyParts,
+  setUiTimeFormatPreference,
   stripThinkingTags,
 } from "./format.ts";
 
@@ -57,6 +60,44 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
+  });
+});
+
+describe("agents.defaults.timeFormat preference", () => {
+  // 19:30 UTC: 24-hour renders "19:30", 12-hour renders "7:30 PM".
+  const ts = Date.UTC(2026, 0, 15, 19, 30);
+  const opts: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  };
+
+  afterEach(() => {
+    setUiTimeFormatPreference("auto");
+  });
+
+  it("forces a 24-hour clock when preference is 24", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, opts, "")).toBe("19:30");
+  });
+
+  it("forces a 12-hour clock when preference is 12", () => {
+    setUiTimeFormatPreference("12");
+    const formatted = formatTimeMs(ts, opts, "");
+    expect(formatted).toContain("7:30");
+    expect(formatted).toMatch(/PM/i);
+  });
+
+  it("lets the caller override the resolved hour cycle", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
+  });
+
+  it("leaves rendering to the browser locale default for auto", () => {
+    setUiTimeFormatPreference("auto");
+    const auto = formatDateTimeMs(ts, opts, "");
+    const native = new Date(ts).toLocaleString([], opts);
+    expect(auto).toBe(native);
   });
 });
 
@@ -175,5 +216,17 @@ describe("parseSessionKeyParts", () => {
     expect(parseSessionKeyParts("agent:main")).toBeNull();
     expect(parseSessionKeyParts("agent:main:")).toBeNull();
     expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
+  });
+});
+
+describe("formatTokens", () => {
+  it("rolls a value that rounds up to 1000k over into the M branch", () => {
+    expect(formatTokens(999_500)).toBe("1.0M");
+    expect(formatTokens(999_999)).toBe("1.0M");
+    expect(formatTokens(999_499)).toBe("999k");
+    expect(formatTokens(1_000_000)).toBe("1.0M");
+    expect(formatTokens(12_345)).toBe("12k");
+    expect(formatTokens(5_500)).toBe("5.5k");
+    expect(formatTokens(null)).toBe("0");
   });
 });

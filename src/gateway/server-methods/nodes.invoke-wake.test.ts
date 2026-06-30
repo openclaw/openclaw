@@ -1,6 +1,9 @@
+// Node invoke wake tests cover APNs wake attempts, reconnect waits, nudge
+// throttling, command policy, and foreground-restricted command handling.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -8,7 +11,6 @@ import {
   nodeHandlers,
   waitForNodeReconnect,
 } from "./nodes.js";
-import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 
 type MockNodeCommandPolicyParams = {
   command: string;
@@ -324,6 +326,7 @@ async function invokeNode(params: {
       error?: { code?: string; message?: string } | null;
     }>;
   };
+  client?: unknown;
   requestParams?: Partial<Record<string, unknown>>;
 }) {
   const respond = vi.fn();
@@ -340,11 +343,30 @@ async function invokeNode(params: {
       logGateway,
       getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
-    client: null,
+    client: (params.client ?? null) as never,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
     isWebchatConnect: () => false,
   });
   return respond;
+}
+
+function createOperatorClient(params?: { scopes?: string[]; pluginRuntimeOwnerId?: string }) {
+  return {
+    connect: {
+      role: "operator" as const,
+      scopes: params?.scopes ?? ["operator.write"],
+      client: {
+        id: "operator-test",
+        mode: "backend" as const,
+        name: "operator-test",
+        platform: "node",
+        version: "test",
+      },
+    },
+    internal: params?.pluginRuntimeOwnerId
+      ? { pluginRuntimeOwnerId: params.pluginRuntimeOwnerId }
+      : {},
+  };
 }
 
 function createNodeClient(nodeId: string, commands?: string[]) {
@@ -553,6 +575,72 @@ describe("node.invoke APNs wake path", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("rejects browser.proxy for plugin runtime owners without admin scope", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "browser-node",
+        commands: ["browser.proxy"],
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({
+        scopes: ["operator.write"],
+        pluginRuntimeOwnerId: "third-party",
+      }),
+      requestParams: {
+        nodeId: "browser-node",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toContain("missing scope: operator.admin");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("allows browser.proxy for admin-scoped plugin runtime callers", async () => {
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "browser-node",
+        commands: ["browser.proxy"],
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({
+        scopes: ["operator.admin"],
+        pluginRuntimeOwnerId: "google-meet",
+      }),
+      requestParams: {
+        nodeId: "browser-node",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
+      nodeId: "browser-node",
+      command: "browser.proxy",
+      params: { method: "GET", path: "/profiles" },
+    });
   });
 
   it("keeps the existing not-connected response when wake path is unavailable", async () => {

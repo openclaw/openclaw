@@ -1,7 +1,15 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
+/**
+ * Top-level gateway frame schemas.
+ *
+ * These are the WebSocket envelope contracts; method/event payload schemas live
+ * in feature-specific modules and are referenced by runtime validators.
+ */
+/** Periodic server heartbeat event payload. */
 export const TickEventSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -9,6 +17,7 @@ export const TickEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Server shutdown notice event payload. */
 export const ShutdownEventSchema = Type.Object(
   {
     reason: NonEmptyString,
@@ -17,6 +26,7 @@ export const ShutdownEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Initial client hello/connect payload sent before the gateway accepts frames. */
 export const ConnectParamsSchema = Type.Object(
   {
     minProtocol: Type.Integer({ minimum: 1 }),
@@ -60,6 +70,7 @@ export const ConnectParamsSchema = Type.Object(
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
           approvalRuntimeToken: Type.Optional(Type.String()),
+          agentRuntimeIdentityToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -70,6 +81,7 @@ export const ConnectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Successful gateway hello response with negotiated protocol and initial state. */
 export const HelloOkSchema = Type.Object(
   {
     type: Type.Literal("hello-ok"),
@@ -124,6 +136,7 @@ export const HelloOkSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Standard structured error shape used in response frames and connect failures. */
 export const ErrorShapeSchema = Type.Object(
   {
     code: NonEmptyString,
@@ -135,6 +148,7 @@ export const ErrorShapeSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Client request frame envelope; `method` selects the payload validator. */
 export const RequestFrameSchema = Type.Object(
   {
     type: Type.Literal("req"),
@@ -145,6 +159,7 @@ export const RequestFrameSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Server response frame envelope paired with a prior request id. */
 export const ResponseFrameSchema = Type.Object(
   {
     type: Type.Literal("res"),
@@ -156,6 +171,7 @@ export const ResponseFrameSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Server event frame envelope; `event` selects the payload validator. */
 export const EventFrameSchema = Type.Object(
   {
     type: Type.Literal("event"),

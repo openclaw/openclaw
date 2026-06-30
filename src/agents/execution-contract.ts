@@ -1,3 +1,6 @@
+/**
+ * Resolves strict agentic execution contracts for provider/model pairs.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";
@@ -69,19 +72,18 @@ export function isStrictAgenticSupportedProviderModel(params: {
  * - Supported provider/model + explicit `"default"` in config ⇒ `"default"`
  *   (opt-out honored).
  * - Supported provider/model + unspecified ⇒ `"strict-agentic"` so the
- *   no-stall completion-gate criterion applies to out-of-the-box GPT-5 runs
- *   without requiring every user to set the flag.
+ *   structured plan tool and non-visible turn recovery apply to out-of-the-box
+ *   GPT-5 runs without requiring every user to set the flag.
  * - Unsupported provider/model (anything that is not openai
  *   with a gpt-5-family model id) ⇒ `"default"`, even when the config
- *   explicitly sets `"strict-agentic"`. The retry guard and blocked-exit
- *   helpers all check this lane again, so an explicit `"strict-agentic"`
- *   on an unsupported lane is a no-op rather than a hard failure.
+ *   explicitly sets `"strict-agentic"`. The structured guards check this lane
+ *   again, so an explicit `"strict-agentic"` on an unsupported lane is a no-op
+ *   rather than a hard failure.
  *
- * This means explicit opt-out still works, but the gate criterion
- * "GPT-5.4 no longer stalls after planning" now covers unconfigured
- * installations, not only users who opted in manually.
+ * Explicit opt-out still works. Assistant prose is never classified to decide
+ * whether a turn represents planning, progress, or completion.
  */
-export function resolveEffectiveExecutionContract(params: {
+function resolveEffectiveExecutionContract(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string | null;

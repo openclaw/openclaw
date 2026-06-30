@@ -1,6 +1,11 @@
+// Control UI tests cover markdown behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import {
+  blockArtCodeBlockCopyPayloadEncoding,
+  decodeCodeBlockCopyPayload,
+} from "./chat/code-block-copy-payload.ts";
 import {
   md,
   toSanitizedMarkdownHtml,
@@ -13,6 +18,28 @@ function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
   container.innerHTML = html;
   return container;
+}
+
+function escapedCodeBlockCopyAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
+  Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
+    value: basePath,
+    writable: true,
+    configurable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  }
 }
 
 describe("toSanitizedMarkdownHtml", () => {
@@ -345,6 +372,8 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("code blocks", () => {
+    const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+
     it("renders fenced code blocks", () => {
       const html = toSanitizedMarkdownHtml("```ts\nconsole.log(1)\n```");
       const fragment = htmlFragment(html);
@@ -352,23 +381,42 @@ describe("toSanitizedMarkdownHtml", () => {
       const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
 
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("ts");
-      expect(copy?.dataset.code).toBe("console.log(1)");
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe("console.log(1)");
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
       expect(code?.classList.contains("language-ts")).toBe(true);
       expect(code?.textContent).toBe("console.log(1)\n");
+    });
+
+    it("renders raw block art as a whitespace-preserving code block", () => {
+      const html = toSanitizedMarkdownHtml(blockArt);
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code.markdown-block-art");
+
+      expect(fragment.querySelector("p")).toBeNull();
+      expect(code?.textContent).toBe(blockArt);
+    });
+
+    it("marks fenced block art without syntax highlighting", () => {
+      const html = toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``);
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code.markdown-block-art");
+
+      expect(code?.classList.contains("hljs")).toBe(false);
+      expect(code?.textContent).toBe(`${blockArt}\n`);
     });
 
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
       expect(html).toBe(
-        '<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="indented code" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>',
+        `<p>text</p>\n<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("indented code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>indented code\n</code></pre></div>`,
       );
     });
 
     it("includes copy button", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
       expect(html).toBe(
-        '<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="code" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>',
+        `<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="${escapedCodeBlockCopyAttribute("code")}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>`,
       );
     });
 
@@ -413,9 +461,39 @@ PY
 
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("js");
       expect(copy?.dataset.code).toBe(source.trimEnd());
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe(source.trimEnd());
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
       expect(code?.textContent).toBe(source);
       expect(code?.querySelector(".hljs-keyword")?.textContent).toBe("const");
       expect(code?.querySelector(".hljs-string")?.textContent).toBe('"yes"');
+    });
+
+    it("keeps ordinary code blocks raw when they start with the block-art prefix", () => {
+      const source = 'openclaw:block-art-code:"literal"\n';
+      const html = toSanitizedMarkdownHtml(`\`\`\`txt\n${source}\`\`\``);
+      const fragment = htmlFragment(html);
+      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(copy?.dataset.code).toBe(source.trimEnd());
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+        source.trimEnd(),
+      );
+    });
+
+    it("keeps boundary spaces in encoded copy payloads after sanitization", () => {
+      const source = "  ▀▀▀▀  \n  ▄▄▄▄  ";
+      const html = toSanitizedMarkdownHtml(`\`\`\`\n${source}\n\`\`\``);
+      const fragment = htmlFragment(html);
+      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(copy?.dataset.code).not.toMatch(/^\s|\s$/);
+      expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
+      expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+        source,
+      );
+      expect(fragment.querySelector("pre code")?.textContent).toBe(`${source}\n`);
     });
 
     it("highlights collapsed JSON code blocks", () => {
@@ -464,6 +542,9 @@ PY
         const chineseCopy = chineseFragment.querySelector<HTMLButtonElement>(".code-block-copy");
 
         expect(englishCopy?.dataset.code).toBe("const localizedCopy = true;");
+        expect(decodeCodeBlockCopyPayload(englishCopy?.dataset.code ?? "")).toBe(
+          "const localizedCopy = true;",
+        );
         expect(englishCopy?.getAttribute("aria-label")).toBe("Copy code");
         expect(englishCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
         expect(englishCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("Copied!");
@@ -472,6 +553,9 @@ PY
         );
 
         expect(chineseCopy?.dataset.code).toBe("const localizedCopy = true;");
+        expect(decodeCodeBlockCopyPayload(chineseCopy?.dataset.code ?? "")).toBe(
+          "const localizedCopy = true;",
+        );
         expect(chineseCopy?.getAttribute("aria-label")).toBe("复制代码");
         expect(chineseCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("复制");
         expect(chineseCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("已复制！");
@@ -493,6 +577,7 @@ PY
       expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
       expect(details?.querySelector(".code-block-lang")?.textContent).toBe("json");
       expect(copy?.dataset.code).toBe('{"key": "value"}');
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe('{"key": "value"}');
       expect(code?.classList.contains("language-json")).toBe(true);
       expect(code?.textContent).toBe('{"key": "value"}\n');
     });
@@ -586,6 +671,26 @@ PY
       const html = toSanitizedMarkdownHtml("[usage](/usage)");
       expect(html).toBe(
         '<p><a href="/usage" rel="noreferrer noopener" target="_blank">usage</a></p>\n',
+      );
+    });
+
+    it("rewrites docs-root links to the public docs host", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [refactor](/refactor/ingress-core)",
+      );
+      expect(html).toBe(
+        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/refactor/ingress-core" rel="noreferrer noopener" target="_blank">refactor</a></p>\n',
+      );
+    });
+
+    it("keeps app and resource routes instead of treating them as docs roots", () => {
+      const html = withControlUiBasePath("/control", () =>
+        toSanitizedMarkdownHtml(
+          "[channels](/channels) [automation](/automation) [workshop](/skills/workshop) [chat](/chat) [baseChat](/control/chat?session=abc) [baseSessions](/control/sessions) [health](/healthz) [pluginDynamic](/googlechat) [asset](/api/files/1) [baseApi](/control/api/files/1) [baseAvatar](/control/avatar/main) [plugin](/plugins/diffs/view/id/token) [basePlugin](/control/plugins/diffs/view/id/token) [artifact](/__openclaw__/canvas/documents/x/index.html) [baseArtifact](/control/__openclaw__/canvas/x)",
+        ),
+      );
+      expect(html).toBe(
+        '<p><a href="/channels" rel="noreferrer noopener" target="_blank">channels</a> <a href="/automation" rel="noreferrer noopener" target="_blank">automation</a> <a href="/skills/workshop" rel="noreferrer noopener" target="_blank">workshop</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/control/chat?session=abc" rel="noreferrer noopener" target="_blank">baseChat</a> <a href="/control/sessions" rel="noreferrer noopener" target="_blank">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
       );
     });
   });
@@ -705,6 +810,34 @@ describe("toStreamingPlainTextHtml", () => {
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
+    const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+    const html = toStreamingMarkdownHtml(blockArt);
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("pre code.markdown-block-art");
+
+    expect(fragment.querySelector("p")).toBeNull();
+    expect(code?.textContent).toBe(blockArt);
+  });
+
+  it("truncates oversized streaming raw block art before rendering", () => {
+    const line = "  ▀▀▀▀  ";
+    const blockArt = Array.from({ length: 20_000 }, () => line).join("\n");
+    const html = toStreamingMarkdownHtml(blockArt);
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("pre code.markdown-block-art");
+    const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+    expect(code?.textContent).toContain("… truncated");
+    expect(code?.textContent).toContain(`showing first 140000`);
+    expect(code?.textContent?.length).toBeLessThan(blockArt.length);
+    expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
+    expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
+    expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+      code?.textContent,
+    );
+  });
+
   it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
     const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
 

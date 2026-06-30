@@ -1,3 +1,8 @@
+/**
+ * Loaded channel plugin registry view.
+ *
+ * Normalizes and sorts active plugin runtime state for channel registry callers.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
@@ -6,11 +11,17 @@ import type {
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
+/**
+ * Loaded channel plugin shape after id/meta normalization.
+ */
 export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
+/**
+ * Loaded channel registry entry with a normalized plugin payload.
+ */
 export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: LoadedChannelPlugin;
 };
@@ -29,6 +40,8 @@ function coerceLoadedChannelPlugin(
     return null;
   }
   if (!plugin.meta || typeof plugin.meta !== "object") {
+    // Loaded plugin metadata is optional at the runtime-state boundary, but
+    // channel sorting expects an object so normalize it once at read time.
     plugin.meta = {};
   }
   return plugin as LoadedChannelPlugin;
@@ -66,6 +79,8 @@ function resolveChannelPlugins(): ChannelPluginView {
   const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
+    // Explicit plugin order wins; known built-ins keep their product order;
+    // unknown extension channels sort after them by id for deterministic lists.
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
     const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
     if (orderA !== orderB) {
@@ -91,10 +106,16 @@ function resolveChannelPlugins(): ChannelPluginView {
   };
 }
 
+/**
+ * Lists loaded channel plugins in deterministic display/runtime order.
+ */
 export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
   return resolveChannelPlugins().sorted.slice();
 }
 
+/**
+ * Returns a loaded channel plugin by normalized id.
+ */
 export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
@@ -103,6 +124,9 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
   return resolveChannelPlugins().byId.get(resolvedId);
 }
 
+/**
+ * Returns the loaded channel registry entry by normalized plugin id.
+ */
 export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPluginEntry | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

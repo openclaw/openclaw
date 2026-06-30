@@ -1,3 +1,4 @@
+// Tests follow-up queue message-id dedupe and drain scheduling behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -151,6 +152,47 @@ describe("followup queue deduplication", () => {
     );
 
     expect(redelivery).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("deduplicates redelivery after reply policy changes", async () => {
+    const key = `test-dedup-policy-change-${Date.now()}`;
+    const { calls, done, runFollowup } = createFollowupCollector();
+
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "first",
+          messageId: "same-id",
+          originatingChannel: "slack",
+          originatingTo: "U123",
+          originatingReplyToId: "101.001",
+          originatingReplyToMode: "off",
+          originatingChatType: "direct",
+        }),
+        collectSettings,
+      ),
+    ).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "redelivery",
+          messageId: "same-id",
+          originatingChannel: "slack",
+          originatingTo: "U123",
+          originatingReplyToId: "101.001",
+          originatingReplyToMode: "first",
+          originatingChatType: "direct",
+        }),
+        collectSettings,
+      ),
+    ).toBe(false);
     expect(calls).toHaveLength(1);
   });
 

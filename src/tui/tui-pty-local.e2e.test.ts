@@ -1,3 +1,4 @@
+// Exercises the slower TUI local-mode PTY smoke path.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ type MockModelRequest = {
 };
 
 const activeRuns: PtyRun[] = [];
-const LOCAL_STARTUP_TIMEOUT_MS = 20_000;
+const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;

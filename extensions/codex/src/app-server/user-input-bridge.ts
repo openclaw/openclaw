@@ -1,5 +1,14 @@
+/**
+ * Bridges Codex item/tool user-input requests to OpenClaw messaging prompts and
+ * turns replies into app-server answer payloads.
+ */
 import {
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
   embeddedAgentLog,
+  emptyAgentHarnessUserInputAnswers,
+  type AgentHarnessUserInputOption,
+  type AgentHarnessUserInputQuestion,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
@@ -15,23 +24,9 @@ type PendingUserInput = {
   threadId: string;
   turnId: string;
   itemId: string;
-  questions: UserInputQuestion[];
+  questions: AgentHarnessUserInputQuestion[];
   resolve: (value: JsonValue) => void;
   cleanup: () => void;
-};
-
-type UserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  isOther: boolean;
-  isSecret: boolean;
-  options: UserInputOption[] | null;
-};
-
-type UserInputOption = {
-  label: string;
-  description: string;
 };
 
 type CodexUserInputBridge = {
@@ -44,6 +39,7 @@ type CodexUserInputBridge = {
   cancelPending: () => void;
 };
 
+/** Creates a per-turn bridge for pending Codex user-input requests. */
 export function createCodexUserInputBridge(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
@@ -137,7 +133,7 @@ function readUserInputParams(value: JsonValue | undefined):
       threadId: string;
       turnId: string;
       itemId: string;
-      questions: UserInputQuestion[];
+      questions: AgentHarnessUserInputQuestion[];
     }
   | undefined {
   if (!isJsonObject(value)) {
@@ -152,11 +148,11 @@ function readUserInputParams(value: JsonValue | undefined):
   }
   const questions = questionsRaw
     .map(readQuestion)
-    .filter((question): question is UserInputQuestion => Boolean(question));
+    .filter((question): question is AgentHarnessUserInputQuestion => Boolean(question));
   return { threadId, turnId, itemId, questions };
 }
 
-function readQuestion(value: JsonValue): UserInputQuestion | undefined {
+function readQuestion(value: JsonValue): AgentHarnessUserInputQuestion | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
@@ -176,17 +172,17 @@ function readQuestion(value: JsonValue): UserInputQuestion | undefined {
   };
 }
 
-function readOptions(value: JsonValue | undefined): UserInputOption[] | null {
+function readOptions(value: JsonValue | undefined): AgentHarnessUserInputOption[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
   const options = value
     .map(readOption)
-    .filter((option): option is UserInputOption => Boolean(option));
+    .filter((option): option is AgentHarnessUserInputOption => Boolean(option));
   return options.length > 0 ? options : null;
 }
 
-function readOption(value: JsonValue): UserInputOption | undefined {
+function readOption(value: JsonValue): AgentHarnessUserInputOption | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
@@ -197,114 +193,25 @@ function readOption(value: JsonValue): UserInputOption | undefined {
 
 async function deliverUserInputPrompt(
   params: EmbeddedRunAttemptParams,
-  questions: UserInputQuestion[],
+  questions: AgentHarnessUserInputQuestion[],
 ): Promise<void> {
-  const text = formatUserInputPrompt(questions);
-  if (params.onBlockReply) {
-    await params.onBlockReply({ text });
-    return;
-  }
-  await params.onPartialReply?.({ text });
-}
-
-function formatUserInputPrompt(questions: UserInputQuestion[]): string {
-  const lines = ["Codex needs input:"];
-  questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push(
-        "",
-        `${index + 1}. ${formatCodexDisplayText(question.header)}`,
-        formatCodexDisplayText(question.question),
-      );
-    } else {
-      lines.push(
-        "",
-        formatCodexDisplayText(question.header),
-        formatCodexDisplayText(question.question),
-      );
-    }
-    if (question.isSecret) {
-      lines.push("This channel may show your reply to other participants.");
-    }
-    question.options?.forEach((option, optionIndex) => {
-      lines.push(
-        `${optionIndex + 1}. ${formatCodexDisplayText(option.label)}${
-          option.description ? ` - ${formatCodexDisplayText(option.description)}` : ""
-        }`,
-      );
-    });
-    if (question.isOther) {
-      lines.push("Other: reply with your own answer.");
-    }
+  await deliverAgentHarnessUserInputPrompt(params, questions, {
+    formatText: formatCodexDisplayText,
+    intro: "Codex needs input:",
   });
-  return lines.join("\n");
 }
 
-function buildUserInputResponse(questions: UserInputQuestion[], inputText: string): JsonObject {
-  const answers: JsonObject = {};
-  if (questions.length === 1) {
-    const question = questions[0];
-    if (question) {
-      const answer = normalizeAnswer(inputText, question);
-      answers[question.id] = { answers: answer ? [answer] : [] };
-    }
-    return { answers };
-  }
-
-  const keyed = parseKeyedAnswers(inputText);
-  const fallbackLines = inputText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  questions.forEach((question, index) => {
-    const key =
-      keyed.get(question.id.toLowerCase()) ??
-      keyed.get(question.header.toLowerCase()) ??
-      keyed.get(question.question.toLowerCase()) ??
-      keyed.get(String(index + 1));
-    const answer = key ?? fallbackLines[index] ?? "";
-    const normalized = answer ? normalizeAnswer(answer, question) : undefined;
-    answers[question.id] = { answers: normalized ? [normalized] : [] };
-  });
-  return { answers };
-}
-
-function normalizeAnswer(answer: string, question: UserInputQuestion): string | undefined {
-  const trimmed = answer.trim();
-  const options = question.options ?? [];
-  const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
-  const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.label;
-  }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  if (options.length > 0 && !question.isOther) {
-    return undefined;
-  }
-  return trimmed || undefined;
-}
-
-function parseKeyedAnswers(inputText: string): Map<string, string> {
-  const answers = new Map<string, string>();
-  for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const key = match[1]?.trim().toLowerCase();
-    const value = match[2]?.trim();
-    if (key && value) {
-      answers.set(key, value);
-    }
-  }
-  return answers;
+function buildUserInputResponse(
+  questions: AgentHarnessUserInputQuestion[],
+  inputText: string,
+): JsonObject {
+  // Multi-question replies may use "header: answer" or numbered lines. Keep the
+  // parser permissive so chat-channel replies remain ergonomic.
+  return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
 }
 
 function emptyUserInputResponse(): JsonObject {
-  return { answers: {} };
+  return emptyAgentHarnessUserInputAnswers() as unknown as JsonObject;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

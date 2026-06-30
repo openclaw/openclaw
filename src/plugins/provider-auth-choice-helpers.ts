@@ -1,3 +1,4 @@
+// Normalizes provider auth choice metadata from plugin setup surfaces.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -91,6 +92,22 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
     }
   }
   return next as T;
+}
+
+function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
+  if (!isPlainRecord(target) || !isPlainRecord(patch)) {
+    return target;
+  }
+
+  const targetRecord = target as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      delete targetRecord[key];
+      continue;
+    }
+    deleteUndefinedPatchLeaves(targetRecord[key], value);
+  }
+  return target;
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -258,7 +275,9 @@ export function applyProviderAuthConfigPatch(
   patch: unknown,
   options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const merged = normalizeConfigModelRefsForWrite(mergeConfigPatch(cfg, patch));
+  const merged = normalizeConfigModelRefsForWrite(
+    deleteUndefinedPatchLeaves(mergeConfigPatch(cfg, patch), patch),
+  );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }

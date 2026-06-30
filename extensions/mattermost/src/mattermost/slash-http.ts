@@ -31,7 +31,10 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  createMattermostReplyDeliveryBarrier,
+  deliverMattermostReplyPayload,
+} from "./reply-delivery.js";
 import {
   buildModelsProviderData,
   createChannelMessageReplyPipeline,
@@ -889,10 +892,16 @@ async function handleSlashCommandAsync(params: {
     },
   });
   const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
+  const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+    isDirect: kind === "direct",
+    dmRetryOptions: account.config.dmChannelRetry,
+  });
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       ...replyPipeline,
+      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+      onDeliverySettled: deliveryBarrier.markDeliverySettled,
       humanDelay,
       deliver: async (payload: ReplyPayload) => {
         await deliverMattermostReplyPayload({
@@ -905,6 +914,7 @@ async function handleSlashCommandAsync(params: {
           textLimit,
           tableMode,
           sendMessage: sendMessageMattermost,
+          onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
         });
         runtime.log?.(`delivered slash reply to ${to}`);
       },

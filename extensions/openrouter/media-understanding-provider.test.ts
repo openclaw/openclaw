@@ -1,3 +1,4 @@
+// Openrouter tests cover media understanding provider plugin behavior.
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -23,6 +24,8 @@ const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRe
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
   requireTranscriptionText: (value: string | undefined, message: string) => {
     const text = value?.trim();
     if (!text) {

@@ -1,9 +1,12 @@
+// Control UI chat module implements tool cards behavior.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import { isMarkdownBlockArtText } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
@@ -412,15 +415,20 @@ function renderPreviewFrame(params: {
   height?: number;
   sandbox?: string;
 }) {
-  return html`
-    <iframe
-      class="chat-tool-card__preview-frame"
-      title=${params.title}
-      sandbox=${params.sandbox ?? ""}
-      src=${params.src ?? nothing}
-      style=${params.height ? `height:${params.height}px` : ""}
-    ></iframe>
-  `;
+  const sandbox = params.sandbox ?? "";
+  const src = params.src ?? "";
+  return keyed(
+    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
+    html`
+      <iframe
+        class="chat-tool-card__preview-frame"
+        title=${params.title}
+        sandbox=${sandbox}
+        src=${src || nothing}
+        style=${params.height ? `height:${params.height}px` : ""}
+      ></iframe>
+    `,
+  );
 }
 
 export function renderToolPreview(
@@ -543,6 +551,7 @@ function renderToolDataBlock(params: {
   empty?: boolean;
 }) {
   const { label, text, expanded, empty } = params;
+  const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
   return html`
     <div class="chat-tool-card__block ${expanded ? "chat-tool-card__block--expanded" : ""}">
       <div class="chat-tool-card__block-header">
@@ -552,7 +561,9 @@ function renderToolDataBlock(params: {
       ${empty
         ? html`<div class="chat-tool-card__block-empty muted">${text}</div>`
         : expanded
-          ? html`<pre class="chat-tool-card__block-content"><code>${text}</code></pre>`
+          ? html`<pre
+              class="chat-tool-card__block-content"
+            ><code class=${codeClass}>${text}</code></pre>`
           : html`<div class="chat-tool-card__block-preview mono">
               ${getTruncatedPreview(text)}
             </div>`}

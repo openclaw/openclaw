@@ -1,3 +1,8 @@
+/**
+ * AbortSignal-aware promise racing helper for embedded-agent attempts.
+ */
+import { toErrorObject } from "../../../infra/errors.js";
+
 function getAbortReason(signal: AbortSignal): unknown {
   return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
 }
@@ -14,6 +19,11 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/**
+ * Races a promise against an AbortSignal while preserving normal promise
+ * settlement. Abort wins immediately and rejected non-Error payloads are
+ * normalized so callers can safely log/inspect them as Error objects.
+ */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
@@ -31,22 +41,8 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
       },
     );
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

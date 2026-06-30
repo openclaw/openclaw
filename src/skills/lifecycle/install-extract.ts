@@ -1,3 +1,4 @@
+// Install extraction helpers validate and unpack skill archives into install roots.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -13,7 +14,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
-export type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
+type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
 type TarPreflightResult = {
   entries: string[];
   metadata: ReturnType<typeof parseTarVerboseMetadata>;

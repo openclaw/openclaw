@@ -1,5 +1,7 @@
+// Whatsapp plugin module implements session behavior.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
+import type { GroupMetadata, WAMessageKey, proto } from "baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
@@ -27,7 +29,6 @@ import {
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
 import {
-  DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
@@ -63,10 +64,11 @@ export {
 } from "./creds-persistence.js";
 export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+export const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
@@ -124,6 +126,30 @@ async function printTerminalQr(qr: string): Promise<void> {
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
+function resolveWaWebSocketUrl(value: string | URL | undefined): string | URL | undefined {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.trim() || undefined;
+}
+
+function resolveEnvWaWebSocketUrl(): string | undefined {
+  const value = resolveWaWebSocketUrl(process.env[OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV]);
+  if (!value) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV} must be a valid URL.`);
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error(`${OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV} must use ws:// or wss://.`);
+  }
+  return url.toString();
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -134,6 +160,9 @@ export async function createWaSocket(
   opts: {
     authDir?: string;
     onQr?: (qr: string) => void;
+    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+    waWebSocketUrl?: string | URL;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -160,6 +189,7 @@ export async function createWaSocket(
     await writeCredsJsonAtomically(authDir, state.creds);
   };
   const { version } = await fetchLatestBaileysVersion();
+  const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
   const socketTiming = {
@@ -185,6 +215,9 @@ export async function createWaSocket(
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
+    ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
+    ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
+    ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
@@ -311,21 +344,41 @@ function normalizeEnvProxyValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export type WhatsAppConnectionWaitOptions =
+  | {
+      timeout: "none";
+    }
+  | {
+      timeoutMs: number;
+    };
+
+export async function waitForWaConnection(
+  sock: ReturnType<typeof makeWASocket>,
+  options: WhatsAppConnectionWaitOptions = { timeout: "none" },
+) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
     };
     const evWithOff = sock.ev as unknown as OffCapable;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      evWithOff.off?.("connection.update", handler);
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
 
     const handler = (...args: unknown[]) => {
       const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
       if (update.connection === "open") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         resolve();
       }
       if (update.connection === "close") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         reject(
           toLintErrorObject(
             update.lastDisconnect ?? new Error("Connection closed"),
@@ -336,6 +389,15 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     };
 
     sock.ev.on("connection.update", handler);
+
+    if ("timeoutMs" in options) {
+      const timeoutMs = options.timeoutMs;
+      timer = setTimeout(() => {
+        cleanup();
+        reject(createConnectionTimeoutError(timeoutMs));
+      }, timeoutMs);
+      timer.unref?.();
+    }
   });
 }
 
@@ -354,5 +416,15 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
     Object.assign(error, value);
   }
+  return error;
+}
+
+function createConnectionTimeoutError(timeoutMs: number): Error {
+  const error = new Error(`WhatsApp connection timed out after ${timeoutMs}ms`);
+  Object.assign(error, {
+    output: {
+      statusCode: 408,
+    },
+  });
   return error;
 }

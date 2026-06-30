@@ -32,7 +32,8 @@ For multi-endpoint setups with memory-specific providers, `provider` can also
 be a custom `models.providers.<id>` entry, such as `ollama-5080`, when that
 provider sets `api: "ollama"` or another memory embedding adapter owner.
 
-For local embeddings with no API key, set `provider: "local"`. Source checkouts
+For local embeddings with no API key, install
+`@openclaw/llama-cpp-provider` and set `provider: "local"`. Source checkouts
 may still require native build approval: `pnpm approve-builds` then
 `pnpm rebuild node-llama-cpp`.
 
@@ -76,9 +77,16 @@ flowchart LR
 - **BM25 keyword search** finds exact matches (IDs, error strings, config
   keys).
 
-If only one path is available (no embeddings or no FTS), the other runs alone.
+If only one path is available, the other runs alone. Intentional FTS-only mode
+(`provider: "none"`) and automatic/default provider selection can still use
+lexical ranking when embeddings are unavailable.
 
-When embeddings are unavailable, OpenClaw still uses lexical ranking over FTS results instead of falling back to raw exact-match ordering only. That degraded mode boosts chunks with stronger query-term coverage and relevant file paths, which keeps recall useful even without `sqlite-vec` or an embedding provider.
+Explicit non-local embedding providers are different. If you set
+`memorySearch.provider` to a concrete remote-backed provider and that provider
+is unavailable at runtime, `memory_search` reports memory as unavailable instead
+of silently using FTS-only results. This keeps a broken configured semantic
+provider visible. Set `provider: "none"` for deliberate FTS-only recall, or fix
+the provider/auth configuration to restore semantic ranking.
 
 ## Improving search quality
 
@@ -135,7 +143,17 @@ setup.
 
 You can optionally index session transcripts so `memory_search` can recall
 earlier conversations. This is opt-in via
-`memorySearch.experimental.sessionMemory`. See the
+`memorySearch.experimental.sessionMemory` and `sources: ["sessions"]`; the default
+source list is memory-only. The experimental flag enables session transcript
+indexing, while `sources` controls whether session chunks are searched.
+
+Session hits obey `tools.sessions.visibility`: the default `tree` setting only
+exposes the current session and sessions it spawned. To recall an unrelated
+same-agent gateway-dispatched session from a separate DM session, intentionally
+widen visibility to `agent`.
+
+When using QMD, also set `memory.qmd.sessions.enabled: true` so transcripts are
+exported into a QMD collection. See the
 [configuration reference](/reference/memory-config) for details.
 
 ## Troubleshooting

@@ -1,3 +1,4 @@
+// Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.js";
@@ -6,6 +7,7 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+// Tolerates history timestamps slightly before locally pending messages.
 const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
 
 type RepeatableSystemMessage = {
@@ -15,6 +17,7 @@ type RepeatableSystemMessage = {
   count: number;
 };
 
+/** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
@@ -37,6 +40,7 @@ export class ChatLog extends Container {
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
   }
 
+  // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
     for (const [toolId, tool] of this.toolById.entries()) {
       if (tool === component) {
@@ -194,10 +198,6 @@ export class ChatLog extends Container {
     return component;
   }
 
-  commitPendingUser(runId: string) {
-    return this.pendingUsers.delete(runId);
-  }
-
   dropPendingUser(runId: string) {
     const existing = this.pendingUsers.get(runId);
     if (!existing) {
@@ -208,8 +208,20 @@ export class ChatLog extends Container {
     return true;
   }
 
-  hasPendingUser(runId: string) {
-    return this.pendingUsers.has(runId);
+  // Re-key in place: the gateway can assign its own runId after the optimistic
+  // row is rendered. Swap the map key without re-mounting the component so the
+  // row keeps its transcript position even if a reply already rendered below it.
+  rekeyPendingUser(fromRunId: string, toRunId: string) {
+    if (fromRunId === toRunId) {
+      return false;
+    }
+    const existing = this.pendingUsers.get(fromRunId);
+    if (!existing) {
+      return false;
+    }
+    this.pendingUsers.delete(fromRunId);
+    this.pendingUsers.set(toRunId, existing);
+    return true;
   }
 
   reconcilePendingUsers(
@@ -218,6 +230,7 @@ export class ChatLog extends Container {
       timestamp?: number | null;
     }>,
   ) {
+    // Gateway history may echo a just-submitted local message; remove pending rows when it does.
     const normalizedHistory = historyUsers
       .map((entry) => ({
         text: entry.text.trim(),
@@ -348,14 +361,6 @@ export class ChatLog extends Container {
     this.toolById.set(toolCallId, component);
     this.appendNonSystem(component);
     return component;
-  }
-
-  updateToolArgs(toolCallId: string, args: unknown) {
-    const existing = this.toolById.get(toolCallId);
-    if (!existing) {
-      return;
-    }
-    existing.setArgs(args);
   }
 
   updateToolResult(

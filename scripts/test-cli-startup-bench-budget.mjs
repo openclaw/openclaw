@@ -1,3 +1,4 @@
+// Compares CLI startup benchmark reports against checked-in budgets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
@@ -35,6 +36,11 @@ if (process.argv.slice(2).includes("--help")) {
       "                                Fail if avg first-output time regresses more than this percent",
       "  --max-rss-regression-pct <n>  Fail if avg RSS regresses more than this percent",
       "  --skip-baseline               Skip fixture regression checks and enforce case contracts only",
+      "  --skip-response-budgets       Skip response first-output and exit budget contracts",
+      "",
+      "Non-x64 runs skip fixture regression checks by default because the",
+      "checked-in startup fixture is a canonical x64 budget. Response contracts still run. Set",
+      "OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH=1 to force them.",
       "  --help                        Show this help text",
       "",
       "Example:",
@@ -63,6 +69,7 @@ try {
       maxRssRegressionPct:
         readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT") ?? 20,
       skipBaseline: false,
+      skipResponseBudgets: false,
     },
     [
       stringFlag("--baseline", "baseline"),
@@ -76,11 +83,24 @@ try {
       budgetFloatFlag("--max-first-output-regression-pct", "maxFirstOutputRegressionPct"),
       budgetFloatFlag("--max-rss-regression-pct", "maxRssRegressionPct"),
       booleanFlag("--skip-baseline", "skipBaseline"),
+      booleanFlag("--skip-response-budgets", "skipResponseBudgets"),
     ],
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
+}
+
+const shouldAutoSkipNonCanonicalBaselineChecks =
+  process.arch !== "x64" && process.env.OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH !== "1";
+if (shouldAutoSkipNonCanonicalBaselineChecks && !opts.skipBaseline) {
+  console.warn(
+    `[test-cli-startup-bench-budget] skipping x64 startup fixture budgets on ${process.arch}; response contracts and sample output validation still ran. Set OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH=1 to force fixture checks.`,
+  );
+  opts = {
+    ...opts,
+    skipBaseline: true,
+  };
 }
 
 function resolveCurrentReportPath() {
@@ -134,17 +154,55 @@ const current = readJsonFile(resolveCurrentReportPath());
 const baselineCases = indexCases(baseline);
 const currentCases = indexCases(current);
 const shouldRequireEveryBaselineCase = opts.preset === "all";
+const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
 
 let failed = false;
+
+if (currentCases.size === 0) {
+  console.error(
+    `[test-cli-startup-bench-budget] current report has no cases for preset ${opts.preset}`,
+  );
+  failed = true;
+}
+
+for (const [id] of baselineCases) {
+  if (shouldRequireEveryBaselineCase && !currentCases.has(id)) {
+    console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
+    failed = true;
+  }
+}
+if (
+  !opts.skipBaseline &&
+  !shouldRequireEveryBaselineCase &&
+  baselineCases.size > 0 &&
+  matchedBaselineCaseIds.length === 0
+) {
+  console.error(
+    `[test-cli-startup-bench-budget] no current cases matched the baseline for preset ${opts.preset}`,
+  );
+  failed = true;
+}
+
+for (const currentCase of currentCases.values()) {
+  const samples = currentCase.samples ?? [];
+  if (samples.length === 0) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} has no measured samples.`);
+    failed = true;
+  }
+  if (samples.some((sample) => sample.timedOut === true)) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} timed out.`);
+    failed = true;
+  }
+  if (samples.some((sample) => !Number.isFinite(sample.maxRssMb))) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} did not report max RSS.`);
+    failed = true;
+  }
+}
 
 if (!opts.skipBaseline) {
   for (const [id, baselineCase] of baselineCases) {
     const currentCase = currentCases.get(id);
     if (!currentCase) {
-      if (shouldRequireEveryBaselineCase) {
-        console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
-        failed = true;
-      }
       continue;
     }
 
@@ -225,46 +283,52 @@ for (const currentCase of currentCases.values()) {
   }
 
   const badSample = (currentCase.samples ?? []).find(
-    (sample) => sample.exitCode !== 0 || sample.signal != null,
+    (sample) => sample.timedOut === true || sample.exitCode !== 0 || sample.signal != null,
   );
   if (badSample) {
     console.error(
       `[test-cli-startup-bench-budget] ${currentCase.name} exited ${String(
-        badSample.signal ?? badSample.exitCode,
+        badSample.timedOut === true ? "timeout" : (badSample.signal ?? badSample.exitCode),
       )}; response contract requires a clean exit.`,
     );
     failed = true;
   }
 
-  const firstOutputBudgetMs = contract.firstOutputBudgetMs;
-  const firstOutputMax = currentCase.summary?.firstOutputMs?.max;
-  if (Number.isFinite(firstOutputBudgetMs)) {
-    if (!Number.isFinite(firstOutputMax)) {
+  if (!opts.skipResponseBudgets) {
+    const firstOutputBudgetMs = contract.firstOutputBudgetMs;
+    const firstOutputMax = currentCase.summary?.firstOutputMs?.max;
+    if (Number.isFinite(firstOutputBudgetMs)) {
+      if (!Number.isFinite(firstOutputMax)) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${currentCase.name} produced no stdout/stderr before exit; response contract requires first output within ${formatMs(
+            firstOutputBudgetMs,
+          )}.`,
+        );
+        failed = true;
+      } else if (firstOutputMax > firstOutputBudgetMs) {
+        console.error(
+          `[test-cli-startup-bench-budget] ${currentCase.name} first output ${formatMs(
+            firstOutputMax,
+          )} exceeded contract ${formatMs(firstOutputBudgetMs)}.`,
+        );
+        failed = true;
+      }
+    }
+
+    const exitBudgetMs = contract.exitBudgetMs;
+    const durationMax = currentCase.summary?.durationMs?.max;
+    if (
+      Number.isFinite(exitBudgetMs) &&
+      Number.isFinite(durationMax) &&
+      durationMax > exitBudgetMs
+    ) {
       console.error(
-        `[test-cli-startup-bench-budget] ${currentCase.name} produced no stdout/stderr before exit; response contract requires first output within ${formatMs(
-          firstOutputBudgetMs,
-        )}.`,
-      );
-      failed = true;
-    } else if (firstOutputMax > firstOutputBudgetMs) {
-      console.error(
-        `[test-cli-startup-bench-budget] ${currentCase.name} first output ${formatMs(
-          firstOutputMax,
-        )} exceeded contract ${formatMs(firstOutputBudgetMs)}.`,
+        `[test-cli-startup-bench-budget] ${currentCase.name} exit ${formatMs(
+          durationMax,
+        )} exceeded contract ${formatMs(exitBudgetMs)}.`,
       );
       failed = true;
     }
-  }
-
-  const exitBudgetMs = contract.exitBudgetMs;
-  const durationMax = currentCase.summary?.durationMs?.max;
-  if (Number.isFinite(exitBudgetMs) && Number.isFinite(durationMax) && durationMax > exitBudgetMs) {
-    console.error(
-      `[test-cli-startup-bench-budget] ${currentCase.name} exit ${formatMs(
-        durationMax,
-      )} exceeded contract ${formatMs(exitBudgetMs)}.`,
-    );
-    failed = true;
   }
 }
 

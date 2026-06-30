@@ -1,3 +1,4 @@
+// Google Meet tests cover chrome browser proxy plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -35,6 +36,7 @@ describe("Google Meet Chrome browser proxy", () => {
         timeoutMs: 100,
       },
       timeoutMs: 5_100,
+      scopes: ["operator.admin"],
     });
   });
 

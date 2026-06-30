@@ -1,3 +1,4 @@
+/** Platform service registry and shared gateway service start/repair logic. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,7 @@ export type {
   GatewayServiceState,
 } from "./service-types.js";
 
+// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   write: (args: TArgs) => Promise<unknown>,
 ): (args: TArgs) => Promise<void> {
@@ -100,6 +102,8 @@ function mergeGatewayServiceEnv(
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_WINDOWS_TASK_NAME",
   ]) {
+    // Explicit caller env selects the target service identity; installed command
+    // env may come from a different profile or stale service file.
     const value = baseEnv[key]?.trim();
     if (value) {
       merged[key] = value;
@@ -141,6 +145,8 @@ function collectGatewayServiceStartRepairIssues(
   const issues: GatewayServiceStartRepairIssue[] = [];
   const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
   if (serviceVersion && serviceVersion !== VERSION) {
+    // Version drift often means the service points at old package paths; require
+    // reinstall/repair before pretending restart succeeded.
     issues.push({
       code: "version-mismatch",
       message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
@@ -258,6 +264,33 @@ export function describeGatewayServiceRestart(
 
 type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
 
+function createUnsupportedGatewayServiceError(): Error {
+  return new Error(`Gateway service install not supported on ${process.platform}`);
+}
+
+async function rejectUnsupportedGatewayService(): Promise<never> {
+  throw createUnsupportedGatewayServiceError();
+}
+
+function createUnsupportedGatewayService(): GatewayService {
+  return {
+    label: "Gateway service",
+    loadedText: "available",
+    notLoadedText: "not installed",
+    stage: rejectUnsupportedGatewayService,
+    install: rejectUnsupportedGatewayService,
+    uninstall: rejectUnsupportedGatewayService,
+    stop: rejectUnsupportedGatewayService,
+    restart: rejectUnsupportedGatewayService,
+    isLoaded: rejectUnsupportedGatewayService,
+    readCommand: async () => null,
+    readRuntime: async () => ({
+      status: "unknown",
+      detail: createUnsupportedGatewayServiceError().message,
+    }),
+  };
+}
+
 const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
   darwin: {
     label: "LaunchAgent",
@@ -304,6 +337,8 @@ function withFutureConfigGuard(service: GatewayService): GatewayService {
   return {
     ...service,
     stage: async (args) => {
+      // Service mutations rewrite durable launchd/systemd/schtasks files, so
+      // block them when config was produced by a newer OpenClaw.
       await assertFutureConfigActionAllowed("rewrite the gateway service");
       return await service.stage(args);
     },
@@ -336,5 +371,5 @@ export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
     return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
-  throw new Error(`Gateway service install not supported on ${process.platform}`);
+  return createUnsupportedGatewayService();
 }

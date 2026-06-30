@@ -1,3 +1,4 @@
+// Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   TaskDeliveryState,
@@ -22,6 +23,7 @@ export type DetachedTaskCreateParams = {
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;

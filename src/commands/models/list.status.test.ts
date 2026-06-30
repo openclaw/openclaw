@@ -1,4 +1,6 @@
+// Model list status tests cover status column construction and auth/probe summaries.
 import { describe, expect, it, type Mock, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -39,10 +41,15 @@ const mocks = vi.hoisted(() => {
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
     resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
+    resolveSessionAgentIds: vi.fn(({ agentId }: { agentId?: string } = {}) => ({
+      defaultAgentId: "main",
+      sessionAgentId: agentId ?? "main",
+    })),
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
+    listAgentEntries: vi.fn().mockReturnValue([{ id: "main" }, { id: "jeremiah" }]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
     listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
       return Object.entries(s.profiles)
@@ -82,15 +89,6 @@ const mocks = vi.hoisted(() => {
       }
       return null;
     }),
-    resolveProviderEnvApiKeyCandidates: vi.fn().mockReturnValue({
-      anthropic: ["ANTHROPIC_API_KEY"],
-      google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      minimax: ["MINIMAX_API_KEY"],
-      "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-      openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
-      fal: ["FAL_KEY"],
-    }),
-    resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
     resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
       aliasMap: { "codex-cli": "openai" },
       envCandidateMap: {
@@ -154,10 +152,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveSessionAgentIds: mocks.resolveSessionAgentIds,
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
   listAgentIds: mocks.listAgentIds,
+  listAgentEntries: mocks.listAgentEntries,
 }));
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
@@ -215,8 +215,6 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
-  resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
   resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
@@ -433,18 +431,10 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
     const localRuntime = createRuntime();
-    const previous = process.env.OPENCLAW_AGENT_DIR;
-    process.env.OPENCLAW_AGENT_DIR = "/tmp/openclaw-isolated-agent";
     mocks.resolveAgentDir.mockClear();
-    try {
+    await withEnvAsync({ OPENCLAW_AGENT_DIR: "/tmp/openclaw-isolated-agent" }, async () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previous;
-      }
-    }
+    });
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
@@ -455,25 +445,16 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("honors deprecated PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
     const localRuntime = createRuntime();
-    const previousOpenClaw = process.env.OPENCLAW_AGENT_DIR;
-    const previousPi = process.env.PI_CODING_AGENT_DIR;
-    delete process.env.OPENCLAW_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = "/tmp/openclaw-legacy-agent";
     mocks.resolveAgentDir.mockClear();
-    try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
-    } finally {
-      if (previousOpenClaw === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousOpenClaw;
-      }
-      if (previousPi === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPi;
-      }
-    }
+    await withEnvAsync(
+      {
+        OPENCLAW_AGENT_DIR: undefined,
+        PI_CODING_AGENT_DIR: "/tmp/openclaw-legacy-agent",
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+      },
+    );
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
@@ -731,6 +712,89 @@ describe("modelsStatusCommand auth overview", () => {
       }
       if (originalHealthImpl) {
         buildAuthHealthSummaryMock.mockImplementation(originalHealthImpl);
+      }
+    }
+  });
+
+  it("reports Gemini CLI OAuth for canonical Google text routed through the CLI runtime", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-flash-preview", fallbacks: [] },
+          models: {
+            "google/*": { agentRuntime: { id: "google-gemini-cli" } },
+          },
+          cliBackends: { "google-gemini-cli": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.store.profiles = {
+      "google-gemini-cli:user@example.test": {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-cli-access-token",
+        refresh: "gemini-cli-refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    };
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
+      provider === "google"
+        ? {
+            apiKey: "AIzaSyD-google-env-key-0123456789",
+            source: "env: GEMINI_API_KEY",
+          }
+        : null,
+    );
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(
+        requireRecord(
+          requireProvider(payload.auth.providers, "google").effective,
+          "google effective",
+        ),
+      ).toEqual(expect.objectContaining({ kind: "env" }));
+      expect(
+        requireRecord(
+          requireProvider(payload.auth.providers, "google-gemini-cli").effective,
+          "google-gemini-cli effective",
+        ),
+      ).toEqual({
+        kind: "profiles",
+        detail: "/tmp/openclaw-agent/auth-profiles.json",
+      });
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "google",
+          runtime: "google-gemini-cli",
+          authProvider: "google-gemini-cli",
+          status: "usable",
+          effective: {
+            kind: "profiles",
+            detail: "/tmp/openclaw-agent/auth-profiles.json",
+          },
+        },
+      ]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
     }
   });
@@ -1949,18 +2013,22 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes auth-evidence-only providers in the auth overview", async () => {
     const localRuntime = createRuntime();
     const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
-    const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
+    const originalLookupImpl = mocks.resolveProviderEnvAuthLookupMaps.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
 
     mocks.listProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
-    mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
-      "workspace-cloud": [
-        {
-          type: "local-file-with-env",
-          credentialMarker: "workspace-cloud-local-credentials",
-          source: "workspace cloud credentials",
-        },
-      ],
+    mocks.resolveProviderEnvAuthLookupMaps.mockReturnValue({
+      aliasMap: { "codex-cli": "openai" },
+      envCandidateMap: {},
+      authEvidenceMap: {
+        "workspace-cloud": [
+          {
+            type: "local-file-with-env",
+            credentialMarker: "workspace-cloud-local-credentials",
+            source: "workspace cloud credentials",
+          },
+        ],
+      },
     });
     mocks.resolveEnvApiKey.mockImplementation(
       (provider: string, _env?: NodeJS.ProcessEnv, options?: { workspaceDir?: string }) =>
@@ -1986,8 +2054,8 @@ describe("modelsStatusCommand auth overview", () => {
       if (originalKeysImpl) {
         mocks.listProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
       }
-      if (originalEvidenceImpl) {
-        mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);
+      if (originalLookupImpl) {
+        mocks.resolveProviderEnvAuthLookupMaps.mockImplementation(originalLookupImpl);
       }
       if (originalEnvImpl) {
         mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);

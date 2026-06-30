@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.6.2",
+  "version": "2026.6.10",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/msteams",
-      "version": "2026.6.2",
+      "version": "2026.6.10",
       "dependencies": {
         "@azure/identity": "4.13.1",
         "@microsoft/teams.api": "2.0.12",
@@ -15,7 +15,7 @@
         "typebox": "1.1.39"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.2"
+        "openclaw": ">=2026.6.10"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -50,9 +50,9 @@
       }
     },
     "node_modules/@azure/core-client": {
-      "version": "1.10.1",
-      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.10.1.tgz",
-      "integrity": "sha512-Nh5PhEOeY6PrnxNPsEHRr9eimxLwgLlpmguQaHKBinFYA/RU9+kOYVOQqOrTsCL+KSxrLLl1gD8Dk5BFW/7l/w==",
+      "version": "1.10.2",
+      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.10.2.tgz",
+      "integrity": "sha512-1D2LpsU7y9xrqKjdIbsB7PlrRePw0xsVV8p+AKTlzITrWmscajryfJCdDJB/oGwvDI5HmRo04eMMADB67uwAwQ==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -68,9 +68,9 @@
       }
     },
     "node_modules/@azure/core-rest-pipeline": {
-      "version": "1.23.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.23.0.tgz",
-      "integrity": "sha512-Evs1INHo+jUjwHi1T6SG6Ua/LHOQBCLuKEEE6efIpt4ZOoNonaT1kP32GoOcdNDbfqsD2445CPri3MubBy5DEQ==",
+      "version": "1.24.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.24.0.tgz",
+      "integrity": "sha512-PpLsoDQ3AMmKZ0VU+0GrmqMxgp/sExjlVm4R+nLWngeoEGAzOIPVifaxKGU5gMv+nWELUoHfvrolWD+ZS/nFJg==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -147,33 +147,33 @@
       }
     },
     "node_modules/@azure/msal-browser": {
-      "version": "5.11.0",
-      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.11.0.tgz",
-      "integrity": "sha512-zkGNYS3TwY8lUpPIafAmsFCYZbgFixY9y/LZB9GUg0IILoHTqpN26j5OrkL1AQThh/YdZsawe4iWXfp85lFVxg==",
+      "version": "5.12.0",
+      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.12.0.tgz",
+      "integrity": "sha512-eNf2aqx1C6I0yT1GEu5ukblFrmaBXGfe1bivpmlfqvK7giPZvoXLa404C8EfeHVsy6EIryfQuPRzuW1fPxWlHg==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.6.2"
+        "@azure/msal-common": "16.7.0"
       },
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-common": {
-      "version": "16.6.2",
-      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.6.2.tgz",
-      "integrity": "sha512-hQjjsekAjB00cM1EmatWJlzhEoK2Qhz7Rj5gvM6tYf8iL7RM3tkxlpU9fG0+ofkulzg9AEEA6dIEnSmDr5ZqUA==",
+      "version": "16.7.0",
+      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.7.0.tgz",
+      "integrity": "sha512-Jb8Y7pX6KM42SIT7KWP6YbY3+vLbwB5b5m+tpiiOzMU1QeyelQzs9lO8jv1e7/Uj9r7tg7VjPvW4T0KB1jF3UQ==",
       "license": "MIT",
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-node": {
-      "version": "5.2.2",
-      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.2.2.tgz",
-      "integrity": "sha512-toS+2AePxqyzb0YOKttDOOiSl3jrkK9aiqIvpurpis0O34QcIS5gToqrgT39p04Dpxw3YoUU0lxJKTpSFFfA6Q==",
+      "version": "5.2.3",
+      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.2.3.tgz",
+      "integrity": "sha512-YYX4TchEVddVBiybKvKhV9QO/q22jgewP+BVxKG7Uh115voPcviGlypbKERDsqQdAiSTJrwi80gcWFjYKdo8+Q==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.6.2",
+        "@azure/msal-common": "16.7.0",
         "jsonwebtoken": "^9.0.0"
       },
       "engines": {
@@ -290,18 +290,18 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "25.9.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
-      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
+      "version": "25.9.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.2.tgz",
+      "integrity": "sha512-G05zqtJhcDLb8uslf5EjCxXg9G1KQxiV8OS0R26IC//Eoyitzqe8z37I7cqvnZlrlSfgocQRfSn/AHBZJJFyGw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": ">=7.24.0 <7.24.7"
       }
     },
     "node_modules/@typespec/ts-http-runtime": {
-      "version": "0.3.5",
-      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.5.tgz",
-      "integrity": "sha512-yURCknZhvywvQItHMMmFSo+fq5arCUIyz/CVk7jD89MSai7dkaX8ufjCWp3NttLojoTVbcE72ri+be/TnEbMHw==",
+      "version": "0.3.6",
+      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.6.tgz",
+      "integrity": "sha512-jIXhD0eWQ1JA6ln/5Dltyx22UxWNrw0hZmhy2rlv6m6KgF7kplHx3g0fzi09lNmTJQRR91OlemYp3xFnvDK9og==",
       "license": "MIT",
       "dependencies": {
         "http-proxy-agent": "^7.0.0",
@@ -761,16 +761,15 @@
       }
     },
     "node_modules/form-data": {
-      "version": "2.5.4",
-      "resolved": "https://registry.npmjs.org/form-data/-/form-data-2.5.4.tgz",
-      "integrity": "sha512-Y/3MmRiR8Nd+0CUtrbvcKtKzLWiUfpQ7DFVggH8PwmGt/0r7RSy32GuP4hpCJlQNEBusisSx1DLtD8uD386HJQ==",
-      "deprecated": "This version has an incorrect dependency; please use v2.5.5",
+      "version": "2.5.6",
+      "resolved": "https://registry.npmjs.org/form-data/-/form-data-2.5.6.tgz",
+      "integrity": "sha512-Ogz/E85h9tlfJzpI6TuFpGcHZFhLrb9Gw8wq9v40CxSCPnv7ahKr6Xgtkn0KYCDQJ8DNn5VoMO8EXr9V5PadyA==",
       "license": "MIT",
       "dependencies": {
         "asynckit": "^0.4.0",
         "combined-stream": "^1.0.8",
         "es-set-tostringtag": "^2.1.0",
-        "has-own": "^1.0.1",
+        "hasown": "^2.0.4",
         "mime-types": "^2.1.35",
         "safe-buffer": "^5.2.1"
       },
@@ -874,13 +873,6 @@
       "funding": {
         "url": "https://github.com/sponsors/ljharb"
       }
-    },
-    "node_modules/has-own": {
-      "version": "1.0.1",
-      "resolved": "https://registry.npmjs.org/has-own/-/has-own-1.0.1.tgz",
-      "integrity": "sha512-RDKhzgQTQfMaLvIFhjahU+2gGnRBK6dYOd5Gd9BzkmnBneOCRYjRC003RIMrdAbH52+l+CnMS4bBCXGer8tEhg==",
-      "deprecated": "This project is not maintained. Use Object.hasOwn() instead.",
-      "license": "MIT"
     },
     "node_modules/has-symbols": {
       "version": "1.1.0",
@@ -1475,9 +1467,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.1",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.1.tgz",
-      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
+      "version": "7.8.4",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.4.tgz",
+      "integrity": "sha512-rUCObTnP32Q08R2uuIrt7r9PlEonuTmtuXYcW6s5kjdlj3xbnwe+21yXptAUYcMAABLkYYTtnmzb3w3EDZfueA==",
       "license": "ISC",
       "bin": {
         "semver": "bin/semver.js"

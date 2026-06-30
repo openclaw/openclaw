@@ -1,3 +1,4 @@
+// Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
@@ -55,7 +56,6 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("./migrate/skill-selection-prompt.js", () => ({
-  promptMigrationSelectionValues: mocks.multiselect,
   promptMigrationSkillSelectionValues: mocks.multiselect,
 }));
 

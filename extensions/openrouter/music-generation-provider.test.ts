@@ -1,3 +1,4 @@
+// Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,19 +39,69 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
   };
 });
 
-function sseResponse(lines: string[]): Response {
+function sseResponse(lines: string[], options?: { releaseLock?: () => void }): Response {
   const encoder = new TextEncoder();
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        for (const line of lines) {
-          controller.enqueue(encoder.encode(line));
-        }
-        controller.close();
-      },
-    }),
-    { status: 200, headers: { "content-type": "text/event-stream" } },
-  );
+  if (!options?.releaseLock) {
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const line of lines) {
+            controller.enqueue(encoder.encode(line));
+          }
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  const chunks: Array<ReadableStreamReadResult<Uint8Array>> = lines.map((line) => ({
+    done: false,
+    value: encoder.encode(line),
+  }));
+  chunks.push({ done: true, value: undefined });
+  const reader = {
+    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    cancel: async () => undefined,
+    releaseLock: options.releaseLock,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "text/event-stream" }),
+    body: {
+      getReader: () => reader,
+    },
+  } as Response;
+}
+
+function sseResponseLines(params: {
+  audio?: string;
+  transcript?: string;
+  done?: boolean;
+}): string[] {
+  const lines: string[] = [];
+  if (params.audio || params.transcript) {
+    lines.push(
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            delta: {
+              audio: {
+                ...(params.audio ? { data: params.audio } : {}),
+                ...(params.transcript ? { transcript: params.transcript } : {}),
+              },
+            },
+          },
+        ],
+      })}\n`,
+    );
+  }
+  if (params.done) {
+    lines.push("data: [DONE]\n");
+  }
+  return lines;
 }
 
 function stalledSseResponse(line: string): Response {
@@ -147,6 +198,32 @@ describe("openrouter music generation provider", () => {
     expect(result.tracks[0]?.buffer).toEqual(Buffer.from("wav-bytes"));
     expect(result.lyrics).toEqual(["line two"]);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("releases OpenRouter audio stream readers after completion", async () => {
+    const releaseLock = vi.fn();
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse(
+        sseResponseLines({
+          audio: Buffer.from("wav-bytes").toString("base64"),
+          done: true,
+        }),
+        { releaseLock },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-pro-preview",
+        prompt: "release stream reader",
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      tracks: [{ mimeType: "audio/wav" }],
+    });
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("decodes independently padded OpenRouter audio chunks", async () => {

@@ -1,11 +1,14 @@
+// Covers shared provider usage fetch parsing and error snapshots.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
+  readUsageJson,
 } from "./provider-usage.fetch.shared.js";
 
 function requireFetchCall(
@@ -106,6 +109,15 @@ describe("provider usage fetch shared helpers", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("cancels unread response bodies when discarding usage responses", async () => {
+    const response = new Response("not needed", { status: 429 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+
+    await discardUsageResponseBody(response);
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
       provider: "openai",
@@ -136,5 +148,89 @@ describe("provider usage fetch shared helpers", () => {
     });
 
     expect(snapshot.error).toBe("HTTP 429");
+  });
+
+  describe("readUsageJson", () => {
+    it("parses a normal-sized JSON response", async () => {
+      const response = new Response(
+        JSON.stringify({ windows: [{ label: "5h", usedPercent: 42 }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+
+      await expect(readUsageJson("anthropic", response)).resolves.toEqual({
+        ok: true,
+        data: { windows: [{ label: "5h", usedPercent: 42 }] },
+      });
+    });
+
+    it("parses UTF-8 BOM-prefixed JSON with fetch-compatible semantics", async () => {
+      const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+      const json = new TextEncoder().encode(JSON.stringify({ windows: [] }));
+      const combined = new Uint8Array(bom.length + json.length);
+      combined.set(bom);
+      combined.set(json, bom.length);
+      const response = new Response(combined, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      await expect(readUsageJson("anthropic", response)).resolves.toEqual({
+        ok: true,
+        data: { windows: [] },
+      });
+    });
+
+    it("rejects an oversized JSON response and cancels the stream", async () => {
+      let pullCount = 0;
+      const cancel = vi.fn(async () => undefined);
+      const oversizedStream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pullCount += 1;
+          controller.enqueue(new Uint8Array(pullCount === 1 ? 16 * 1024 * 1024 + 1 : 1));
+        },
+        cancel,
+      });
+      const response = new Response(oversizedStream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      await expect(readUsageJson("anthropic", response)).resolves.toEqual({
+        ok: false,
+        snapshot: expect.objectContaining({
+          provider: "anthropic",
+          error: "Malformed usage response",
+        }),
+      });
+      expect(pullCount).toBeLessThanOrEqual(2);
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it("handles a JSON parse error gracefully", async () => {
+      const response = new Response("not-json", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      await expect(readUsageJson("openai", response)).resolves.toEqual({
+        ok: false,
+        snapshot: expect.objectContaining({
+          provider: "openai",
+          error: "Malformed usage response",
+        }),
+      });
+    });
+
+    it("preserves provider name in malformed error snapshots", async () => {
+      const response = new Response("", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      await expect(readUsageJson("deepseek", response)).resolves.toEqual({
+        ok: false,
+        snapshot: expect.objectContaining({ provider: "deepseek" }),
+      });
+    });
   });
 });

@@ -1,3 +1,4 @@
+// Verifies manifest-driven model suppression behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -187,6 +188,13 @@ describe("manifest model suppression", () => {
         provider: "qwen",
         id: "qwen3.6-plus",
         baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
         env: process.env,
       })?.suppress,
     ).toBe(true);

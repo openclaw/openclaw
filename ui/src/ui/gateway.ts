@@ -1,3 +1,4 @@
+// Control UI module implements gateway behavior.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -524,7 +525,7 @@ export class GatewayBrowserClient {
       this.pendingDeviceTokenRetry = false;
       this.pendingStartupReconnectDelayMs = null;
       this.flushPending(new Error(error.message));
-      this.opts.onClose?.({
+      this.notifyClose({
         code: BROWSER_WEBSOCKET_CLOSE_CODE,
         reason:
           error.code === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
@@ -561,7 +562,7 @@ export class GatewayBrowserClient {
         return;
       }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
-      this.opts.onClose?.({ code: ev.code, reason, error: connectError });
+      this.notifyClose({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
         if (this.pendingDeviceTokenRetry) {
@@ -798,7 +799,7 @@ export class GatewayBrowserClient {
     }
     this.backoffMs = 800;
     this.emitConnectTiming(generation, "hello", this.connectPlanTimingPayload(plan));
-    this.opts.onHello?.(hello);
+    this.notifyHello(hello);
   }
 
   private handleConnectFailure(err: unknown, plan: ConnectPlan, ws: WebSocket, generation: number) {
@@ -919,17 +920,17 @@ export class GatewayBrowserClient {
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
-          this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
+          this.notifyGap({ expected: this.lastSeq + 1, received: seq });
         }
         this.lastSeq = seq;
       }
-      try {
-        this.opts.onEvent?.(evt);
-        for (const listener of this.eventListeners) {
+      this.notifyEvent(evt);
+      for (const listener of this.eventListeners) {
+        try {
           listener(evt);
+        } catch (err) {
+          console.error("[gateway] event listener error:", err);
         }
-      } catch (err) {
-        console.error("[gateway] event handler error:", err);
       }
       return;
     }
@@ -956,6 +957,38 @@ export class GatewayBrowserClient {
           }),
         );
       }
+    }
+  }
+
+  private notifyHello(hello: GatewayHelloOk): void {
+    try {
+      this.opts.onHello?.(hello);
+    } catch (err) {
+      console.error("[gateway] hello handler error:", err);
+    }
+  }
+
+  private notifyClose(info: { code: number; reason: string; error?: GatewayErrorInfo }): void {
+    try {
+      this.opts.onClose?.(info);
+    } catch (err) {
+      console.error("[gateway] close handler error:", err);
+    }
+  }
+
+  private notifyGap(info: { expected: number; received: number }): void {
+    try {
+      this.opts.onGap?.(info);
+    } catch (err) {
+      console.error("[gateway] gap handler error:", err);
+    }
+  }
+
+  private notifyEvent(evt: GatewayEventFrame): void {
+    try {
+      this.opts.onEvent?.(evt);
+    } catch (err) {
+      console.error("[gateway] event handler error:", err);
     }
   }
 

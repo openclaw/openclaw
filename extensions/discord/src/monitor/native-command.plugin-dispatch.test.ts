@@ -1,3 +1,4 @@
+// Discord tests cover native command.plugin dispatch plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
@@ -13,8 +14,12 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
@@ -414,6 +419,7 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
@@ -457,6 +463,50 @@ describe("Discord native plugin command dispatch", () => {
     );
     discordNativeCommandTesting.setGetSessionEntry(
       runtimeModuleMocks.getSessionEntry as typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry,
+    );
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("refreshes native command routing config between invocations", async () => {
+    const sourceCfg = {
+      ...createConfig(),
+      session: { dmScope: "main" },
+    } as OpenClawConfig;
+    const runtimeCfg = {
+      ...sourceCfg,
+      session: { dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+    const resolveRouteState = vi.fn(async (params: { cfg: OpenClawConfig }) =>
+      createUnboundRouteState({
+        sessionKey:
+          params.cfg.session?.dmScope === "per-channel-peer"
+            ? "agent:main:discord:direct:owner"
+            : "agent:main:main",
+      }),
+    );
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
+      resolveRouteState as typeof resolveDiscordNativeInteractionRouteState,
+    );
+    const command = await createStatusCommand(sourceCfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      createInteraction() as unknown,
+    );
+    setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      createInteraction() as unknown,
+    );
+
+    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ sessionKey: "agent:main:discord:direct:owner" }),
     );
   });
 

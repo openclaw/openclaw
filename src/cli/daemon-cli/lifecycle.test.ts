@@ -1,3 +1,4 @@
+// Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
@@ -571,6 +572,20 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to unmanaged restart when launchd repair reports headless GUI bootstrap failure", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    recoverInstalledLaunchAgent.mockRejectedValue(
+      new Error("LaunchAgent openclaw gateway restart requires a logged-in macOS GUI session"),
+    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow("logged-in macOS GUI session");
+
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
   });
 
   it("re-bootstraps an installed LaunchAgent on restart when no unmanaged listener exists", async () => {

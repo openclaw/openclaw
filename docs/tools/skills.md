@@ -145,15 +145,15 @@ publish and sync.
 
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
-| Install a skill into the workspace | `openclaw skills install <slug>`                       |
+| Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
-| Install for all local agents       | `openclaw skills install <slug> --global`              |
+| Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
 | Update all workspace skills        | `openclaw skills update --all`                         |
-| Update a shared managed skill      | `openclaw skills update <slug> --global`               |
+| Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
-| Verify a skill's trust envelope    | `openclaw skills verify <slug>`                        |
-| Print the generated Skill Card     | `openclaw skills verify <slug> --card`                 |
+| Verify a skill's trust envelope    | `openclaw skills verify @owner/<slug>`                 |
+| Print the generated Skill Card     | `openclaw skills verify @owner/<slug> --card`          |
 | Publish / sync via ClawHub CLI     | `clawhub sync --all`                                   |
 
 <AccordionGroup>
@@ -171,15 +171,17 @@ publish and sync.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
-    `openclaw skills verify <slug>` asks ClawHub for the skill's
+    `openclaw skills verify @owner/<slug>` asks ClawHub for the skill's
     `clawhub.skill.verify.v1` trust envelope. Installed ClawHub skills verify
     against the version and registry recorded in `.clawhub/origin.json`.
+    Bare slugs remain accepted for existing installed or unambiguous skills, but
+    owner-qualified refs avoid publisher ambiguity.
 
     ClawHub skill pages expose the latest security scan state before install,
     with detail pages for VirusTotal, ClawScan, and static analysis. The
     command exits non-zero when ClawHub marks verification as failed. Publishers
     recover false positives through the ClawHub dashboard or
-    `clawhub skill rescan <slug>`.
+    `clawhub skill rescan @owner/<slug>`.
 
   </Accordion>
   <Accordion title="Private archive installs">
@@ -204,16 +206,18 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
+    Skill Workshop writes through those trusted targets only when
+    `skills.workshop.allowSymlinkTargetWrites` is enabled.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
   </Accordion>
-  <Accordion title="Scan and scan overrides">
-    Gateway-backed skill installs (onboarding, Skills settings UI) run the
-    built-in dangerous-code scanner before executing installer metadata.
-    `critical` findings block by default; `suspicious` findings warn only.
-    `openclaw skills install <slug>` downloads a ClawHub skill folder directly
-    and does not use the installer-metadata scanner.
+  <Accordion title="Operator install policy">
+    Configure `security.installPolicy` to run a trusted local policy command
+    before skill installs continue. The policy receives metadata and the staged
+    source path, applies to ClawHub, uploaded, Git, local, update, and
+    dependency-installer paths, and fails closed when the command cannot return
+    a valid decision.
   </Accordion>
   <Accordion title="Secret injection scope">
     `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the
@@ -533,6 +537,8 @@ aligned.
     Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
+    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
+    should also apply proposals through those trusted symlinked paths.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">

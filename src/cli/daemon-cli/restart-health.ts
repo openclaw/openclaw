@@ -1,3 +1,4 @@
+// Restart health probes for gateway service restarts and port listener recovery.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -70,6 +71,7 @@ type GatewayRestartProbeAuth = {
 };
 
 function hasListenerAttributionGap(portUsage: PortUsage): boolean {
+  // lsof/netstat may report a busy port without a PID; keep that distinct from a free port.
   if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
     return false;
   }
@@ -520,6 +522,7 @@ export async function waitForGatewayHealthyRestart(params: {
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
+  requireRunningService?: boolean;
 }): Promise<GatewayRestartSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
@@ -542,7 +545,9 @@ export async function waitForGatewayHealthyRestart(params: {
   );
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (snapshot.healthy) {
+    const healthy =
+      snapshot.healthy && (!params.requireRunningService || snapshot.runtime.status === "running");
+    if (healthy) {
       return withWaitContext(snapshot, "healthy", attempt * delayMs);
     }
     if (snapshot.activatedPluginErrors?.length) {

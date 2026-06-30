@@ -1,9 +1,38 @@
+// Google Meet tests cover oauth plugin behavior.
+import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,
   refreshGoogleMeetAccessToken,
   resolveGoogleMeetAccessToken,
+  waitForGoogleMeetAuthCode,
 } from "./oauth.js";
+
+async function occupyPort(port: number): Promise<Server | null> {
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "localhost", () => {
+        resolve();
+      });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("EADDRINUSE")) {
+      return null;
+    }
+    throw error;
+  }
+  return server;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+}
 
 describe("Google Meet OAuth", () => {
   afterEach(() => {
@@ -159,5 +188,43 @@ describe("Google Meet OAuth", () => {
     });
 
     expect(tokens.expiresAt).toBe(Date.now());
+  });
+
+  it("falls back to manual paste when the local callback port is occupied", async () => {
+    const blocker = await occupyPort(8085);
+    try {
+      const state = "state-token";
+      const lines: string[] = [];
+      const code = await waitForGoogleMeetAuthCode({
+        state,
+        manual: false,
+        timeoutMs: 60_000,
+        authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+        promptInput: async () =>
+          `http://localhost:8085/oauth2callback?code=auth-code-123&state=${state}`,
+        writeLine: (message) => lines.push(message),
+      });
+      expect(code).toBe("auth-code-123");
+      expect(lines.some((line) => line.includes("Switching to manual mode"))).toBe(true);
+    } finally {
+      if (blocker) {
+        await closeServer(blocker);
+      }
+    }
+  });
+
+  it("propagates non-listener callback failures without manual fallback", async () => {
+    const promptInput = vi.fn(async () => "unused");
+    await expect(
+      waitForGoogleMeetAuthCode({
+        state: "state-token",
+        manual: false,
+        timeoutMs: 1,
+        authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+        promptInput,
+        writeLine: () => {},
+      }),
+    ).rejects.toThrow(/timeout/i);
+    expect(promptInput).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+// Ollama plugin module implements stream behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -17,6 +18,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
@@ -53,6 +55,7 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -244,7 +247,6 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-      normalizeOllamaCompatMessageToolArgs(payloadRecord);
     });
 }
 
@@ -652,6 +654,18 @@ function estimateTokensFromChars(chars: number): number {
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
 }
 
+function resolveOllamaStopReason(response: OllamaChatResponse) {
+  // Ollama's length terminal means generation hit its token limit, even when
+  // the partial response already contains a complete-looking tool call.
+  if (response.done_reason === "length") {
+    return "length" as const;
+  }
+  if (response.message.tool_calls?.length) {
+    return "toolUse" as const;
+  }
+  return "stop" as const;
+}
+
 function estimateOllamaPromptTokens(params: {
   messages: OllamaChatMessage[];
   tools: OllamaTool[];
@@ -724,46 +738,6 @@ function ensureArgsObject(value: unknown): Record<string, unknown> {
 
 function normalizeOllamaToolCallArguments(value: unknown): Record<string, unknown> {
   return ensureArgsObject(value);
-}
-
-function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
-  const messages = payloadRecord.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-
-  for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const messageRecord = message as Record<string, unknown>;
-
-    const functionCall = messageRecord.function_call;
-    if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
-      const functionCallRecord = functionCall as Record<string, unknown>;
-      if (Object.hasOwn(functionCallRecord, "arguments")) {
-        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
-      }
-    }
-
-    const toolCalls = messageRecord.tool_calls;
-    if (!Array.isArray(toolCalls)) {
-      continue;
-    }
-    for (const toolCall of toolCalls) {
-      if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
-        continue;
-      }
-      const functionSpec = (toolCall as Record<string, unknown>).function;
-      if (!functionSpec || typeof functionSpec !== "object" || Array.isArray(functionSpec)) {
-        continue;
-      }
-      const functionRecord = functionSpec as Record<string, unknown>;
-      if (Object.hasOwn(functionRecord, "arguments")) {
-        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
-      }
-    }
-  }
 }
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
@@ -1060,7 +1034,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: toolCalls && toolCalls.length > 0 ? "toolUse" : "stop",
+    stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
       input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
       output: resolveUsageCount(response.eval_count, usageFallback?.output),
@@ -1203,7 +1177,10 @@ function createRawOllamaStreamFn(
 
         try {
           if (!response.ok) {
-            const errorText = await response.text().catch(() => "unknown error");
+            const errorText = await readResponseTextLimited(
+              response,
+              OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "unknown error");
             throw new Error(`${response.status} ${errorText}`);
           }
           if (!response.body) {
@@ -1321,17 +1298,10 @@ function createRawOllamaStreamFn(
             }
 
             accumulatedVisibleContent = nextVisibleContent;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
             stream.push({
               type: "text_delta",
               contentIndex: textContentIndex(),
               delta,
-              partial,
             });
           };
 
@@ -1448,7 +1418,7 @@ function createRawOllamaStreamFn(
 
           stream.push({
             type: "done",
-            reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+            reason: resolveOllamaStopReason(finalResponse),
             message: assistantMessage,
           });
         } finally {

@@ -1,3 +1,4 @@
+// Parallels Vm script supports OpenClaw repository automation.
 import { die, run, say, warn } from "./host-command.ts";
 
 const PRLCTL_STATUS_TIMEOUT_MS = 30_000;
@@ -12,14 +13,18 @@ export interface WaitForVmStatusOptions {
   probeTimeoutMs?: () => number | undefined;
 }
 
+export interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
+  transitionTimeoutMs?: () => number | undefined;
+}
+
 export function listVmNames(): string[] {
   return listVms()
     .map((item) => (item.name ?? "").trim())
     .filter(Boolean);
 }
 
-export function vmStatus(vmName: string): string {
-  return listVms().find((vm) => vm.name === vmName)?.status || "missing";
+export function vmStatus(vmName: string, timeoutMs?: number): string {
+  return listVms(timeoutMs).find((vm) => vm.name === vmName)?.status || "missing";
 }
 
 export function waitForVmStatus(
@@ -43,10 +48,14 @@ export function waitForVmStatus(
   throw new Error(`VM ${vmName} did not reach ${expected}`);
 }
 
-export function ensureVmRunning(vmName: string, timeoutSeconds = 180): void {
+export function ensureVmRunning(
+  vmName: string,
+  timeoutSeconds = 180,
+  options: EnsureVmRunningOptions = {},
+): void {
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
-    const status = vmStatus(vmName);
+    const status = vmStatus(vmName, options.probeTimeoutMs?.());
     if (status === "running") {
       return;
     }
@@ -54,13 +63,13 @@ export function ensureVmRunning(vmName: string, timeoutSeconds = 180): void {
       say(`Start ${vmName} before update phase`);
       run("prlctl", ["start", vmName], {
         quiet: true,
-        timeoutMs: PRLCTL_TRANSITION_TIMEOUT_MS,
+        timeoutMs: options.transitionTimeoutMs?.() ?? PRLCTL_TRANSITION_TIMEOUT_MS,
       });
     } else if (status === "suspended" || status === "paused") {
       say(`Resume ${vmName} before update phase`);
       run("prlctl", ["resume", vmName], {
         quiet: true,
-        timeoutMs: PRLCTL_TRANSITION_TIMEOUT_MS,
+        timeoutMs: options.transitionTimeoutMs?.() ?? PRLCTL_TRANSITION_TIMEOUT_MS,
       });
     } else if (status === "missing") {
       die(`VM not found before update phase: ${vmName}`);
@@ -80,15 +89,11 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
   }
   const fallback =
     names
-      .map((name) => ({ name, version: /ubuntu\s+(\d+(?:\.\d+)*)/i.exec(name)?.[1] }))
-      .filter((item): item is { name: string; version: string } => Boolean(item.version))
-      .map((item) => ({
-        name: item.name,
-        parts: item.version.split(".").map(Number),
-      }))
+      .map((name) => ({ name, parts: parseUbuntuVersionParts(name) }))
+      .filter((item): item is { name: string; parts: number[] } => Boolean(item.parts))
       .filter((item) => item.parts[0] >= 24)
       .toSorted((a, b) => compareVersions(b.parts, a.parts))[0]?.name ??
-    names.find((name) => /ubuntu/i.test(name));
+    names.find(isSafeUbuntuFallbackName);
   if (!fallback) {
     die(`VM not found: ${requested}`);
   }
@@ -96,13 +101,46 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
   return fallback;
 }
 
-function listVms(): PrlctlVmListItem[] {
+export function resolveMacosVmName(requested: string, explicit = false): string {
+  const names = listVmNames();
+  if (names.includes(requested)) {
+    return requested;
+  }
+  if (explicit) {
+    die(`VM not found: ${requested}`);
+  }
+  const fallback = names.find((name) => name === "macOS");
+  if (!fallback) {
+    die(`VM not found: ${requested}; select a macOS VM explicitly`);
+  }
+  warn(`requested VM ${requested} not found; using ${fallback}`);
+  return fallback;
+}
+
+function listVms(timeoutMs = PRLCTL_STATUS_TIMEOUT_MS): PrlctlVmListItem[] {
   return JSON.parse(
     run("prlctl", ["list", "--all", "--json"], {
       quiet: true,
-      timeoutMs: PRLCTL_STATUS_TIMEOUT_MS,
+      timeoutMs,
     }).stdout,
   ) as PrlctlVmListItem[];
+}
+
+function parseUbuntuVersionParts(name: string): number[] | undefined {
+  const version = /ubuntu\s+(\d+(?:\.\d+)*)/i.exec(name)?.[1];
+  const parts = version?.split(".").map((part) => Number(part));
+  if (!parts?.every((part) => Number.isSafeInteger(part))) {
+    return undefined;
+  }
+  return parts;
+}
+
+function isSafeUbuntuFallbackName(name: string): boolean {
+  if (!/ubuntu/i.test(name)) {
+    return false;
+  }
+  const hasVersion = /ubuntu\s+\d+(?:\.\d+)*/i.test(name);
+  return !hasVersion || Boolean(parseUbuntuVersionParts(name));
 }
 
 function compareVersions(a: number[], b: number[]): number {

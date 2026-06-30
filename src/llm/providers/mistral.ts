@@ -1,4 +1,5 @@
-import { Mistral } from "@mistralai/mistralai";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { HTTPClient, Mistral, type Fetcher } from "@mistralai/mistralai";
 import type {
   ChatCompletionStreamRequest,
   ChatCompletionStreamRequestMessage,
@@ -6,6 +7,8 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -31,6 +34,63 @@ import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
+
+// 16 MiB cap on Mistral streaming success bodies, matching the
+// `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
+// 16 MiB cap used elsewhere. A hostile or malfunctioning Mistral-compatible
+// endpoint cannot exhaust memory by streaming an unbounded SSE body;
+// `createSseByteGuard` cancels the upstream reader and throws once the
+// accumulated byte count exceeds this cap.
+const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Builds a `Fetcher` that wraps the default `fetch` with a 16 MiB byte cap
+ * on streamed response bodies. The wrapped `Response.body` exposes a
+ * `ReadableStream` whose chunks flow through `createSseByteGuard`, so the
+ * SDK's internal SSE parser (`EventStream` in
+ * `@mistralai/mistralai/lib/event-streams.ts`) reads exactly as it would on
+ * an unbounded body — but bounded.
+ *
+ * Bodyless responses (no `body` or no `getReader`) are returned unchanged so
+ * the SDK's error-path `res.arrayBuffer()` call still works.
+ */
+export function createBoundedMistralFetcher(
+  maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
+): Fetcher {
+  return async (input, init) => {
+    const response = init == null ? await fetch(input) : await fetch(input, init);
+    if (!response.body || typeof response.body.getReader !== "function") {
+      return response;
+    }
+    const reader = response.body.getReader();
+    const guard = createSseByteGuard(reader, {
+      maxBytes,
+      onOverflow: ({ size, maxBytes: cap }) =>
+        new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
+    });
+    // Re-shape the response body so the SDK's `responseBody.getReader()`
+    // call inside `EventStream` resolves to a stream whose `read()` is
+    // routed through `guard.read()`. Cancellation is also forwarded.
+    const guardedStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await guard.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      },
+      async cancel(reason) {
+        await guard.cancel(reason);
+      },
+    });
+    return new Response(guardedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
 
 /**
  * Provider-specific options for the Mistral API.
@@ -71,6 +131,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       const mistral = new Mistral({
         apiKey,
         serverURL: model.baseUrl,
+        // Bound the streamed Mistral response body at 16 MiB so a hostile or
+        // malfunctioning endpoint cannot exhaust memory. The fetcher is
+        // injected via the SDK's `HTTPClient` (see
+        // `@mistralai/mistralai/lib/sdks.ts` `ClientSDK` constructor: when
+        // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
+        // every `chat.stream` / `complete` call routes through
+        // `HTTPClient.request` → `this.fetcher(req)`).
+        httpClient: new HTTPClient({ fetcher: createBoundedMistralFetcher() }),
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -274,9 +342,14 @@ function buildChatPayload(
     stream: true,
     messages: toChatMessages(messages, model.input.includes("image")),
   };
+  let convertedToolNames: Set<string> | undefined;
 
   if (context.tools?.length) {
-    payload.tools = toFunctionTools(context.tools);
+    const tools = toFunctionTools(context.tools);
+    convertedToolNames = new Set(tools.map((tool) => tool.function.name));
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
   }
   if (options?.temperature !== undefined) {
     payload.temperature = options.temperature;
@@ -288,7 +361,10 @@ function buildChatPayload(
     payload.stop = options.stop;
   }
   if (options?.toolChoice) {
-    payload.toolChoice = mapToolChoice(options.toolChoice);
+    const toolChoice = mapToolChoice(options.toolChoice, convertedToolNames);
+    if (toolChoice) {
+      payload.toolChoice = toolChoice;
+    }
   }
   if (options?.promptMode) {
     payload.promptMode = options.promptMode;
@@ -300,7 +376,7 @@ function buildChatPayload(
   if (context.systemPrompt) {
     payload.messages.unshift({
       role: "system",
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
 
@@ -506,15 +582,21 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
-      strict: false,
-    },
-  }));
+  return tools.flatMap((tool) => {
+    try {
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
+          strict: false,
+        },
+      };
+    } catch {
+      return [];
+    }
+  });
 }
 
 function stripSymbolKeys(value: unknown): unknown {
@@ -687,6 +769,7 @@ function mapReasoningEffort(
 
 function mapToolChoice(
   choice: MistralOptions["toolChoice"],
+  convertedToolNames?: ReadonlySet<string>,
 ):
   | "auto"
   | "none"
@@ -697,12 +780,24 @@ function mapToolChoice(
   if (!choice) {
     return undefined;
   }
+  if (convertedToolNames && convertedToolNames.size === 0) {
+    if (choice === "none" || choice === "auto") {
+      return choice === "none" ? "none" : undefined;
+    }
+    throw new Error("Mistral tool_choice requires a tool, but no tools survived schema conversion");
+  }
   if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
     return choice;
   }
+  const toolName = choice.function.name;
+  if (convertedToolNames && !convertedToolNames.has(toolName)) {
+    throw new Error(
+      `Mistral tool_choice requested unavailable tool "${toolName}" after schema conversion`,
+    );
+  }
   return {
     type: "function",
-    function: { name: choice.function.name },
+    function: { name: toolName },
   };
 }
 

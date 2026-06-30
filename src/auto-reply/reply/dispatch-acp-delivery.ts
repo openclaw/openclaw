@@ -1,8 +1,10 @@
+// Delivers ACP turn results through reply payload routing.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -17,6 +19,11 @@ import type { ReplyPayload } from "../types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import {
+  createReplyDeliveryContext,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -195,6 +202,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
@@ -205,13 +213,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const explicitAccountId =
     normalizeOptionalString(params.originatingAccountId) ??
     normalizeOptionalString(params.ctx.AccountId);
-  const resolvedAccountId =
-    explicitAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
-    );
+  const resolvedAccountId = resolveReplyDeliveryAccountId(
+    params.cfg,
+    routedChannel ?? directChannel,
+    explicitAccountId,
+  );
+  const routedReplyDelivery = params.originatingChannel
+    ? createReplyDeliveryContext(
+        resolveReplyToMode(
+          params.cfg,
+          params.originatingChannel,
+          resolvedAccountId,
+          params.originatingChatType ?? params.ctx.ChatType,
+        ),
+        params.originatingChatType ?? params.ctx.ChatType,
+      )
+    : undefined;
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -429,6 +446,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
         threadId,
+        replyDelivery: routedReplyDelivery,
         cfg: params.cfg,
         mirror: false,
         replyKind: kind,

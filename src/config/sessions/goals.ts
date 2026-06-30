@@ -1,4 +1,6 @@
+// Session goal state tracks objective progress and token budgets in the session store.
 import crypto from "node:crypto";
+import { formatTokenCount } from "../../utils/token-format.js";
 import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
@@ -61,25 +63,6 @@ function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
 }
 
-function formatGoalTokenCount(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) {
-    return "0";
-  }
-  const safe = Math.max(0, value);
-  if (safe >= 1_000_000) {
-    return `${(safe / 1_000_000).toFixed(1)}m`;
-  }
-  if (safe >= 1_000) {
-    const precision = safe >= 10_000 ? 0 : 1;
-    const formattedThousands = (safe / 1_000).toFixed(precision);
-    if (Number(formattedThousands) >= 1_000) {
-      return `${(safe / 1_000_000).toFixed(1)}m`;
-    }
-    return `${formattedThousands}k`;
-  }
-  return String(Math.round(safe));
-}
-
 export function resolveSessionGoalDisplayState(
   entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
   now?: number,
@@ -101,6 +84,8 @@ function accountGoalUsage(
   }
   const totalTokens = resolveEntryFreshTotalTokens(entry);
   const hasFreshStart = goal.tokenStartFresh !== false;
+  // Old entries may have a stale token baseline; display-only reads can hold it, while persisted
+  // reads adopt the fresh total so future budget checks use current accounting.
   const shouldHoldStaleStart = !hasFreshStart && options?.adoptFreshBaseline === false;
   const shouldAdoptFreshStart =
     !shouldHoldStaleStart && totalTokens !== undefined && !hasFreshStart;
@@ -140,14 +125,14 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
   const budget =
     goal.tokenBudget === undefined
       ? ""
-      : `\nToken budget: ${formatGoalTokenCount(goal.tokensUsed)}/${formatGoalTokenCount(goal.tokenBudget)}`;
+      : `\nToken budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const note = goal.lastStatusNote ? `\nNote: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
     `Status: ${goal.status}`,
     `Objective: ${goal.objective}`,
-    `Tokens used: ${formatGoalTokenCount(goal.tokensUsed)}`,
+    `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget.slice(1)] : []),
     ...(note ? [note.slice(1)] : []),
     "",
@@ -175,6 +160,7 @@ export async function getSessionGoal(
 ): Promise<SessionGoalSnapshot> {
   const now = nowMs(options.now);
   if (options.persist === false) {
+    // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
       getSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
@@ -265,6 +251,7 @@ export async function updateSessionGoalStatus(
         (accounted.status === "budget_limited" ||
           accounted.status === "usage_limited" ||
           (accounted.tokenBudget !== undefined && accounted.tokensUsed >= accounted.tokenBudget));
+      // Resuming from a limited state starts a new budget window at the current fresh token count.
       const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
       const next: SessionGoal = {
         ...accounted,

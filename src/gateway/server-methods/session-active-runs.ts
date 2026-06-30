@@ -1,6 +1,14 @@
+// Session active-run helpers decide whether session operations should treat a
+// session as busy based on Control UI-visible active chat/agent runs.
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
+/**
+ * Active-run matcher used by session list/update methods.
+ *
+ * It only reports runs visible to the Control UI so background or hidden runs
+ * do not make a session look busy to user-facing session operations.
+ */
 type TrackedActiveSessionRun = {
   sessionKey: string;
   agentId?: string;
@@ -51,6 +59,7 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
+/** Returns true when either requested or canonical session key has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;

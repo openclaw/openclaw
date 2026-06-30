@@ -1,7 +1,10 @@
-import type { PluginRuntimeChannel } from "./types-channel.js";
+// Plugin runtime types describe activated plugin capabilities exposed to core execution.
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
+
+type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -72,6 +75,8 @@ export type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
+  scopes?: OperatorScope[];
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */

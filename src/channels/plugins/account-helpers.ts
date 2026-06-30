@@ -1,3 +1,8 @@
+/**
+ * Channel plugin account helper factory.
+ *
+ * Lists configured accounts and resolves default-account behavior for plugin configs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +17,9 @@ import {
 } from "../../routing/session-key.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
+/**
+ * Creates reusable account id listing and default-account resolution helpers for a channel.
+ */
 export function createAccountListHelpers(
   channelKey: string,
   options?: {
@@ -25,6 +33,8 @@ export function createAccountListHelpers(
   },
 ) {
   function hasImplicitDefaultAccount(cfg: OpenClawConfig): boolean {
+    // Legacy single-account configs and env-only setup imply the default account even when
+    // channels.<id>.accounts is absent.
     if (options?.hasImplicitDefaultAccount?.(cfg)) {
       return true;
     }
@@ -54,6 +64,7 @@ export function createAccountListHelpers(
     if (options?.allowUnlistedDefaultAccount) {
       return preferred;
     }
+    // Reject stale defaultAccount values unless the channel explicitly supports external ids.
     if (ids.some((id) => normalizeAccountId(id) === preferred)) {
       return preferred;
     }
@@ -93,6 +104,9 @@ export function createAccountListHelpers(
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
 }
 
+/**
+ * Checks whether a config/env value should count as an account being configured.
+ */
 export function hasConfiguredAccountValue(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -100,6 +114,9 @@ export function hasConfiguredAccountValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/**
+ * Combines configured, additional, implicit, and fallback account ids into stable order.
+ */
 export function listCombinedAccountIds(params: {
   configuredAccountIds: Iterable<string>;
   additionalAccountIds?: Iterable<string>;
@@ -128,6 +145,9 @@ export function listCombinedAccountIds(params: {
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Resolves the default account id from a listed account set and optional configured preference.
+ */
 export function resolveListedDefaultAccountId(params: {
   accountIds: readonly string[];
   configuredDefaultAccountId?: string | undefined;
@@ -153,6 +173,9 @@ export function resolveListedDefaultAccountId(params: {
   return params.accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+/**
+ * Merges channel-level config with account-level overrides.
+ */
 export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
@@ -169,6 +192,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
     ...base,
     ...params.accountConfig,
   };
+  // Some config subtrees are additive maps/options rather than replace-on-account override.
   for (const key of params.nestedObjectKeys ?? []) {
     const baseValue = base[key as keyof TConfig];
     const accountValue = params.accountConfig?.[key as keyof TConfig];
@@ -189,6 +213,9 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
   return merged;
 }
 
+/**
+ * Resolves an account config by id, then merges it over channel-level defaults.
+ */
 export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accounts: Record<string, Partial<TConfig>> | undefined;
@@ -214,6 +241,9 @@ type AccountSnapshotInput = {
   name?: string | null | undefined;
 };
 
+/**
+ * Builds a safe account snapshot for status/setup surfaces.
+ */
 export function describeAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;
@@ -228,6 +258,9 @@ export function describeAccountSnapshot(params: {
   };
 }
 
+/**
+ * Builds a webhook-mode account snapshot with the standard mode field.
+ */
 export function describeWebhookAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;

@@ -1,3 +1,5 @@
+// Gateway live agent probe helpers.
+// Builds prompts and verification helpers for live image and cron probe tests.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
@@ -33,11 +35,13 @@ type LiveCronProbeSpec = {
   argsJson: string;
 };
 
+/** Return true for live agents that expose Claude-style MCP tool names. */
 export function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized === "claude" || normalized === "claude-cli";
 }
 
+/** Assert the live image probe answered with the expected cat description. */
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
@@ -45,6 +49,7 @@ export function assertLiveImageProbeReply(text: string): void {
   }
 }
 
+/** Resolve whether a live image probe should run for this agent/override. */
 export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
   const override = params.override?.trim();
   if (override) {
@@ -98,8 +103,10 @@ export function buildLiveCronProbeMessage(params: {
   const claudeLike = isClaudeLikeLiveAgent(params.agent);
   if (params.attempt === 0) {
     return (
-      "Use the OpenClaw MCP tool `openclaw-tools/cron` (server `openclaw-tools`, tool `cron`). " +
-      "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
+      "Use the OpenClaw MCP cron tool from server `openclaw`. " +
+      "If it is not already visible, search/load MCP tools for `openclaw cron` or `cron`, " +
+      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__cron`. " +
+      "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
       `Call it with JSON arguments ${params.argsJson}. ` +
       "Preserve the JSON exactly, including job.sessionTarget and job.sessionKey; do not omit, rename, or flatten those fields. " +
       "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
@@ -108,8 +115,10 @@ export function buildLiveCronProbeMessage(params: {
   }
   if (claudeLike) {
     return (
-      "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
-      "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
+      "Retry the OpenClaw MCP cron tool from server `openclaw` now. " +
+      "If it is not already visible, search/load MCP tools for `openclaw cron` or `cron`, " +
+      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__cron`. " +
+      "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +
       "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
       `If the cron job is created, reply exactly: ${params.exactReply}. ` +
@@ -120,8 +129,8 @@ export function buildLiveCronProbeMessage(params: {
   }
   return (
     "Your previous OpenClaw cron MCP tool call was cancelled before the job was created. " +
-    "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
-    "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
+    "Retry the OpenClaw MCP cron tool from server `openclaw` now. " +
+    "If the harness shows Claude-style MCP names, use `mcp__openclaw__cron`. " +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
     "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +

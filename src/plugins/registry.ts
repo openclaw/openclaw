@@ -1,3 +1,4 @@
+/** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -131,6 +132,7 @@ import type {
   PluginRegistryParams,
   PluginSessionActionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 export type {
   PluginReloadRegistration,
@@ -231,6 +233,10 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
     `${deprecation.reason} Use ${deprecation.replacement}. ` +
     `This compatibility hook will be removed after ${removeAfter}.`
   );
+}
+
+function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
+  return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
 
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
@@ -524,15 +530,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
   ) => {
-    if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register agent tool result middleware",
-      });
-      return;
-    }
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
         level: "error",
@@ -562,6 +559,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
       });
       return;
     }
@@ -735,9 +741,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
-        // Shallow-copy to avoid mutating the shared event object
-        // passed to all handlers sequentially by triggerInternalHook
-        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+        const context = evt.context;
+        const hadPluginConfig = Object.hasOwn(context, "pluginConfig");
+        const previousPluginConfig = context.pluginConfig;
+        // Internal hooks intentionally share one mutable context object across
+        // handlers; only pluginConfig stays per-handler and is restored after.
+        context.pluginConfig = pluginConfig;
+        try {
+          return await handler({ ...evt, context });
+        } finally {
+          if (hadPluginConfig) {
+            context.pluginConfig = previousPluginConfig;
+          } else {
+            delete context.pluginConfig;
+          }
+        }
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });
@@ -2023,12 +2041,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     policy: PluginTrustedToolPolicyRegistration,
   ) => {
-    if (record.origin !== "bundled") {
+    if (!policy || typeof policy !== "object") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "only bundled plugins can register trusted tool policies",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
       });
       return;
     }
@@ -2043,7 +2061,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.trustedToolPolicies ?? []).find((entry) => entry.policy.id === id);
+    if (
+      record.origin !== "bundled" &&
+      !(record.contracts?.trustedToolPolicies ?? []).includes(id)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.trustedToolPolicies for: ${id}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must be explicitly enabled to register trusted tool policy: ${id}`,
+      });
+      return;
+    }
+    const policies = (registry.trustedToolPolicies ??= []);
+    const existing = policies.find(
+      (entry) => entry.pluginId === record.id && entry.policy.id === id,
+    );
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -2053,7 +2095,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.trustedToolPolicies ??= []).push({
+    const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,
       pluginName: record.name,
       policy: {
@@ -2061,9 +2103,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         id,
         description,
       },
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
-    });
+    };
+    if (record.origin === "bundled") {
+      const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
+      if (firstInstalledPolicyIndex === -1) {
+        policies.push(registration);
+      } else {
+        policies.splice(firstInstalledPolicyIndex, 0, registration);
+      }
+      return;
+    }
+    policies.push(registration);
   };
 
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
@@ -2145,16 +2198,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     descriptor: PluginControlUiDescriptor,
   ) => {
+    const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
-    const label = normalizeHostHookString(descriptor.label);
+    const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
-    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
+    // The flat registerControlUiDescriptor API shipped before descriptor.surface/label were
+    // required. Keep older external JS plugins loadable while current typed plugins stay explicit.
+    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
       !id ||
       !label ||
-      !controlUiSurfaces.has(surface as PluginControlUiDescriptor["surface"]) ||
+      !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
       requiredScopes === null
@@ -2210,7 +2266,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       descriptor: {
         ...descriptor,
         id,
-        surface: surface as PluginControlUiDescriptor["surface"],
+        surface,
         label,
         ...(description !== undefined ? { description } : {}),
         ...(placement !== undefined ? { placement } : {}),
@@ -2605,7 +2661,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
-            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            ? withPluginRuntimePluginScope(
+                {
+                  pluginId,
+                  pluginSource: record.source,
+                  pluginOrigin: record.origin,
+                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+                },
+                run,
+              )
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
         const getRuntimeProperty = () => {
@@ -2668,6 +2732,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "nodes") {
+          const nodes = getRuntimeProperty();
+          return {
+            list: (params) => runWithPluginScope(() => nodes.list(params)),
+            invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+          } satisfies PluginRuntime["nodes"];
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();
@@ -2841,6 +2912,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   `plugin:${record.id}`,
                   {
                     allowSameOwnerRefresh: true,
+                    lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
                   },
                 );
                 if (!result.ok) {

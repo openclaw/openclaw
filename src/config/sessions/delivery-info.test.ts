@@ -1,6 +1,8 @@
+// Session delivery info tests cover persisted delivery metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => {
@@ -36,7 +38,6 @@ vi.mock("./targets.js", () => ({
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
-let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
@@ -45,7 +46,7 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
 });
 
 beforeAll(async () => {
-  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
+  ({ extractDeliveryInfo } = await import("./delivery-info.js"));
 });
 
 beforeEach(() => {

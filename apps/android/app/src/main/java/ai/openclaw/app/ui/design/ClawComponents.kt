@@ -61,6 +61,7 @@ internal enum class ClawStatus {
 internal fun ClawScaffold(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.lg, vertical = ClawTheme.spacing.lg),
+  contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
   content: @Composable () -> Unit,
 ) {
   Box(
@@ -68,7 +69,7 @@ internal fun ClawScaffold(
       modifier
         .fillMaxSize()
         .background(ClawTheme.colors.canvas)
-        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .windowInsetsPadding(contentWindowInsets)
         .padding(contentPadding),
   ) {
     content()
@@ -181,6 +182,53 @@ internal fun ClawIconButton(
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
+  }
+}
+
+/** Transparent circular icon button for low-emphasis toolbar actions. */
+@Composable
+internal fun ClawPlainIconButton(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+    }
+  }
+}
+
+/** Compact label/value row for health and readiness summaries. */
+@Composable
+internal fun ClawStatusRow(
+  title: String,
+  value: String,
+  healthy: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Text(
+      text = title,
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+      modifier = Modifier.weight(1f),
+      maxLines = 1,
+    )
+    ClawStatusPill(
+      text = value,
+      status = if (healthy) ClawStatus.Success else ClawStatus.Warning,
+    )
   }
 }
 

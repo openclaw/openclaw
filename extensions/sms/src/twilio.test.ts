@@ -1,3 +1,4 @@
+// Sms tests cover twilio plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildTwilioInboundMessage,
@@ -50,6 +51,28 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
     return init.body;
   }
   throw new Error("Expected Twilio request body to be URL-encoded.");
+}
+
+function cancelTrackedTextResponse(
+  text: string,
+  init?: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 describe("Twilio SMS helpers", () => {
@@ -176,17 +199,8 @@ describe("Twilio SMS helpers", () => {
       status: "queued",
     });
 
-    const firstFetchCall = fetchImpl.mock.calls[0];
-    expect(firstFetchCall).toBeDefined();
-    if (!firstFetchCall) {
-      throw new Error("Expected Twilio fetch call");
-    }
-    const [url, init] = firstFetchCall;
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
     expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json");
-    expect(init).toBeDefined();
-    if (!init) {
-      throw new Error("Expected Twilio request init");
-    }
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
@@ -480,6 +494,35 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds and cancels oversized guarded Twilio error bodies", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedTextResponse(`${"upstream unavailable ".repeat(512)}tail`, {
+      status: 503,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release,
+    });
+
+    let caught: Error | undefined;
+    try {
+      await sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("Twilio SMS send failed (503): upstream unavailable");
+    expect(caught?.message).toContain("... [truncated]");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects malformed JSON from successful Twilio sends", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not json", { status: 201 }));
 
@@ -508,6 +551,28 @@ describe("Twilio SMS helpers", () => {
       }),
     ).rejects.toThrow("Twilio SMS send returned malformed JSON.");
 
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels oversized guarded Twilio success bodies", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 201 });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release,
+    });
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+      }),
+    ).rejects.toThrow(
+      "Twilio SMS API response body too large: 1048577 bytes (limit: 1048576 bytes)",
+    );
+
+    expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
 

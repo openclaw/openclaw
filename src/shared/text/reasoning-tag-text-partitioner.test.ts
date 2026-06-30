@@ -1,3 +1,4 @@
+// Reasoning tag partitioner tests cover splitting reasoning and visible text segments.
 import { describe, expect, it } from "vitest";
 import { createReasoningTagTextPartitioner } from "./reasoning-tag-text-partitioner.js";
 
@@ -98,6 +99,21 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
+  it("keeps split mm reasoning tags out of visible text", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+    const deltas = [
+      ...partitioner.push("Before <mm:thi"),
+      ...partitioner.push("nk>secret</mm:think> after"),
+      ...partitioner.flush(),
+    ];
+
+    expect(deltas).toEqual([
+      { kind: "text", text: "Before " },
+      { kind: "thinking", text: "secret" },
+      { kind: "text", text: " after" },
+    ]);
+  });
+
   it("keeps nested reasoning hidden until the outer tag closes", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
@@ -167,7 +183,7 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
-  it("recovers unclosed trailing tags as visible prose in visible mode", () => {
+  it("keeps unclosed trailing tags as visible prose in visible mode", () => {
     const partitioner = createReasoningTagTextPartitioner();
 
     expect(partitioner.pushVisible("Use <think> only in this mode")).toEqual([

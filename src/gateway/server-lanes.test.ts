@@ -1,10 +1,13 @@
+/**
+ * Gateway server lane configuration tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
-import { createDeferred } from "./test-helpers.deferred.js";
 
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(() => {

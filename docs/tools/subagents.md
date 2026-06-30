@@ -523,6 +523,7 @@ should be rewritten in normal assistant voice.
 - Credential/token-like text is redacted.
 - Long blocks can be truncated.
 - Very large histories can drop older rows or replace an oversized row with `[sessions_history omitted: message too large]`.
+- Use `nextOffset` when present to page backward through older transcript windows.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.
 
 ## Tool policy
@@ -621,10 +622,12 @@ tombstoned sessions.
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.
-Internal `sessions_spawn` coordination should connect as
-`client.id: "gateway-client"` with `client.mode: "backend"` over direct
-loopback shared-token/password auth; that path does not depend on the
-CLI's paired-device scope baseline. Remote callers, explicit
+Internal `sessions_spawn` coordination dispatches in process when the
+caller is already running inside the gateway request context, so it does
+not open a loopback WebSocket or depend on the CLI's paired-device scope
+baseline. Callers outside the gateway process still use the WebSocket
+fallback as `client.id: "gateway-client"` with `client.mode: "backend"`
+over direct loopback shared-token/password auth. Remote callers, explicit
 `deviceIdentity`, explicit device-token paths, and browser/node clients
 still need normal device approval for scope upgrades.
 </Note>

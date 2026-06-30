@@ -1,5 +1,10 @@
+/**
+ * Regression coverage for live model sweep filtering.
+ * Verifies provider exclusions, explicit filters, and high-signal model caps.
+ */
 import { describe, expect, it } from "vitest";
 import {
+  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
@@ -104,5 +109,14 @@ describe("resolveHighSignalLiveModelLimit", () => {
         defaultLimit: 5,
       }),
     ).toBe(0);
+  });
+});
+
+describe("live model priorities", () => {
+  it("includes the always-thinking Moonshot K2.7 Code route", () => {
+    expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
+      provider: "moonshot",
+      id: "kimi-k2.7-code",
+    });
   });
 });

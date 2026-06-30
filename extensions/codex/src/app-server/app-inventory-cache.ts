@@ -1,3 +1,7 @@
+/**
+ * Process-local cache for Codex app-server app inventories, keyed by runtime
+ * identity and safe to refresh in the background.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isFutureDateTimestampMs,
@@ -7,28 +11,35 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
+/** Default app inventory cache freshness window. */
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_TARGETED_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
+/** App-server request function used to list installed/available apps. */
 export type CodexAppInventoryRequest = (
   method: "app/list",
   params: v2.AppsListParams,
 ) => Promise<v2.AppsListResponse>;
 
+/** Runtime identity fields that affect visible Codex app inventory. */
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
+  runtimeIdentity?: Record<string, string | undefined>;
   authProfileId?: string;
   accountId?: string;
   envApiKeyFingerprint?: string;
   appServerVersion?: string;
 };
 
+/** Last refresh diagnostic stored with a cache key or snapshot. */
 export type CodexAppInventoryCacheDiagnostic = {
   message: string;
   atMs: number;
 };
 
+/** Immutable app inventory snapshot returned from cache reads and refreshes. */
 export type CodexAppInventorySnapshot = {
   key: string;
   apps: v2.AppInfo[];
@@ -38,8 +49,10 @@ export type CodexAppInventorySnapshot = {
   lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
+/** Freshness state for a cache read. */
 export type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
+/** Cache read result plus refresh scheduling state. */
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
   key: string;
@@ -59,8 +72,10 @@ type RefreshParams = {
   nowMs?: number;
   forceRefetch?: boolean;
   suppressRefresh?: boolean;
+  targetAppIds?: readonly string[];
 };
 
+/** In-memory app inventory cache with coalesced refreshes per key. */
 export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
@@ -75,6 +90,7 @@ export class CodexAppInventoryCache {
     this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
   }
 
+  /** Reads a snapshot and schedules refresh when missing, stale, or forced. */
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
@@ -107,10 +123,12 @@ export class CodexAppInventoryCache {
     };
   }
 
+  /** Forces or joins an immediate refresh for a cache key. */
   refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
     return this.refresh(params);
   }
 
+  /** Marks a key stale and records the reason as a diagnostic. */
   invalidate(key: string, reason: string, nowMs = Date.now()): number {
     this.revision += 1;
     const diagnostic = { message: reason, atMs: nowMs };
@@ -125,6 +143,7 @@ export class CodexAppInventoryCache {
     return this.revision;
   }
 
+  /** Clears all cached snapshots, diagnostics, in-flight requests, and revision state. */
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
@@ -133,6 +152,7 @@ export class CodexAppInventoryCache {
     this.revision = 0;
   }
 
+  /** Returns the monotonically increasing cache revision. */
   getRevision(): number {
     return this.revision;
   }
@@ -172,7 +192,11 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const apps = await listAllApps(params.request, params.forceRefetch ?? false);
+      const apps = await listAllApps(
+        params.request,
+        params.forceRefetch ?? false,
+        params.targetAppIds,
+      );
       this.revision += 1;
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
@@ -209,6 +233,7 @@ export class CodexAppInventoryCache {
   }
 }
 
+/** Serializes a refresh failure without leaking large or sensitive error data. */
 export function serializeCodexAppInventoryError(error: unknown): Record<string, unknown> {
   const record = isRecord(error) ? error : undefined;
   const data = record && "data" in record ? redactErrorData(record.data) : undefined;
@@ -225,12 +250,21 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
   };
 }
 
+/** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
-export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyInput): string {
+/** Builds a stable cache key from build versions and runtime identity fields. */
+export function buildCodexAppInventoryCacheKey(
+  input: CodexAppInventoryCacheKeyInput,
+  openClawVersion: string,
+  codexPluginVersion: string,
+): string {
   return JSON.stringify({
+    openClawVersion,
+    codexPluginVersion,
     codexHome: input.codexHome ?? null,
     endpoint: input.endpoint ?? null,
+    runtimeIdentity: normalizeRuntimeIdentityForCacheKey(input.runtimeIdentity),
     authProfileId: input.authProfileId ?? null,
     accountId: input.accountId ?? null,
     envApiKeyFingerprint: input.envApiKeyFingerprint ?? null,
@@ -238,20 +272,54 @@ export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyI
   });
 }
 
+function normalizeRuntimeIdentityForCacheKey(
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string> | null {
+  if (!value) {
+    return null;
+  }
+  const entries = Object.entries(value)
+    .flatMap(([key, rawValue]) => {
+      const normalized = rawValue?.trim();
+      return normalized ? ([[key, normalized]] as const) : [];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 async function listAllApps(
   request: CodexAppInventoryRequest,
   forceRefetch: boolean,
+  targetAppIds: readonly string[] = [],
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const remainingTargetIds = new Set(targetIds);
+  const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   do {
     const response = await request("app/list", {
       cursor,
-      limit: 100,
+      // Thread startup only needs to recover the configured plugin-owned apps.
+      // Large pages minimize startup latency while pagination still proves an
+      // absent target instead of publishing a known-incomplete lookup.
+      limit: targetIds.size > 0 ? CODEX_TARGETED_APP_INVENTORY_LIMIT : 100,
       forceRefetch,
     });
     apps.push(...response.data);
+    for (const app of response.data) {
+      remainingTargetIds.delete(app.id);
+    }
+    if (targetIds.size > 0 && remainingTargetIds.size === 0) {
+      break;
+    }
     cursor = response.nextCursor;
+    if (cursor && seenCursors.has(cursor)) {
+      throw new Error(`app/list returned repeated cursor ${cursor}`);
+    }
+    if (cursor) {
+      seenCursors.add(cursor);
+    }
   } while (cursor);
   return apps;
 }

@@ -1,3 +1,8 @@
+/**
+ * Agent path formatting helpers.
+ *
+ * Canonicalizes local paths and formats paths relative to a workspace when possible.
+ */
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 
@@ -40,7 +45,7 @@ function resolveAgainstCwd(filePath: string, cwd: string): string {
   return isAbsolute(filePath) ? resolvePath(filePath) : resolvePath(cwd, filePath);
 }
 
-export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
+function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
   const resolvedCwd = resolvePath(cwd);
   const resolvedPath = resolveAgainstCwd(filePath, resolvedCwd);
   const relativePath = relative(resolvedCwd, resolvedPath);

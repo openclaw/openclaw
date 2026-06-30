@@ -1,3 +1,4 @@
+/** Caches plugin module loaders and native-load stats for runtime/source module imports. */
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +14,7 @@ import {
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
+/** Jiti-based module loader used for plugin source/runtime imports. */
 export type PluginModuleLoader = ReturnType<typeof createJiti>;
 export type PluginModuleLoaderFactory = typeof createJiti;
 export type PluginModuleLoaderCache = Pick<
@@ -80,6 +82,7 @@ function recordSourceTransformTarget(target: string): void {
   }
 }
 
+/** Returns process-local plugin module loader stats for diagnostics and tests. */
 export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
   return {
     calls: pluginModuleLoaderStats.calls,
@@ -92,15 +95,6 @@ export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
       .slice(0, 8)
       .map(([target, count]) => ({ target, count })),
   };
-}
-
-export function resetPluginModuleLoaderStatsForTest(): void {
-  pluginModuleLoaderStats.calls = 0;
-  pluginModuleLoaderStats.nativeHits = 0;
-  pluginModuleLoaderStats.nativeMisses = 0;
-  pluginModuleLoaderStats.sourceTransformForced = 0;
-  pluginModuleLoaderStats.sourceTransformFallbacks = 0;
-  pluginModuleLoaderStats.sourceTransformTargets.clear();
 }
 
 function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {

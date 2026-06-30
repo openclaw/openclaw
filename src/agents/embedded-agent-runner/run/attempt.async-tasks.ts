@@ -1,3 +1,7 @@
+/**
+ * Waits for completion-required async tasks before finalizing an attempt.
+ */
+import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -13,6 +17,7 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
+/** Summary of completion-required async task waits performed before a cron run can finish. */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -73,7 +78,7 @@ async function sleepWithAbort(
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
       },
     );
   });
@@ -101,6 +106,8 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
+  // Registry lookup catches completion-required tasks started before their
+  // tool metadata reached the current attempt result.
   for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
       continue;
@@ -130,6 +137,7 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
+/** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -153,6 +161,29 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/** Returns whether the current attempt should synchronously wait for media tasks. */
+export function shouldWaitForCompletionRequiredAsyncTasks(params: {
+  sessionKey: string | undefined;
+  toolMetas: readonly AsyncStartedToolMeta[];
+  yieldDetected?: boolean;
+}): boolean {
+  if (params.yieldDetected === true) {
+    // sessions_yield pauses the turn so the completion event can wake it later;
+    // waiting here would reuse the internal abort signal and turn the pause into AbortError.
+    return false;
+  }
+  return requiresCompletionRequiredAsyncTaskWait({
+    sessionKey: params.sessionKey,
+    toolMetas: params.toolMetas,
+  });
+}
+
+/**
+ * Polls completion-required async tasks until they reach terminal state, time
+ * out at the run deadline, or abort. Newly discovered task run ids are folded
+ * into later poll rounds so task metadata and registry state can arrive in any
+ * order.
+ */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
@@ -171,6 +202,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 
   while (true) {
     throwIfAborted(params.abortSignal);
+    // Re-read metadata every outer loop; tool calls may record async run ids
+    // after an earlier task wait finished.
     const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
     if (runIds.length === 0) {
       return {
@@ -212,18 +245,4 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -1,3 +1,4 @@
+// Covers agent-command reply normalization and outbound delivery status.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
@@ -5,6 +6,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -46,6 +48,8 @@ const slackOutboundForTest: ChannelOutboundAdapter = {
   }),
 };
 
+// Two registries let tests switch between no-channel and Slack-capable delivery
+// without loading the full plugin runtime.
 const emptyRegistry = createTestRegistry([]);
 const slackRegistry = createTestRegistry([
   {
@@ -172,6 +176,8 @@ async function deliverMediaReplyForTest(
   outboundSession: DeliverParams["outboundSession"],
   optsOverrides: Partial<AgentCommandOpts> = {},
 ) {
+  // Media replies go through the same normalizer seam as production so relative
+  // paths are interpreted with agent/session context before delivery.
   const runtime = { log: vi.fn(), error: vi.fn() };
   return await deliverAgentCommandResult({
     cfg: {
@@ -213,6 +219,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("keeps Slack directives in text for direct agent deliveries", () => {
+    // Direct CLI deliveries preserve Slack directive markup because no channel
+    // adapter has consumed it yet.
     const normalized = normalizeAgentCommandReplyPayloads({
       cfg: {
         channels: {
@@ -230,6 +238,130 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     expect(normalized).toHaveLength(1);
     expectTextPayload(normalized[0], "Choose [[slack_buttons: Retry:retry]]");
+  });
+
+  it("rechecks delivery ownership after asynchronous payload preparation", async () => {
+    let deliveryCurrent = true;
+    createReplyMediaPathNormalizerMock.mockImplementationOnce(
+      (..._args: unknown[]) =>
+        async (payload: ReplyPayload): Promise<ReplyPayload> => {
+          deliveryCurrent = false;
+          return payload;
+        },
+    );
+
+    await expect(
+      deliverAgentCommandResult({
+        cfg: {
+          agents: {
+            list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+          },
+        } as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        opts: {
+          message: "go",
+          deliver: true,
+          replyChannel: "slack",
+          replyTo: "#general",
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "result", mediaUrls: ["./out/photo.png"] }],
+        result: createResult(),
+        assertDeliveryCurrent: () => {
+          if (!deliveryCurrent) {
+            throw new Error("stale lifecycle");
+          }
+        },
+      }),
+    ).rejects.toThrow("stale lifecycle");
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards the run abort signal into durable delivery", async () => {
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+
+    await deliverMediaReplyForTest(undefined, {
+      abortSignal: controller.signal,
+    });
+
+    const deliverySignal = (
+      deliverOutboundPayloadsMock.mock.calls[0]?.[0] as { abortSignal?: AbortSignal } | undefined
+    )?.abortSignal;
+    expect(deliverySignal).toBeInstanceOf(AbortSignal);
+    expect(deliverySignal?.aborted).toBe(true);
+    expect(deliverySignal?.reason).toBe(controller.signal.reason);
+  });
+
+  it("does not cancel final delivery for an ordinary run timeout", async () => {
+    const controller = new AbortController();
+    const timeoutError = new Error("run timed out");
+    timeoutError.name = "TimeoutError";
+    controller.abort(timeoutError);
+
+    await deliverMediaReplyForTest(undefined, {
+      abortSignal: controller.signal,
+    });
+
+    const deliverySignal = (
+      deliverOutboundPayloadsMock.mock.calls[0]?.[0] as { abortSignal?: AbortSignal } | undefined
+    )?.abortSignal;
+    expect(deliverySignal).toBeInstanceOf(AbortSignal);
+    expect(deliverySignal?.aborted).toBe(false);
+  });
+
+  it("cancels durable delivery when restart arrives before the durable intent", async () => {
+    const controller = new AbortController();
+    let deliverySignal: AbortSignal | undefined;
+    deliverOutboundPayloadsMock.mockImplementationOnce(async (params: unknown) => {
+      deliverySignal = (params as { abortSignal?: AbortSignal }).abortSignal;
+      controller.abort(createAgentRunRestartAbortError());
+      expect(deliverySignal?.aborted).toBe(true);
+      throw deliverySignal?.reason;
+    });
+
+    await expect(
+      deliverMediaReplyForTest(undefined, {
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow("agent run aborted for restart");
+
+    expect(deliverySignal?.reason).toBe(controller.signal.reason);
+  });
+
+  it("finishes durable delivery when restart arrives after the durable intent", async () => {
+    const controller = new AbortController();
+    let deliverySignal: AbortSignal | undefined;
+    deliverOutboundPayloadsMock.mockImplementationOnce(async (params: unknown) => {
+      const request = params as {
+        abortSignal?: AbortSignal;
+        onDeliveryIntent?: (intent: {
+          id: string;
+          channel: string;
+          to: string;
+          queuePolicy: "required";
+        }) => void;
+      };
+      deliverySignal = request.abortSignal;
+      request.onDeliveryIntent?.({
+        id: "intent-after-restart",
+        channel: "discord",
+        to: "channel:123",
+        queuePolicy: "required",
+      });
+      controller.abort(createAgentRunRestartAbortError());
+      expect(deliverySignal?.aborted).toBe(false);
+      return [{ channel: "discord", messageId: "sent-after-restart" }];
+    });
+
+    const result = await deliverMediaReplyForTest(undefined, {
+      abortSignal: controller.signal,
+    });
+
+    expect(result.deliverySucceeded).toBe(true);
+    expect(deliverySignal?.aborted).toBe(false);
   });
 
   it("renders response prefix templates with the selected runtime model", () => {

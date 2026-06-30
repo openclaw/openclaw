@@ -1,3 +1,4 @@
+// Discord tests cover channel plugin behavior.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ChannelType } from "discord-api-types/v10";
@@ -476,6 +477,40 @@ describe("discordPlugin outbound", () => {
       expect(diagnostics?.lines?.map((line) => line.text).join("\n")).toContain(
         "Missing required: Connect, Speak, ReadMessageHistory",
       );
+    } finally {
+      fetchPermissionsSpy.mockRestore();
+    }
+  });
+
+  it("returns a timeout error when capabilities diagnostics exceed the timeout", async () => {
+    let diagnosticSignal: AbortSignal | undefined;
+    const fetchPermissionsSpy = vi
+      .spyOn(sendModule, "fetchChannelPermissionsDiscord")
+      .mockImplementation(
+        async (_channelId, opts) =>
+          await new Promise<never>((_, reject) => {
+            diagnosticSignal = opts.signal;
+            opts.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("permission lookup aborted")),
+              { once: true },
+            );
+          }),
+      );
+    try {
+      const cfg = createCfg();
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg),
+        timeoutMs: 10,
+        cfg,
+        target: "channel:222",
+      });
+
+      const timeoutPerms = recordField(diagnostics?.details?.permissions, "permissions");
+      expect(String(timeoutPerms.error)).toContain("timed out");
+      expect(diagnostics?.lines?.[0]?.tone).toBe("error");
+      expect(objectArgAt(fetchPermissionsSpy, 0, 1).timeoutMs).toBe(10);
+      expect(diagnosticSignal?.aborted).toBe(true);
     } finally {
       fetchPermissionsSpy.mockRestore();
     }

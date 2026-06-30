@@ -1,5 +1,13 @@
+/**
+ * Steers active embedded sessions and waits for transcript commits when needed.
+ */
+import { toErrorObject } from "../../../infra/errors.js";
 import { log } from "../logger.js";
 
+/**
+ * Minimal active-session surface needed to steer a running attempt and observe
+ * whether the queued user message reached the transcript.
+ */
 export type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
@@ -7,7 +15,8 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
-export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
+/** Default wait for a steered user message to appear in the active transcript. */
+const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
@@ -76,6 +85,11 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
   return Array.isArray(messages) ? messages : undefined;
 }
 
+/**
+ * Removes one pending steered user message from both the runtime queue and UI
+ * steering list. This targets the exact text so unrelated queued messages keep
+ * their payloads and ordering.
+ */
 export async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -103,6 +117,11 @@ export async function cancelQueuedSteeringMessage(
   return true;
 }
 
+/**
+ * Sends a steering message and resolves only after the matching user
+ * `message_end` event appears. If the run ends or times out first, the pending
+ * queue entry is removed so an abandoned steer does not leak into a later turn.
+ */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -124,12 +143,14 @@ export async function steerAndWaitForTranscriptCommit(
       }
       unsubscribe?.();
       if (err) {
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
     };
     const rejectAfterCancellation = (message: string) => {
+      // Cancellation is best-effort but must finish before rejecting so callers
+      // do not return while a stale queued message can leak into the next turn.
       void cancelQueuedSteeringMessage(activeSession, text)
         .then((removed) => {
           if (!removed) {
@@ -166,6 +187,8 @@ export async function steerAndWaitForTranscriptCommit(
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
+        // Continuation events prove the run is still alive under a new attempt,
+        // so keep waiting for the queued user message to drain.
         if (terminalTimer) {
           clearTimeout(terminalTimer);
           terminalTimer = undefined;
@@ -189,6 +212,10 @@ export async function steerAndWaitForTranscriptCommit(
   });
 }
 
+/**
+ * Steers the active session directly or waits for transcript commitment when a
+ * caller needs delivery proof before returning.
+ */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -203,18 +230,4 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
   );
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

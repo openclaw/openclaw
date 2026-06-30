@@ -1,3 +1,4 @@
+// Amazon Bedrock Mantle tests cover discovery plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -476,11 +477,21 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(2);
+    expect(provider?.models).toHaveLength(3);
     const opus = provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7");
     expect(opus?.api).toBe("anthropic-messages");
     expect(opus?.reasoning).toBe(false);
     expect(opus).not.toHaveProperty("baseUrl");
+    const mythos = provider?.models?.find(
+      (model) => model.id === "anthropic.claude-mythos-preview",
+    );
+    expect(mythos).toMatchObject({
+      api: "anthropic-messages",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("returns null when no auth is available", async () => {

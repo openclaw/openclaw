@@ -1,3 +1,4 @@
+// Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -5,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -245,15 +247,6 @@ function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
 }
 
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // The temp manifest is passed to `tar.c` alongside the asset source paths. If
 // the temp file lives inside any asset, recursive traversal pulls it in a
 // second time and both copies remap to `<archiveRoot>/manifest.json`, which
@@ -463,11 +456,78 @@ export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: s
   };
 }
 
-type SanitizedSqliteBackupAsset = {
+type SqliteBackupAsset = {
   sourcePath: string;
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
+
+type StateSqliteBackupPlan = {
+  snapshots: SqliteBackupAsset[];
+  discoveredSourcePaths: Set<string>;
+};
+
+const SQLITE_BACKUP_SOURCE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
+const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
+  /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
+  const resolvedStateDir = path.resolve(stateDir);
+  const resolvedSourcePath = path.resolve(sourcePath);
+  return (
+    isPathWithin(resolvedSourcePath, resolvedStateDir) &&
+    path.relative(resolvedStateDir, resolvedSourcePath).split(path.sep).includes("node_modules")
+  );
+}
+
+function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
+  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
+    if (sourcePath.endsWith(suffix)) {
+      const databasePath = sourcePath.slice(0, -suffix.length);
+      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
+    }
+  }
+  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
+}
+
+function resolveSqliteBackupBasePath(sourcePath: string): string {
+  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
+    if (sourcePath.endsWith(suffix)) {
+      return sourcePath.slice(0, -suffix.length);
+    }
+  }
+  return sourcePath;
+}
+
+function classifyStateSqliteBackupSourcePath(
+  sourcePath: string,
+  stateDir: string,
+): "excluded" | "sqlite" | undefined {
+  const resolvedSourcePath = path.resolve(sourcePath);
+  if (!isPathWithin(resolvedSourcePath, stateDir)) {
+    return undefined;
+  }
+  if (isStatePackageContentPath(resolvedSourcePath, stateDir)) {
+    return undefined;
+  }
+  if (
+    SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN.test(resolveSqliteBackupBasePath(resolvedSourcePath))
+  ) {
+    return "excluded";
+  }
+  const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
+  if (!databasePath) {
+    return undefined;
+  }
+  return SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => databasePath.endsWith(suffix))
+    ? "excluded"
+    : "sqlite";
+}
+
+function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
+  return "isFile" in entry ? entry.isFile() : entry.type === "File";
+}
 
 function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
   const row = db
@@ -476,47 +536,158 @@ function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
-async function createSanitizedStateSqliteBackupAsset(params: {
+function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
+  if (tableExistsSql(db, "delivery_queue_entries")) {
+    db.prepare("DELETE FROM delivery_queue_entries").run();
+    db.exec("VACUUM;");
+  }
+}
+
+async function listStateSqlitePaths(params: {
   stateDir: string;
-  tempDir: string;
-}): Promise<SanitizedSqliteBackupAsset | undefined> {
-  const archiveSourcePath = resolveOpenClawStateSqlitePath({
-    ...process.env,
-    OPENCLAW_STATE_DIR: params.stateDir,
-  });
-  if (!(await pathExists(archiveSourcePath))) {
-    return undefined;
-  }
-
-  const sqlite = requireNodeSqlite();
-  const source = new sqlite.DatabaseSync(archiveSourcePath, { readOnly: true });
-  const sourcePath = path.join(params.tempDir, "openclaw-state-backup.sqlite");
-  try {
-    source.exec("PRAGMA busy_timeout = 30000;");
-    source.prepare("VACUUM INTO ?").run(sourcePath);
-  } finally {
-    source.close();
-  }
-
-  const snapshot = new sqlite.DatabaseSync(sourcePath);
-  try {
-    if (tableExistsSql(snapshot, "delivery_queue_entries")) {
-      snapshot.prepare("DELETE FROM delivery_queue_entries").run();
-      snapshot.exec("VACUUM;");
+  globalStateSqlitePath: string;
+}): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
+  const snapshotPaths = new Set<string>();
+  const discoveredSourcePaths = new Set<string>();
+  const extensionsFilter = buildExtensionsNodeModulesFilter(params.stateDir);
+  async function visit(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
     }
-  } finally {
-    snapshot.close();
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      // Preserve state-tree symlinks in the archive instead of dereferencing
+      // their SQLite-looking targets during snapshot discovery.
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
+          await visit(entryPath);
+        }
+      } else if (entry.isFile() && extensionsFilter(entryPath)) {
+        const resolvedEntryPath = path.resolve(entryPath);
+        if (resolveSqliteBackupDatabasePath(resolvedEntryPath)) {
+          discoveredSourcePaths.add(resolvedEntryPath);
+        }
+        if (
+          entry.name.endsWith(".sqlite") &&
+          !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))
+        ) {
+          snapshotPaths.add(resolvedEntryPath);
+        }
+      }
+    }
+  }
+  await visit(params.stateDir);
+
+  const globalStateSqlitePath = path.resolve(params.globalStateSqlitePath);
+  let globalStateEntry: import("node:fs").Stats | undefined;
+  try {
+    globalStateEntry = await fs.lstat(globalStateSqlitePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+  if (globalStateEntry?.isFile()) {
+    snapshotPaths.add(globalStateSqlitePath);
+    discoveredSourcePaths.add(globalStateSqlitePath);
+  } else if (globalStateEntry?.isSymbolicLink()) {
+    let targetEntry: import("node:fs").Stats;
+    try {
+      targetEntry = await fs.stat(globalStateSqlitePath);
+    } catch (err) {
+      throw new Error(
+        `Canonical global SQLite symlink cannot be snapshotted: ${globalStateSqlitePath}`,
+        { cause: err },
+      );
+    }
+    if (!targetEntry.isFile()) {
+      throw new Error(
+        `Canonical global SQLite symlink must resolve to a regular file: ${globalStateSqlitePath}`,
+      );
+    }
+    snapshotPaths.add(globalStateSqlitePath);
+    discoveredSourcePaths.add(globalStateSqlitePath);
+  } else if (globalStateEntry) {
+    throw new Error(
+      `Canonical global SQLite path must be a regular file or symlink to one: ${globalStateSqlitePath}`,
+    );
   }
 
   return {
-    sourcePath,
-    archiveSourcePath,
-    skippedSourcePaths: new Set([
-      path.resolve(archiveSourcePath),
-      path.resolve(`${archiveSourcePath}-wal`),
-      path.resolve(`${archiveSourcePath}-shm`),
-    ]),
+    snapshotPaths: [...snapshotPaths].toSorted((left, right) => left.localeCompare(right)),
+    discoveredSourcePaths,
   };
+}
+
+async function createStateSqliteBackupPlan(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<StateSqliteBackupPlan> {
+  // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
+  // tempDir outside stateDir, and this ordering prevents future overlap from
+  // making backup discover one of its own staged SQLite files.
+  const globalStateSqlitePath = path.resolve(
+    resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: params.stateDir,
+    }),
+  );
+  const discovery = await listStateSqlitePaths({
+    stateDir: params.stateDir,
+    globalStateSqlitePath,
+  });
+  const sqlite = requireNodeSqlite();
+  const snapshots: SqliteBackupAsset[] = [];
+  for (const archiveSourcePath of discovery.snapshotPaths) {
+    // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
+    // Raw-copying malformed or unreadable databases would restore unsafe state.
+    // Resolve the canonical global path so a symlinked DB reads the target's
+    // live WAL/SHM state instead of looking for sidecars beside the symlink.
+    const sourceDatabasePath =
+      path.resolve(archiveSourcePath) === globalStateSqlitePath
+        ? await fs.realpath(archiveSourcePath)
+        : archiveSourcePath;
+    const source = new sqlite.DatabaseSync(sourceDatabasePath, {
+      allowExtension: true,
+      readOnly: true,
+    });
+    const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    try {
+      source.exec("PRAGMA busy_timeout = 30000;");
+      // VACUUM INTO removes deleted-page remnants before the snapshot enters
+      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
+      // can still be compacted without weakening that privacy property.
+      await loadSqliteVecExtension({ db: source });
+      source.prepare("VACUUM INTO ?").run(sourcePath);
+    } finally {
+      source.close();
+    }
+    await fs.chmod(sourcePath, 0o600);
+    if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
+      const snapshot = new sqlite.DatabaseSync(sourcePath);
+      try {
+        sanitizeGlobalStateSqliteSnapshot(snapshot);
+      } finally {
+        snapshot.close();
+      }
+    }
+    snapshots.push({
+      sourcePath,
+      archiveSourcePath,
+      skippedSourcePaths: new Set(
+        [archiveSourcePath, sourceDatabasePath].flatMap((databasePath) =>
+          SQLITE_BACKUP_SOURCE_SUFFIXES.map((suffix) => path.resolve(`${databasePath}${suffix}`)),
+        ),
+      ),
+    });
+  }
+  return { snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
 }
 
 export async function createBackupArchive(
@@ -582,18 +753,19 @@ export async function createBackupArchive(
   const tempArchivePath = buildTempArchivePath(outputPath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
-    const sanitizedStateSqlite = stateAsset
-      ? await createSanitizedStateSqliteBackupAsset({
+    const stateSqliteBackup = stateAsset
+      ? await createStateSqliteBackupPlan({
           stateDir: stateAsset.sourcePath,
           tempDir,
         })
-      : undefined;
+      : { snapshots: [], discoveredSourcePaths: new Set<string>() };
     const sourcePathRemaps = new Map<string, string>();
-    if (sanitizedStateSqlite) {
-      sourcePathRemaps.set(
-        path.resolve(sanitizedStateSqlite.sourcePath),
-        sanitizedStateSqlite.archiveSourcePath,
-      );
+    const skippedSqliteSourcePaths = new Set<string>();
+    for (const snapshot of stateSqliteBackup.snapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
+      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
+        skippedSqliteSourcePaths.add(skippedSourcePath);
+      }
     }
     const manifest = buildManifest({
       createdAt,
@@ -615,16 +787,39 @@ export async function createBackupArchive(
       : undefined;
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
-    const tarFilter = (entryPath: string): boolean => {
+    // node-tar invokes filters from async stat callbacks, so throwing inside
+    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    const unexpectedSqliteSourcePaths: string[] = [];
+    const tarFilter = (
+      entryPath: string,
+      entryStat: import("node:fs").Stats | import("tar").ReadEntry,
+    ): boolean => {
       // The manifest is staged in a tmp dir outside any state directory and
       // is always safe to include.
-      if (path.resolve(entryPath) === manifestPath) {
+      const resolvedEntryPath = path.resolve(entryPath);
+      if (resolvedEntryPath === manifestPath) {
         return true;
       }
-      if (sanitizedStateSqlite?.skippedSourcePaths.has(path.resolve(entryPath))) {
+      if (extensionsFilter && !extensionsFilter(entryPath)) {
         return false;
       }
-      if (extensionsFilter && !extensionsFilter(entryPath)) {
+      const sqliteSourceKind = stateAsset
+        ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
+        : undefined;
+      if (sqliteSourceKind === "excluded") {
+        return false;
+      }
+      if (skippedSqliteSourcePaths.has(resolvedEntryPath)) {
+        return false;
+      }
+      if (
+        sqliteSourceKind === "sqlite" &&
+        stateSqliteBackup.discoveredSourcePaths.has(resolvedEntryPath)
+      ) {
+        return false;
+      }
+      if (sqliteSourceKind === "sqlite" && isBackupTarFilterFile(entryStat)) {
+        unexpectedSqliteSourcePaths.push(entryPath);
         return false;
       }
       if (isVolatileBackupPath(entryPath, volatilePlan)) {
@@ -636,12 +831,13 @@ export async function createBackupArchive(
     await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
-      runTar: () => {
+      runTar: async () => {
         // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
-        return tar.c(
+        unexpectedSqliteSourcePaths.length = 0;
+        await tar.c(
           {
             file: tempArchivePath,
             gzip: true,
@@ -660,10 +856,16 @@ export async function createBackupArchive(
           },
           [
             manifestPath,
-            ...(sanitizedStateSqlite ? [sanitizedStateSqlite.sourcePath] : []),
+            ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
             ...result.assets.map((asset) => asset.sourcePath),
           ],
         );
+        const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
+        if (unexpectedSqliteSourcePath) {
+          throw new Error(
+            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+          );
+        }
       },
     });
     result.skippedVolatileCount = skippedVolatileCount;

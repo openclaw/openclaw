@@ -1,3 +1,4 @@
+// Outbound attachment tests cover media loading rules for outgoing messages.
 import { describe, expect, it, vi } from "vitest";
 
 const loadWebMedia = vi.hoisted(() => vi.fn());
@@ -11,7 +12,8 @@ vi.mock("./store.js", () => ({
   saveMediaBuffer,
 }));
 
-const { resolveOutboundAttachmentFromUrl } = await import("./outbound-attachment.js");
+const { resolveOutboundAttachmentFromBuffer, resolveOutboundAttachmentFromUrl } =
+  await import("./outbound-attachment.js");
 
 describe("resolveOutboundAttachmentFromUrl", () => {
   it("preserves the loaded file name when staging outbound media", async () => {
@@ -35,5 +37,32 @@ describe("resolveOutboundAttachmentFromUrl", () => {
       1024,
       "report.pdf",
     );
+  });
+});
+
+describe("resolveOutboundAttachmentFromBuffer", () => {
+  it("stages outbound buffers with filename and content type metadata", async () => {
+    const buffer = Buffer.from("hello");
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/media/outbound/note---uuid.txt",
+      contentType: "text/plain",
+    });
+
+    const result = await resolveOutboundAttachmentFromBuffer(buffer, 1024, {
+      contentType: "text/plain",
+      filename: "note.txt",
+    });
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      buffer,
+      "text/plain",
+      "outbound",
+      1024,
+      "note.txt",
+    );
+    expect(result).toEqual({
+      path: "/tmp/media/outbound/note---uuid.txt",
+      contentType: "text/plain",
+    });
   });
 });

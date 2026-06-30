@@ -1,9 +1,14 @@
+/**
+ * User-facing auth-profile failure copy.
+ * Maps failover reasons into provider-specific recovery guidance while keeping
+ * raw error detail as a short diagnostic suffix.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 
-export type AuthProfileFailureCopyParams = {
+type AuthProfileFailureCopyParams = {
   reason: FailoverReason;
   provider: string;
   /**
@@ -78,6 +83,7 @@ function shouldIncludeRecoveryHint(reason: FailoverReason): boolean {
     case "timeout":
     case "server_error":
     case "model_not_found":
+    case "format":
       return false;
     default:
       return true;

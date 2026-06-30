@@ -1,3 +1,5 @@
+/** Tests BTW side-question execution, session context, auth, and harness routing. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -24,7 +26,10 @@ const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const resolveEmbeddedAgentStreamFnMock = vi.fn();
+const prepareCliRunContextMock = vi.fn();
+const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
+const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -76,10 +81,13 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./model-runtime-aliases.js", () => ({
+  isCliRuntimeAliasForProvider: ({ runtime, provider }: { runtime?: string; provider?: string }) =>
+    runtime === "claude-cli" && provider === "anthropic",
   resolveCliRuntimeExecutionProvider: ({
     provider,
     cfg,
     modelId,
+    authProfileId,
   }: {
     provider?: string;
     cfg?: {
@@ -88,15 +96,45 @@ vi.mock("./model-runtime-aliases.js", () => ({
           models?: Record<string, { agentRuntime?: { id?: string } }>;
         };
       };
+      auth?: {
+        order?: Record<string, string[]>;
+        profiles?: Record<string, { provider?: string }>;
+      };
     };
     modelId?: string;
+    authProfileId?: string;
   }) => {
     const key = provider && modelId ? `${provider}/${modelId}` : undefined;
     const runtime = key
       ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
       : undefined;
-    return runtime || undefined;
+    if ((!runtime || runtime === "auto") && authProfileId?.trim()) {
+      return cfg?.auth?.profiles?.[authProfileId]?.provider === "claude-cli"
+        ? "claude-cli"
+        : undefined;
+    }
+    if (!runtime || runtime === "auto") {
+      for (const profileId of cfg?.auth?.order?.[provider ?? ""] ?? []) {
+        if (cfg?.auth?.profiles?.[profileId]?.provider === "claude-cli") {
+          return "claude-cli";
+        }
+      }
+    }
+    return runtime === "claude-cli" ? runtime : undefined;
   },
+}));
+
+vi.mock("./cli-runner/prepare.runtime.js", () => ({
+  prepareCliRunContext: (...args: unknown[]) => prepareCliRunContextMock(...args),
+}));
+
+vi.mock("./cli-runner/execute.runtime.js", () => ({
+  executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
+}));
+
+vi.mock("./harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
+    ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -105,6 +143,8 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+    cfg.agents?.list?.find((entry) => entry.id === agentId),
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
@@ -158,6 +198,8 @@ const DEFAULT_USAGE = {
 };
 
 function makeAsyncEvents(events: unknown[]) {
+  // Minimal async iterable that matches provider stream shape without loading
+  // real model/runtime infrastructure.
   return {
     async *[Symbol.asyncIterator]() {
       for (const event of events) {
@@ -177,6 +219,8 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 function createAssistantDoneEvent(content: unknown[]) {
+  // Done events include usage/provider metadata because BTW persists the reply
+  // as a normal assistant turn.
   return {
     type: "done",
     reason: "stop",
@@ -414,7 +458,10 @@ describe("runBtwSideQuestion", () => {
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
     resolveEmbeddedAgentStreamFnMock.mockReset();
+    prepareCliRunContextMock.mockReset();
+    executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
+    ensureSelectedAgentHarnessPluginMock.mockReset();
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
@@ -572,6 +619,16 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      sandboxSessionKey: "agent:main:runtime-policy",
+      agentAccountId: "account-1",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
     });
 
     expect(result).toEqual({ text: "Codex side answer." });
@@ -586,6 +643,17 @@ describe("runBtwSideQuestion", () => {
           agentId?: string;
           workspaceDir?: string;
           authProfileId?: string;
+          sandboxSessionKey?: string;
+          agentAccountId?: string;
+          groupId?: string;
+          groupChannel?: string;
+          groupSpace?: string;
+          spawnedBy?: string;
+          senderId?: string;
+          senderName?: string;
+          senderUsername?: string;
+          senderE164?: string;
+          toolsAllow?: string[];
         },
       ]
     >;
@@ -596,11 +664,148 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai:work");
+    expect(sideQuestionParams).toMatchObject({
+      agentAccountId: "account-1",
+      sandboxSessionKey: "agent:main:runtime-policy",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
+    });
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: (ctx) =>
+        ctx.provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "openai only" },
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+    };
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:user@example.test");
+    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
+      provider?: string;
+      acceptedProviderIds?: string[];
+    };
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    await runSideQuestion({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              "deny-room": {
+                toolsBySender: {
+                  "id:restricted-sender": { deny: ["*"] },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: "agent:main:telegram:group:deny-room",
+      messageProvider: "telegram",
+      groupId: "deny-room",
+      senderId: "restricted-sender",
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
+  });
+
+  it("prepares a narrow global policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    await runSideQuestion({
+      cfg: { tools: { allow: ["message"] } } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
   });
 
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
@@ -637,33 +842,211 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not let an auto-selected stale Anthropic profile suppress Claude CLI auth for BTW", async () => {
-    const claudeAuthStore = {
-      version: 1 as const,
-      profiles: {
-        "anthropic:api": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          key: "static-key",
-        },
-        "anthropic:claude-cli": {
-          type: "oauth" as const,
-          provider: "claude-cli",
-          access: "claude-cli-access",
-          refresh: "claude-cli-refresh",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
-    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
-    getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "claude-cli-access",
-      mode: "oauth",
-      source: "profile:anthropic:claude-cli",
-      profileId: "anthropic:claude-cli",
+  it("loads a cold Copilot harness before selecting the /btw provider fallback", async () => {
+    let loaded = false;
+    ensureSelectedAgentHarnessPluginMock.mockImplementation(async () => {
+      if (loaded) {
+        return;
+      }
+      loaded = true;
+      registerAgentHarness({
+        id: "copilot",
+        label: "Copilot test harness",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+      });
     });
-    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
-    mockDoneAnswer("Claude CLI answer.");
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-4o",
+      api: "openai-completions",
+    });
+    mockDoneAnswer("Copilot fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/gpt-4o": { agentRuntime: { id: "copilot" } },
+            },
+          },
+        },
+      } as never,
+      provider: "github-copilot",
+      model: "gpt-4o",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Copilot fallback answer." });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: expect.any(Object),
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(streamSimpleMock).toHaveBeenCalledOnce();
+  });
+
+  it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "CLI side answer." });
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      provider?: string;
+      model?: string;
+      disableTools?: boolean;
+      cliSessionId?: string;
+      extraSystemPrompt?: string;
+      prompt?: string;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.model).toBe("claude-opus-4-7");
+    expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams.cliSessionId).toBeUndefined();
+    expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
+    expect(prepareParams.prompt).toContain("<conversation_history>");
+    expect(prepareParams.prompt).toContain("<btw_side_question>");
+    expect(executePreparedCliRunMock).toHaveBeenCalledWith({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      opts: { timeoutOverrideSeconds: 0 },
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      timeoutMs?: unknown;
+      runTimeoutOverrideMs?: unknown;
+    };
+    expect(prepareParams.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(prepareParams.runTimeoutOverrideMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("runs auth-order-selected CLI BTW through the CLI side-question path", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI auth-order side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:claude-cli": { provider: "claude-cli" },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "CLI auth-order side answer." });
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      provider?: string;
+      disableTools?: boolean;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.disableTools).toBe(true);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not expose raw CLI BTW output when transformed text is empty", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "   ",
+      rawText: "raw untransformed answer",
+    });
+
+    await expect(
+      runSideQuestion({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        } as never,
+        model: "claude-opus-4-7",
+        sessionKey: DEFAULT_SESSION_KEY,
+      }),
+    ).rejects.toThrow("/btw side question via claude-cli produced no answer");
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let an auto-selected stale direct profile suppress auth-order CLI BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Claude CLI answer." });
 
     const result = await runSideQuestion({
       cfg: {
@@ -682,28 +1065,108 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "Claude CLI answer." });
-    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
-      externalCliProviderIds: ["claude-cli"],
-      allowKeychainPrompt: false,
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBeUndefined();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("uses an auto-selected session CLI auth profile for CLI BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
     });
-    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
-    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
-      profileId: undefined,
-      store: claudeAuthStore,
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:auto-cli",
+        authProfileOverrideSource: "auto",
+      }),
     });
-    expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
-      provider: "anthropic",
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves auto-selected session CLI BTW routing before resolving runtime auth", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const sessionEntry = createSessionEntry({
+      authProfileOverride: "anthropic:auto-cli",
+      authProfileOverrideSource: "auto",
     });
-    expectRecordFields(
-      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
-      {
-        profileId: "anthropic:claude-cli",
-        authMode: "oauth",
+    const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+    resolveSessionAuthProfileOverrideMock.mockImplementation(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        if (params.sessionEntry) {
+          params.sessionEntry.authProfileOverride = "anthropic:api";
+          params.sessionEntry.authProfileOverrideSource = "auto";
+        }
+        return "anthropic:api";
       },
     );
-    expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
-      authProfileId: "anthropic:claude-cli",
+    mockDoneAnswer("Generic fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey: DEFAULT_SESSION_KEY,
     });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
   it("loads Claude CLI auth for BTW from persisted auth-store order", async () => {
@@ -1184,6 +1647,144 @@ describe("runBtwSideQuestion", () => {
     expect(diagDebugMock).toHaveBeenCalledWith(
       "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
+  });
+
+  it("honors an explicitly empty active run snapshot", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+    });
+
+    await expect(runMathSideQuestion()).rejects.toThrow("No active session context.");
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([]);
+  });
+
+  it("uses the branch selected by a terminal transcript leaf control", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps parentless history addressed by a terminal leaf control", async () => {
+    const userEntry = {
+      type: "message",
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    };
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      { ...userEntry, parentId: null },
+      { ...assistantEntry, parentId: "user-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps visible history after continuing from a disjoint opaque append cursor", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const metadataEntry = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: "side-delivery",
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+      appendParentId: "plugin-metadata",
+    };
+    const continuationEntry = createTranscriptEntry({
+      id: "assistant-continuation",
+      parentId: "plugin-metadata",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "continued answer" }]),
+    });
+    mockTranscriptEntries([
+      userEntry,
+      assistantEntry,
+      sideEntry,
+      metadataEntry,
+      leafEntry,
+      continuationEntry,
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      userEntry,
+      assistantEntry,
+      { ...continuationEntry, parentId: "assistant-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
   });
 
   it("returns the BTW answer without appending transcript custom entries", async () => {

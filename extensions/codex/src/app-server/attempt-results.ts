@@ -1,46 +1,50 @@
+/**
+ * Result-shaping helpers for Codex app-server attempt terminal text, replay
+ * safety, startup failures, and malformed image errors.
+ */
 import type {
   AgentMessage,
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
+import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
 
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 
+/** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
 }
 
-export function hasCodexAppServerPotentialSideEffectEvidence(
-  result: EmbeddedRunAttemptResult,
-): boolean {
-  return result.replayMetadata.hadPotentialSideEffects;
-}
-
+/**
+ * Builds the user-facing timeout outcome when Codex stops without a terminal
+ * turn event.
+ */
 export function buildCodexAppServerPromptTimeoutOutcome(params: {
   result: EmbeddedRunAttemptResult;
   turnCompletionIdleTimedOut: boolean;
+  turnWatchTimeoutKind?: CodexAttemptTurnWatchTimeoutKind;
 }): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
-  const completionIdleTimeoutHadPotentialSideEffects = hasCodexAppServerPotentialSideEffectEvidence(
-    params.result,
-  );
-  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
-  if (
-    !params.turnCompletionIdleTimedOut ||
-    (params.result.itemLifecycle.completedCount === 0 &&
-      !completionIdleTimeoutHadPotentialSideEffects &&
-      replayBlockedReason === undefined)
-  ) {
+  if (!params.turnCompletionIdleTimedOut) {
     return undefined;
   }
+  if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
+    return undefined;
+  }
+  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
+  const completionIdleTimeoutHadPotentialSideEffects =
+    replayBlockedReason === "tool_activity" ||
+    replayBlockedReason === "potential_side_effect" ||
+    replayBlockedReason === "active_item";
   return {
     message: completionIdleTimeoutHadPotentialSideEffects
       ? CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE
       : CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE,
-    ...(completionIdleTimeoutHadPotentialSideEffects
+    ...(replayBlockedReason
       ? {
           replayInvalid: true,
           livenessState: "abandoned" as const,
@@ -49,6 +53,7 @@ export function buildCodexAppServerPromptTimeoutOutcome(params: {
   };
 }
 
+/** Explains why an incomplete app-server turn cannot be safely replayed. */
 export function resolveCodexAppServerReplayBlockedReason(
   result: EmbeddedRunAttemptResult,
 ):
@@ -74,6 +79,7 @@ export function resolveCodexAppServerReplayBlockedReason(
   return undefined;
 }
 
+/** Builds an attempt result for failures before the app-server turn starts. */
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
@@ -94,6 +100,7 @@ export function buildCodexTurnStartFailureResult(params: {
     assistantTexts: [],
     toolMetas: [],
     lastAssistant: undefined,
+    currentAttemptAssistant: undefined,
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
@@ -113,6 +120,7 @@ export function buildCodexTurnStartFailureResult(params: {
   };
 }
 
+/** Detects app-server errors caused by invalid image payload data. */
 export function isInvalidCodexImagePayloadError(message: unknown): boolean {
   if (typeof message !== "string" || !message.trim()) {
     return false;

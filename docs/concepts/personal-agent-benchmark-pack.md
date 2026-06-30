@@ -11,7 +11,7 @@ The Personal Agent Benchmark Pack is a small repo-backed QA scenario pack for
 local personal assistant workflows. It is not a generic model benchmark and it
 does not require a new runner. The pack reuses the private QA stack described in
 [QA overview](/concepts/qa-e2e-automation), the synthetic
-[QA channel](/channels/qa-channel), and the existing `qa/scenarios` markdown
+[QA channel](/channels/qa-channel), and the existing `qa/scenarios` YAML
 catalog.
 
 The first pack is intentionally narrow:
@@ -61,9 +61,9 @@ to inspect and file in issues.
 
 ## Extending The Pack
 
-Add new cases under `qa/scenarios/personal/`, then add the scenario id to
-`QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic in
-`mock-openai`, and focused on one personal assistant behavior.
+Add new `.yaml` cases under `qa/scenarios/personal/`, then add the scenario id
+to `QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic
+in `mock-openai`, and focused on one personal assistant behavior.
 
 Good follow-up candidates:
 

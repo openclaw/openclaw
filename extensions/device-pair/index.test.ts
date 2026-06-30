@@ -1,3 +1,4 @@
+// Device Pair tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,7 +54,6 @@ vi.mock("./notify.js", () => ({
   armPairNotifyOnce: vi.fn(async () => false),
   formatPendingRequests: vi.fn(() => "No pending device pairing requests."),
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
-  registerPairingNotifierService: vi.fn(),
 }));
 
 import {
@@ -290,7 +290,12 @@ describe("device-pair /pair qr", () => {
         gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
-    const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
+    const payload = result as {
+      text?: string;
+      mediaUrl?: string;
+      channelData?: Record<string, unknown>;
+      sensitiveMedia?: boolean;
+    };
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
@@ -301,7 +306,11 @@ describe("device-pair /pair qr", () => {
       },
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(payload.mediaUrl).toBe("data:image/png;base64,ZmFrZXBuZw==");
+    expect(payload.mediaUrl).toBeUndefined();
+    expect(payload.channelData?.openclawPairingQr).toEqual({
+      setupCode: expect.any(String),
+      expiresAtMs: expect.any(Number),
+    });
     expect(payload.sensitiveMedia).toBe(true);
     expect(text).toContain("- Security: single-use bootstrap token");
     expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");

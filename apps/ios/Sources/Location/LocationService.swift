@@ -12,8 +12,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     private let manager = CLLocationManager()
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
-    private var updatesContinuation: AsyncStream<CLLocation>.Continuation?
-    private var isStreaming = false
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
 
@@ -84,54 +82,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         try await AsyncTimeout.withTimeoutMs(timeoutMs: timeoutMs, onTimeout: { Error.timeout }, operation: operation)
     }
 
-    func startLocationUpdates(
-        desiredAccuracy: OpenClawLocationAccuracy,
-        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
-    {
-        self.stopLocationUpdates()
-
-        self.manager.desiredAccuracy = LocationCurrentRequest.accuracyValue(desiredAccuracy)
-        self.manager.pausesLocationUpdatesAutomatically = true
-        self.manager.allowsBackgroundLocationUpdates = true
-
-        self.isStreaming = true
-        if significantChangesOnly {
-            self.manager.startMonitoringSignificantLocationChanges()
-        } else {
-            self.manager.startUpdatingLocation()
-        }
-
-        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-            self.updatesContinuation = continuation
-            continuation.onTermination = { @Sendable _ in
-                Task { @MainActor in
-                    self.stopLocationUpdates()
-                }
-            }
-        }
-    }
-
-    func stopLocationUpdates() {
-        guard self.isStreaming else { return }
-        self.isStreaming = false
-        self.manager.stopUpdatingLocation()
-        self.manager.stopMonitoringSignificantLocationChanges()
-        self.updatesContinuation?.finish()
-        self.updatesContinuation = nil
-    }
-
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {
         self.significantLocationCallback = onUpdate
         guard !self.isMonitoringSignificantChanges else { return }
         self.isMonitoringSignificantChanges = true
         self.manager.startMonitoringSignificantLocationChanges()
-    }
-
-    func stopMonitoringSignificantLocationChanges() {
-        guard self.isMonitoringSignificantChanges else { return }
-        self.isMonitoringSignificantChanges = false
-        self.significantLocationCallback = nil
-        self.manager.stopMonitoringSignificantLocationChanges()
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -160,9 +115,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
             }
             if let callback = self.significantLocationCallback, let latest = locs.last {
                 callback(latest)
-            }
-            if let latest = locs.last, let updates = self.updatesContinuation {
-                updates.yield(latest)
             }
         }
     }

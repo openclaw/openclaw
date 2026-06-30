@@ -1,3 +1,7 @@
+/**
+ * Subagent spawn target policy. Requesters can self-spawn by default, or opt
+ * into a configured allowlist that is still intersected with known agents.
+ */
 import {
   normalizeUniqueStringEntries,
   sortUniqueStrings,
@@ -44,6 +48,7 @@ function filterConfiguredAllowedIds(params: {
   return params.allowedIds.filter((id) => configuredIds.has(id));
 }
 
+/** Resolve the normalized agent IDs a requester may target with sessions_spawn. */
 export function resolveSubagentAllowedTargetIds(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
@@ -76,6 +81,7 @@ export function resolveSubagentAllowedTargetIds(params: {
   };
 }
 
+/** Validate one requested target against subagent spawn policy. */
 export function resolveSubagentTargetPolicy(params: {
   requesterAgentId: string;
   targetAgentId: string;

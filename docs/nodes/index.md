@@ -51,8 +51,14 @@ Notes:
   different role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
-- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
-  separate gateway-owned node pairing store.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a
+  device-backed node it revokes the device's `node` role in `devices/paired.json`
+  and disconnects that device's node-role sessions — a mixed-role device keeps
+  its row and only loses the `node` role, while a node-only device row is
+  deleted. It also clears any matching entry from the separate gateway-owned node
+  pairing store. `operator.pairing` may remove non-operator node rows; a
+  device-token caller revoking its own node role on a mixed-role device
+  additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -214,6 +220,59 @@ permission boundary. Dangerous plugin node commands still require explicit
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.
 
+## Config (`openclaw.json`)
+
+Node-related settings live under `gateway.nodes` and `tools.exec`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      // Auto-approve first-time node pairing from trusted networks (CIDR list).
+      // Disabled when unset. Only applies to first-time role:node requests
+      // with no requested scopes; does not auto-approve upgrades.
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+      // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
+      allowCommands: ["camera.snap", "screen.record"],
+      // Block exact command names even if defaults or allowCommands include them.
+      denyCommands: ["camera.clip"],
+    },
+  },
+  tools: {
+    exec: {
+      // Default exec host: "node" routes all exec calls to a paired node.
+      host: "node",
+      // Security mode for node exec: allow only approved/allowlisted commands.
+      security: "allowlist",
+      // Pin exec to a specific node (id or name). Omit to allow any node.
+      node: "build-node",
+    },
+  },
+}
+```
+
+Use exact node command names. `denyCommands` removes a command even when a
+platform default or `allowCommands` entry would otherwise allow it. See
+[Gateway configuration reference](/gateway/configuration-reference#gateway-field-details)
+for gateway node pairing and command-policy field details.
+
+Per-agent exec node override:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        tools: { exec: { node: "build-node" } },
+      },
+    ],
+  },
+}
+```
+
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
@@ -249,7 +308,9 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
+- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
+- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 
 ## Photos + videos (node camera)
 
@@ -376,10 +437,10 @@ Notes:
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped `--env` values are reduced to an explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
+- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
+- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).

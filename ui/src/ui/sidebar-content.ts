@@ -1,3 +1,4 @@
+// Control UI module implements sidebar content behavior.
 export type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
@@ -24,4 +25,14 @@ export type CanvasSidebarContent = {
   unavailableReason?: "not_found" | "oversized" | "not_visible" | null;
 };
 
-export type SidebarContent = MarkdownSidebarContent | CanvasSidebarContent;
+export type ImageSidebarContent = {
+  kind: "image";
+  title: string;
+  src: string;
+  mimeType?: string | null;
+  rawText?: string | null;
+  fullMessageRequest?: SidebarFullMessageRequest;
+  unavailableReason?: "not_found" | "oversized" | "not_visible" | null;
+};
+
+export type SidebarContent = MarkdownSidebarContent | CanvasSidebarContent | ImageSidebarContent;

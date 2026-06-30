@@ -8,6 +8,8 @@ struct RootTabs: View {
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.rootTabsUserInterfaceIdiomOverride) private var userInterfaceIdiomOverride
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
@@ -21,10 +23,19 @@ struct RootTabs: View {
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
     @State private var selectedTab: AppTab = Self.initialTab
+    @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
+    @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
+    @State private var selectedSettingsRouteRequestID: Int = 0
+    // Embedded Settings rows push onto the sidebar stack; clear it before
+    // changing sidebar roots so stale settings detail screens cannot survive.
+    @State private var sidebarNavigationPath: [SettingsRoute] = []
+    @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
+    @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
+    @State private var isSidebarDrawerLayout: Bool = false
+    @State private var didResolveSidebarLayout: Bool = false
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
-    @State private var showGatewayActions: Bool = false
     @State private var showGatewayProblemDetails: Bool = false
     @State private var showOnboarding: Bool = false
     @State private var onboardingAllowSkip: Bool = true
@@ -33,14 +44,7 @@ struct RootTabs: View {
     @State private var didApplyInitialAppearance: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
     @State private var handledGatewaySetupRequestID: Int = 0
-
-    private enum AppTab: Hashable {
-        case control
-        case chat
-        case talk
-        case agent
-        case settings
-    }
+    @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
 
     private static var initialTab: AppTab {
         let arguments = ProcessInfo.processInfo.arguments
@@ -66,6 +70,28 @@ struct RootTabs: View {
         }
     }
 
+    private static var initialSidebarDestination: SidebarDestination {
+        if let requested = requestedInitialSidebarDestination {
+            return requested
+        }
+        return Self.defaultSidebarDestination(for: initialTab)
+    }
+
+    private static var requestedInitialSidebarDestination: SidebarDestination? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        let requested = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return SidebarDestination.allCases.first { $0.rawValue.lowercased() == requested }
+    }
+
+    private static var initialSidebarVisibility: Bool? {
+        requestedInitialSidebarVisibility(arguments: ProcessInfo.processInfo.arguments)
+    }
+
     private static var initialChatSessionKey: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let flagIndex = arguments.firstIndex(of: "--openclaw-chat-session") else {
@@ -87,45 +113,11 @@ struct RootTabs: View {
         }
     }
 
-    enum StartupPresentationRoute: Equatable {
-        case none
-        case onboarding
-        case settings
-    }
-
-    static func startupPresentationRoute(
-        gatewayConnected: Bool,
-        hasConnectedOnce: Bool,
-        onboardingComplete: Bool,
-        hasExistingGatewayConfig: Bool,
-        shouldPresentOnLaunch: Bool) -> StartupPresentationRoute
+    static func shouldUseSidebarTabs(
+        idiom: UIUserInterfaceIdiom,
+        horizontalSizeClass _: UserInterfaceSizeClass?) -> Bool
     {
-        if gatewayConnected {
-            return .none
-        }
-        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
-            return .onboarding
-        }
-        if !hasExistingGatewayConfig {
-            return .settings
-        }
-        return .none
-    }
-
-    static func shouldPresentQuickSetup(
-        quickSetupDismissed: Bool,
-        showOnboarding: Bool,
-        hasPresentedSheet: Bool,
-        gatewayConnected: Bool,
-        hasExistingGatewayConfig: Bool,
-        discoveredGatewayCount: Int) -> Bool
-    {
-        guard !quickSetupDismissed else { return false }
-        guard !showOnboarding else { return false }
-        guard !hasPresentedSheet else { return false }
-        guard !gatewayConnected else { return false }
-        guard !hasExistingGatewayConfig else { return false }
-        return discoveredGatewayCount > 0
+        idiom == .pad
     }
 
     var body: some View {
@@ -136,20 +128,30 @@ struct RootTabs: View {
                         .tint(OpenClawBrand.accent))))
     }
 
+    @ViewBuilder
     private var tabContent: some View {
+        if self.usesSidebarTabs {
+            self.sidebarSplitContent
+        } else {
+            self.phoneTabContent
+        }
+    }
+
+    private var phoneTabContent: some View {
         TabView(selection: self.$selectedTab) {
-            CommandCenterTab(
-                openChat: { self.selectedTab = .chat },
-                openSettings: { self.selectedTab = .settings })
-                .tabItem { Label("Command", systemImage: "target") }
+            RootTabsPhoneControlHub(
+                groups: Self.phoneControlGroups,
+                initialDestination: Self.requestedInitialSidebarDestination,
+                openRootDestination: { self.selectSidebarDestination($0) })
+                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
-            ChatProTab()
+            ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
 
-            TalkProTab(openSettings: { self.selectedTab = .settings })
+            TalkProTab(openSettings: { self.selectSidebarDestination(.gateway) })
                 .tabItem {
                     Label(
                         "Talk",
@@ -157,14 +159,439 @@ struct RootTabs: View {
                 }
                 .tag(AppTab.talk)
 
-            AgentProTab()
-                .tabItem { Label("Agent", systemImage: "person.2.fill") }
-                .tag(AppTab.agent)
+            NavigationStack {
+                AgentProTab(
+                    directRoute: .agents,
+                    openSettings: { self.selectSidebarDestination(.gateway) })
+            }
+            .tabItem { Label("Agent", systemImage: "person.2.fill") }
+            .tag(AppTab.agent)
 
-            SettingsProTab()
+            SettingsProTab(
+                initialRoute: self.selectedSettingsRoute,
+                onRouteChange: self.handleSettingsRouteChange)
+                .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
         }
+    }
+
+    private var sidebarSplitContent: some View {
+        GeometryReader { proxy in
+            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: proxy.size)
+            let sidebarWidth = self.sidebarWidth(containerWidth: proxy.size.width, isDrawerLayout: isDrawerLayout)
+            Group {
+                if isDrawerLayout {
+                    self.sidebarDrawerContent(sidebarWidth: sidebarWidth)
+                } else {
+                    self.sidebarNavigationSplitContent(sidebarWidth: sidebarWidth)
+                }
+            }
+            .animation(.easeInOut(duration: 0.22), value: self.isSidebarVisible)
+            .onAppear {
+                self.updateSidebarLayout(containerSize: proxy.size, force: false)
+            }
+            .onChange(of: proxy.size) { _, size in
+                self.updateSidebarLayout(containerSize: size, force: false)
+            }
+        }
+    }
+
+    private func sidebarNavigationSplitContent(sidebarWidth: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            if self.isSidebarVisible {
+                self.sidebarColumn
+                    .frame(width: sidebarWidth, alignment: .topLeading)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+                    .overlay(alignment: .trailing) {
+                        self.sidebarVerticalSeparator
+                    }
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            self.sidebarDetailNavigationShell
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .background(OpenClawProBackground())
+    }
+
+    private func sidebarDrawerContent(sidebarWidth: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            self.sidebarDetailNavigationShell
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if self.isSidebarVisible {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.black.opacity(0.28)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            self.hideSidebar()
+                        }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .zIndex(0)
+
+                self.sidebarColumn
+                    .frame(width: sidebarWidth, alignment: .topLeading)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+                    .overlay(alignment: .trailing) {
+                        self.sidebarVerticalSeparator
+                    }
+                    .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(1)
+            }
+        }
+    }
+
+    private var sidebarDetailShell: some View {
+        self.sidebarDetail
+            .id(self.sidebarDetailShellID)
+    }
+
+    private var sidebarColumn: some View {
+        VStack(spacing: 0) {
+            self.sidebarIdentityHeader
+            self.sidebarList
+            self.sidebarFooter
+        }
+        .safeAreaPadding(.top, 8)
+        .safeAreaPadding(.bottom, 8)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private var sidebarIdentityHeader: some View {
+        HStack(spacing: 10) {
+            OpenClawProMark(size: 30, shadowRadius: 3)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("OpenClaw")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 4) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(self.sidebarGatewayStatusColor)
+                    Text(self.sidebarGatewayStatusTitle)
+                        .lineLimit(1)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if self.isSidebarDrawerLayout {
+                self.sidebarHideButton
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Color(uiColor: .systemBackground))
+        .overlay(alignment: .bottom) {
+            self.sidebarHorizontalSeparator
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("OpenClaw \(self.sidebarGatewayStatusTitle)")
+    }
+
+    private var sidebarGatewayStatusTitle: String {
+        switch self.gatewayStatus {
+        case .connected:
+            "Online"
+        case .connecting:
+            "Connecting"
+        case .error:
+            "Needs attention"
+        case .disconnected:
+            "Offline"
+        }
+    }
+
+    private var sidebarList: some View {
+        List {
+            ForEach(Self.sidebarGroups) { group in
+                Section(group.title.capitalized) {
+                    ForEach(group.destinations) { destination in
+                        self.sidebarDestinationButton(destination)
+                    }
+                }
+                .listSectionSeparator(.hidden, edges: .all)
+            }
+        }
+        .listStyle(.sidebar)
+        .tint(OpenClawBrand.accent)
+        .scrollContentBackground(.hidden)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private var sidebarFooter: some View {
+        VStack(spacing: 0) {
+            self.sidebarHorizontalSeparator
+            HStack(spacing: 10) {
+                Text("VERSION")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text("v\(DeviceInfoHelper.openClawVersionString())")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                ProStatusDot(color: self.sidebarGatewayStatusColor)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+        }
+    }
+
+    private var sidebarHorizontalSeparator: some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(height: 1 / UIScreen.main.scale)
+    }
+
+    private var sidebarVerticalSeparator: some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(width: 1 / UIScreen.main.scale)
+    }
+
+    private var sidebarGatewayStatusColor: Color {
+        switch self.gatewayStatus {
+        case .connected:
+            OpenClawBrand.ok
+        case .connecting:
+            OpenClawBrand.accent
+        case .error:
+            OpenClawBrand.warn
+        case .disconnected:
+            .secondary
+        }
+    }
+
+    private func sidebarDestinationButton(
+        _ destination: SidebarDestination,
+        title: String? = nil) -> some View
+    {
+        Button {
+            self.selectSidebarDestination(destination)
+        } label: {
+            Label(title ?? destination.sidebarTitle, systemImage: destination.systemImage)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .truncationMode(.tail)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
+        .listRowBackground(
+            destination == self.selectedSidebarDestination
+                ? OpenClawBrand.accent.opacity(0.12)
+                : Color.clear)
+        .listRowSeparator(.hidden, edges: .all)
+    }
+
+    @ViewBuilder
+    private var sidebarDetail: some View {
+        switch self.selectedSidebarDestination {
+        case .chat:
+            ChatProTab(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Chat",
+                headerSubtitle: "Agent conversation",
+                showsAgentBadge: false,
+                ownsNavigationStack: false,
+                openSettings: { self.selectSidebarDestination(.gateway) })
+        case .talk:
+            TalkProTab(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
+                openSettings: { self.selectSidebarDestination(.gateway) })
+        case .overview:
+            CommandCenterTab(
+                ownsNavigationStack: false,
+                headerTitle: "Overview",
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                showsHeaderMark: false,
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openSessions: { self.selectSidebarDestination(.sessions) })
+        case .activity:
+            IPadActivityScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSettings: { self.selectSidebarDestination(.gateway) })
+        case .workboard:
+            IPadWorkboardScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSettings: { self.selectSidebarDestination(.gateway) })
+        case .skillWorkshop:
+            IPadSkillWorkshopScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                openSettings: { self.selectSidebarDestination(.gateway) })
+        case .agents:
+            AgentProTab(
+                directRoute: .agents,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Agents",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
+        case .instances:
+            AgentProTab(
+                directRoute: .instances,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Instances",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
+        case .sessions:
+            CommandSessionsScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                openChat: { self.selectSidebarDestination(.chat) })
+        case .dreaming:
+            AgentProTab(
+                directRoute: .dreaming,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Dreaming",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
+        case .usage:
+            AgentProTab(
+                directRoute: .usage,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Usage",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
+        case .cron:
+            AgentProTab(
+                directRoute: .cron,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Cron Jobs",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
+        case .docs:
+            OpenClawDocsScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
+        case .settings:
+            if let selectedSettingsRoute {
+                SettingsProTab(
+                    directRoute: selectedSettingsRoute,
+                    headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
+                    onRouteChange: self.handleSettingsRouteChange)
+            } else {
+                SettingsProTab(
+                    headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
+                    onRouteChange: self.handleSettingsRouteChange)
+            }
+        case .gateway:
+            SettingsProTab(
+                directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
+                navigateToRoute: self.pushSidebarSettingsRoute,
+                onRouteChange: self.handleSettingsRouteChange)
+        }
+    }
+
+    private var sidebarDetailNavigationShell: some View {
+        NavigationStack(path: self.$sidebarNavigationPath) {
+            self.sidebarDetailShell
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+    }
+
+    private var usesSidebarTabs: Bool {
+        Self.shouldUseSidebarTabs(
+            idiom: self.userInterfaceIdiom,
+            horizontalSizeClass: self.horizontalSizeClass)
+    }
+
+    private var userInterfaceIdiom: UIUserInterfaceIdiom {
+        if let userInterfaceIdiomOverride {
+            return userInterfaceIdiomOverride
+        }
+        return UIDevice.current.userInterfaceIdiom
+    }
+
+    private var sidebarDetailShellID: String {
+        let routeID = self.selectedSettingsRoute.map { "\($0)" } ?? "root"
+        return "\(self.selectedSidebarDestination.id):\(routeID):\(self.selectedSettingsRouteRequestID)"
+    }
+
+    private var settingsTabViewID: String {
+        let routeID = self.selectedSettingsRoute.map { "\($0)" } ?? "settings"
+        return "\(routeID):\(self.selectedSettingsRouteRequestID)"
+    }
+
+    private var activeExecApprovalPromptSuppressionID: String? {
+        guard self.selectedTab == .settings, self.selectedSettingsRoute == .notifications else { return nil }
+        return self.suppressedExecApprovalPromptIDForNotificationSettings
+    }
+
+    private var shouldCollapseSidebarAfterSelection: Bool {
+        Self.shouldCollapseSidebarAfterSelection(
+            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
+    }
+
+    private var sidebarHeaderLeadingAction: OpenClawSidebarHeaderAction? {
+        guard Self.shouldShowSidebarRevealInDestinationHeader(
+            isSidebarVisible: self.isSidebarVisible,
+            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
+        else {
+            return nil
+        }
+        if self.isSidebarVisible {
+            return OpenClawSidebarHeaderAction(
+                systemName: "sidebar.left",
+                accessibilityLabel: "Hide Sidebar",
+                accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
+                action: { self.hideSidebar() })
+        }
+        return OpenClawSidebarHeaderAction(
+            systemName: "sidebar.left",
+            accessibilityLabel: "Show Sidebar",
+            accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
+            action: { self.showSidebar() })
+    }
+
+    private var sidebarHideButton: some View {
+        Button {
+            self.hideSidebar()
+        } label: {
+            Image(systemName: self.isSidebarDrawerLayout ? "xmark" : "sidebar.left")
+                .font(.system(size: 15, weight: .semibold))
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenClawBrand.accent)
+        .accessibilityLabel("Hide Sidebar")
+        .accessibilityIdentifier(Self.sidebarHideButtonAccessibilityIdentifier)
+    }
+
+    private func shouldUseSidebarDrawer(containerSize: CGSize) -> Bool {
+        Self.sidebarLayoutMode(containerSize: containerSize) == .drawer
+    }
+
+    private func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
+        Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
     private func rootOverlays(_ content: some View) -> some View {
@@ -195,11 +622,42 @@ struct RootTabs: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+
             .overlay {
                 if self.appModel.cameraFlashNonce != 0 {
                     RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
                 }
             }
+            .overlay {
+                if self.appModel.screen.isCanvasPresented {
+                    self.canvasPresentationOverlay
+                        .transition(.opacity)
+                        .zIndex(20)
+                }
+            }
+    }
+
+    private var canvasPresentationOverlay: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            ScreenWebView(controller: self.appModel.screen)
+                .ignoresSafeArea()
+            Button {
+                self.appModel.screen.hideCanvas()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.32), radius: 8, y: 2)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close canvas")
+            .safeAreaPadding(.top, 8)
+            .padding(.trailing, 12)
+        }
     }
 
     private func rootLifecycle(_ content: some View) -> some View {
@@ -248,6 +706,7 @@ struct RootTabs: View {
                 self.updateIdleTimer()
                 self.updateHomeCanvasState()
                 guard newValue == .active else { return }
+                self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
                     await MainActor.run {
@@ -268,7 +727,6 @@ struct RootTabs: View {
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
-                    self.showOnboarding = false
                     self.onboardingComplete = true
                     self.hasConnectedOnce = true
                     OnboardingStateStore.markCompleted(mode: nil)
@@ -295,20 +753,25 @@ struct RootTabs: View {
             .onChange(of: self.onboardingRequestID) { _, _ in
                 self.evaluateOnboardingPresentation(force: true)
             }
+            .onChange(of: self.showOnboarding) { _, newValue in
+                guard !newValue else { return }
+                self.maybeRequestLocalNetworkAccess(reason: "onboarding_dismissed")
+            }
             .onChange(of: self.appModel.openChatRequestID) { _, _ in
-                self.selectedTab = .chat
+                self.selectSidebarDestination(.chat)
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.maybeOpenSettingsForGatewaySetup()
+            }
+            .onChange(of: self.appModel.pendingExecApprovalPrompt?.id) { _, newValue in
+                if newValue != self.suppressedExecApprovalPromptIDForNotificationSettings {
+                    self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+                }
             }
     }
 
     private func rootPresentation(_ content: some View) -> some View {
         content
-            .gatewayActionsDialog(
-                isPresented: self.$showGatewayActions,
-                onDisconnect: { self.appModel.disconnectGateway() },
-                onOpenSettings: { self.selectedTab = .settings })
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -332,6 +795,9 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: self.onboardingAllowSkip,
+                    onRequestLocalNetworkAccess: { reason in
+                        self.requestLocalNetworkAccess(reason: reason)
+                    },
                     onClose: {
                         self.showOnboarding = false
                     })
@@ -342,7 +808,12 @@ struct RootTabs: View {
             }
             .gatewayTrustPromptAlert()
             .deepLinkAgentPromptAlert()
-            .execApprovalPromptDialog()
+            .execApprovalPromptDialog(
+                suppressedApprovalID: self.activeExecApprovalPromptSuppressionID)
+            .notificationPermissionGuidanceDialog(openNotifications: { approvalId in
+                self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId
+                self.selectSettingsRoute(.notifications)
+            })
     }
 
     private var appearancePreference: AppAppearancePreference {
@@ -474,6 +945,88 @@ struct RootTabs: View {
     private func homeCanvasName(for agent: AgentSummary) -> String {
         self.normalized(agent.name) ?? agent.id
     }
+}
+
+extension RootTabs {
+    private func selectSidebarDestination(_ destination: SidebarDestination) {
+        self.sidebarNavigationPath.removeAll()
+        if destination.settingsRoute != .notifications {
+            self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+        }
+        self.selectedSidebarDestination = destination
+        self.selectedSettingsRoute = destination.settingsRoute
+        self.selectedTab = destination.appTab
+        guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            self.setSidebarVisible(false)
+        }
+    }
+
+    private func selectSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath.removeAll()
+        if route != .notifications {
+            self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+        }
+        self.selectedSettingsRoute = route
+        self.selectedSettingsRouteRequestID &+= 1
+        self.selectedSidebarDestination = .settings
+        self.selectedTab = .settings
+        guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            self.setSidebarVisible(false)
+        }
+    }
+
+    private func pushSidebarSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath = [route]
+        self.handleSettingsRouteChange(route)
+    }
+
+    private func handleSettingsRouteChange(_ route: SettingsRoute?) {
+        guard route != .notifications else { return }
+        if route == nil {
+            self.selectedSettingsRoute = nil
+            if self.selectedTab == .settings {
+                self.selectedSidebarDestination = .settings
+            }
+        }
+        self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+    }
+
+    private func showSidebar() {
+        self.sidebarVisibilityUserOverridden = true
+        withAnimation(.easeInOut(duration: 0.22)) {
+            self.setSidebarVisible(true)
+        }
+    }
+
+    private func hideSidebar() {
+        self.sidebarVisibilityUserOverridden = true
+        withAnimation(.easeInOut(duration: 0.22)) {
+            self.setSidebarVisible(false)
+        }
+    }
+
+    private func updateSidebarLayout(containerSize: CGSize, force: Bool) {
+        let layoutMode = Self.sidebarLayoutMode(containerSize: containerSize)
+        let previousLayoutMode: SidebarLayoutMode = self.isSidebarDrawerLayout ? .drawer : .split
+        let didResolvePreviousLayout = self.didResolveSidebarLayout
+        let layoutModeDidChange = layoutMode != previousLayoutMode
+        self.didResolveSidebarLayout = true
+        self.isSidebarDrawerLayout = layoutMode == .drawer
+        if layoutModeDidChange && didResolvePreviousLayout {
+            self.sidebarVisibilityUserOverridden = false
+        }
+        guard force || !self.sidebarVisibilityUserOverridden else { return }
+
+        let preferredVisibility = Self.preferredSidebarVisibility(layoutMode: layoutMode)
+        guard self.isSidebarVisible != preferredVisibility else { return }
+        self.setSidebarVisible(preferredVisibility)
+    }
+
+    private func setSidebarVisible(_ isVisible: Bool) {
+        self.isSidebarVisible = isVisible
+    }
 
     private func homeCanvasBadge(for agent: AgentSummary) -> String {
         if let identity = agent.identity,
@@ -509,7 +1062,7 @@ struct RootTabs: View {
         } else if problem.retryable {
             Task { await self.gatewayController.connectLastKnown() }
         } else {
-            self.selectedTab = .settings
+            self.selectSidebarDestination(.gateway)
         }
     }
 
@@ -530,13 +1083,14 @@ struct RootTabs: View {
             shouldPresentOnLaunch: OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel))
         switch route {
         case .none:
-            break
+            self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
             self.onboardingAllowSkip = true
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true
-            self.selectedTab = .settings
+            self.selectSidebarDestination(.gateway)
+            self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         }
     }
 
@@ -562,7 +1116,8 @@ struct RootTabs: View {
             shouldPresentOnLaunch: false)
         guard route == .settings else { return }
         self.didAutoOpenSettings = true
-        self.selectedTab = .settings
+        self.selectSidebarDestination(.gateway)
+        self.maybeRequestLocalNetworkAccess(reason: "auto_open_settings")
     }
 
     private func maybeOpenSettingsForGatewaySetup() {
@@ -572,7 +1127,20 @@ struct RootTabs: View {
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
-        self.selectedTab = .settings
+        self.selectSidebarDestination(.gateway)
+        self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
+    }
+
+    private func maybeRequestLocalNetworkAccess(reason: String) {
+        guard self.didEvaluateOnboarding else { return }
+        guard self.scenePhase == .active else { return }
+        guard !self.showOnboarding else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
+        self.gatewayController.requestLocalNetworkAccess(reason: reason)
     }
 
     private func applyInitialChatSessionIfNeeded() {
@@ -652,3 +1220,120 @@ private struct RootCameraFlashOverlay: View {
             }
     }
 }
+
+extension EnvironmentValues {
+    @Entry var rootTabsUserInterfaceIdiomOverride: UIUserInterfaceIdiom?
+}
+
+#if DEBUG
+#Preview(
+    "Shell iPhone portrait",
+    traits: .fixedLayout(width: 393, height: 852),
+    .portrait)
+{
+    RootTabsPreviewHost(idiom: .phone)
+}
+
+#Preview(
+    "Shell iPhone connected",
+    traits: .fixedLayout(width: 393, height: 852),
+    .portrait)
+{
+    RootTabsPreviewHost(idiom: .phone, gatewayState: .connected)
+}
+
+#Preview(
+    "Shell iPhone gateway error",
+    traits: .fixedLayout(width: 393, height: 852),
+    .portrait)
+{
+    RootTabsPreviewHost(idiom: .phone, gatewayState: .error)
+}
+
+#Preview(
+    "Shell iPhone landscape",
+    traits: .fixedLayout(width: 852, height: 393),
+    .landscapeLeft)
+{
+    RootTabsPreviewHost(idiom: .phone)
+        .environment(\.horizontalSizeClass, .regular)
+        .environment(\.verticalSizeClass, .compact)
+}
+
+#Preview(
+    "Shell iPad portrait drawer",
+    traits: .fixedLayout(width: 1024, height: 1366),
+    .portrait)
+{
+    RootTabsPreviewHost(idiom: .pad)
+}
+
+#Preview(
+    "Shell iPad landscape split",
+    traits: .fixedLayout(width: 1366, height: 1024),
+    .landscapeLeft)
+{
+    RootTabsPreviewHost(idiom: .pad, gatewayState: .connected)
+}
+
+#Preview(
+    "Shell iPad connecting",
+    traits: .fixedLayout(width: 1366, height: 1024),
+    .landscapeLeft)
+{
+    RootTabsPreviewHost(idiom: .pad, gatewayState: .connecting)
+}
+
+#Preview(
+    "Shell iPad gateway error",
+    traits: .fixedLayout(width: 1366, height: 1024),
+    .landscapeLeft)
+{
+    RootTabsPreviewHost(idiom: .pad, gatewayState: .error)
+}
+
+private struct RootTabsPreviewHost: View {
+    @State private var appModel: NodeAppModel
+    @State private var gatewayController: GatewayConnectionController
+    private let idiom: UIUserInterfaceIdiom
+
+    init(idiom: UIUserInterfaceIdiom, gatewayState: RootTabsPreviewGatewayState = .offline) {
+        let appModel = NodeAppModel()
+        gatewayState.apply(to: appModel)
+        self.idiom = idiom
+        _appModel = State(initialValue: appModel)
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(appModel: appModel, startDiscovery: false))
+    }
+
+    var body: some View {
+        RootTabs()
+            .environment(self.appModel)
+            .environment(self.appModel.voiceWake)
+            .environment(self.gatewayController)
+            .environment(\.rootTabsUserInterfaceIdiomOverride, self.idiom)
+    }
+}
+
+private enum RootTabsPreviewGatewayState {
+    case offline
+    case connecting
+    case connected
+    case error
+
+    @MainActor
+    func apply(to appModel: NodeAppModel) {
+        switch self {
+        case .offline:
+            break
+        case .connecting:
+            appModel.gatewayStatusText = "Connecting..."
+        case .connected:
+            appModel.enterAppleReviewDemoMode()
+        case .error:
+            appModel.gatewayStatusText = "Gateway error: connection refused"
+        }
+    }
+}
+
+#endif

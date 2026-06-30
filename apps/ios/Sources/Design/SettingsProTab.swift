@@ -1,7 +1,5 @@
 import OpenClawKit
 import SwiftUI
-import UIKit
-import UserNotifications
 
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
@@ -55,35 +53,90 @@ struct SettingsProTab: View {
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @State var notificationStatusText = "Checking"
-    @State var notificationActionText = "Request Access"
+    @State var notificationStatus: SettingsNotificationStatus = .checking
+    @State var isRequestingNotificationAuthorization = false
+    @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
+    @State var showTalkIssueDetails = false
+    @State private var navigationPath: [SettingsRoute] = []
+    let initialRoute: SettingsRoute?
+    let directRoute: SettingsRoute?
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
+    let navigateToRoute: ((SettingsRoute) -> Void)?
+    let onRouteChange: ((SettingsRoute?) -> Void)?
+
+    init(
+        initialRoute: SettingsRoute? = nil,
+        directRoute: SettingsRoute? = nil,
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
+        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+    {
+        self.initialRoute = initialRoute
+        self.directRoute = directRoute
+        self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
+        self.navigateToRoute = navigateToRoute
+        self.onRouteChange = onRouteChange
+    }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.settingsHeader
-                        self.appearanceSection
-                        self.gatewaySection
-                        self.settingsListSection
-                    }
-                    .padding(.vertical, 18)
+        self.settingsModalPresentation(
+            self.settingsLifecycle(
+                self.settingsContent))
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        if let directRoute {
+            self.destination(for: directRoute)
+        } else {
+            if self.ownsNavigationStack {
+                self.settingsNavigationStack
+            } else {
+                self.settingsNavigationContent
+            }
+        }
+    }
+
+    private var settingsNavigationStack: some View {
+        NavigationStack(path: self.$navigationPath) {
+            self.settingsNavigationContent
+        }
+    }
+
+    private var settingsNavigationContent: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    self.settingsHeader
+                    self.appearanceSection
+                    self.gatewaySection
+                    self.settingsListSection
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+                .padding(.top, 18)
+                .padding(.bottom, 18)
             }
-            .navigationBarHidden(true)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                self.destination(for: route)
-            }
+        }
+        .navigationBarHidden(true)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
+    }
+
+    private func settingsLifecycle(_ content: some View) -> some View {
+        content
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyInitialRouteIfNeeded()
+                self.notifyRouteChange()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -120,58 +173,104 @@ struct SettingsProTab: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
-        }
-        .sheet(isPresented: self.$showGatewayProblemDetails) {
-            if let gatewayProblem = self.appModel.lastGatewayProblem {
-                GatewayProblemDetailsSheet(
-                    problem: gatewayProblem,
-                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                    onPrimaryAction: {
-                        Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
-                    })
+            .onChange(of: self.navigationPath) { _, _ in
+                self.notifyRouteChange()
             }
-        }
-        .sheet(isPresented: self.$showQRScanner) {
-            NavigationStack {
-                QRScannerView(
-                    onGatewayLink: { link in
-                        self.handleScannedGatewayLink(link)
-                    },
-                    onError: { error in
-                        self.showQRScanner = false
-                        self.setupStatusText = "Scanner error: \(error)"
-                        self.scannerError = error
-                    },
-                    onDismiss: {
-                        self.showQRScanner = false
-                    })
-                    .ignoresSafeArea()
-                    .navigationTitle("Scan QR Code")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Cancel") { self.showQRScanner = false }
+    }
+
+    private func settingsModalPresentation(_ content: some View) -> some View {
+        content
+            .sheet(isPresented: self.$showGatewayProblemDetails) {
+                if let gatewayProblem = self.appModel.lastGatewayProblem {
+                    GatewayProblemDetailsSheet(
+                        problem: gatewayProblem,
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                        onPrimaryAction: {
+                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
+                        })
+                }
+            }
+            .sheet(isPresented: self.$showTalkIssueDetails) {
+                if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
+                    TalkRuntimeIssueDetailsSheet(issue: issue)
+                }
+            }
+            .sheet(isPresented: self.$showQRScanner) {
+                NavigationStack {
+                    QRScannerView(
+                        onGatewayLink: { link in
+                            self.handleScannedGatewayLink(link)
+                        },
+                        onSetupCode: { code in
+                            self.handleScannedSetupCode(code)
+                        },
+                        onError: { error in
+                            self.showQRScanner = false
+                            self.setupStatusText = "Scanner error: \(error)"
+                            self.scannerError = error
+                        },
+                        onDismiss: {
+                            self.showQRScanner = false
+                        })
+                        .ignoresSafeArea()
+                        .navigationTitle("Scan QR Code")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Cancel") { self.showQRScanner = false }
+                            }
                         }
+                }
+            }
+            .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
+                Button("Reset", role: .destructive) {
+                    self.resetOnboarding()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+            }
+            .alert(
+                "QR Scanner Unavailable",
+                isPresented: Binding(
+                    get: { self.scannerError != nil },
+                    set: { if !$0 { self.scannerError = nil } }))
+            {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(self.scannerError ?? "")
+            }
+            .alert("Enable OpenClaw Hosted Push Relay?", isPresented: self.$showNotificationRelayDisclosure) {
+                    Button("Continue") {
+                        self.requestNotificationAuthorizationFromSettings()
                     }
-            }
+                    Button("Not Now", role: .cancel) {}
+                } message: {
+                    Text(self.notificationRelayDisclosureMessage)
+                }
+    }
+
+    func openNotificationsRouteFromApprovals() {
+        guard self.directRoute == nil else { return }
+        if !self.ownsNavigationStack, let navigateToRoute {
+            navigateToRoute(.notifications)
+            return
         }
-        .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-            Button("Reset", role: .destructive) {
-                self.resetOnboarding()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+        self.navigationPath = [.notifications]
+    }
+
+    private func applyInitialRouteIfNeeded() {
+        guard self.directRoute == nil else { return }
+        guard let initialRoute else { return }
+        guard self.navigationPath != [initialRoute] else { return }
+        self.navigationPath = [initialRoute]
+    }
+
+    private func notifyRouteChange() {
+        if let directRoute {
+            self.onRouteChange?(directRoute)
+            return
         }
-        .alert(
-            "QR Scanner Unavailable",
-            isPresented: Binding(
-                get: { self.scannerError != nil },
-                set: { if !$0 { self.scannerError = nil } }))
-        {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(self.scannerError ?? "")
-        }
+        self.onRouteChange?(self.navigationPath.last)
     }
 }

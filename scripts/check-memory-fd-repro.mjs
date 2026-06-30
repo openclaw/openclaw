@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reproduces memory-search file descriptor retention with a synthetic workspace.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -26,8 +27,18 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+/**
+ * Maximum gateway-ready output tail retained while waiting for startup.
+ */
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+/**
+ * Maximum bytes read from the memory_search HTTP response.
+ */
 export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+/**
+ * Probe query expected to hit the synthetic top-level memory file.
+ */
 export const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
@@ -88,6 +99,9 @@ function stripPackageManagerSeparatorForKnownFlags(argv) {
     : argv;
 }
 
+/**
+ * Parses a safe non-negative integer option.
+ */
 export function readNumber(value, label) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
@@ -100,6 +114,9 @@ export function readNumber(value, label) {
   return parsed;
 }
 
+/**
+ * Parses a safe positive integer option.
+ */
 export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
@@ -118,6 +135,27 @@ function readPositiveNumberEnv(name, fallback) {
   return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
 }
 
+function clampTimerTimeoutMs(valueMs, minMs = 1) {
+  const min = Math.max(0, Math.floor(minMs));
+  const value = Number.isFinite(valueMs) ? valueMs : min;
+  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
+}
+
+function readTimerTimeoutNumber(value, label, minMs = 1) {
+  const parsed = minMs > 0 ? readPositiveNumber(value, label) : readNumber(value, label);
+  return clampTimerTimeoutMs(parsed, minMs);
+}
+
+function readTimerTimeoutNumberEnv(name, fallback, minMs = 1) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === ""
+    ? clampTimerTimeoutMs(fallback, minMs)
+    : readTimerTimeoutNumber(raw, name, minMs);
+}
+
+/**
+ * Parses memory FD repro CLI arguments and environment fallbacks.
+ */
 export function parseArgs(argv) {
   const args = stripPackageManagerSeparatorForKnownFlags(argv);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -138,7 +176,7 @@ export function parseArgs(argv) {
     const arg = args[i];
     const next = args[i + 1];
     const readValue = () => {
-      if (!next) {
+      if (!next || next.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       i += 1;
@@ -173,13 +211,13 @@ export function parseArgs(argv) {
         options.minLeakedFds = readPositiveNumber(readValue(), "--min-leaked-fds");
         break;
       case "--invoke-timeout-ms":
-        options.invokeTimeoutMs = readPositiveNumber(readValue(), "--invoke-timeout-ms");
+        options.invokeTimeoutMs = readTimerTimeoutNumber(readValue(), "--invoke-timeout-ms");
         break;
       case "--sample-delay-ms":
-        options.sampleDelayMs = readNumber(readValue(), "--sample-delay-ms");
+        options.sampleDelayMs = readTimerTimeoutNumber(readValue(), "--sample-delay-ms", 0);
         break;
       case "--settle-delay-ms":
-        options.settleDelayMs = readNumber(readValue(), "--settle-delay-ms");
+        options.settleDelayMs = readTimerTimeoutNumber(readValue(), "--settle-delay-ms", 0);
         break;
       case "--output-dir":
         options.outputDir = path.resolve(readValue());
@@ -203,9 +241,17 @@ export function parseArgs(argv) {
     "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
     DEFAULT_MAX_WORKSPACE_REG_FDS,
   );
-  options.invokeTimeoutMs ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
-  options.sampleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS", 1_000);
-  options.settleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS", 5_000);
+  options.invokeTimeoutMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.sampleDelayMs ??= readTimerTimeoutNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS",
+    1_000,
+    0,
+  );
+  options.settleDelayMs ??= readTimerTimeoutNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS",
+    5_000,
+    0,
+  );
   if (!Number.isFinite(options.fileCount) || options.fileCount <= 0) {
     throw new Error("file count must be greater than 0");
   }
@@ -224,7 +270,7 @@ function logStep(message) {
 
 function sleep(ms) {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
   });
 }
 
@@ -278,6 +324,9 @@ function writeSyntheticWorkspace(workspaceDir, fileCount) {
   }
 }
 
+/**
+ * Writes isolated OpenClaw config for the synthetic memory workspace.
+ */
 export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
@@ -352,6 +401,9 @@ function preindexSyntheticMemory(env) {
   logStep("preindex complete");
 }
 
+/**
+ * Updates bounded gateway-ready output state from a stdout/stderr chunk.
+ */
 export function updateGatewayReadyOutputState(
   state,
   chunk,
@@ -431,10 +483,16 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
+/**
+ * Reports whether a spawned child has already exited.
+ */
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+/**
+ * Waits until gateway output and listener state both indicate readiness.
+ */
 export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
   let outputState = { tail: "", readySeen: false };
@@ -458,6 +516,9 @@ export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
+/**
+ * Stops the gateway child using the default process/runtime hooks.
+ */
 export async function stopGateway({ child, port }) {
   return stopGatewayWithRuntime({
     child,
@@ -467,21 +528,21 @@ export async function stopGateway({ child, port }) {
   });
 }
 
+/**
+ * Stops the gateway child and any remaining listener process.
+ */
 export async function stopGatewayWithRuntime({
   child,
+  childExitPollIntervalMs = 100,
+  childExitPolls = 50,
   port,
   findGatewayPidFn,
   killProcess,
   listenerSettleDelayMs = 500,
 }) {
   if (!hasChildExited(child)) {
-    child.kill("SIGINT");
-    for (let i = 0; i < 50; i += 1) {
-      if (hasChildExited(child)) {
-        break;
-      }
-      await sleep(100);
-    }
+    signalChild(child, "SIGINT");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
   }
   const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
@@ -496,9 +557,32 @@ export async function stopGatewayWithRuntime({
       } catch {}
     }
   }
+  if (!hasChildExited(child)) {
+    signalChild(child, "SIGKILL");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
+  }
 }
 
+/**
+ * Reads an HTTP response body up to a configured byte limit.
+ */
 export { readBoundedResponseText };
+
+function signalChild(child, signal) {
+  try {
+    child.kill(signal);
+  } catch {}
+}
+
+async function waitForChildExit(child, { intervalMs, polls }) {
+  for (let i = 0; i < polls; i += 1) {
+    if (hasChildExited(child)) {
+      return true;
+    }
+    await sleep(intervalMs);
+  }
+  return hasChildExited(child);
+}
 
 function parseJsonValue(text) {
   try {
@@ -532,6 +616,9 @@ function parseToolTextContent(result) {
   return null;
 }
 
+/**
+ * Classifies the memory_search HTTP response into success/error details.
+ */
 export function classifyMemorySearchInvokeResponse({ httpOk, status, bodyText }) {
   const parsedBody = parseJsonValue(bodyText);
   const body = asRecord(parsedBody);
@@ -616,9 +703,10 @@ export function classifyMemorySearchInvokeResponse({ httpOk, status, bodyText })
   };
 }
 
-async function invokeMemorySearch({ port, token, timeoutMs }) {
+export async function invokeMemorySearch({ port, token, timeoutMs }) {
+  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   const startedAt = Date.now();
   try {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {

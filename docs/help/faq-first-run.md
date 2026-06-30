@@ -67,7 +67,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
-    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
 
@@ -328,7 +328,12 @@ and troubleshooting see the main [FAQ](/help/faq).
     Rough guide:
 
     - **Install:** 2-5 minutes
-    - **Onboarding:** 5-15 minutes depending on how many channels/models you configure
+    - **QuickStart onboarding:** usually a few minutes
+    - **Full onboarding:** longer when provider sign-in, channel pairing, daemon install,
+      network downloads, skills, or optional plugins need extra setup
+
+    The CLI wizard shows this timeline up front. You can skip optional steps and return
+    later with `openclaw configure`.
 
     If it hangs, use [Installer stuck](#quick-start-and-first-run-setup)
     and the fast debug loop in [I am stuck](#quick-start-and-first-run-setup).
@@ -387,7 +392,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
     - Close and reopen PowerShell after updating PATH.
 
-    If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
+    For desktop setup, use the native **Windows Hub** app. For terminal-only
+    setup, the PowerShell installer and WSL2 Gateway paths are both supported.
     Docs: [Windows](/platforms/windows).
 
   </Accordion>
@@ -507,7 +513,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Daemon install** (LaunchAgent on macOS; systemd user unit on Linux/WSL2)
     - **Health checks** and **skills** selection
 
-    It also warns if your configured model is unknown or missing auth.
+    It also sets duration expectations before the main prompts begin and warns if your
+    configured model is unknown or missing auth.
 
   </Accordion>
 
@@ -855,7 +862,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Recommended:** 2GB RAM or more if you run multiple channels, browser automation, or media tools.
     - **OS:** Ubuntu LTS or another modern Debian/Ubuntu.
 
-    If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
+    If you are on Windows, use **Windows Hub** for desktop setup, or WSL2 when
+    you specifically want a Linux-style Gateway VM with broad tooling
     compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
     If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 

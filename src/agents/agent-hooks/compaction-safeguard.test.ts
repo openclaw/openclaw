@@ -1,3 +1,4 @@
+/** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { jsonResult } from "../tools/common.js";
 import {
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
@@ -262,6 +264,104 @@ describe("compaction-safeguard tool failures", () => {
     const section = formatToolFailuresSection(failures);
     expect(section).toContain("## Tool Failures");
     expect(section).toContain("exec (status=failed exitCode=1): ENOENT: missing file");
+  });
+
+  it("excludes accepted sessions_spawn results even when persisted with isError", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-accepted",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: {
+          status: "accepted",
+          childSessionKey: "agent:watcher:subagent:abc",
+          runId: "run-123",
+          mode: "run",
+        },
+        content: [{ type: "text", text: "accepted" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    expect(collectToolFailures(messages)).toHaveLength(0);
+  });
+
+  it("still reports sessions_spawn results that genuinely failed", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-error",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: { status: "error" },
+        content: [{ type: "text", text: "spawn rejected" }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-forbidden",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: { status: "forbidden" },
+        content: [{ type: "text", text: "not allowed" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const failures = collectToolFailures(messages);
+    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+      "call-spawn-error",
+      "call-spawn-forbidden",
+    ]);
+  });
+
+  it("only excludes the accepted spawn from a mixed batch and reports look-alike non-spawn tools", () => {
+    // Build the accepted-spawn details via the production helper so the skip is
+    // proven against the real sessions_spawn result shape, not a hand-authored stub.
+    const acceptedDetails = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+      mode: "run",
+    }).details;
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-accepted",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: acceptedDetails,
+        content: [{ type: "text", text: "accepted" }],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-exec-failed",
+        toolName: "exec",
+        isError: true,
+        details: { status: "failed", exitCode: 1 },
+        content: [{ type: "text", text: "boom" }],
+        timestamp: Date.now(),
+      },
+      {
+        // Same accepted-shaped details on a non-spawn tool must still be reported:
+        // the skip is gated on toolName so look-alike payloads are not suppressed.
+        role: "toolResult",
+        toolCallId: "call-other-lookalike",
+        toolName: "some_other_tool",
+        isError: true,
+        details: acceptedDetails,
+        content: [{ type: "text", text: "real failure" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const failures = collectToolFailures(messages);
+    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+      "call-exec-failed",
+      "call-other-lookalike",
+    ]);
   });
 
   it("dedupes by toolCallId and handles empty output", () => {
@@ -1861,6 +1961,107 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const messages = requireArray(call.messages);
     expect(JSON.stringify(messages[0])).toContain("<previous-compaction-summary>");
     expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
+  });
+
+  it("falls back to LLM when provider throws a provider-side AbortError with signal not aborted", async () => {
+    // Reproduce the undici AbortError("This operation was aborted") shape that
+    // arrives when the compaction provider's HTTP connection drops mid-stream while
+    // the caller has NOT yet fired their abort signal. Before the fix,
+    // isAbortError() matched this shape so tryProviderSummarize rethrew and the
+    // extension runner swallowed the error — the LLM fallback path was skipped.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("llm fallback summary");
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
+    registerCompactionProvider({
+      id: "disconnecting-provider",
+      label: "Disconnecting Provider",
+      summarize: failingProviderSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "disconnecting-provider",
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal, // not aborted
+    };
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "key" });
+
+    // Provider failure → LLM fallback ran, not { cancel: true }.
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+  });
+
+  it("propagates provider AbortError and cancels when caller signal is already aborted", async () => {
+    mockSummarizeInStages.mockReset();
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
+    registerCompactionProvider({
+      id: "aborted-provider",
+      label: "Aborted Provider",
+      summarize: failingProviderSummarize,
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "aborted-provider",
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: controller.signal, // already aborted
+    };
+
+    await expect(
+      runCompactionScenario({ sessionManager, event, apiKey: "key" }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — LLM fallback should not have run.
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
   });
 
   it("passes compaction instructions to providers and preserves suffix context", async () => {

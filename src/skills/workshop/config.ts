@@ -1,10 +1,13 @@
+// Workshop config helpers resolve skill workshop settings from OpenClaw config.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Runtime configuration for the skill workshop proposal flow. */
 export type SkillWorkshopConfig = {
   autonomous: {
     enabled: boolean;
   };
+  allowSymlinkTargetWrites: boolean;
   approvalPolicy: "pending" | "auto";
   maxPending: number;
   maxSkillBytes: number;
@@ -14,6 +17,7 @@ const DEFAULT_CONFIG: SkillWorkshopConfig = {
   autonomous: {
     enabled: false,
   },
+  allowSymlinkTargetWrites: false,
   approvalPolicy: "pending",
   maxPending: 50,
   maxSkillBytes: 40_000,
@@ -40,6 +44,10 @@ export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorksh
     autonomous: {
       enabled: readBoolean(autonomous.enabled, DEFAULT_CONFIG.autonomous.enabled),
     },
+    allowSymlinkTargetWrites: readBoolean(
+      raw.allowSymlinkTargetWrites,
+      DEFAULT_CONFIG.allowSymlinkTargetWrites,
+    ),
     approvalPolicy: readApprovalPolicy(raw.approvalPolicy, DEFAULT_CONFIG.approvalPolicy),
     maxPending: readInteger(raw.maxPending, DEFAULT_CONFIG.maxPending, 1, 200),
     maxSkillBytes: readInteger(raw.maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes, 1024, 200_000),

@@ -1,8 +1,8 @@
+/**
+ * Tests chat stream text merging before gateway events reach clients.
+ */
 import { describe, expect, it } from "vitest";
-import {
-  MAX_LIVE_CHAT_BUFFER_CHARS,
-  resolveMergedAssistantText,
-} from "./live-chat-projector.js";
+import { MAX_LIVE_CHAT_BUFFER_CHARS, resolveMergedAssistantText } from "./live-chat-projector.js";
 
 describe("server chat stream text merge", () => {
   it.each([
@@ -58,6 +58,29 @@ describe("server chat stream text merge", () => {
         nextDelta: "\nAfter tool call",
       }),
     ).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("replaces prior live text when Codex assistant item switches with empty delta", () => {
+    const prior = "coordination draft";
+    const replacement = resolveMergedAssistantText({
+      previousText: prior,
+      nextText: "final answer",
+      nextDelta: "",
+    });
+
+    expect(replacement).toBe("final answer");
+    expect(replacement).not.toContain(prior);
+  });
+
+  it("would concatenate superseded text if replacement incorrectly included delta", () => {
+    const prior = "coordination draft";
+    const buggy = resolveMergedAssistantText({
+      previousText: prior,
+      nextText: "final ",
+      nextDelta: "final ",
+    });
+
+    expect(buggy).toBe("coordination draftfinal ");
   });
 
   it("caps merged live text while preserving the newest assistant output", () => {

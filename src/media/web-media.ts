@@ -1,3 +1,4 @@
+// Web media helpers load local and remote media for web-facing surfaces.
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
@@ -32,10 +33,12 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
+/** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
 export type WebMediaResult = {
   buffer: Buffer;
   contentType?: string;
@@ -65,8 +68,10 @@ type WebMediaOptions = {
   hostReadCapability?: boolean;
 };
 
+/** Compression preference used to tune image size/quality search grids. */
 export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
+/** Per-model image compression constraints merged into outbound media policy. */
 export type ImageCompressionModelPolicy = {
   maxBytes?: number;
   maxPixels?: number;
@@ -74,6 +79,7 @@ export type ImageCompressionModelPolicy = {
   preferredSidePx?: number;
 };
 
+/** Image compression policy for model/tool callers that need bounded media payloads. */
 export type ImageCompressionPolicy = {
   quality?: ImageQualityPreference;
   models?: ImageCompressionModelPolicy[];
@@ -277,6 +283,13 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   return (
     relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
+}
+
+function resolveLocalMediaFileName(filePath: string): string | undefined {
+  const fileName = basenameFromAnyPath(filePath) || undefined;
+  return fileName && isPathInsideRoot(filePath, getMediaDir())
+    ? extractOriginalFilename(fileName)
+    : fileName;
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
@@ -660,6 +673,7 @@ function isPreservableImageMime(
   );
 }
 
+/** Returns the stricter byte cap between caller limits and image compression policy limits. */
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -690,6 +704,7 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
+/** Resolves the ordered max-side and JPEG quality search grid for an image compression policy. */
 export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
@@ -772,6 +787,7 @@ async function optimizeImageWithFallback(params: {
   };
 }
 
+/** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
 export async function optimizeImageBufferForWebMedia(params: {
   buffer: Buffer;
   contentType?: string;
@@ -1066,7 +1082,7 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
-  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  let fileName = resolveLocalMediaFileName(mediaUrl);
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
@@ -1081,6 +1097,7 @@ async function loadWebMediaInternal(
   });
 }
 
+/** Loads local, remote, hosted, or media-store media and optimizes images by default. */
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
@@ -1092,6 +1109,7 @@ export async function loadWebMedia(
   );
 }
 
+/** Loads local, remote, hosted, or media-store media without image optimization. */
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
@@ -1103,6 +1121,7 @@ export async function loadWebMediaRaw(
   );
 }
 
+/** Optimizes image bytes to JPEG under a target byte cap using the shared compression grid. */
 export async function optimizeImageToJpeg(
   buffer: Buffer,
   maxBytes: number,

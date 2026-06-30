@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
@@ -12,6 +13,7 @@ import {
   ensureAuthProfileStore,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -146,7 +148,9 @@ async function postGitHubDeviceFlowForm(params: {
     if (!response.ok) {
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
-    return parseJsonResponse(await response.json());
+    return parseJsonResponse(
+      await readProviderJsonResponse(response, "github-copilot.device-flow"),
+    );
   } finally {
     await release();
   }

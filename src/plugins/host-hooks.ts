@@ -1,7 +1,7 @@
+/** Public host-hook type contracts exposed to plugin runtimes. */
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
-  PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
@@ -26,6 +26,7 @@ export type {
   PluginNextTurnInjectionRecord,
 } from "./host-hook-turn-types.js";
 
+/** Reason passed to plugin cleanup callbacks when host-owned state changes. */
 export type PluginHostCleanupReason = "disable" | "reset" | "delete" | "restart";
 
 export type PluginSessionExtensionProjectionContext = {
@@ -34,6 +35,7 @@ export type PluginSessionExtensionProjectionContext = {
   state: PluginJsonValue | undefined;
 };
 
+/** Session extension registration owned by a plugin namespace. */
 export type PluginSessionExtensionRegistration = {
   namespace: string;
   description: string;
@@ -64,14 +66,6 @@ export type PluginSessionExtensionProjection = {
   value: PluginJsonValue;
 };
 
-export type PluginSessionExtensionPatchParams = {
-  key: string;
-  pluginId: string;
-  namespace: string;
-  value?: PluginJsonValue;
-  unset?: boolean;
-};
-
 export type PluginToolPolicyDecision =
   | PluginHookBeforeToolCallResult
   | {
@@ -94,10 +88,6 @@ export type PluginToolMetadataRegistration = {
   description?: string;
   risk?: "low" | "medium" | "high";
   tags?: string[];
-};
-
-export type PluginCommandContinuation = {
-  continueAgent?: boolean;
 };
 
 export type PluginControlUiDescriptor = {
@@ -328,5 +318,3 @@ export function buildPluginAgentTurnPrepareContext(params: {
     ...(append.length > 0 ? { appendContext: append.join("\n\n") } : {}),
   };
 }
-
-export type PluginHostHookRunContext = PluginHookAgentContext;

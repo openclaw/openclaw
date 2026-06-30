@@ -1,3 +1,4 @@
+// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -11,21 +12,7 @@ import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
-
-const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
-  "emoji-upload",
-  "sticker-upload",
-  "role-add",
-  "role-remove",
-  "channel-create",
-  "channel-edit",
-  "channel-delete",
-  "channel-move",
-  "category-create",
-  "category-edit",
-  "category-delete",
-  "event-create",
-]);
+import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
@@ -198,8 +185,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
-    normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
-    trustedRequesterGuildAdminActions.has(action),
+    Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
@@ -262,6 +248,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     cfg,
     accountId,
     requesterSenderId,
+    senderIsOwner,
     toolContext,
     mediaAccess,
     mediaLocalRoots,
@@ -277,6 +264,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId,
       requesterSenderId,
+      senderIsOwner,
       toolContext,
       mediaAccess,
       mediaLocalRoots,

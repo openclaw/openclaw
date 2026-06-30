@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+// Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 
 const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
 const RUN_JOBS_PAGE_SIZE = 20;
@@ -15,16 +18,21 @@ function parseJsonCommand(command, args, options = {}) {
   let lastError;
   for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      return JSON.parse(
-        execFileSync(command, args, {
-          encoding: "utf8",
-          ...options,
-        }),
-      );
+      const stdout =
+        command === "gh"
+          ? execPlainGh(args, {
+              encoding: "utf8",
+              ...options,
+            })
+          : execFileSync(command, args, {
+              encoding: "utf8",
+              ...options,
+            });
+      return JSON.parse(stdout);
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      const retryable = /HTTP 5\d\d|Server Error|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u.test(message);
+      const retryable = isRetryableGhJsonErrorMessage(message);
       if (!retryable || attempt === GH_JSON_RETRY_DELAYS_MS.length) {
         throw error;
       }
@@ -32,6 +40,12 @@ function parseJsonCommand(command, args, options = {}) {
     }
   }
   throw lastError;
+}
+
+export function isRetryableGhJsonErrorMessage(message) {
+  return /HTTP 5\d\d|HTTP 429|Server Error|secondary rate limit|abuse detection|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu.test(
+    message,
+  );
 }
 
 function normalizeRunJob(job) {
@@ -45,6 +59,9 @@ function normalizeRunJob(job) {
   };
 }
 
+/**
+ * Flattens paginated GitHub run job responses.
+ */
 export function collectRunJobsFromPages(pages) {
   return pages.flatMap((page) => (Array.isArray(page.jobs) ? page.jobs.map(normalizeRunJob) : []));
 }
@@ -117,8 +134,14 @@ function collectRunTimingContext(run) {
   return { created, jobs, updated };
 }
 
+/**
+ * Summarizes longest jobs and total timing for a workflow run.
+ */
 export function summarizeRunTimings(run, limit = 15) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -141,6 +164,9 @@ export function summarizeRunTimings(run, limit = 15) {
   };
 }
 
+/**
+ * Summarizes pnpm store warmup overlap near run start.
+ */
 export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   const { jobs } = collectRunTimingContext(run);
   const preflight = jobs.find((job) => job.name === "preflight");
@@ -181,6 +207,9 @@ export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   };
 }
 
+/**
+ * Selects the latest main push CI run, optionally matching a head SHA.
+ */
 export function selectLatestMainPushCiRun(runs, headSha = null) {
   const pushRuns = runs.filter((run) => run.event === "push");
   if (headSha) {
@@ -193,8 +222,7 @@ export function selectLatestMainPushCiRun(runs, headSha = null) {
 }
 
 function getLatestCiRunId() {
-  const raw = execFileSync(
-    "gh",
+  const raw = execPlainGh(
     ["run", "list", "--branch", "main", "--workflow", "CI", "--limit", "1", "--json", "databaseId"],
     { encoding: "utf8" },
   );
@@ -217,8 +245,7 @@ function getRemoteMainSha() {
 
 function getLatestMainPushCiRunId() {
   const headSha = getRemoteMainSha();
-  const raw = execFileSync(
-    "gh",
+  const raw = execPlainGh(
     [
       "run",
       "list",
@@ -241,8 +268,7 @@ function getLatestMainPushCiRunId() {
 }
 
 function listRecentSuccessfulCiRuns(limit) {
-  const raw = execFileSync(
-    "gh",
+  const raw = execPlainGh(
     [
       "run",
       "list",
@@ -298,6 +324,9 @@ function loadRun(runId) {
 
 function summarizeJobs(run) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const completedJobs = jobs.filter((job) => job.started !== null && job.completed !== null);
   const successfulDurations = jobs
     .filter((job) => job.status === "completed" && job.conclusion === "success")
@@ -336,32 +365,72 @@ function printSection(title, jobs, metric) {
   }
 }
 
+/**
+ * Parses CI run timing CLI arguments.
+ */
 export function parseRunTimingArgs(args) {
-  const recentIndex = args.indexOf("--recent");
-  const limitIndex = args.indexOf("--limit");
-  const ignoredArgIndexes = new Set();
-  for (const [index, arg] of args.entries()) {
-    if (arg === "--" || arg === "--latest-main") {
-      ignoredArgIndexes.add(index);
+  let explicitRunId;
+  let limit = 15;
+  let recentLimit = null;
+  let useLatestMain = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      continue;
     }
+    if (arg === "--latest-main") {
+      useLatestMain = true;
+      continue;
+    }
+    const limitOption = consumePositiveIntFlag(args, index, "--limit");
+    if (limitOption) {
+      limit = limitOption.value;
+      index = limitOption.nextIndex;
+      continue;
+    }
+    const recentOption = consumePositiveIntFlag(args, index, "--recent");
+    if (recentOption) {
+      recentLimit = recentOption.value;
+      index = recentOption.nextIndex;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown CI run timing option: ${arg}`);
+    }
+    if (explicitRunId) {
+      throw new Error(`Unexpected CI run id argument: ${arg}`);
+    }
+    explicitRunId = arg;
   }
-  if (limitIndex !== -1) {
-    ignoredArgIndexes.add(limitIndex);
-    ignoredArgIndexes.add(limitIndex + 1);
-  }
-  if (recentIndex !== -1) {
-    ignoredArgIndexes.add(recentIndex);
-    ignoredArgIndexes.add(recentIndex + 1);
-  }
-  const limit =
-    limitIndex === -1 ? 15 : Math.max(1, Number.parseInt(args[limitIndex + 1] ?? "", 10) || 15);
-  const recentLimit =
-    recentIndex === -1 ? null : Math.max(1, Number.parseInt(args[recentIndex + 1] ?? "", 10) || 10);
+
   return {
-    explicitRunId: args.find((_arg, index) => !ignoredArgIndexes.has(index)),
+    explicitRunId,
     limit,
     recentLimit,
-    useLatestMain: args.includes("--latest-main"),
+    useLatestMain,
+  };
+}
+
+function consumePositiveIntFlag(args, index, flag) {
+  const arg = args[index];
+  const inlinePrefix = `${flag}=`;
+  if (arg.startsWith(inlinePrefix)) {
+    return {
+      nextIndex: index,
+      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
+    };
+  }
+  if (arg !== flag) {
+    return null;
+  }
+  const rawValue = args[index + 1];
+  if (!rawValue || rawValue.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return {
+    nextIndex: index + 1,
+    value: parsePositiveInt(rawValue, flag),
   };
 }
 

@@ -1,3 +1,6 @@
+/**
+ * Gateway pre-auth hardening tests.
+ */
 import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +10,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
@@ -18,6 +22,7 @@ import {
   installGatewayTestHooks,
   readConnectChallengeNonce,
 } from "./test-helpers.server.js";
+import { readClientResponseBody } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -35,15 +40,9 @@ afterEach(async () => {
 });
 
 function setEnvForTest(name: string, value: string) {
-  const previous = process.env[name];
-  process.env[name] = value;
-  cleanupEnv.push(() => {
-    if (previous === undefined) {
-      delete process.env[name];
-      return;
-    }
-    process.env[name] = previous;
-  });
+  const envSnapshot = captureEnv([name]);
+  setTestEnvValue(name, value);
+  cleanupEnv.push(() => envSnapshot.restore());
 }
 
 function setGatewayAuthNoneForTest() {
@@ -72,14 +71,7 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
       reject(new Error("expected websocket upgrade to be rejected"));
     });
     req.once("response", (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        body += chunk;
-      });
-      res.once("end", () => {
-        resolve({ status: res.statusCode ?? 0, body });
-      });
+      void readClientResponseBody(res).then(resolve, reject);
     });
     req.once("error", reject);
     req.end();
@@ -120,7 +112,7 @@ describe("gateway pre-auth hardening", () => {
       handleHooksRequest: async () => false,
       resolvedAuth,
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
     attachGatewayUpgradeHandler({
       httpServer,
       wss,

@@ -1,3 +1,4 @@
+// Qwen setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -50,28 +51,12 @@ const qwenOAuthPresetAppliers = createModelCatalogPresetAppliers<[]>({
   },
 });
 
-function applyQwenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_GLOBAL_BASE_URL);
-}
-
-function applyQwenProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
-  return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_CN_BASE_URL);
-}
-
 export function applyQwenConfig(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyConfig(cfg, QWEN_GLOBAL_BASE_URL);
 }
 
 export function applyQwenConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyConfig(cfg, QWEN_CN_BASE_URL);
-}
-
-function applyQwenStandardProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_STANDARD_GLOBAL_BASE_URL);
-}
-
-function applyQwenStandardProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
-  return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_STANDARD_CN_BASE_URL);
 }
 
 export function applyQwenStandardConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -85,12 +70,3 @@ export function applyQwenStandardConfigCn(cfg: OpenClawConfig): OpenClawConfig {
 export function applyQwenOAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
   return qwenOAuthPresetAppliers.applyConfig(cfg);
 }
-
-export const applyModelStudioProviderConfig = applyQwenProviderConfig;
-export const applyModelStudioProviderConfigCn = applyQwenProviderConfigCn;
-export const applyModelStudioConfig = applyQwenConfig;
-export const applyModelStudioConfigCn = applyQwenConfigCn;
-export const applyModelStudioStandardProviderConfig = applyQwenStandardProviderConfig;
-export const applyModelStudioStandardProviderConfigCn = applyQwenStandardProviderConfigCn;
-export const applyModelStudioStandardConfig = applyQwenStandardConfig;
-export const applyModelStudioStandardConfigCn = applyQwenStandardConfigCn;

@@ -1,3 +1,4 @@
+// Input file helpers normalize inline, fetched, and local media inputs.
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -10,23 +11,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
-export type InputImageContent = PdfExtractedImage;
+/** Image payload shape reused for extracted PDF images and normalized input images. */
+type InputImageContent = PdfExtractedImage;
 
-export type InputFileExtractResult = {
+/** Text/images extracted from an input_file source after MIME-specific processing. */
+type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
 };
 
-export type InputPdfLimits = {
+/** PDF extraction limits applied before model-visible input_file content is produced. */
+type InputPdfLimits = {
   maxPages: number;
   maxPixels: number;
   minTextChars: number;
 };
 
+/** Resolved input_file limits with normalized MIME allowlist and PDF sub-limits. */
 export type InputFileLimits = {
   allowUrl: boolean;
   urlAllowlist?: string[];
@@ -38,6 +44,7 @@ export type InputFileLimits = {
   pdf: InputPdfLimits;
 };
 
+/** Optional config shape accepted by input_file limit resolution. */
 export type InputFileLimitsConfig = {
   allowUrl?: boolean;
   allowedMimes?: string[];
@@ -52,6 +59,7 @@ export type InputFileLimitsConfig = {
   };
 };
 
+/** Resolved input_image limits with normalized MIME allowlist and URL fetch controls. */
 export type InputImageLimits = {
   allowUrl: boolean;
   urlAllowlist?: string[];
@@ -61,6 +69,7 @@ export type InputImageLimits = {
   timeoutMs: number;
 };
 
+/** Supported input_image source variants before base64 decoding or guarded URL fetch. */
 export type InputImageSource =
   | {
       type: "base64";
@@ -73,7 +82,8 @@ export type InputImageSource =
       mediaType?: string;
     };
 
-export type InputFileSource =
+/** Supported input_file source variants before text/PDF extraction. */
+type InputFileSource =
   | {
       type: "base64";
       data: string;
@@ -87,12 +97,14 @@ export type InputFileSource =
       filename?: string;
     };
 
-export type InputFetchResult = {
+/** Guarded URL fetch result before final MIME allowlist validation. */
+type InputFetchResult = {
   buffer: Buffer;
   mimeType: string;
   contentType?: string;
 };
 
+/** Default MIME allowlist for input_image sources. */
 export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/jpeg",
   "image/png",
@@ -101,6 +113,7 @@ export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/heic",
   "image/heif",
 ];
+/** Default MIME allowlist for input_file text/PDF extraction. */
 export const DEFAULT_INPUT_FILE_MIMES = [
   "text/plain",
   "text/markdown",
@@ -109,13 +122,21 @@ export const DEFAULT_INPUT_FILE_MIMES = [
   "application/json",
   "application/pdf",
 ];
+/** Default decoded-byte cap for input_image payloads. */
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Default decoded-byte cap for input_file payloads. */
 export const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
+/** Default maximum model-visible characters emitted from input_file text. */
 export const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
+/** Default redirect cap for guarded input source URL fetches. */
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
+/** Default timeout for guarded input source URL fetches. */
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
+/** Default PDF page cap for input_file extraction. */
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
+/** Default PDF raster pixel cap for extracted input_file images. */
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
+/** Default text threshold before PDF extraction keeps text-only output. */
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
 const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
@@ -133,11 +154,13 @@ function rejectOversizedBase64Payload(params: {
   }
 }
 
+/** Normalizes a MIME value by stripping parameters and lowercasing the media type. */
 export function normalizeMimeType(value: string | undefined): string | undefined {
   const [raw] = value?.split(";") ?? [];
   return normalizeOptionalLowercaseString(raw);
 }
 
+/** Parses a Content-Type header into normalized MIME and optional charset values. */
 export function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
@@ -153,11 +176,13 @@ export function parseContentType(value: string | undefined): {
   return { mimeType, charset };
 }
 
+/** Converts configured MIME lists into a normalized allowlist, using fallback defaults when empty. */
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
   return new Set(input.flatMap((value) => normalizeMimeType(value) ?? []));
 }
 
+/** Resolves input_file extraction limits from partial config and stable defaults. */
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
   return {
     allowUrl: config?.allowUrl ?? true,
@@ -174,6 +199,7 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
   };
 }
 
+/** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
 export async function fetchWithGuard(params: {
   url: string;
   maxBytes: number;
@@ -250,6 +276,25 @@ function clampText(text: string, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
+function withInputFileTimeout<T>(params: {
+  task: Promise<T>;
+  timeoutMs: number;
+  label: string;
+}): Promise<T> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  return Promise.race([params.task, timedOut]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 async function normalizeInputImage(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -279,6 +324,7 @@ async function normalizeInputImage(params: {
     };
   }
 
+  // Normalize HEIC/HEIF to JPEG because downstream model and channel surfaces expect common images.
   const normalizedBuffer = await convertHeicToJpeg(params.buffer);
   if (normalizedBuffer.byteLength > params.limits.maxBytes) {
     throw new Error(
@@ -306,6 +352,7 @@ async function resolveInputFileMime(params: {
   return sniffedMime;
 }
 
+/** Extracts and normalizes an input_image source from base64 or guarded URL input. */
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -354,6 +401,7 @@ export async function extractImageContentFromSource(
   throw new Error(`Unsupported input_image source type: ${(source as { type: string }).type}`);
 }
 
+/** Extracts model-visible text and images from an input_file source after MIME validation. */
 export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
@@ -411,15 +459,19 @@ export async function extractFileContentFromSource(params: {
   }
 
   if (mimeType === "application/pdf") {
-    const extracted = await extractPdfContent({
-      buffer,
-      maxPages: limits.pdf.maxPages,
-      maxPixels: limits.pdf.maxPixels,
-      minTextChars: limits.pdf.minTextChars,
-      ...(params.config ? { config: params.config } : {}),
-      onImageExtractionError: (err) => {
-        logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-      },
+    const extracted = await withInputFileTimeout({
+      label: "PDF extraction",
+      timeoutMs: limits.timeoutMs,
+      task: extractPdfContent({
+        buffer,
+        maxPages: limits.pdf.maxPages,
+        maxPixels: limits.pdf.maxPixels,
+        minTextChars: limits.pdf.minTextChars,
+        ...(params.config ? { config: params.config } : {}),
+        onImageExtractionError: (err) => {
+          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+        },
+      }),
     });
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {

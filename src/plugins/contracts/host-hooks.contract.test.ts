@@ -1,3 +1,4 @@
+// Host hook contract tests cover plugin host hook registration and runtime behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,15 +7,18 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  validatePluginsUiDescriptorsResult,
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
 import {
@@ -88,6 +92,34 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
+type HostHookStateFixture = {
+  stateDir: string;
+  storePath: string;
+  tempConfig: { session: { store: string } } & Record<string, unknown>;
+};
+
+async function withHostHookState(
+  prefix: string,
+  run: (fixture: HostHookStateFixture) => Promise<void>,
+  createTempConfig: (storePath: string) => HostHookStateFixture["tempConfig"] = (storePath) => ({
+    session: { store: storePath },
+  }),
+): Promise<void> {
+  const stateDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
+  const storePath = path.join(stateDir, "sessions.json");
+  const tempConfig = createTempConfig(storePath);
+  try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => await run({ stateDir, storePath, tempConfig }),
+      });
+    });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -154,9 +186,301 @@ describe("host-hook fixture plugin contract", () => {
     const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
     expect(diagnostics).toHaveLength(2);
     expect(diagnostics[0]?.pluginId).toBe("external-policy");
-    expect(diagnostics[0]?.message).toContain("only bundled plugins can register trusted tool");
+    expect(diagnostics[0]?.message).toContain(
+      "plugin must declare contracts.trustedToolPolicies for: deny",
+    );
     expect(diagnostics[1]?.pluginId).toBe("external-policy");
     expect(diagnostics[1]?.message).toContain("only bundled plugins can claim reserved command");
+  });
+
+  it("rejects declared external trusted policy registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-policy",
+        message: "plugin must be explicitly enabled to register trusted tool policy: deny",
+      },
+    ]);
+  });
+
+  it("allows explicitly enabled declared external trusted policy registration without reserved command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+        api.registerCommand({
+          name: "status",
+          description: "Should not be accepted",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies?.[0]?.policy.id).toBe("deny");
+    expect(registry.registry.commands).toHaveLength(0);
+    const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.pluginId).toBe("external-policy");
+    expect(diagnostics[0]?.message).toContain("only bundled plugins can claim reserved command");
+  });
+
+  it("rejects declared external tool-result middleware registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-middleware",
+        name: "External Middleware",
+        origin: "workspace",
+        contracts: { agentToolResultMiddleware: ["codex"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }), {
+          runtimes: ["codex"],
+        });
+      },
+    });
+
+    expect(registry.registry.agentToolResultMiddlewares ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-middleware",
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
+      },
+    ]);
+  });
+
+  it("diagnoses malformed trusted policy registrations", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "malformed-policy",
+        name: "Malformed Policy",
+        origin: "workspace",
+      }),
+      register(api) {
+        Reflect.apply(api.registerTrustedToolPolicy, api, [null]);
+        Reflect.apply(api.registerTrustedToolPolicy, api, [undefined]);
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+    ]);
+  });
+
+  it("scopes installed trusted policy ids to the registering plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    for (const pluginId of ["budget-policy-a", "budget-policy-b"]) {
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: pluginId,
+          name: pluginId,
+          origin: "workspace",
+          contracts: { trustedToolPolicies: ["workflow-budget"] },
+        }),
+        register(api) {
+          api.registerTrustedToolPolicy({
+            id: "workflow-budget",
+            description: `${pluginId} workflow budget policy`,
+            evaluate: () => undefined,
+          });
+        },
+      });
+    }
+
+    expect(
+      (registry.registry.trustedToolPolicies ?? []).map((entry) => [
+        entry.pluginId,
+        entry.policy.id,
+      ]),
+    ).toEqual([
+      ["budget-policy-a", "workflow-budget"],
+      ["budget-policy-b", "workflow-budget"],
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+  });
+
+  it("rejects duplicate trusted policy ids from the same plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "duplicate-policy",
+        name: "Duplicate Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["workflow-budget"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "First workflow budget policy",
+          evaluate: () => undefined,
+        });
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "Duplicate workflow budget policy",
+          evaluate: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "duplicate-policy",
+        message: "trusted tool policy already registered: workflow-budget (duplicate-policy)",
+      },
+    ]);
+  });
+
+  it("runs bundled trusted policies before declared external trusted policies", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["external-deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "external-deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "external policy" }),
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-policy",
+        name: "Bundled Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "bundled-deny",
+          description: "Bundled policy",
+          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const result = await runTrustedToolPolicies(
+      { toolName: "exec", params: {} },
+      { toolName: "exec" },
+    );
+
+    expect(result?.blockReason).toBe("bundled policy");
+  });
+
+  it("keeps same-id bundled and installed trusted policies owner-scoped", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["shared-deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Declared external policy",
+          evaluate: () => ({ allow: true }),
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-policy",
+        name: "Bundled Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Bundled policy",
+          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    expect(
+      registry.registry.trustedToolPolicies?.map((entry) => [entry.pluginId, entry.policy.id]),
+    ).toEqual([
+      ["bundled-policy", "shared-deny"],
+      ["external-policy", "shared-deny"],
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+
+    const result = await runTrustedToolPolicies(
+      { toolName: "exec", params: {} },
+      { toolName: "exec" },
+    );
+
+    expect(result?.blockReason).toBe("bundled policy");
   });
 
   it("allows the official npm Codex plugin to keep /codex command ownership", () => {
@@ -1159,102 +1483,81 @@ describe("host-hook fixture plugin contract", () => {
     });
     setActivePluginRegistry(registry.registry);
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-patch-"),
-    );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "patch-fixture": { workflow: { state: "waiting" } },
-              },
-            };
-            return undefined;
-          });
-
-          await expect(
-            patchPluginSessionExtension({
-              cfg: tempConfig,
-              sessionKey: "agent:main:main",
-              pluginId: "patch-fixture",
-              namespace: "workflow",
-            }),
-          ).resolves.toEqual({
-            ok: false,
-            error: "plugin session extension value is required unless unset is true",
-          });
-          expect(
-            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
-              ?.workflow,
-          ).toEqual({ state: "waiting" });
-
-          await expect(
-            patchPluginSessionExtension({
-              cfg: tempConfig,
-              sessionKey: "agent:main:main",
-              pluginId: "patch-fixture",
-              namespace: "workflow",
-              value: { state: "ambiguous" },
-              unset: true,
-            }),
-          ).resolves.toEqual({
-            ok: false,
-            error: "plugin session extension cannot specify both unset and value",
-          });
-          expect(
-            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
-              ?.workflow,
-          ).toEqual({ state: "waiting" });
-
-          await expect(
-            patchPluginSessionExtension({
-              cfg: tempConfig,
-              sessionKey: "agent:main:main",
-              pluginId: "patch-fixture",
-              namespace: "workflow",
-              value: { state: "approved" },
-            }),
-          ).resolves.toEqual({
-            ok: true,
-            key: "agent:main:main",
-            value: { state: "approved" },
-          });
-
-          await expect(
-            patchPluginSessionExtension({
-              cfg: tempConfig,
-              sessionKey: "agent:main:main",
-              pluginId: "patch-fixture",
-              namespace: "workflow",
-              unset: true,
-            }),
-          ).resolves.toEqual({
-            ok: true,
-            key: "agent:main:main",
-            value: undefined,
-          });
-          expect(loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions).toBeUndefined();
-        },
+    await withHostHookState("openclaw-host-hooks-patch-", async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            "patch-fixture": { workflow: { state: "waiting" } },
+          },
+        };
+        return undefined;
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+
+      await expect(
+        patchPluginSessionExtension({
+          cfg: tempConfig,
+          sessionKey: "agent:main:main",
+          pluginId: "patch-fixture",
+          namespace: "workflow",
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "plugin session extension value is required unless unset is true",
+      });
+      expect(
+        loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
+          ?.workflow,
+      ).toEqual({ state: "waiting" });
+
+      await expect(
+        patchPluginSessionExtension({
+          cfg: tempConfig,
+          sessionKey: "agent:main:main",
+          pluginId: "patch-fixture",
+          namespace: "workflow",
+          value: { state: "ambiguous" },
+          unset: true,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "plugin session extension cannot specify both unset and value",
+      });
+      expect(
+        loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
+          ?.workflow,
+      ).toEqual({ state: "waiting" });
+
+      await expect(
+        patchPluginSessionExtension({
+          cfg: tempConfig,
+          sessionKey: "agent:main:main",
+          pluginId: "patch-fixture",
+          namespace: "workflow",
+          value: { state: "approved" },
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        key: "agent:main:main",
+        value: { state: "approved" },
+      });
+
+      await expect(
+        patchPluginSessionExtension({
+          cfg: tempConfig,
+          sessionKey: "agent:main:main",
+          pluginId: "patch-fixture",
+          namespace: "workflow",
+          unset: true,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        key: "agent:main:main",
+        value: undefined,
+      });
+      expect(loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions).toBeUndefined();
+    });
   });
 
   it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
@@ -1375,71 +1678,50 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it("reports duplicate next-turn injections as not newly enqueued", async () => {
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-"),
-    );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-            };
-            return undefined;
-          });
-          const now = Date.now();
-
-          const first = await enqueuePluginNextTurnInjection({
-            cfg: tempConfig,
-            pluginId: "approval-fixture",
-            injection: {
-              sessionKey: "agent:main:main",
-              text: "resume approval workflow",
-              placement: "prepend_context",
-              idempotencyKey: "approval:resume",
-            },
-            now,
-          });
-          const duplicate = await enqueuePluginNextTurnInjection({
-            cfg: tempConfig,
-            pluginId: "approval-fixture",
-            injection: {
-              sessionKey: "agent:main:main",
-              text: "resume approval workflow again",
-              placement: "prepend_context",
-              idempotencyKey: "approval:resume",
-            },
-            now: now + 1,
-          });
-
-          expect(first.enqueued).toBe(true);
-          expect(duplicate).toEqual({
-            enqueued: false,
-            id: first.id,
-            sessionKey: "agent:main:main",
-          });
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expect(
-            stored["agent:main:main"]?.pluginNextTurnInjections?.["approval-fixture"],
-          ).toHaveLength(1);
-        },
+    await withHostHookState("openclaw-host-hooks-injection-", async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        };
+        return undefined;
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+      const now = Date.now();
+
+      const first = await enqueuePluginNextTurnInjection({
+        cfg: tempConfig,
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "resume approval workflow",
+          placement: "prepend_context",
+          idempotencyKey: "approval:resume",
+        },
+        now,
+      });
+      const duplicate = await enqueuePluginNextTurnInjection({
+        cfg: tempConfig,
+        pluginId: "approval-fixture",
+        injection: {
+          sessionKey: "agent:main:main",
+          text: "resume approval workflow again",
+          placement: "prepend_context",
+          idempotencyKey: "approval:resume",
+        },
+        now: now + 1,
+      });
+
+      expect(first.enqueued).toBe(true);
+      expect(duplicate).toEqual({
+        enqueued: false,
+        id: first.id,
+        sessionKey: "agent:main:main",
+      });
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      expect(
+        stored["agent:main:main"]?.pluginNextTurnInjections?.["approval-fixture"],
+      ).toHaveLength(1);
+    });
   });
 
   it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
@@ -1462,86 +1744,71 @@ describe("host-hook fixture plugin contract", () => {
       }),
     );
     setActivePluginRegistry(registry);
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-stale-"),
-    );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-      plugins: {
-        entries: {
-          "policy-blocked-injector": {
-            hooks: { allowPromptInjection: false },
+    await withHostHookState(
+      "openclaw-host-hooks-stale-",
+      async ({ storePath, tempConfig }) => {
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginNextTurnInjections: {
+              "active-injector": [
+                {
+                  id: "active",
+                  pluginId: "active-injector",
+                  text: "active prompt contribution",
+                  placement: "append_context",
+                  createdAt: 1,
+                },
+              ],
+              "disabled-injector": [
+                {
+                  id: "stale",
+                  pluginId: "disabled-injector",
+                  text: "stale prompt contribution",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+              "policy-blocked-injector": [
+                {
+                  id: "policy-blocked",
+                  pluginId: "policy-blocked-injector",
+                  text: "policy blocked prompt contribution",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
+          };
+          return undefined;
+        });
+
+        const drained = await drainPluginNextTurnInjections({
+          cfg: tempConfig,
+          sessionKey: "agent:main:main",
+          now: 2,
+        });
+        expect(drained).toHaveLength(1);
+        expectRecordFields(drained[0], {
+          id: "active",
+          pluginId: "active-injector",
+          text: "active prompt contribution",
+        });
+        const stored = loadSessionStore(storePath, { skipCache: true });
+        expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
+      },
+      (storePath) => ({
+        session: { store: storePath },
+        plugins: {
+          entries: {
+            "policy-blocked-injector": {
+              hooks: { allowPromptInjection: false },
+            },
           },
         },
-      },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "active-injector": [
-                  {
-                    id: "active",
-                    pluginId: "active-injector",
-                    text: "active prompt contribution",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                ],
-                "disabled-injector": [
-                  {
-                    id: "stale",
-                    pluginId: "disabled-injector",
-                    text: "stale prompt contribution",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-                "policy-blocked-injector": [
-                  {
-                    id: "policy-blocked",
-                    pluginId: "policy-blocked-injector",
-                    text: "policy blocked prompt contribution",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
-          });
-
-          const drained = await drainPluginNextTurnInjections({
-            cfg: tempConfig,
-            sessionKey: "agent:main:main",
-            now: 2,
-          });
-          expect(drained).toHaveLength(1);
-          expectRecordFields(drained[0], {
-            id: "active",
-            pluginId: "active-injector",
-            text: "active prompt contribution",
-          });
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
-        },
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+      }),
+    );
   });
 
   it("preserves global enqueue order when draining live next-turn injections", async () => {
@@ -1559,73 +1826,52 @@ describe("host-hook fixture plugin contract", () => {
       }),
     );
     setActivePluginRegistry(registry);
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-order-"),
-    );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "injector-a": [
-                  {
-                    id: "a1",
-                    pluginId: "injector-a",
-                    text: "first",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                  {
-                    id: "a2",
-                    pluginId: "injector-a",
-                    text: "third",
-                    placement: "append_context",
-                    createdAt: 3,
-                  },
-                ],
-                "injector-b": [
-                  {
-                    id: "b1",
-                    pluginId: "injector-b",
-                    text: "second",
-                    placement: "append_context",
-                    createdAt: 2,
-                  },
-                ],
+    await withHostHookState("openclaw-host-hooks-order-", async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          pluginNextTurnInjections: {
+            "injector-a": [
+              {
+                id: "a1",
+                pluginId: "injector-a",
+                text: "first",
+                placement: "append_context",
+                createdAt: 1,
               },
-            };
-            return undefined;
-          });
-
-          const drained = await drainPluginNextTurnInjections({
-            cfg: tempConfig,
-            sessionKey: "agent:main:main",
-            now: 4,
-          });
-          expect(drained).toHaveLength(3);
-          expectRecordFields(drained[0], { id: "a1", text: "first" });
-          expectRecordFields(drained[1], { id: "b1", text: "second" });
-          expectRecordFields(drained[2], { id: "a2", text: "third" });
-        },
+              {
+                id: "a2",
+                pluginId: "injector-a",
+                text: "third",
+                placement: "append_context",
+                createdAt: 3,
+              },
+            ],
+            "injector-b": [
+              {
+                id: "b1",
+                pluginId: "injector-b",
+                text: "second",
+                placement: "append_context",
+                createdAt: 2,
+              },
+            ],
+          },
+        };
+        return undefined;
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+
+      const drained = await drainPluginNextTurnInjections({
+        cfg: tempConfig,
+        sessionKey: "agent:main:main",
+        now: 4,
+      });
+      expect(drained).toHaveLength(3);
+      expectRecordFields(drained[0], { id: "a1", text: "first" });
+      expectRecordFields(drained[1], { id: "b1", text: "second" });
+      expectRecordFields(drained[2], { id: "a2", text: "third" });
+    });
   });
 
   it("validates gateway protocol envelopes for plugin patch and UI descriptors", () => {
@@ -1648,6 +1894,84 @@ describe("host-hook fixture plugin contract", () => {
     ).toBe(false);
     expect(validatePluginsUiDescriptorsParams({})).toBe(true);
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
+    expect(
+      validatePluginsUiDescriptorsResult({
+        ok: true,
+        descriptors: [
+          {
+            id: "approval-panel",
+            pluginId: "host-hook-fixture",
+            surface: "session",
+            label: "Approval panel",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsUiDescriptorsResult({
+        ok: true,
+        descriptors: [
+          {
+            id: "approval-panel",
+            pluginId: "host-hook-fixture",
+            surface: "session",
+            label: "Approval panel",
+            leakedRegistryField: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("projects plugin UI descriptors through the strict gateway result shape", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-hook-fixture",
+        name: "Host Hook Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "approval-panel",
+          surface: "session",
+          label: "Approval panel",
+        });
+      },
+    });
+    const descriptorEntry = registry.registry.controlUiDescriptors?.[0];
+    if (!descriptorEntry) {
+      throw new Error("expected control UI descriptor registration");
+    }
+    Object.assign(descriptorEntry.descriptor, { leakedRegistryField: true });
+    setActivePluginRegistry(registry.registry);
+
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    void pluginHostHookHandlers["plugins.uiDescriptors"]({
+      params: {},
+      respond: (ok: boolean, payload: unknown, error: unknown) => {
+        calls.push([ok, payload, error]);
+      },
+    } as never);
+
+    expect(calls).toHaveLength(1);
+    const [ok, payload, error] = calls[0] ?? [];
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(validatePluginsUiDescriptorsResult(payload)).toBe(true);
+    expect(payload).toEqual({
+      ok: true,
+      descriptors: [
+        {
+          id: "approval-panel",
+          pluginId: "host-hook-fixture",
+          pluginName: "Host Hook Fixture",
+          surface: "session",
+          label: "Approval panel",
+        },
+      ],
+    });
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
@@ -2145,40 +2469,20 @@ describe("host-hook fixture plugin contract", () => {
       ],
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-state-"),
-    );
-    const tempConfig = {
-      session: { store: path.join(stateDir, "sessions.json") },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
+    await withHostHookState("openclaw-host-hooks-state-", async ({ tempConfig }) => {
+      await runPluginHostCleanup({
         cfg: tempConfig,
-        run: async () => {
-          await runPluginHostCleanup({
-            cfg: tempConfig,
-            registry: registry.registry,
-            pluginId: "cleanup-fixture",
-            reason: "reset",
-            sessionKey: "agent:main:main",
-          });
-          await cleanupReplacedPluginHostRegistry({
-            cfg: tempConfig,
-            previousRegistry: registry.registry,
-            nextRegistry: createEmptyPluginRegistry(),
-          });
-        },
+        registry: registry.registry,
+        pluginId: "cleanup-fixture",
+        reason: "reset",
+        sessionKey: "agent:main:main",
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+      await cleanupReplacedPluginHostRegistry({
+        cfg: tempConfig,
+        previousRegistry: registry.registry,
+        nextRegistry: createEmptyPluginRegistry(),
+      });
+    });
 
     expect(cleanupEvents).toEqual([
       "session:reset:agent:main:main",
@@ -2514,86 +2818,65 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-store-"),
-    );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
+    await withHostHookState("openclaw-host-hooks-store-", async ({ storePath, tempConfig }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            "cleanup-fixture": { workflow: { state: "waiting" } },
+            "other-plugin": { workflow: { state: "keep" } },
+          },
+          pluginNextTurnInjections: {
+            "cleanup-fixture": [
+              {
+                id: "resume",
+                pluginId: "cleanup-fixture",
+                text: "resume",
+                placement: "prepend_context",
+                createdAt: 1,
+              },
+            ],
+            "other-plugin": [
+              {
+                id: "keep",
+                pluginId: "other-plugin",
+                text: "keep",
+                placement: "append_context",
+                createdAt: 1,
+              },
+            ],
+          },
+        };
+        return undefined;
+      });
+
+      const cleanupResult = await runPluginHostCleanup({
         cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "cleanup-fixture": { workflow: { state: "waiting" } },
-                "other-plugin": { workflow: { state: "keep" } },
-              },
-              pluginNextTurnInjections: {
-                "cleanup-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "cleanup-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-                "other-plugin": [
-                  {
-                    id: "keep",
-                    pluginId: "other-plugin",
-                    text: "keep",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
-          });
+        registry: registry.registry,
+        pluginId: "cleanup-fixture",
+        reason: "disable",
+      });
+      expect(cleanupResult.failures).toEqual([]);
 
-          const cleanupResult = await runPluginHostCleanup({
-            cfg: tempConfig,
-            registry: registry.registry,
-            pluginId: "cleanup-fixture",
-            reason: "disable",
-          });
-          expect(cleanupResult.failures).toEqual([]);
-
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expectRecordFields(stored["agent:main:main"], {
-            pluginExtensions: {
-              "other-plugin": { workflow: { state: "keep" } },
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      expectRecordFields(stored["agent:main:main"], {
+        pluginExtensions: {
+          "other-plugin": { workflow: { state: "keep" } },
+        },
+        pluginNextTurnInjections: {
+          "other-plugin": [
+            {
+              id: "keep",
+              pluginId: "other-plugin",
+              text: "keep",
+              placement: "append_context",
+              createdAt: 1,
             },
-            pluginNextTurnInjections: {
-              "other-plugin": [
-                {
-                  id: "keep",
-                  pluginId: "other-plugin",
-                  text: "keep",
-                  placement: "append_context",
-                  createdAt: 1,
-                },
-              ],
-            },
-          });
+          ],
         },
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("does not clear unrelated run context during session-scoped cleanup", async () => {
@@ -2611,34 +2894,14 @@ describe("host-hook fixture plugin contract", () => {
       }),
     ).toBe(true);
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-run-context-"),
-    );
-    const tempConfig = {
-      session: { store: path.join(stateDir, "sessions.json") },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
+    await withHostHookState("openclaw-host-hooks-run-context-", async ({ tempConfig }) => {
+      await runPluginHostCleanup({
         cfg: tempConfig,
-        run: async () => {
-          await runPluginHostCleanup({
-            cfg: tempConfig,
-            registry,
-            reason: "reset",
-            sessionKey: "agent:main:main",
-          });
-        },
+        registry,
+        reason: "reset",
+        sessionKey: "agent:main:main",
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
 
     expect(
       getPluginRunContext({
@@ -2671,74 +2934,56 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-restart-state-"),
+    await withHostHookState(
+      "openclaw-host-hooks-restart-state-",
+      async ({ storePath, tempConfig }) => {
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginExtensions: {
+              "restart-state-fixture": { workflow: { state: "waiting" } },
+            },
+            pluginNextTurnInjections: {
+              "restart-state-fixture": [
+                {
+                  id: "resume",
+                  pluginId: "restart-state-fixture",
+                  text: "resume",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
+          };
+          return undefined;
+        });
+
+        const cleanupResult = await runPluginHostCleanup({
+          cfg: tempConfig,
+          registry: registry.registry,
+          pluginId: "restart-state-fixture",
+          reason: "restart",
+        });
+        expect(cleanupResult.failures).toEqual([]);
+
+        const stored = loadSessionStore(storePath, { skipCache: true });
+        expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
+          "restart-state-fixture": { workflow: { state: "waiting" } },
+        });
+        expect(stored["agent:main:main"]?.pluginNextTurnInjections).toEqual({
+          "restart-state-fixture": [
+            {
+              id: "resume",
+              pluginId: "restart-state-fixture",
+              text: "resume",
+              placement: "prepend_context",
+              createdAt: 1,
+            },
+          ],
+        });
+      },
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "restart-state-fixture": { workflow: { state: "waiting" } },
-              },
-              pluginNextTurnInjections: {
-                "restart-state-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "restart-state-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
-          });
-
-          const cleanupResult = await runPluginHostCleanup({
-            cfg: tempConfig,
-            registry: registry.registry,
-            pluginId: "restart-state-fixture",
-            reason: "restart",
-          });
-          expect(cleanupResult.failures).toEqual([]);
-
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
-            "restart-state-fixture": { workflow: { state: "waiting" } },
-          });
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toEqual({
-            "restart-state-fixture": [
-              {
-                id: "resume",
-                pluginId: "restart-state-fixture",
-                text: "resume",
-                placement: "prepend_context",
-                createdAt: 1,
-              },
-            ],
-          });
-        },
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
   });
 
   it("cleans pending injections for plugins that registered no host-hook callbacks", async () => {
@@ -2750,56 +2995,38 @@ describe("host-hook fixture plugin contract", () => {
         status: "loaded",
       }),
     );
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-only-"),
+    await withHostHookState(
+      "openclaw-host-hooks-injection-only-",
+      async ({ storePath, tempConfig }) => {
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginNextTurnInjections: {
+              "injection-only-fixture": [
+                {
+                  id: "resume",
+                  pluginId: "injection-only-fixture",
+                  text: "resume",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
+          };
+          return undefined;
+        });
+
+        const cleanupResult = await cleanupReplacedPluginHostRegistry({
+          cfg: tempConfig,
+          previousRegistry,
+          nextRegistry: createEmptyPluginRegistry(),
+        });
+        expect(cleanupResult.failures).toEqual([]);
+
+        const stored = loadSessionStore(storePath, { skipCache: true });
+        expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
+      },
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      await withTempConfig({
-        cfg: tempConfig,
-        run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "injection-only-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "injection-only-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
-          });
-
-          const cleanupResult = await cleanupReplacedPluginHostRegistry({
-            cfg: tempConfig,
-            previousRegistry,
-            nextRegistry: createEmptyPluginRegistry(),
-          });
-          expect(cleanupResult.failures).toEqual([]);
-
-          const stored = loadSessionStore(storePath, { skipCache: true });
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
-        },
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
   });
 });

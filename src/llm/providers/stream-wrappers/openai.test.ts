@@ -1,3 +1,4 @@
+// OpenAI stream wrapper tests cover streamed text, tools, and reasoning fields.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -6,6 +7,7 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -34,7 +36,23 @@ const openaiModel = {
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
+  baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+describe("createOpenAIFastModeWrapper", () => {
+  it("resolves dynamic fast mode for each stream call", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    let enabled = true;
+    const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = false;
+    void wrapped(openaiModel, { messages: [] }, {});
+
+    expect(payloads[0]?.service_tier).toBe("priority");
+    expect(payloads[1]).not.toHaveProperty("service_tier");
+  });
+});
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -146,6 +164,12 @@ describe("createCodexNativeWebSearchWrapper", () => {
           const payloadObj = payload as { tools?: unknown } | undefined;
           if (payloadObj && Array.isArray(payloadObj.tools)) {
             payloadObj.tools.push({ type: "function", name: "web_search" });
+            payloadObj.tools.push({
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("code mode payload function getter exploded");
+              },
+            });
           }
         },
       },
@@ -155,6 +179,56 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("filters async replacement payloads when code mode owns the tool surface", async () => {
+    let observedOptions: Parameters<StreamFn>[2];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      observedOptions = options;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    } as Model<"openai-responses">;
+
+    void wrapped(
+      model,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            {
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("async code mode payload function getter exploded");
+              },
+            },
+            { type: "function", name: "wait" },
+            { type: "web_search" },
+          ],
+        }),
+      },
+    );
+
+    const nextPayload = await observedOptions?.onPayload?.({ tools: [] }, model);
+    expect(nextPayload).toEqual({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "wait" },
+      ],
+    });
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
@@ -281,6 +355,94 @@ describe("createCodexNativeWebSearchWrapper", () => {
         ],
       },
     ]);
+  });
+
+  it("does not inject native web_search when agent policy denies web search", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", name: "read" }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      agentId: "main",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["group:web"] },
+            },
+          ],
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
+  it("does not inject native web_search when runtime sender policy denies web search", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", name: "read" }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      messageProvider: "teams",
+      senderId: "alice",
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["web_search"] },
+          },
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
   });
 });
 

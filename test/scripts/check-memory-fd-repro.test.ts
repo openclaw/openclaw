@@ -1,7 +1,10 @@
+// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
@@ -9,6 +12,7 @@ import {
   MEMORY_SEARCH_RESPONSE_MAX_BYTES,
   classifyMemorySearchInvokeResponse,
   hasChildExited,
+  invokeMemorySearch,
   parseArgs,
   readBoundedResponseText,
   readNumber,
@@ -18,28 +22,21 @@ import {
   waitForGatewayReady,
   writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
+import { withEnv } from "../../src/test-utils/env.js";
 
-function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test server did not expose a TCP port");
   }
-  try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return address.port;
 }
 
 describe("check-memory-fd-repro", () => {
@@ -61,13 +58,17 @@ describe("check-memory-fd-repro", () => {
           OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
           OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
           OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
+          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
         },
         () => parseArgs([]),
       ),
     ).toMatchObject({
       fileCount: 17,
+      invokeTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       maxWorkspaceRegFds: 0,
       sampleDelayMs: 0,
+      settleDelayMs: MAX_TIMER_TIMEOUT_MS,
     });
 
     expect(() =>
@@ -111,6 +112,23 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+  it("rejects missing valued options instead of consuming the next flag", () => {
+    for (const flag of [
+      "--files",
+      "--invoke-timeout-ms",
+      "--max-workspace-reg-fds",
+      "--min-leaked-fds",
+      "--mode",
+      "--output-dir",
+      "--sample-delay-ms",
+      "--settle-delay-ms",
+    ]) {
+      for (const value of ["--keep", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
+    }
+  });
+
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
       fileCount: 20,
@@ -128,6 +146,37 @@ describe("check-memory-fd-repro", () => {
       allowNonDarwin: true,
       fileCount: 20,
     });
+  });
+
+  it("clamps oversized memory_search invoke timers before scheduling", async () => {
+    const server = createServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            ok: true,
+            result: {
+              content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+            },
+          }),
+        );
+      }, 25);
+    });
+    const port = await listen(server);
+    try {
+      await expect(
+        invokeMemorySearch({
+          port,
+          token: "test-token",
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        }),
+      ).resolves.toMatchObject({
+        gatewayOk: true,
+        ok: true,
+        resultCount: 0,
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("uses a fast matching probe query instead of a no-hit stress query", () => {
@@ -264,6 +313,31 @@ describe("check-memory-fd-repro", () => {
     expect(child.kill).not.toHaveBeenCalled();
     expect(findGatewayPidFn).toHaveBeenCalledWith(9);
     expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("force-kills a gateway child that survives listener cleanup", async () => {
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    };
+    const findGatewayPidFn = vi.fn().mockReturnValueOnce(1234).mockReturnValue(null);
+    const killProcess = vi.fn();
+
+    await expect(
+      stopGatewayWithRuntime({
+        child,
+        childExitPolls: 0,
+        findGatewayPidFn,
+        killProcess,
+        listenerSettleDelayMs: 0,
+        port: 9,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGINT");
+    expect(killProcess).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 
   it("bounds gateway readiness output while keeping newest logs", () => {

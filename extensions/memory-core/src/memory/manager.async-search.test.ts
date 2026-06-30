@@ -1,29 +1,57 @@
+// Memory Core tests cover manager.async search plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { MemoryIndexManager } from "./manager.js";
 
 describe("memory search async sync", () => {
-  it("does not await sync when searching", async () => {
+  it("waits for dirty sync before querying", async () => {
     let releaseSync = () => {};
-    const pending = new Promise<void>((resolve) => {
+    const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
     const syncMock = vi.fn(async () => {
-      return pending;
+      return pendingSync;
     });
-    const onError = vi.fn();
-
-    startAsyncSearchSync({
-      enabled: true,
+    const queryMock = vi.fn(async () => []);
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "fts-only", provider: "none" },
+      hasIndexedContent: () => true,
+      settings: {
+        sync: { onSearch: true },
+        query: {
+          minScore: 0,
+          maxResults: 5,
+          hybrid: {
+            enabled: true,
+            candidateMultiplier: 2,
+            temporalDecay: { enabled: false, halfLifeDays: 30 },
+          },
+        },
+      },
+      warmSession: vi.fn(),
+      ensureProviderInitialized: vi.fn(async () => {}),
+      assertRequiredProviderAvailable: vi.fn(),
       dirty: true,
       sessionsDirty: false,
       sync: syncMock,
-      onError,
+      provider: null,
+      providerLifecycle: { mode: "fts-only", reason: "test" },
+      refreshIndexIdentityDirty: () => ({ status: "valid" }),
+      sources: new Set(["memory"]),
+      fts: { enabled: true, available: true },
+      searchKeywordWithFallback: queryMock,
+      workspaceDir: "",
     });
+
+    const searchPromise = manager.search("current memory");
+    await vi.waitFor(() => expect(syncMock).toHaveBeenCalledWith({ reason: "search" }));
+    expect(queryMock).not.toHaveBeenCalled();
 
     expect(syncMock).toHaveBeenCalledTimes(1);
     releaseSync();
-    await pending;
-    expect(onError).not.toHaveBeenCalled();
+    await searchPromise;
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
   it("waits for in-flight search sync during close", async () => {
@@ -44,9 +72,9 @@ describe("memory search async sync", () => {
     await closePromise;
   });
 
-  it("skips background search sync when search-triggered sync is disabled", () => {
+  it("skips background search sync when search-triggered sync is disabled", async () => {
     const syncMock = vi.fn(async () => {});
-    startAsyncSearchSync({
+    await startAsyncSearchSync({
       enabled: false,
       dirty: true,
       sessionsDirty: false,

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements query behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -244,12 +245,17 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+        const entries = await fs
+          .readdir(dirPath, { withFileTypes: true, recursive: true })
+          .catch(() => []);
         return entries
           .filter(
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
-          .map((entry) => path.join(relativeDir, entry.name));
+          .map((entry) => {
+            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
+            return path.relative(rootDir, absPath).split(path.sep).join("/");
+          });
       }),
     )
   ).flat();

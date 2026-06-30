@@ -1,10 +1,13 @@
+// Covers backup archive creation and verification filtering.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -496,6 +499,498 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("snapshots per-agent SQLite auth stores without deleted secret pages", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-backup",
+              },
+            },
+          },
+          state.agentDir(),
+          { syncExternalCli: false },
+        );
+        closeOpenClawAgentDatabasesForTest();
+        const sqlite = requireNodeSqlite();
+        const liveDbPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+        const deletedSecretMarker = "OPENCLAW_DELETED_SECRET_PAGE_MARKER";
+        const deletedSecret = `${deletedSecretMarker}-${"x".repeat(16_384)}`;
+        const liveDb = new sqlite.DatabaseSync(liveDbPath);
+        try {
+          liveDb.exec("PRAGMA secure_delete = OFF; CREATE TABLE deleted_secrets (value TEXT)");
+          liveDb.prepare("INSERT INTO deleted_secrets (value) VALUES (?)").run(deletedSecret);
+          liveDb
+            .prepare("INSERT INTO deleted_secrets (value) VALUES (?)")
+            .run(`keeper-${"y".repeat(16_384)}`);
+          liveDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          liveDb.prepare("DELETE FROM deleted_secrets WHERE value = ?").run(deletedSecret);
+        } finally {
+          liveDb.close();
+        }
+        expect((await fs.readFile(liveDbPath)).includes(Buffer.from(deletedSecretMarker))).toBe(
+          true,
+        );
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 31, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const archivedDbEntry = entries.find((entry) =>
+          entry.endsWith("/state/agents/main/agent/openclaw-agent.sqlite"),
+        );
+        expect(archivedDbEntry).toBeDefined();
+        expect(
+          entries.some((entry) =>
+            entry.endsWith("/state/agents/main/agent/openclaw-agent.sqlite-wal"),
+          ),
+        ).toBe(false);
+
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        const extractedPath = path.join(extractDir, archivedDbEntry!);
+        expect((await fs.stat(extractedPath)).mode & 0o777).toBe(0o600);
+        expect((await fs.readFile(extractedPath)).includes(Buffer.from(deletedSecretMarker))).toBe(
+          false,
+        );
+        const archivedDb = new sqlite.DatabaseSync(extractedPath, {
+          readOnly: true,
+        });
+        try {
+          const row = archivedDb
+            .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
+            .get() as { store_json: string };
+          expect(JSON.parse(row.store_json).profiles["openai:default"]).toMatchObject({
+            type: "api_key",
+            provider: "openai",
+            key: "sk-backup",
+          });
+        } finally {
+          archivedDb.close();
+        }
+      },
+    );
+  });
+
+  it("snapshots nested live SQLite databases with transaction continuity", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-nested-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const dbPath = state.statePath("plugins", "dedicated", "live.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        db.exec(`
+          PRAGMA journal_mode = WAL;
+          PRAGMA wal_autocheckpoint = 0;
+          CREATE TABLE backup_meta (
+            id INTEGER PRIMARY KEY,
+            last_seq INTEGER NOT NULL
+          );
+          CREATE TABLE backup_markers (
+            seq INTEGER PRIMARY KEY,
+            transaction_id INTEGER NOT NULL
+          );
+          CREATE TABLE delivery_queue_entries (
+            id TEXT PRIMARY KEY
+          );
+          INSERT INTO backup_meta (id, last_seq) VALUES (1, 0);
+          INSERT INTO delivery_queue_entries (id) VALUES ('must-stay');
+          PRAGMA wal_checkpoint(TRUNCATE);
+          BEGIN IMMEDIATE;
+          INSERT INTO backup_markers (seq, transaction_id) VALUES (1, 7), (2, 7), (3, 7);
+          UPDATE backup_meta SET last_seq = 3 WHERE id = 1;
+          COMMIT;
+        `);
+        await fs.writeFile(`${dbPath}-journal`, "");
+
+        try {
+          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+          await expect(fs.access(`${dbPath}-shm`)).resolves.toBeUndefined();
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 32, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const archivedDbEntries = entries.filter((entry) =>
+            entry.endsWith("/state/plugins/dedicated/live.sqlite"),
+          );
+          expect(archivedDbEntries).toHaveLength(1);
+          for (const suffix of ["-wal", "-shm", "-journal"]) {
+            expect(
+              entries.some((entry) =>
+                entry.endsWith(`/state/plugins/dedicated/live.sqlite${suffix}`),
+              ),
+              suffix,
+            ).toBe(false);
+          }
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedDbEntries[0]), {
+            readOnly: true,
+          });
+          try {
+            expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
+              integrity_check: "ok",
+            });
+            expect(
+              archivedDb.prepare("SELECT last_seq FROM backup_meta WHERE id = 1").get(),
+            ).toEqual({ last_seq: 3 });
+            expect(
+              archivedDb
+                .prepare(
+                  "SELECT COUNT(*) AS count, MIN(seq) AS min_seq, MAX(seq) AS max_seq FROM backup_markers",
+                )
+                .get(),
+            ).toEqual({ count: 3, min_seq: 1, max_seq: 3 });
+            expect(
+              archivedDb.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+            ).toEqual({ count: 1 });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          db.close();
+        }
+      },
+    );
+  });
+
+  it("fails instead of raw-copying malformed nested SQLite databases", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-malformed-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = state.statePath("plugins", "dedicated", "malformed.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(dbPath, "not a sqlite database", "utf8");
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          }),
+        ).rejects.toThrow(/file is not a database|malformed/i);
+      },
+    );
+  });
+
+  it.each(["late.sqlite", "late.sqlite-wal"])(
+    "fails when SQLite-looking state appears after snapshot discovery: %s",
+    async (lateName) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-late-sqlite-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputDir = state.path("backups");
+          const latePath = state.statePath(lateName);
+          await fs.mkdir(outputDir, { recursive: true });
+
+          const originalReaddir = fs.readdir.bind(fs);
+          let createdLatePath = false;
+          const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
+            ...args: unknown[]
+          ) => {
+            const entries = await (
+              originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>
+            )(...args);
+            if (
+              !createdLatePath &&
+              path.resolve(String(args[0])) === path.resolve(state.stateDir)
+            ) {
+              createdLatePath = true;
+              await fs.writeFile(latePath, "late SQLite state");
+            }
+            return entries;
+          }) as typeof fs.readdir);
+
+          try {
+            await expect(
+              createBackupArchive({
+                output: outputDir,
+                includeWorkspace: false,
+                nowMs: Date.UTC(2026, 4, 9, 8, 33, 30),
+              }),
+            ).rejects.toThrow(/SQLite state appeared after snapshot discovery/);
+            expect(createdLatePath).toBe(true);
+            expect(await fs.readdir(outputDir)).toEqual([]);
+          } finally {
+            readdirSpy.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
+  it("omits pre-existing orphan SQLite sidecars without failing backup", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-orphan-sqlite-sidecars-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const orphanPath = state.statePath("plugins", "dedicated", "orphan.sqlite");
+        await fs.mkdir(path.dirname(orphanPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          await fs.writeFile(`${orphanPath}${suffix}`, "orphan SQLite sidecar");
+        }
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 33, 45),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          expect(
+            entries.some((entry) =>
+              entry.endsWith(`/state/plugins/dedicated/orphan.sqlite${suffix}`),
+            ),
+            suffix,
+          ).toBe(false);
+        }
+      },
+    );
+  });
+
+  it("omits transient memory reindex databases and sidecars", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-memory-reindex-lock-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const transientPaths = [
+          state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
+          state.statePath("memory", "main.sqlite.tmp-11111111-2222-3333-4444-555555555555"),
+          state.statePath("memory", "main.sqlite.backup-66666666-7777-8888-9999-aaaaaaaaaaaa"),
+          state.statePath(
+            "agents",
+            "main",
+            "agent.sqlite.memory-reindex-bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+          ),
+        ];
+        await fs.mkdir(outputDir, { recursive: true });
+        for (const transientPath of transientPaths) {
+          await fs.mkdir(path.dirname(transientPath), { recursive: true });
+          for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            await fs.writeFile(`${transientPath}${suffix}`, "transient reindex database");
+          }
+        }
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 34, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        for (const transientPath of transientPaths) {
+          const relativeTransientPath = path
+            .relative(state.stateDir, transientPath)
+            .split(path.sep)
+            .join("/");
+          for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            expect(
+              entries.some((entry) => entry.endsWith(`/state/${relativeTransientPath}${suffix}`)),
+              `${relativeTransientPath}${suffix}`,
+            ).toBe(false);
+          }
+        }
+      },
+    );
+  });
+
+  it("preserves noncanonical symlinked SQLite paths without dereferencing them", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-symlinked-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const externalDbPath = state.path("external-malformed.sqlite");
+        const linkedDbPath = state.statePath("plugins", "dedicated", "linked.sqlite");
+        await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(externalDbPath, "not a sqlite database", "utf8");
+        await fs.symlink(externalDbPath, linkedDbPath);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 34, 0),
+        });
+        const entries = await listArchiveEntryDetails(result.archivePath);
+        expect(
+          entries.find((entry) => entry.path.endsWith("/state/plugins/dedicated/linked.sqlite")),
+        ).toMatchObject({ type: "SymbolicLink" });
+      },
+    );
+  });
+
+  it("snapshots the canonical global SQLite symlink as a complete regular file", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-global-sqlite-symlink-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const externalDbPath = path.join(state.workspaceDir, "external-global.sqlite");
+        const linkedDbPath = state.statePath("state", "openclaw.sqlite");
+        await state.writeConfig({
+          agents: {
+            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          },
+        });
+        await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(externalDbPath);
+        db.exec(`
+          PRAGMA journal_mode = WAL;
+          PRAGMA wal_autocheckpoint = 0;
+          CREATE TABLE durable_state (
+            id INTEGER PRIMARY KEY,
+            value TEXT NOT NULL
+          );
+          CREATE TABLE delivery_queue_entries (
+            id TEXT PRIMARY KEY
+          );
+          PRAGMA wal_checkpoint(TRUNCATE);
+          INSERT INTO durable_state (id, value) VALUES (1, 'must-stay');
+          INSERT INTO delivery_queue_entries (id) VALUES ('must-drop');
+        `);
+        await fs.symlink(externalDbPath, linkedDbPath);
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: true,
+            nowMs: Date.UTC(2026, 4, 9, 8, 34, 30),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const archivedDbEntries = entries.filter((entry) =>
+            entry.path.endsWith("/state/state/openclaw.sqlite"),
+          );
+          expect(archivedDbEntries).toEqual([
+            expect.objectContaining({
+              type: "File",
+            }),
+          ]);
+          for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            expect(
+              entries.some((entry) =>
+                entry.path.endsWith(`/workspace/external-global.sqlite${suffix}`),
+              ),
+              suffix || "database",
+            ).toBe(false);
+          }
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const archivedDb = new sqlite.DatabaseSync(
+            path.join(extractDir, archivedDbEntries[0].path),
+            { readOnly: true },
+          );
+          try {
+            expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
+              integrity_check: "ok",
+            });
+            expect(
+              archivedDb.prepare("SELECT value FROM durable_state WHERE id = 1").get(),
+            ).toEqual({ value: "must-stay" });
+            expect(
+              archivedDb.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+            ).toEqual({ count: 0 });
+          } finally {
+            archivedDb.close();
+          }
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+          expect(verification.ok).toBe(true);
+        } finally {
+          db.close();
+        }
+      },
+    );
+  });
+
+  it("fails when the canonical global SQLite path is not a file", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-global-sqlite-directory-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const globalDbPath = state.statePath("state", "openclaw.sqlite");
+        await fs.mkdir(globalDbPath, { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 34, 45),
+          }),
+        ).rejects.toThrow(/Canonical global SQLite path must be a regular file or symlink/);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
   it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
     await withOpenClawTestState(
       {
@@ -511,6 +1006,9 @@ describe("createBackupArchive", () => {
         });
         await fs.mkdir(path.join(stateDir, "extensions", "demo", "src"), { recursive: true });
         await fs.mkdir(path.join(stateDir, "node_modules", "root-dep"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep"), {
+          recursive: true,
+        });
         await fs.writeFile(
           path.join(stateDir, "extensions", "demo", "openclaw.plugin.json"),
           '{"id":"demo"}\n',
@@ -527,8 +1025,23 @@ describe("createBackupArchive", () => {
           "utf8",
         );
         await fs.writeFile(
+          path.join(stateDir, "extensions", "demo", "node_modules", "dep", "cache.sqlite"),
+          "not a sqlite database",
+          "utf8",
+        );
+        await fs.writeFile(
           path.join(stateDir, "node_modules", "root-dep", "index.js"),
           "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "node_modules", "root-dep", "fixture.sqlite"),
+          "package-owned sqlite-named asset\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep", "fixture.sqlite"),
+          "managed-package sqlite-named asset\n",
           "utf8",
         );
         await fs.mkdir(outputDir, { recursive: true });
@@ -544,6 +1057,8 @@ describe("createBackupArchive", () => {
         expect(entrySuffixes).toContain("/state/extensions/demo/openclaw.plugin.json");
         expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
+        expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
+        expect(entrySuffixes).toContain("/state/npm/projects/demo/node_modules/dep/fixture.sqlite");
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
@@ -641,7 +1156,12 @@ describe("createBackupArchive", () => {
       },
       async (state) => {
         const outputDir = state.path("backups");
+        const emptyDbPath = state.statePath("plugins", "dedicated", "empty.sqlite");
+        const extractDir = state.path("extract");
+        await fs.mkdir(path.dirname(emptyDbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.writeFile(emptyDbPath, "");
         const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(state.stateDir);
 
         try {
@@ -655,6 +1175,24 @@ describe("createBackupArchive", () => {
             (entry) => entry.endsWith("/manifest.json") && !entry.includes("/payload/"),
           );
           expect(rootManifestEntries).toHaveLength(1);
+          const emptyDbEntries = entries.filter((entry) =>
+            entry.endsWith("/state/plugins/dedicated/empty.sqlite"),
+          );
+          expect(emptyDbEntries).toHaveLength(1);
+          expect(entries.some((entry) => entry.includes("/openclaw-state-db-"))).toBe(false);
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const sqlite = requireNodeSqlite();
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, emptyDbEntries[0]), {
+            readOnly: true,
+          });
+          try {
+            expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
+              integrity_check: "ok",
+            });
+          } finally {
+            archivedDb.close();
+          }
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });

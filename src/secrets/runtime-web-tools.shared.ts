@@ -1,3 +1,4 @@
+/** Shared helpers for web-tool secret metadata resolution. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -19,6 +20,9 @@ const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
 );
 
 type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
+/**
+ * Result of resolving one provider credential from config, SecretRef, env, or fallback.
+ */
 export type SecretResolutionResult<TSource extends string> = {
   value?: string;
   source: TSource;
@@ -28,6 +32,9 @@ export type SecretResolutionResult<TSource extends string> = {
   fallbackUsedAfterRefFailure: boolean;
 };
 
+/**
+ * Metadata fields shared by runtime web search and fetch provider selection.
+ */
 export type RuntimeWebProviderMetadataBase<TSource extends string> = {
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
@@ -36,6 +43,9 @@ export type RuntimeWebProviderMetadataBase<TSource extends string> = {
   diagnostics: RuntimeWebDiagnostic[];
 };
 
+/**
+ * Parameters shared by web search/fetch provider selection after provider surface discovery.
+ */
 export type RuntimeWebProviderSelectionParams<
   TProvider extends {
     id: string;
@@ -56,10 +66,14 @@ export type RuntimeWebProviderSelectionParams<
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
+  /** Allow keyless providers to be selected when no provider is explicitly configured. */
+  allowKeylessAutoSelect: boolean;
+  /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
   deferKeylessFallback: boolean;
   fallbackUsedCode: RuntimeWebWarningCode;
   noFallbackCode: RuntimeWebWarningCode;
   autoDetectSelectedCode: RuntimeWebWarningCode;
+  /** Reads the primary credential location for a provider from source config. */
   readConfiguredCredential: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -70,11 +84,13 @@ export type RuntimeWebProviderSelectionParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => { path: string; value: unknown } | undefined;
+  /** Resolves inline/env/SecretRef credentials and reports the winning source. */
   resolveSecretInput: (params: {
     value: unknown;
     path: string;
     envVars: string[];
   }) => Promise<SecretResolutionResult<TSource>>;
+  /** Writes the selected credential into the resolved runtime config snapshot. */
   setResolvedCredential: (params: {
     resolvedConfig: OpenClawConfig;
     provider: TProvider;
@@ -122,6 +138,9 @@ function pushInactiveProviderCredentialWarnings<
   }
 }
 
+/**
+ * Ensures a nested config object exists and returns it for mutation.
+ */
 export function ensureObject(
   target: Record<string, unknown>,
   key: string,
@@ -149,6 +168,9 @@ function normalizeKnownProvider(
   return undefined;
 }
 
+/**
+ * Returns whether a configured value or sibling ref field contains a SecretRef.
+ */
 export function hasConfiguredSecretRef(
   value: unknown,
   defaults: SecretDefaults | undefined,
@@ -188,6 +210,9 @@ function setResolvedCredentialPath(params: {
   }
 }
 
+/**
+ * Provider set plus effective config state for one runtime web tool surface.
+ */
 export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
   providers: TProvider[];
   configuredProvider?: string;
@@ -195,6 +220,9 @@ export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
   hasConfiguredSurface: boolean;
 };
 
+/**
+ * Parameters for resolving configured/available providers before credential selection.
+ */
 export type ResolveRuntimeWebProviderSurfaceParams<
   TProvider extends {
     id: string;
@@ -211,6 +239,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   invalidAutoDetectCode: RuntimeWebWarningCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
+  /** Bundled plugin id already known from caller context, avoiding duplicate manifest lookup. */
   configuredBundledPluginIdHint?: string;
   resolveProviders: (params: { configuredBundledPluginId?: string }) => Promise<TProvider[]>;
   sortProviders: (providers: TProvider[]) => TProvider[];
@@ -229,6 +258,9 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   normalizeConfiguredProviderAgainstActiveProviders?: boolean;
 };
 
+/**
+ * Resolves available providers, configured provider validity, and whether the surface is active.
+ */
 export async function resolveRuntimeWebProviderSurface<
   TProvider extends {
     id: string;
@@ -309,11 +341,17 @@ export async function resolveRuntimeWebProviderSurface<
     params.rawProvider,
     params.normalizeConfiguredProviderAgainstActiveProviders ? providers : allProviders,
   );
+  const invalidConfiguredProvider =
+    params.normalizeConfiguredProviderAgainstActiveProviders === true &&
+    Boolean(params.rawProvider) &&
+    !configuredProvider;
 
   if (params.rawProvider && !configuredProvider) {
     const diagnostic: RuntimeWebDiagnostic = {
       code: params.invalidAutoDetectCode,
-      message: `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
+      message: invalidConfiguredProvider
+        ? `${params.providerPath} is "${params.rawProvider}". No provider will be selected.`
+        : `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
       path: params.providerPath,
     };
     params.diagnostics.push(diagnostic);
@@ -329,11 +367,16 @@ export async function resolveRuntimeWebProviderSurface<
     providers,
     configuredProvider,
     enabled:
-      hasConfiguredSurface && (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
+      hasConfiguredSurface &&
+      !invalidConfiguredProvider &&
+      (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
     hasConfiguredSurface,
   };
 }
 
+/**
+ * Selects a configured or auto-detected provider and materializes its resolved credential.
+ */
 export async function resolveRuntimeWebProviderSelection<
   TProvider extends {
     id: string;
@@ -361,18 +404,15 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
-      if (provider.requiresCredential === false) {
+      const isKeyless = provider.requiresCredential === false;
+      if (isKeyless) {
+        if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
+          continue;
+        }
         if (params.deferKeylessFallback && !params.configuredProvider) {
           keylessFallbackProvider ||= provider;
           continue;
         }
-        selectedProvider = provider.id;
-        selectedResolution = {
-          source: "missing" as TSource,
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-        break;
       }
 
       const path = params.inactivePathsForProvider(provider)[0] ?? "";
@@ -419,6 +459,7 @@ export async function resolveRuntimeWebProviderSelection<
             envVars: getProviderEnvVars(provider),
           });
           if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
+            // Preserve transcript/config bytes for env-selected providers while materializing refs.
             setResolvedCredentialPath({
               resolvedConfig: params.resolvedConfig,
               path: fallback.path,
@@ -460,7 +501,37 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
 
+      if (
+        isKeyless &&
+        selectedCandidateResolution.secretRefConfigured &&
+        !selectedCandidateResolution.value
+      ) {
+        continue;
+      }
+
+      if (isKeyless && !params.configuredProvider && !selectedCandidateResolution.value) {
+        continue;
+      }
+
       if (params.configuredProvider) {
+        selectedProvider = provider.id;
+        selectedResolution = selectedCandidateResolution;
+        if (selectedCandidateResolution.value) {
+          setResolvedCredentialPath({
+            resolvedConfig: params.resolvedConfig,
+            path: selectedCandidatePath,
+            value: selectedCandidateResolution.value,
+          });
+          params.setResolvedCredential({
+            resolvedConfig: params.resolvedConfig,
+            provider,
+            value: selectedCandidateResolution.value,
+          });
+        }
+        break;
+      }
+
+      if (isKeyless) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
@@ -495,7 +566,7 @@ export async function resolveRuntimeWebProviderSelection<
       }
     }
 
-    if (!selectedProvider && keylessFallbackProvider) {
+    if (!selectedProvider && keylessFallbackProvider && params.allowKeylessAutoSelect) {
       selectedProvider = keylessFallbackProvider.id;
       selectedResolution = {
         source: "missing" as TSource,
@@ -536,7 +607,7 @@ export async function resolveRuntimeWebProviderSelection<
         );
         const selectedDetails =
           selectedProviderEntry?.requiresCredential === false
-            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}".`
             : `${params.scopePath} auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: params.autoDetectSelectedCode,

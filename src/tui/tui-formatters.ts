@@ -1,6 +1,8 @@
+// Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { formatTokenCount } from "../utils/usage-format.js";
@@ -17,6 +19,7 @@ const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
 const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
@@ -106,6 +109,12 @@ function isCopySensitiveToken(token: string): boolean {
 function normalizeLongTokenForDisplay(token: string): string {
   // Preserve copy-sensitive tokens exactly (paths/urls/file-like names).
   if (isCopySensitiveToken(token)) {
+    return token;
+  }
+  // CJK text naturally appears without spaces between words. Inserting spaces
+  // into long CJK runs makes assistant prose render with visible artifacts such
+  // as "苦难 者". Let the TUI renderer wrap these runs at grapheme boundaries.
+  if (CJK_SCRIPT_RE.test(token)) {
     return token;
   }
   // Pure symbol/punctuation runs (table borders made of `─`, `=`, `-`) carry
@@ -355,10 +364,36 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
   const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
-  if (visible) {
-    return visible;
+  const pairingQr = extractPairingQrTerminalText(record);
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  if (content) {
+    return content;
   }
   return formatAssistantErrorFromRecord(record);
+}
+
+function extractPairingQrTerminalText(record: Record<string, unknown>): string {
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const blockRecord = block as Record<string, unknown>;
+    if (
+      blockRecord.type === "openclaw_pairing_qr" &&
+      typeof blockRecord.terminalText === "string"
+    ) {
+      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -440,6 +475,15 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
+}
+
+export function formatRemoteConnectionHostFooter(connectionUrl: string): string | null {
+  try {
+    const hostname = new URL(connectionUrl.trim()).hostname.trim();
+    return hostname && !isLoopbackHost(hostname) ? `host ${hostname}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatGoalUsage(goal: SessionGoal): string | null {

@@ -1,10 +1,20 @@
+/**
+ * Tests OpenAI/Codex OAuth refresh fallback behavior.
+ * Covers CLI bootstrap and profile success state when refresh recovery has to
+ * fall back across auth sources.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
-import { captureEnv } from "../../test-utils/env.js";
-import { OAUTH_AGENT_ENV_KEYS, createExpiredOauthStore } from "./oauth-test-utils.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  readAuthProfileStoreForTest,
+} from "./oauth-test-utils.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -76,9 +86,7 @@ afterAll(() => {
 });
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
-  return JSON.parse(
-    await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-  ) as AuthProfileStore;
+  return readAuthProfileStoreForTest(agentDir);
 }
 
 function mockRotatedOpenAICodexRefresh() {
@@ -161,32 +169,41 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
     agentDir = path.join(caseRoot, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", caseRoot);
+    setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
   });
 
   afterEach(async () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    closeOpenClawAgentDatabasesForTest();
     envSnapshot.restore();
   });
 
   afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("falls back to cached access token when openai refresh fails on accountId extraction", async () => {
+  it("falls back to matching cached Codex CLI credentials when openai refresh fails", async () => {
     const profileId = "openai:default";
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
-      async (params?: { context?: unknown }) => params?.context as never,
-    );
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
         provider: "openai",
+        accountId: "acct-cached",
       }),
       agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "cached-access-token",
+      refresh: "cached-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-cached",
+    });
 
     const result = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(agentDir),

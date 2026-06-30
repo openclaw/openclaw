@@ -1,7 +1,9 @@
+/** Ensures the managed gateway is available before commands that need it run. */
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
 
 const daemonStatusModuleLoader = createLazyImportLoader(
   () => import("../cli/daemon-cli/status.gather.js"),
@@ -13,7 +15,8 @@ const daemonLifecycleModuleLoader = createLazyImportLoader(
   () => import("../cli/daemon-cli/lifecycle.js"),
 );
 
-export type GatewayReadinessResult =
+/** Result returned after checking, optionally installing, and optionally starting the gateway. */
+type GatewayReadinessResult =
   | {
       ready: true;
       status: DaemonStatus;
@@ -33,7 +36,8 @@ type GatewayReadinessDeps = {
   startGateway?: () => Promise<void>;
 };
 
-export type GatewayReadinessOptions = {
+/** Inputs controlling readiness checks, recovery prompts, and injectable test seams. */
+type GatewayReadinessOptions = {
   runtime: RuntimeEnv;
   operation: string;
   yes?: boolean;
@@ -80,25 +84,7 @@ function gatewayIsRunning(status: DaemonStatus): boolean {
 }
 
 function gatewayProbeSawGateway(status: DaemonStatus): boolean {
-  const rpc = status.rpc;
-  if (!rpc) {
-    return false;
-  }
-  if (rpc.ok) {
-    return true;
-  }
-  if (rpc.auth?.capability && rpc.auth.capability !== "unknown") {
-    return true;
-  }
-  if (rpc.auth?.role || (rpc.auth?.scopes?.length ?? 0) > 0) {
-    return true;
-  }
-  if (rpc.server?.version || rpc.server?.connId) {
-    return true;
-  }
-  return /\bgateway closed \(\d+\):|\bpairing required\b|\bdevice identity required\b/i.test(
-    rpc.error ?? "",
-  );
+  return Boolean(status.rpc && gatewayProbeResultSawGateway(status.rpc));
 }
 
 function gatewayLooksReachable(status: DaemonStatus): boolean {
@@ -109,6 +95,8 @@ function gatewayLooksReachable(status: DaemonStatus): boolean {
   if (port?.status !== "busy") {
     return false;
   }
+  // A busy port alone is not enough: pair it with probe evidence so another
+  // local service on the same port cannot satisfy gateway readiness.
   return gatewayProbeSawGateway(status);
 }
 
@@ -193,6 +181,7 @@ async function waitForGatewayReady(params: {
   return latest;
 }
 
+/** Checks readiness and, when approved, recovers by installing or starting the gateway. */
 export async function ensureGatewayReadyForOperation(
   options: GatewayReadinessOptions,
 ): Promise<GatewayReadinessResult> {

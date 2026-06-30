@@ -1,3 +1,4 @@
+// Universal CommonJS plugin-sdk stub for tests that only need import shape compatibility.
 "use strict";
 
 const stub = new Proxy(

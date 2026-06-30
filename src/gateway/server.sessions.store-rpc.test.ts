@@ -1,3 +1,6 @@
+/**
+ * Gateway session store RPC tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -7,6 +10,7 @@ import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
+  createLinearSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -40,14 +44,15 @@ test("lists and patches session store via sessions.* RPC", async () => {
 
   await fs.writeFile(
     path.join(dir, "sess-main.jsonl"),
-    `${Array.from({ length: 10 })
-      .map((_, idx) => JSON.stringify({ role: "user", content: `line ${idx}` }))
-      .join("\n")}\n`,
+    createLinearSessionTranscript(
+      "sess-main",
+      Array.from({ length: 10 }, (_, index) => `line ${index}`),
+    ),
     "utf-8",
   );
   await fs.writeFile(
     path.join(dir, "sess-group.jsonl"),
-    `${JSON.stringify({ role: "user", content: "group line 0" })}\n`,
+    createLinearSessionTranscript("sess-group", ["group line 0"]),
     "utf-8",
   );
 

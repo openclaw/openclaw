@@ -1,3 +1,4 @@
+// Provider Auth script supports OpenClaw repository automation.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +20,7 @@ export function parseBoolEnv(value: string | undefined): boolean {
 
 export function ensureValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (value == null || value === "") {
+  if (value == null || value === "" || value.startsWith("-")) {
     die(`${flag} requires a value`);
   }
   return value;
@@ -189,6 +190,9 @@ export function parsePlatformList(value: string): Set<Platform> {
   const result = new Set<Platform>();
   for (const entry of normalized.split(",")) {
     if (entry === "macos" || entry === "windows" || entry === "linux") {
+      if (result.has(entry)) {
+        die(`duplicate --platform entry: ${entry}`);
+      }
       result.add(entry);
     } else {
       die(`invalid --platform entry: ${entry}`);

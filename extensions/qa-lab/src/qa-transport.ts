@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements qa transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -55,7 +56,7 @@ type QaTransportFailureAssertionOptions = {
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-type QaTransportCommonCapabilities = {
+export type QaTransportCapabilities = {
   sendInboundMessage: QaTransportState["addInboundMessage"];
   injectOutboundMessage: QaTransportState["addOutboundMessage"];
   waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
@@ -161,8 +162,9 @@ export type QaTransportAdapter = {
   label: string;
   accountId: string;
   requiredPluginIds: readonly string[];
+  supportedActions: readonly QaTransportActionName[];
   state: QaTransportState;
-  capabilities: QaTransportCommonCapabilities;
+  capabilities: QaTransportCapabilities;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
   waitReady: (params: {
     gateway: QaTransportGatewayClient;
@@ -171,9 +173,11 @@ export type QaTransportAdapter = {
   }) => Promise<void>;
   buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+    to?: string;
     replyChannel: string;
     replyTo: string;
   };
+  createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
   handleAction: (params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
@@ -181,6 +185,7 @@ export type QaTransportAdapter = {
     accountId?: string | null;
   }) => Promise<unknown>;
   createReportNotes: (params: QaTransportReportParams) => string[];
+  cleanup?: () => Promise<void>;
 };
 
 export abstract class QaStateBackedTransportAdapter implements QaTransportAdapter {
@@ -188,20 +193,23 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   readonly label: string;
   readonly accountId: string;
   readonly requiredPluginIds: readonly string[];
+  readonly supportedActions: readonly QaTransportActionName[];
   readonly state: QaTransportState;
-  readonly capabilities: QaTransportCommonCapabilities;
+  readonly capabilities: QaTransportCapabilities;
 
   protected constructor(params: {
     id: string;
     label: string;
     accountId: string;
     requiredPluginIds: readonly string[];
+    supportedActions?: readonly QaTransportActionName[];
     state: QaTransportState;
   }) {
     this.id = params.id;
     this.label = params.label;
     this.accountId = params.accountId;
     this.requiredPluginIds = params.requiredPluginIds;
+    this.supportedActions = params.supportedActions ?? [];
     this.state = params.state;
     this.capabilities = {
       sendInboundMessage: this.state.addInboundMessage.bind(this.state),
@@ -229,6 +237,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }) => Promise<void>;
   abstract buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+    to?: string;
     replyChannel: string;
     replyTo: string;
   };

@@ -1,3 +1,4 @@
+// Telegram tests cover action runtime plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1700,6 +1701,25 @@ describe("handleTelegramAction", () => {
       cfg,
     );
     expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("allows inline buttons when legacy capabilities are empty", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Choose",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+        },
+      },
+      telegramConfig({ capabilities: [] }),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "empty legacy capabilities");
+    expect(call[0]).toBe("@testchannel");
+    expect(requireRecord(call[2], "empty legacy capabilities options").buttons).toEqual([
+      [{ text: "Ok", callback_data: "cmd:ok" }],
+    ]);
   });
 
   it("uses interactive button labels as fallback text when message text is omitted", async () => {

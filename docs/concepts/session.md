@@ -127,6 +127,14 @@ in `enforce` mode and applies cleanup during maintenance. Set
 
 For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+Gateway model-run probe sessions are short-lived by default. Matching rows with
+strict explicit keys like `agent:*:explicit:model-run-<uuid>` use fixed `24h`
+retention, but cleanup is pressure-gated: it only removes stale probe rows when
+session-entry maintenance/cap pressure is reached. When model-run cleanup runs,
+it runs before the broader stale-entry age cutoff and entry cap. Normal direct,
+group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit
+this 24h retention.
+
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.

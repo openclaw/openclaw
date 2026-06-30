@@ -1,3 +1,4 @@
+// Codex plugin module implements apply behavior.
 import path from "node:path";
 import {
   applyMigrationManualItem,
@@ -30,7 +31,6 @@ import {
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
-  isCodexPluginsMarketplaceName,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
@@ -355,13 +355,12 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
   return (
     Array.isArray(marketplaces) &&
-    marketplaces.some((marketplace) => {
-      if (!marketplace || typeof marketplace !== "object") {
-        return false;
-      }
-      const name = (marketplace as { name?: unknown }).name;
-      return name === CODEX_PLUGINS_MARKETPLACE_NAME;
-    })
+    marketplaces.some(
+      (marketplace) =>
+        marketplace &&
+        typeof marketplace === "object" &&
+        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
+    )
   );
 }
 
@@ -498,18 +497,18 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
   const pluginName = item.details?.pluginName;
   if (
     typeof configKey !== "string" ||
-    typeof marketplaceName !== "string" ||
-    !isCodexPluginsMarketplaceName(marketplaceName) ||
+    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
     typeof pluginName !== "string"
   ) {
     return undefined;
   }
   return {
     configKey,
-    marketplaceName,
+    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     pluginName,
     enabled: true,
     allowDestructiveActions: true,
+    destructiveApprovalMode: "allow",
   };
 }
 

@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for provider/model failover classification.
+ * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
+ */
 import { describe, expect, it } from "vitest";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
@@ -7,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   isNonProviderRuntimeCoordinationError,
+  isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -645,6 +650,40 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("uses structured OpenAI-compatible param detail for model-not-found 400s", () => {
+    const err = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      code: "400",
+      param: "Not supported model some-model-id",
+      error: {
+        code: "400",
+        message: "Param Incorrect",
+        param: "Not supported model some-model-id",
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("model_not_found");
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "400 Param Incorrect",
+      reason: "model_not_found",
+      status: 400,
+      code: "400",
+    });
+  });
+
+  it("keeps unsupported capability details classified as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 Param Incorrect",
+        error: {
+          message: "Param Incorrect",
+          param: "This model is not supported for tool calling.",
+        },
+      }),
+    ).toBe("format");
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -919,12 +958,36 @@ describe("failover-error", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
       model: "claude-opus-4-6",
+      authMode: "oauth",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-6");
+    expect(err?.authMode).toBe("oauth");
+  });
+
+  it("enriches an existing FailoverError with the active auth mode", () => {
+    const original = new FailoverError("credit balance too low", {
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      status: 402,
+    });
+
+    const err = coerceToFailoverError(original, { authMode: "token" });
+
+    expect(err).not.toBe(original);
+    expect(err).toMatchObject({
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      authMode: "token",
+      status: 402,
+    });
   });
 
   it("preserves raw provider error text for diagnostic logs", () => {
@@ -1163,6 +1226,7 @@ describe("failover-error", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       profileId: "profile-2",
+      authMode: "oauth",
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
@@ -1173,6 +1237,7 @@ describe("failover-error", () => {
     expect(description.provider).toBe("anthropic");
     expect(description.model).toBe("claude-opus-4-6");
     expect(description.profileId).toBe("profile-2");
+    expect(description.authMode).toBe("oauth");
     expect(description.sessionId).toBe("session:browser-abcd");
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
@@ -1223,6 +1288,20 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
     });
 
+    it("returns true for Codex missing tool-result local execution failures", () => {
+      const missingToolResultMessage =
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
+      expect(isNonProviderRuntimeCoordinationError(new Error(missingToolResultMessage))).toBe(true);
+      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          message: "codex app-server turn failed",
+          cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(true);
+      expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
+    });
+
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
@@ -1237,8 +1316,24 @@ describe("failover-error", () => {
           cause: makeSessionLockError(),
         }),
       ).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 503,
+          message: "upstream overloaded",
+          cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+    });
+
+    it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
+      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          new Error("provider returned diagnostic text: reason=missing_tool_result"),
+        ),
+      ).toBe(false);
     });
   });
 });
@@ -1309,5 +1404,36 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
     expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
     expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
+  });
+});
+
+describe("isSignalTimeoutReason", () => {
+  it("returns false for plain AbortController.abort() DOMException (client disconnect)", () => {
+    // watchClientDisconnect calls abort() with no args, producing AbortError.
+    // This must not be classified as a run timeout (#90764).
+    const err = new DOMException("This operation was aborted", "AbortError");
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns false for AbortError whose message matches ABORT_TIMEOUT_RE", () => {
+    // Old isTimeoutError returned true here via ABORT_TIMEOUT_RE (/request.*aborted/i).
+    const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns true for AbortSignal.timeout() DOMException", () => {
+    const err = new DOMException("signal timed out", "TimeoutError");
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns true for makeTimeoutAbortReason()-style Error", () => {
+    // makeTimeoutAbortReason() in attempt.ts: Error("request timed out", name="TimeoutError")
+    const err = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns false for null and undefined", () => {
+    expect(isSignalTimeoutReason(null)).toBe(false);
+    expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });

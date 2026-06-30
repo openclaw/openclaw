@@ -1,3 +1,4 @@
+// Codex tests cover request plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -109,6 +110,44 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
+  });
+
+  it("allows config value writes in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const params = {
+      keyPath: 'apps."google-calendar-app".tools',
+      value: null,
+      mergeStrategy: "replace",
+    };
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "config/value/write",
+        requestParams: params,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(request).toHaveBeenCalledWith("config/value/write", params, { timeoutMs: 60_000 });
+  });
+
+  it("allows config reads in sandboxed sessions", async () => {
+    const request = vi.fn(async () => ({ config: { apps: { apps: {} } } }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const params = { includeLayers: false };
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "config/read",
+        requestParams: params,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ config: { apps: { apps: {} } } });
+
+    expect(request).toHaveBeenCalledWith("config/read", params, { timeoutMs: 60_000 });
   });
 
   it("allows sandbox-pinned thread starts in sandboxed sessions", async () => {

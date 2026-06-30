@@ -1,3 +1,8 @@
+/**
+ * Direct text/media outbound adapter helpers.
+ *
+ * Builds lightweight SDK-backed send adapters with chunking, sanitization, and media limits.
+ */
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -45,6 +50,9 @@ export {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 
+/**
+ * Resolves an account-scoped channel media byte limit.
+ */
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -57,6 +65,9 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
+/**
+ * Builds a media byte-limit resolver for channels with `mediaMaxMb` config.
+ */
 export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
@@ -73,6 +84,9 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
     });
 }
 
+/**
+ * Creates a channel outbound adapter backed by direct text/media send functions.
+ */
 export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,
@@ -155,6 +169,8 @@ export function createDirectTextMediaOutbound<
         to,
         text,
         mediaUrl,
+        // Older callers pass local media access as split roots/readFile fields;
+        // normalize them into the newer mediaAccess object before option building.
         mediaAccess:
           mediaAccess ??
           (mediaLocalRoots || mediaReadFile

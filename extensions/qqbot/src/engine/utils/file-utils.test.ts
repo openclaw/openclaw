@@ -1,7 +1,20 @@
+// Qqbot tests cover file utils plugin behavior.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+async function createSymlinkedFile(targetPath: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.promises.writeFile(targetPath, "image-bytes");
+    await fs.promises.symlink(targetPath, linkPath, "file");
+    return true;
+  } catch {
+    await fs.promises.rm(linkPath, { force: true });
+    await fs.promises.rm(targetPath, { force: true });
+    return false;
+  }
+}
 
 const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
@@ -96,11 +109,12 @@ describe("qqbot file-utils downloadFile", () => {
     expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform === "win32")("rejects symlinked local media helpers", async () => {
+  it("rejects symlinked local media helpers", async ({ skip }) => {
     const targetPath = path.join(tempDir, "target.png");
     const linkPath = path.join(tempDir, "link.png");
-    await fs.promises.writeFile(targetPath, "image-bytes");
-    await fs.promises.symlink(targetPath, linkPath);
+    if (!(await createSymlinkedFile(targetPath, linkPath))) {
+      skip("file symlinks are unavailable on this host");
+    }
 
     expect(checkFileSize(linkPath).ok).toBe(false);
     await expect(readFileAsync(linkPath)).rejects.toThrow(/symbolic link|symlink|regular file/i);

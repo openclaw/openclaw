@@ -1,9 +1,13 @@
+// Readiness checker tests cover startup grace, channel health, and stale socket decisions.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "../server-channels.js";
 import { createReadinessChecker } from "./readiness.js";
 
+/**
+ * Readiness checker tests for startup grace, channel health, and stale sockets.
+ */
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
 
@@ -64,6 +68,7 @@ function createReadinessHarness(params: {
   accounts?: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
+  getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
@@ -79,6 +84,7 @@ function createReadinessHarness(params: {
       startedAt,
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
+      getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
@@ -169,6 +175,35 @@ describe("createReadinessChecker", () => {
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
       startupPending = false;
+      expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports not ready while the gateway command queue is draining for restart", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        getGatewayDraining: () => true,
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not cache gateway-draining readiness", () => {
+    withReadinessClock(() => {
+      let gatewayDraining = true;
+      const { manager, readiness } = createReadinessHarness({
+        getGatewayDraining: () => gatewayDraining,
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      gatewayDraining = false;
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });

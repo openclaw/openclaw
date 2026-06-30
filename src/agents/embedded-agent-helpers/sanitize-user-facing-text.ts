@@ -1,3 +1,10 @@
+/**
+ * Converts raw provider/transport errors into concise user-facing copy.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
@@ -11,10 +18,7 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../packages/normalization-core/src/string-coerce.js";
-import {
+  stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
@@ -30,11 +34,31 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
-export function formatBillingErrorMessage(provider?: string, model?: string): string {
+/** Format the billing failure copy with optional provider/model context.
+ *
+ * When `authMode` is `"oauth"` or `"token"` (i.e. Anthropic Max or a static
+ * bearer-token subscription) the user has no API key to top up, so we emit
+ * neutral copy that directs them to check their account instead (#80877).
+ */
+export function formatBillingErrorMessage(
+  provider?: string,
+  model?: string,
+  authMode?: string,
+): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+
+  // OAuth and static-token credentials do not have an API key to top up.
+  const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
+  if (isSubscriptionAuth) {
+    if (providerLabel) {
+      return `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`;
+    }
+    return "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
+  }
+
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
@@ -414,8 +438,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutInternalTraceLines = errorContext
+    ? stripAssistantInternalTraceLines(withoutPlaceholder)
+    : withoutPlaceholder;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
-    stripLegacyBracketToolCallBlocks(withoutPlaceholder),
+    stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {

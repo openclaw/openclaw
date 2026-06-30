@@ -1,9 +1,16 @@
+/**
+ * Provider authentication recovery hint builder.
+ *
+ * Prefers plugin manifest login commands, then falls back to configure/env-var guidance.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 
+// Builds short auth recovery hints for provider errors. Manifest auth choices
+// can supply a provider-specific login command before generic configure/env help.
 function normalizeProviderIdForAuth(
   providerId: string,
   aliases: Readonly<Record<string, string>>,
@@ -41,6 +48,7 @@ function resolveProviderAuthLoginCommand(params: {
   return formatCliCommand(`openclaw models auth login --provider ${providerId}`);
 }
 
+/** Build a concise user-facing hint for recovering provider authentication. */
 export function buildProviderAuthRecoveryHint(params: {
   provider: string;
   config?: OpenClawConfig;

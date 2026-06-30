@@ -1,9 +1,13 @@
+// Gateway HTTP listener tests cover retry behavior for lock contention and listen failures.
 import { EventEmitter } from "node:events";
 import type { Server as HttpServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { listenGatewayHttpServer } from "./http-listen.js";
 
+/**
+ * Gateway HTTP listener retry tests for lock contention and listen failures.
+ */
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
 vi.mock("../../utils.js", () => ({

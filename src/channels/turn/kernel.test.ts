@@ -1,3 +1,4 @@
+// Turn kernel tests cover channel turn orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
@@ -803,6 +804,108 @@ describe("channel turn kernel", () => {
     expect(logRecord?.trace?.traceId).toBe(traceId);
   });
 
+  it("logs a warning when a visible prepared dispatch queues no payloads", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-zero",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.queuedFinal).toBe(false);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-zero",
+        reason: "zero-count-visible-dispatch",
+      }),
+    ]);
+  });
+
+  it("does not warn for observed-path deliveries with zero queued counts", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Observed-delivery path: queuedFinal false and all counts zero, but the reply was
+    // delivered via observedReplyDelivery and must not trip the silent-drop sentinel.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-observed",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(true);
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
+    ]);
+  });
+
+  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: false,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-empty",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-empty",
+        reason: "zero-count-visible-dispatch",
+      }),
+    ]);
+  });
+
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
@@ -962,6 +1065,47 @@ describe("channel turn kernel", () => {
       { stage: "record", event: "start" },
       { stage: "record", event: "error" },
     ]);
+  });
+
+  it("runs afterRecord only after session recording succeeds and before dispatch", async () => {
+    const events: string[] = [];
+    await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(events),
+      afterRecord: vi.fn(async () => {
+        events.push("afterRecord");
+      }),
+      runDispatch: vi.fn(async () => {
+        events.push("dispatch");
+        return { visibleReplySent: true };
+      }),
+    });
+
+    expect(events).toEqual(["record", "afterRecord", "dispatch"]);
+  });
+
+  it("does not run afterRecord when session recording fails", async () => {
+    const recordError = new Error("session store failed");
+    const afterRecord = vi.fn();
+
+    await expect(
+      runPreparedChannelTurn({
+        channel: "test",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: vi.fn(async () => {
+          throw recordError;
+        }) as unknown as RecordInboundSession,
+        afterRecord,
+        runDispatch: vi.fn(),
+      }),
+    ).rejects.toThrow(recordError);
+
+    expect(afterRecord).not.toHaveBeenCalled();
   });
 
   it("normalizes visible dispatch checks", () => {

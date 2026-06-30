@@ -1,3 +1,4 @@
+/** Config preflight for doctor: legacy config/state migration, recovery, and snapshot loading. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -7,20 +8,28 @@ import {
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import type { LegacyConfigIssue } from "../config/types.js";
+import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
+import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
 type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
+type DoctorCronModule = typeof import("./doctor/cron/index.js");
 
 let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
+let doctorCronPromise: Promise<DoctorCronModule> | null = null;
 
 function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
   doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
   return doctorStateMigrationsPromise;
+}
+
+function loadDoctorCron(): Promise<DoctorCronModule> {
+  doctorCronPromise ??= import("./doctor/cron/index.js");
+  return doctorCronPromise;
 }
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
@@ -92,6 +101,7 @@ function addDoctorLegacyIssues(
   return { ...snapshot, legacyIssues };
 }
 
+/** Returns true during updater-managed config rewrites where plugin validation may be stale. */
 export function shouldSkipPluginValidationForDoctorConfigPreflight(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -107,6 +117,12 @@ function noteStateMigrationResult(result: { changes: string[]; warnings: string[
   }
 }
 
+/**
+ * Runs early doctor config checks before the main config repair flow.
+ *
+ * It may migrate legacy state/config paths, recover corrupt target config when requested, and
+ * returns the best-effort config snapshot used by later doctor checks.
+ */
 export async function runDoctorConfigPreflight(
   options: {
     migrateState?: boolean;
@@ -114,10 +130,19 @@ export async function runDoctorConfigPreflight(
     repairPrefixedConfig?: boolean;
     recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
+    beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
-  if (options.migrateState !== false) {
-    const { autoMigrateLegacyStateDir } = await loadDoctorStateMigrations();
+  const stateMigrations =
+    options.migrateState !== false ? await loadDoctorStateMigrations() : undefined;
+  // The gateway uses this last-moment guard to ensure its prepared config did not change before
+  // any automatic migration mutates state. A rejected guard skips every state migration stage.
+  const stateMigrationsAllowed =
+    stateMigrations === undefined ||
+    options.beforeStateMigrations === undefined ||
+    (await options.beforeStateMigrations());
+  if (stateMigrations && stateMigrationsAllowed) {
+    const { autoMigrateLegacyStateDir } = stateMigrations;
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
     noteStateMigrationResult(stateDirResult);
   }
@@ -165,17 +190,47 @@ export async function runDoctorConfigPreflight(
   }
 
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-  if (options.migrateState !== false) {
-    const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
-      await loadDoctorStateMigrations();
-    const stateResult = snapshot.valid
-      ? await autoMigrateLegacyState({
-          cfg: baseConfig,
-          env: process.env,
-          recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-        })
-      : await autoMigrateLegacyTaskStateSidecars({ env: process.env });
-    noteStateMigrationResult(stateResult);
+  const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+  const configStateMigrationsAllowed =
+    stateMigrations !== undefined &&
+    stateMigrationsAllowed &&
+    (options.beforeStateMigrations === undefined ||
+      (await options.beforeStateMigrations(snapshot)));
+  if (stateMigrations && configStateMigrationsAllowed) {
+    const {
+      autoMigrateLegacyState,
+      autoMigrateLegacyPluginDoctorState,
+      autoMigrateLegacyTaskStateSidecars,
+    } = stateMigrations;
+    if (stateMigrationInput) {
+      if (stateMigrationInput.cfg) {
+        const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+        const cronResult = await repairLegacyCronStoreWithoutPrompt({
+          cfg: stateMigrationInput.cfg,
+        });
+        noteStateMigrationResult(cronResult);
+        noteStateMigrationResult(
+          await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+          }),
+        );
+      } else if (stateMigrationInput.pluginDoctorConfig) {
+        noteStateMigrationResult(
+          await autoMigrateLegacyPluginDoctorState({
+            config: stateMigrationInput.pluginDoctorConfig,
+            env: process.env,
+          }),
+        );
+        noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
+      }
+    } else {
+      noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
+    }
   }
 
   return {

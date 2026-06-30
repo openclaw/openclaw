@@ -1,3 +1,4 @@
+// Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 /**
  * Feishu app registration via OAuth device-code flow.
@@ -265,7 +266,7 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
-  const output = await renderQrTerminal(url);
+  const output = await renderQrTerminal(url, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 

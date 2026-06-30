@@ -1,6 +1,8 @@
+// Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 
+/** User or automatic model/provider override selection for a session entry. */
 export type ModelOverrideSelection = {
   provider: string;
   model: string;
@@ -20,6 +22,7 @@ function clearFallbackOrigin(entry: SessionEntry): boolean {
   return updated;
 }
 
+/** Applies a model/auth-profile override to a session entry and clears stale runtime fields. */
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
@@ -90,6 +93,14 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // When switching back to the default model without override fields to delete
+  // (e.g. model comes from steering/fallback runtime fields), the isDefault
+  // branch at line 42 won't set selectionUpdated. Mark it here so that
+  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  if (selection.isDefault && runtimePresent && !runtimeAligned) {
+    selectionUpdated = true;
+  }
+
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
@@ -158,6 +169,7 @@ function wrappedOverrideModel(provider: string, model: string): string {
   return `${provider}/${model}`;
 }
 
+/** Repairs overrides where legacy provider/model fields were stored as provider/model strings. */
 export function repairProviderWrappedModelOverride(params: {
   entry: SessionEntry;
   defaultProvider: string;

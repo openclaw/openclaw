@@ -1,3 +1,8 @@
+/**
+ * Lightweight shell parsing helpers for exec display summaries.
+ *
+ * Handles common quoting, wrapper, and preamble shapes for UI labels without validating shell syntax.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type PreambleResult = {
@@ -5,6 +10,7 @@ type PreambleResult = {
   chdirPath?: string;
 };
 
+/** Removes matching outer single or double quotes from a display token. */
 export function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -20,6 +26,7 @@ export function stripOuterQuotes(value: string | undefined): string | undefined 
   return trimmed;
 }
 
+/** Splits a command string into shell-ish words while respecting simple quotes and escapes. */
 export function splitShellWords(input: string | undefined, maxWords = 48): string[] {
   if (!input) {
     return [];
@@ -76,6 +83,7 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
   return words;
 }
 
+/** Returns a normalized basename for a command token. */
 export function binaryName(token: string | undefined): string | undefined {
   if (!token) {
     return undefined;
@@ -85,6 +93,7 @@ export function binaryName(token: string | undefined): string | undefined {
   return normalizeLowercaseStringOrEmpty(segment);
 }
 
+/** Reads the value for any matching short or long option name. */
 export function optionValue(words: string[], names: string[]): string | undefined {
   const lookup = new Set(names);
 
@@ -112,6 +121,7 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
+/** Returns positional args after skipping options and configured option values. */
 export function positionalArgs(
   words: string[],
   from = 1,
@@ -159,6 +169,7 @@ export function positionalArgs(
   return args;
 }
 
+/** Returns the first positional arg after skipping options and configured option values. */
 export function firstPositional(
   words: string[],
   from = 1,
@@ -167,6 +178,7 @@ export function firstPositional(
   return positionalArgs(words, from, optionsWithValue)[0];
 }
 
+/** Removes leading `env` wrappers and VAR=value assignments from parsed words. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
     return words;
@@ -199,6 +211,7 @@ export function trimLeadingEnv(words: string[]): string[] {
   return words.slice(index);
 }
 
+/** Unwraps common `sh -c`/`bash -lc` command wrappers for display parsing. */
 export function unwrapShellWrapper(command: string): string {
   const words = splitShellWords(command, 10);
   if (words.length < 3) {
@@ -261,6 +274,7 @@ function scanTopLevelChars(
   }
 }
 
+/** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -283,6 +297,7 @@ export function splitTopLevelStages(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/** Splits a command on top-level single pipes without splitting `||`. */
 export function splitTopLevelPipes(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -317,12 +332,15 @@ function isPopdCommand(head: string): boolean {
   return binaryName(splitShellWords(head, 2)[0]) === "popd";
 }
 
+/** Removes leading setup commands such as exports and cwd changes from display summaries. */
 export function stripShellPreamble(command: string): PreambleResult {
   let rest = command.trim();
   let chdirPath: string | undefined;
 
   for (let i = 0; i < 4; i += 1) {
     let first: { index: number; length: number; isOr?: boolean } | undefined;
+    // Only scan top-level separators so quoted strings and nested shell fragments stay intact in
+    // the command fragment that display code will summarize.
     scanTopLevelChars(rest, (char, idx) => {
       if (char === "&" && rest[idx + 1] === "&") {
         first = { index: idx, length: 2 };

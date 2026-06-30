@@ -1,3 +1,6 @@
+// Lazy attachment cache resolves local/remote media bytes and temporary files
+// under local-root and SSRF policy.
+import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,6 +8,7 @@ import {
   mergeInboundPathRoots,
 } from "@openclaw/media-core/inbound-path-policy";
 import { detectMime } from "@openclaw/media-core/mime";
+import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -15,9 +19,10 @@ import {
   MediaFetchError,
 } from "../media/fetch.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -66,10 +71,38 @@ function concreteMime(mime: string | undefined): string | undefined {
 }
 
 function getDefaultLocalPathRoots(): readonly string[] {
+  // Default local roots are process-stable inbound attachment locations; merge
+  // once and reuse for cache instances.
   defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
 }
 
+function resolveUsableLocalCandidate(
+  candidate: string,
+  roots: readonly string[],
+): string | undefined {
+  try {
+    const realPath = realpathSync(candidate);
+    const canonicalRoots = roots.map((root) => {
+      if (root.includes("*")) {
+        return root;
+      }
+      try {
+        return realpathSync(root);
+      } catch {
+        return root;
+      }
+    });
+    return statSync(realPath).isFile() &&
+      isInboundPathAllowed({ filePath: realPath, roots: canonicalRoots })
+      ? candidate
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Local/remote access policy used by the lazy media-understanding attachment cache. */
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
   includeDefaultLocalPathRoots?: boolean;
@@ -77,6 +110,12 @@ export type MediaAttachmentCacheOptions = {
   workspaceDir?: string;
 };
 
+/**
+ * Lazy resolver for media-understanding attachments.
+ *
+ * The cache prefers allowed local paths, falls back to remote URLs when a local path is blocked
+ * or missing, and owns any temporary files created for providers that require a filesystem path.
+ */
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly attachments: MediaAttachment[];
@@ -98,6 +137,7 @@ export class MediaAttachmentCache {
     }
   }
 
+  /** Returns attachment bytes, MIME hint, filename, and size within the requested byte limit. */
   async getBuffer(params: {
     attachmentIndex: number;
     maxBytes: number;
@@ -210,6 +250,7 @@ export class MediaAttachmentCache {
     }
   }
 
+  /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
   async getPath(params: {
     attachmentIndex: number;
     maxBytes?: number;
@@ -271,6 +312,7 @@ export class MediaAttachmentCache {
     return { path: tmpPath, cleanup: entry.tempCleanup };
   }
 
+  /** Removes temporary files created by `getPath`; callers should run this after provider use. */
   async cleanup(): Promise<void> {
     const cleanups: Promise<void>[] = [];
     for (const entry of this.entries.values()) {
@@ -286,7 +328,7 @@ export class MediaAttachmentCache {
     const existing = this.entries.get(attachmentIndex);
     if (existing) {
       if (!existing.resolvedPath) {
-        existing.resolvedPath = this.resolveLocalPath(existing.attachment);
+        existing.resolvedPath = await this.resolveLocalPath(existing.attachment);
       }
       return existing;
     }
@@ -295,18 +337,40 @@ export class MediaAttachmentCache {
     };
     const entry: AttachmentCacheEntry = {
       attachment,
-      resolvedPath: this.resolveLocalPath(attachment),
+      resolvedPath: await this.resolveLocalPath(attachment),
     };
     this.entries.set(attachmentIndex, entry);
     return entry;
   }
 
-  private resolveLocalPath(attachment: MediaAttachment): string | undefined {
+  private async resolveLocalPath(attachment: MediaAttachment): Promise<string | undefined> {
     const rawPath = normalizeAttachmentPath(attachment.path);
     if (!rawPath) {
       return undefined;
     }
-    return this.workspaceDir ? path.resolve(this.workspaceDir, rawPath) : path.resolve(rawPath);
+    const inboundReference = await resolveInboundMediaReference(rawPath).catch(() => null);
+    if (inboundReference) {
+      return inboundReference.physicalPath;
+    }
+    if (this.workspaceDir) {
+      return path.resolve(this.workspaceDir, rawPath);
+    }
+    if (!path.isAbsolute(rawPath)) {
+      const cwdCandidate = path.resolve(rawPath);
+      const usableCwdCandidate = resolveUsableLocalCandidate(cwdCandidate, this.localPathRoots);
+      if (usableCwdCandidate) {
+        return usableCwdCandidate;
+      }
+      const stateCandidate = path.resolve(resolveStateDir(), rawPath);
+      const usableStateCandidate = resolveUsableLocalCandidate(
+        stateCandidate,
+        this.localPathRoots,
+      );
+      if (usableStateCandidate) {
+        return usableStateCandidate;
+      }
+    }
+    return path.resolve(rawPath);
   }
 
   private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {
@@ -314,16 +378,19 @@ export class MediaAttachmentCache {
       return undefined;
     }
     if (!isInboundPathAllowed({ filePath: entry.resolvedPath, roots: this.localPathRoots })) {
-      entry.resolvedPath = undefined;
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Blocked attachment path outside allowed roots: ${entry.attachment.path ?? entry.attachment.url ?? "(unknown)"}`,
+      const canonicalRoots = await this.getCanonicalLocalPathRoots();
+      if (!isInboundPathAllowed({ filePath: entry.resolvedPath, roots: canonicalRoots })) {
+        entry.resolvedPath = undefined;
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Blocked attachment path outside allowed roots: ${entry.attachment.path ?? entry.attachment.url ?? "(unknown)"}`,
+          );
+        }
+        throw new MediaUnderstandingSkipError(
+          "blocked",
+          `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
         );
       }
-      throw new MediaUnderstandingSkipError(
-        "blocked",
-        `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
-      );
     }
     if (entry.statSize !== undefined) {
       return entry.statSize;

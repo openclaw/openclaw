@@ -1,7 +1,9 @@
+/** Session-manager scoped runtime state for context-pruning extension settings. */
 import { createSessionManagerRuntimeRegistry } from "../session-manager-runtime-registry.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 
-export type ContextPruningRuntimeValue = {
+/** Runtime inputs consumed by the context-pruning extension. */
+type ContextPruningRuntimeValue = {
   settings: EffectiveContextPruningSettings;
   contextWindowTokens?: number | null;
   isToolPrunable: (toolName: string) => boolean;

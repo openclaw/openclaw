@@ -1,3 +1,4 @@
+// Coverage for waiting on completion-required async tool tasks.
 import { describe, expect, it } from "vitest";
 import {
   completeTaskRunByRunId,
@@ -6,11 +7,14 @@ import {
 import { resetTaskRegistryForTests, type TaskRecord } from "../../../tasks/runtime-internal.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
+  shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
 } from "./attempt.async-tasks.js";
 
 function requireCreatedTask(task: TaskRecord | null): TaskRecord {
+  // Task registry creation returns null for invalid task shapes; tests require
+  // a concrete active record before waiting.
   if (!task) {
     throw new Error("expected test task to be created");
   }
@@ -19,6 +23,8 @@ function requireCreatedTask(task: TaskRecord | null): TaskRecord {
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
   it("waits for async task ids discovered during the attempt", async () => {
+    // Tool metadata is the primary source for async task ids produced during
+    // the current attempt.
     resetTaskRegistryForTests();
     const task = requireCreatedTask(
       createRunningTaskRun({
@@ -92,7 +98,49 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     ).toBe(true);
   });
 
+  it("skips media task waiting after sessions_yield pauses the attempt", () => {
+    resetTaskRegistryForTests();
+    const sessionKey = "agent:main:cron:daily-media:run:run-123";
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "image_generation",
+      sourceId: "image_generate:openai",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      runId: "tool:image_generate:run-123",
+      task: "daily image",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 1,
+      lastEventAt: 1,
+    });
+
+    expect(
+      shouldWaitForCompletionRequiredAsyncTasks({
+        sessionKey,
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskRunId: "tool:image_generate:run-123",
+          },
+        ],
+        yieldDetected: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForCompletionRequiredAsyncTasks({
+        sessionKey,
+        toolMetas: [],
+        yieldDetected: false,
+      }),
+    ).toBe(true);
+  });
+
   it("waits for active cron media tasks from the task registry", async () => {
+    // Cron media tools may start tasks before metadata is flushed, so the
+    // registry is also consulted by session key.
     resetTaskRegistryForTests();
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     createRunningTaskRun({

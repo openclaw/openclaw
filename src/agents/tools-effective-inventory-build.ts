@@ -1,21 +1,26 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+/**
+ * Builds the operator-facing effective inventory for the current tool surface:
+ * runtime-compatible tools plus warnings for tools quarantined by schema
+ * policy, with plugin/channel ownership preserved.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
-import { summarizeToolDescriptionText } from "./tool-description-summary.js";
-import { resolveToolDisplay } from "./tool-display.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
-import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
+import {
+  disambiguateEffectiveToolLabels,
+  resolveEffectiveToolLabel,
+  resolveEffectiveToolRawDescription,
+  summarizeEffectiveToolDescription,
+} from "./tools-effective-inventory-shared.js";
 import type {
   EffectiveToolInventoryEntry,
   EffectiveToolInventoryNotice,
@@ -23,28 +28,8 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
-  if (
-    rawLabel &&
-    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
-  ) {
-    return rawLabel;
-  }
-  return resolveToolDisplay({ name: tool.name }).title;
-}
-
-function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
-}
-
-function summarizeToolDescription(tool: AnyAgentTool): string {
-  return summarizeToolDescriptionText({
-    rawDescription: resolveRawToolDescription(tool),
-    displaySummary: tool.displaySummary,
-  });
-}
-
+// Tool metadata may be attached to the normalized tool or the raw fallback
+// before schema projection. Check both so owner attribution survives cloning.
 function resolveEffectiveToolSource(
   tool: AnyAgentTool,
   fallbackTool?: AnyAgentTool,
@@ -70,6 +55,8 @@ function resolveEffectiveToolSource(
   return { source: "core" };
 }
 
+// Unsupported-schema notices need owner context when available so operators know
+// whether to disable a plugin/channel or fix core tool definitions.
 function buildUnsupportedToolSchemaNotice(params: {
   diagnostic: RuntimeToolSchemaDiagnostic;
   tool: AnyAgentTool | undefined;
@@ -118,6 +105,8 @@ function readMatchingTool(
   }
 }
 
+// Raw tool arrays can contain getters/proxies from plugin boundaries. Read
+// defensively; projection diagnostics handle the exact unreadable entry later.
 function buildReadableRawToolsByName(
   tools: readonly AnyAgentTool[],
 ): ReadonlyMap<string, AnyAgentTool> {
@@ -139,20 +128,7 @@ function buildReadableRawToolsByName(
   return toolsByName;
 }
 
-function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
-  const counts = new Map<string, number>();
-  for (const entry of entries) {
-    counts.set(entry.label, (counts.get(entry.label) ?? 0) + 1);
-  }
-  return entries.map((entry) => {
-    if ((counts.get(entry.label) ?? 0) < 2) {
-      return entry;
-    }
-    const suffix = entry.pluginId ?? entry.channelId ?? entry.id;
-    return { ...entry, label: `${entry.label} (${suffix})` };
-  });
-}
-
+/** Builds effective inventory entries from already runtime-compatible tools. */
 export function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
@@ -166,7 +142,7 @@ export function buildEffectiveToolInventoryEntries(
     ]),
   );
 
-  return disambiguateLabels(
+  return disambiguateEffectiveToolLabels(
     tools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
@@ -179,11 +155,12 @@ export function buildEffectiveToolInventoryEntries(
             label:
               normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
             description:
-              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+              normalizeOptionalString(metadata?.description) ??
+              summarizeEffectiveToolDescription(tool),
             rawDescription:
               normalizeOptionalString(metadata?.description) ??
-              resolveRawToolDescription(tool) ??
-              summarizeToolDescription(tool),
+              resolveEffectiveToolRawDescription(tool) ??
+              summarizeEffectiveToolDescription(tool),
             ...(metadata?.risk ? { risk: metadata.risk } : {}),
             ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
@@ -191,9 +168,11 @@ export function buildEffectiveToolInventoryEntries(
         ) satisfies EffectiveToolInventoryEntry;
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
+    (entry) => entry.pluginId ?? entry.channelId ?? entry.id,
   );
 }
 
+/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
 export function buildRuntimeCompatibleToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;
@@ -235,5 +214,3 @@ export function buildRuntimeCompatibleToolInventory(params: {
     }),
   };
 }
-
-export { buildEffectiveToolInventoryGroups };

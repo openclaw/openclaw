@@ -1,3 +1,4 @@
+// Feishu tests cover streaming card plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -180,7 +181,7 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " small",
+      content: "hello small",
       sequence: 2,
       uuid: "s_card_1_2",
     });
@@ -212,13 +213,13 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "!",
+      content: "hello!",
       sequence: 2,
       uuid: "s_card_2_2",
     });
   });
 
-  it("retries unsent suffix content after a failed delta update", async () => {
+  it("retries cumulative content after a failed streaming update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);
     const updateBodies: string[] = [];
@@ -245,18 +246,18 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
       uuid: "s_card_3_2",
     });
     expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: " world!",
+      content: "hello world!",
       sequence: 3,
       uuid: "s_card_3_3",
     });
   });
 
-  it("retries unsent suffix content after a non-OK delta update", async () => {
+  it("retries cumulative content after a non-OK streaming update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_500);
     const updateBodies: string[] = [];
@@ -283,12 +284,12 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
       uuid: "s_card_5_2",
     });
     expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: " world!",
+      content: "hello world!",
       sequence: 3,
       uuid: "s_card_5_3",
     });
@@ -338,6 +339,72 @@ describe("FeishuStreamingSession", () => {
       sequence: 2,
       uuid: "r_card_4_2",
     });
+  });
+
+  it("drops a surrogate pair whole when truncating the closeout summary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_200);
+    // 46 'a' + 😀 (U+1F600, UTF-16 indices 46-47) + 20 'b' = 68-char string.
+    // truncateSummary's default max is 50, so it slices at max-3 = 47, which
+    // lands between the high and low surrogate halves of the emoji.
+    const finalText = `${"a".repeat(46)}\u{1F600}${"b".repeat(20)}`;
+    const settingsBodies: string[] = [];
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url, init }: { url: string; init?: { body?: string } }) => {
+        if (url.includes("/auth/")) {
+          return {
+            response: {
+              ok: true,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: "token",
+                expire: 7200,
+              }),
+            },
+            release,
+          };
+        }
+        if (url.includes("/settings")) {
+          settingsBodies.push(init?.body ?? "");
+        }
+        return {
+          response: { ok: true, status: 200, json: async () => ({ code: 0, msg: "ok" }) },
+          release,
+        };
+      },
+    );
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_summary_surrogate",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_surrogate",
+        messageId: "om_surrogate",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await session.close(finalText);
+
+    expect(settingsBodies).toHaveLength(1);
+    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
+    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    const summary = settings.config?.summary?.content ?? "";
+    // The half-emoji must be dropped whole: 46 a's + "...", and the summary
+    // must NOT end with a lone high surrogate (which Feishu renders as �).
+    expect(summary).toBe(`${"a".repeat(46)}...`);
+    expect(summary).not.toContain("\uD83D");
+    expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
   it("logs a final replacement failure when CardKit returns non-OK", async () => {

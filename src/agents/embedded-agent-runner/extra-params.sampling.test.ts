@@ -1,3 +1,4 @@
+// Coverage for sampling, token, and response-format extra parameter precedence.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
@@ -9,6 +10,8 @@ import {
 } from "./extra-params.js";
 
 vi.mock("./logger.js", () => ({
+  // Sampling tests assert call options only; silence warning/debug output from
+  // invalid or provider-specific extra params.
   log: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -123,6 +126,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("canonicalizes token aliases with config precedence before preparing stream params", () => {
+    // Canonicalization happens before provider preparation so plugins receive a
+    // single maxTokens field with agent-level precedence already applied.
     const resolved = resolveExtraParams({
       cfg: {
         agents: {
@@ -159,6 +164,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("lets runtime options override the wrapper sampling defaults", () => {
+    // Runtime call options are closest to the request and must beat configured
+    // defaults injected by the extra-params wrapper.
     const underlying = vi.fn(() => ({
       push: vi.fn(),
       result: vi.fn(async () => undefined),
@@ -470,5 +477,38 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       | undefined;
     expect(callOptions?.frequencyPenalty).toBe(0.9);
     expect(callOptions?.presencePenalty).toBe(0.7);
+  });
+
+  it("keeps dynamic fast mode overrides out of prepared extra params cache", () => {
+    const prepareProviderExtraParams = vi.fn((params) => ({
+      ...params.context.extraParams,
+      prepared: true,
+    }));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: () => undefined,
+    });
+
+    const cfg = { agents: { defaults: {} } } as never;
+    const firstFastMode = () => true;
+    const secondFastMode = () => false;
+    const first = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParamsOverride: { fastMode: firstFastMode },
+    });
+    const second = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParamsOverride: { fastMode: secondFastMode },
+    });
+
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(2);
+    expect(first).not.toBe(second);
+    expect(first.fastMode).toBe(firstFastMode);
+    expect(second.fastMode).toBe(secondFastMode);
   });
 });

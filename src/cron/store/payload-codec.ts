@@ -1,3 +1,4 @@
+/** SQLite column codec for cron payload variants. */
 import type { CronPayload } from "../types.js";
 import {
   booleanToInteger,
@@ -12,6 +13,51 @@ import type { CronJobInsert, CronJobRow } from "./schema.js";
 function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
   const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
   return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
+}
+
+function parseCommandPayloadMessage(
+  raw: string | null,
+): Omit<Extract<CronPayload, { kind: "command" }>, "kind" | "timeoutSeconds"> | null {
+  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  if (
+    !Array.isArray(record.argv) ||
+    record.argv.length === 0 ||
+    record.argv.some((value) => typeof value !== "string" || value.length === 0)
+  ) {
+    return null;
+  }
+  const argv = record.argv.map((value) => String(value));
+  const env =
+    record.env && typeof record.env === "object" && !Array.isArray(record.env)
+      ? Object.fromEntries(
+          Object.entries(record.env as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : undefined;
+  const rawNoOutputTimeoutSeconds =
+    typeof record.noOutputTimeoutSeconds === "number" ||
+    typeof record.noOutputTimeoutSeconds === "bigint"
+      ? record.noOutputTimeoutSeconds
+      : null;
+  const rawOutputMaxBytes =
+    typeof record.outputMaxBytes === "number" || typeof record.outputMaxBytes === "bigint"
+      ? record.outputMaxBytes
+      : null;
+  const noOutputTimeoutSeconds = normalizeNumber(rawNoOutputTimeoutSeconds);
+  const outputMaxBytes = normalizeNumber(rawOutputMaxBytes);
+  return {
+    argv,
+    ...(typeof record.cwd === "string" && record.cwd.trim() ? { cwd: record.cwd } : {}),
+    ...(env && Object.keys(env).length > 0 ? { env } : {}),
+    ...(typeof record.input === "string" ? { input: record.input } : {}),
+    ...(noOutputTimeoutSeconds != null ? { noOutputTimeoutSeconds } : {}),
+    ...(outputMaxBytes != null && outputMaxBytes > 0 ? { outputMaxBytes } : {}),
+  };
 }
 
 /** Maps cron payload variants into normalized SQLite columns. */
@@ -29,6 +75,7 @@ export function bindPayloadColumns(
   | "payload_thinking"
   | "payload_timeout_seconds"
   | "payload_tools_allow_json"
+  | "payload_tools_allow_is_default"
 > {
   if (payload.kind === "systemEvent") {
     return {
@@ -42,6 +89,23 @@ export function bindPayloadColumns(
       payload_external_content_source_json: null,
       payload_light_context: null,
       payload_tools_allow_json: null,
+      payload_tools_allow_is_default: null,
+    };
+  }
+  if (payload.kind === "command") {
+    const { timeoutSeconds: _timeoutSeconds, ...payloadMessage } = payload;
+    return {
+      payload_kind: "command",
+      payload_message: serializeJson(payloadMessage),
+      payload_model: null,
+      payload_fallbacks_json: null,
+      payload_thinking: null,
+      payload_timeout_seconds: payload.timeoutSeconds ?? null,
+      payload_allow_unsafe_external_content: null,
+      payload_external_content_source_json: null,
+      payload_light_context: null,
+      payload_tools_allow_json: null,
+      payload_tools_allow_is_default: null,
     };
   }
   return {
@@ -55,6 +119,9 @@ export function bindPayloadColumns(
     payload_external_content_source_json: serializeJson(payload.externalContentSource),
     payload_light_context: booleanToInteger(payload.lightContext),
     payload_tools_allow_json: serializeJson(payload.toolsAllow),
+    payload_tools_allow_is_default: payload.toolsAllow
+      ? booleanToInteger(payload.toolsAllowIsDefault)
+      : null,
   };
 }
 
@@ -83,6 +150,10 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
     const toolsAllow = row.payload_tools_allow_json
       ? parseJsonArray(row.payload_tools_allow_json)
       : undefined;
+    const toolsAllowIsDefault =
+      row.payload_tools_allow_is_default != null
+        ? integerToBoolean(row.payload_tools_allow_is_default)
+        : undefined;
     return {
       kind: "agentTurn",
       message: row.payload_message,
@@ -94,6 +165,19 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       ...(externalContentSource ? { externalContentSource } : {}),
       ...(lightContext != null ? { lightContext } : {}),
       ...(toolsAllow ? { toolsAllow } : {}),
+      ...(toolsAllow && toolsAllowIsDefault ? { toolsAllowIsDefault: true } : {}),
+    };
+  }
+  if (row.payload_kind === "command") {
+    const command = parseCommandPayloadMessage(row.payload_message);
+    if (!command) {
+      return null;
+    }
+    const timeoutSeconds = normalizeNumber(row.payload_timeout_seconds);
+    return {
+      kind: "command",
+      ...command,
+      ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
     };
   }
   return null;

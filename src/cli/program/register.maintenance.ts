@@ -1,9 +1,11 @@
+// Maintenance command registration: doctor, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
+/** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
   program
     .command("doctor")
@@ -37,6 +39,7 @@ export function registerMaintenanceCommands(program: Command) {
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
     )
+    .option("--all", "With --lint: run all registered checks, including opt-in checks", false)
     .option(
       "--skip <id>",
       "With --lint: skip a specific check id (repeatable)",
@@ -58,9 +61,11 @@ export function registerMaintenanceCommands(program: Command) {
             const exitCode = await runDoctorLintCli(defaultRuntime, {
               json: Boolean(opts.json),
               severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+              includeAllChecks: Boolean(opts.all),
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
               allowExec: Boolean(opts.allowExec),
+              deep: Boolean(opts.deep),
             });
             defaultRuntime.exit(exitCode);
           },
@@ -177,12 +182,14 @@ function hasLintOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
   readonly severityMin?: unknown;
+  readonly all?: boolean;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
     (opts.json === true && opts.postUpgrade !== true) ||
     typeof opts.severityMin === "string" ||
+    opts.all === true ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)
   );

@@ -1,4 +1,12 @@
+// Zod parse helpers wrap schema parsing with consistent error handling.
 import type { ZodType } from "zod";
+
+/**
+ * Null-returning Zod parse helpers for plugin and runtime boundaries.
+ *
+ * Callers use these where invalid external payloads should be ignored or
+ * recovered from without constructing and catching validation errors.
+ */
 
 /** Safely validates an unknown value with a Zod schema, returning null on validation failure. */
 export function safeParseWithSchema<T>(schema: ZodType<T>, value: unknown): T | null {

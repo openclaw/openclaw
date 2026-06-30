@@ -1,3 +1,4 @@
+// Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveSessionStoreAgentId,
@@ -18,7 +19,6 @@ import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
-export { parseSessionThreadInfo };
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;
@@ -34,6 +34,12 @@ function hasRoutableDeliveryContext(context?: {
   return Boolean(context?.channel && context?.to);
 }
 
+/**
+ * Extracts the routable delivery context and thread id for a persisted session key.
+ *
+ * Thread/topic keys first try their exact store entry, then fall back to the base session when
+ * the thread entry has no delivery route of its own.
+ */
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
   options?: { cfg?: OpenClawConfig },
@@ -77,6 +83,8 @@ export function extractDeliveryInfo(
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
   const paths = new Set<string>();
   paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  // Delivery can be restored from any resolved agent target; store order keeps the configured
+  // primary path first while still covering per-agent stores.
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     if (target.agentId === agentId) {
       paths.add(target.storePath);
@@ -161,6 +169,8 @@ function findSessionEntryInStore(
       acceptCandidate(store[trimmed]);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
+      // Build the normalized index only after direct/exact probes fail; large session stores can
+      // stay on the cheap path when the queried key already has routable delivery context.
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
       if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
@@ -197,6 +207,8 @@ function buildFreshestSessionEntryIndex(
     ) {
       index.set(normalized, entry);
     }
+    // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
+    // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
     if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;
@@ -247,6 +259,8 @@ function loadDeliverySessionEntry(params: {
       continue;
     }
     fallback ??= { entry, baseEntry };
+    // Prefer the first store that can actually route delivery; keep a non-routable fallback only
+    // so callers can still inspect thread ids when no target-bearing session exists.
     if (
       hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
       hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))

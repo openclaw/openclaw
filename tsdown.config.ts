@@ -1,3 +1,4 @@
+// tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
@@ -198,9 +199,11 @@ const explicitNeverBundleDependencies = [
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "@vitest/expect",
+  "jimp",
   "matrix-js-sdk",
   "prism-media",
   "qrcode-terminal",
+  "sharp",
   "typescript",
   "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
@@ -294,6 +297,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
+    "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };
 }
 
@@ -339,19 +343,15 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
     "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-repo": "packages/agent-core/src/harness/session/jsonl-repo.ts",
     "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-repo": "packages/agent-core/src/harness/session/memory-repo.ts",
     "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/repo-utils": "packages/agent-core/src/harness/session/repo-utils.ts",
     "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
-    "harness/prompt-templates": "packages/agent-core/src/harness/prompt-templates.ts",
+    "harness/prompt-template-arguments":
+      "packages/agent-core/src/harness/prompt-template-arguments.ts",
     "harness/skills": "packages/agent-core/src/harness/skills.ts",
-    "harness/system-prompt": "packages/agent-core/src/harness/system-prompt.ts",
-    "harness/utils/shell-output": "packages/agent-core/src/harness/utils/shell-output.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
 }

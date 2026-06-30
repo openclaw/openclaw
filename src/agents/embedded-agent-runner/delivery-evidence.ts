@@ -1,5 +1,14 @@
+/**
+ * Extracts visible delivery evidence from embedded-agent run results.
+ */
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
+/**
+ * Helpers for deciding whether an embedded run produced user-visible or outbound effects.
+ *
+ * Fallback and retry code uses these checks to avoid rerunning a model after messages, media,
+ * cron entries, or spawned sessions have already been delivered.
+ */
 type AgentPayloadLike = {
   text?: unknown;
   mediaUrl?: unknown;
@@ -7,11 +16,12 @@ type AgentPayloadLike = {
   presentation?: unknown;
   interactive?: unknown;
   channelData?: unknown;
+  attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
 };
 
-export type AgentDeliveryEvidence = {
+type AgentDeliveryEvidence = {
   payloads?: unknown;
   deliveryStatus?: {
     status?: unknown;
@@ -42,6 +52,19 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
+function hasVisibleAttachmentReference(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const urls = new Set<string>();
+  for (const attachment of value) {
+    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
+    }
+  }
+  return urls.size > 0;
+}
+
 function collectStringValues(value: unknown, output: Set<string>) {
   if (typeof value === "string" && value.trim()) {
     output.add(value.trim());
@@ -57,7 +80,19 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
-function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+function collectMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+  output: Set<string>,
+  // Payloads arrive as in-process `unknown` objects, so a malformed
+  // self-referential `attachments` chain would recurse until the stack
+  // overflows. Track visited records to bound the descent, matching
+  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
+  seen = new WeakSet<object>(),
+) {
+  if (seen.has(record)) {
+    return;
+  }
+  seen.add(record);
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -67,12 +102,13 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
       }
     }
   }
 }
 
+/** Collects media URLs from agent payloads and committed messaging-tool delivery metadata. */
 export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
   const urls = new Set<string>();
   if (Array.isArray(result.payloads)) {
@@ -88,6 +124,7 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
   return Array.from(urls);
 }
 
+/** Collects media URLs recorded by messaging-tool sends and their target attachments. */
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
@@ -107,6 +144,7 @@ function hasPositiveNumber(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+/** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   if (!response || typeof response !== "object") {
     return null;
@@ -134,6 +172,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
   );
 }
 
+/** Returns whether payload metadata contains visible text, media, presentation, or channel data. */
 export function hasVisibleAgentPayload(
   result: Pick<AgentDeliveryEvidence, "payloads">,
   options: { includeErrorPayloads?: boolean; includeReasoningPayloads?: boolean } = {},
@@ -157,6 +196,7 @@ export function hasVisibleAgentPayload(
       hasNonEmptyString(record.text) ||
       hasNonEmptyString(record.mediaUrl) ||
       hasNonEmptyStringArray(record.mediaUrls) ||
+      hasVisibleAttachmentReference(record.attachments) ||
       record.presentation ||
       record.interactive ||
       record.channelData,
@@ -164,12 +204,14 @@ export function hasVisibleAgentPayload(
   });
 }
 
+/** Returns whether the messaging tool attempted or committed an outbound delivery. */
 export function hasMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     result.didSendViaMessagingTool === true || hasCommittedMessagingToolDeliveryEvidence(result)
   );
 }
 
+/** Returns whether messaging-tool metadata proves committed text, media, or target delivery. */
 export function hasCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -183,16 +225,25 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+/** Returns whether committed outbound evidence makes replay unsafe. */
+export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
+export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasCommittedOutboundDeliveryEvidence(result) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
 }
 
+/** Formats an agent-command delivery failure message from delivery status metadata. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
   const status = result.deliveryStatus?.status;
   if (status !== "failed" && status !== "partial_failed") {

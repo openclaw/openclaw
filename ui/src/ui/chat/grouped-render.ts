@@ -1,9 +1,11 @@
+// Control UI chat module implements grouped render behavior.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
+import { resolveUiHourCycleOptions } from "../format.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
@@ -23,6 +25,7 @@ import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
+import { formatCompactTokenCount } from "./token-format.ts";
 import {
   extractToolCardsCached,
   formatCollapsedToolPreviewText,
@@ -62,8 +65,10 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
     };
   }
 
+  const hourCycle = resolveUiHourCycleOptions();
   return {
     label: date.toLocaleString([], {
+      ...hourCycle,
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -71,6 +76,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       minute: "2-digit",
     }),
     title: date.toLocaleString([], {
+      ...hourCycle,
       weekday: "long",
       month: "long",
       day: "numeric",
@@ -312,6 +318,14 @@ function extractImages(message: unknown): ImageBlock[] {
             }),
           });
         }
+      } else if (b.type === "openclaw_pairing_qr") {
+        const imageUrl = b.image_url;
+        if (typeof imageUrl === "string") {
+          appendImageBlock(images, {
+            url: imageUrl,
+            alt: typeof b.alt === "string" ? b.alt : undefined,
+          });
+        }
       }
     }
   }
@@ -403,34 +417,66 @@ export function renderStreamingGroup(
   `;
 }
 
-export function renderMessageGroup(
+type RenderMessageGroupOptions = {
+  onOpenSidebar?: (content: SidebarContent) => void;
+  sessionKey?: string;
+  agentId?: string;
+  showReasoning: boolean;
+  showToolCalls?: boolean;
+  autoExpandToolCalls?: boolean;
+  isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+  onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
+  isToolExpanded?: (toolCardId: string) => boolean;
+  onToggleToolExpanded?: (toolCardId: string) => void;
+  onRequestUpdate?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
+  assistantName?: string;
+  assistantAvatar?: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
+  basePath?: string;
+  localMediaPreviewRoots?: readonly string[];
+  assistantAttachmentAuthToken?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
+  embedSandboxMode?: EmbedSandboxMode;
+  allowExternalEmbedUrls?: boolean;
+  contextWindow?: number | null;
+  onDelete?: () => void;
+};
+
+type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+
+function buildGroupedMessageRenderOptions(
   group: MessageGroup,
-  opts: {
-    onOpenSidebar?: (content: SidebarContent) => void;
-    sessionKey?: string;
-    agentId?: string;
-    showReasoning: boolean;
-    showToolCalls?: boolean;
-    autoExpandToolCalls?: boolean;
-    isToolMessageExpanded?: (messageId: string) => boolean | undefined;
-    onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
-    isToolExpanded?: (toolCardId: string) => boolean;
-    onToggleToolExpanded?: (toolCardId: string) => void;
-    onRequestUpdate?: () => void;
-    assistantName?: string;
-    assistantAvatar?: string | null;
-    userName?: string | null;
-    userAvatar?: string | null;
-    basePath?: string;
-    localMediaPreviewRoots?: readonly string[];
-    assistantAttachmentAuthToken?: string | null;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    contextWindow?: number | null;
-    onDelete?: () => void;
-  },
-) {
+  item: MessageGroup["messages"][number],
+  index: number,
+  opts: RenderMessageGroupOptions,
+): GroupedMessageRenderOptions {
+  return {
+    isStreaming: group.isStreaming && index === group.messages.length - 1,
+    sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
+    duplicateCount: item.duplicateCount ?? 1,
+    showReasoning: opts.showReasoning,
+    showToolCalls: opts.showToolCalls ?? true,
+    turnSucceeded: group.turnSucceeded,
+    autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+    isToolMessageExpanded: opts.isToolMessageExpanded,
+    onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+    isToolExpanded: opts.isToolExpanded,
+    onToggleToolExpanded: opts.onToggleToolExpanded,
+    onRequestUpdate: opts.onRequestUpdate,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+    basePath: opts.basePath,
+    localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    embedSandboxMode: opts.embedSandboxMode,
+    allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+  };
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
@@ -442,7 +488,7 @@ export function renderMessageGroup(
     normalizedRole === "user"
       ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
-        ? assistantName
+        ? (userLabel ?? assistantName)
         : normalizedRole === "tool"
           ? "Tool"
           : normalizedRole;
@@ -483,7 +529,9 @@ export function renderMessageGroup(
         : toolLabels.length <= 3
           ? toolLabels.join(", ")
           : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
-    const hasError = cards.some(isToolCardError);
+    // Non-terminal internal tool failures (turn produced a clean reply) stay
+    // collapsed and unstyled; detail remains available on expand. #89683
+    const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
@@ -534,26 +582,7 @@ export function renderMessageGroup(
                       renderGroupedMessage(
                         item.message,
                         item.key,
-                        {
-                          isStreaming: group.isStreaming && index === group.messages.length - 1,
-                          sessionKey: opts.sessionKey,
-                          agentId: opts.agentId,
-                          duplicateCount: item.duplicateCount ?? 1,
-                          showReasoning: opts.showReasoning,
-                          showToolCalls: opts.showToolCalls ?? true,
-                          autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-                          isToolMessageExpanded: opts.isToolMessageExpanded,
-                          onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
-                          isToolExpanded: opts.isToolExpanded,
-                          onToggleToolExpanded: opts.onToggleToolExpanded,
-                          onRequestUpdate: opts.onRequestUpdate,
-                          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                          basePath: opts.basePath,
-                          localMediaPreviewRoots: opts.localMediaPreviewRoots,
-                          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-                          embedSandboxMode: opts.embedSandboxMode,
-                          allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-                        },
+                        buildGroupedMessageRenderOptions(group, item, index, opts),
                         opts.onOpenSidebar,
                       ),
                     )}
@@ -591,26 +620,7 @@ export function renderMessageGroup(
           renderGroupedMessage(
             item.message,
             item.key,
-            {
-              isStreaming: group.isStreaming && index === group.messages.length - 1,
-              sessionKey: opts.sessionKey,
-              agentId: opts.agentId,
-              duplicateCount: item.duplicateCount ?? 1,
-              showReasoning: opts.showReasoning,
-              showToolCalls: opts.showToolCalls ?? true,
-              autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-              isToolMessageExpanded: opts.isToolMessageExpanded,
-              onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
-              isToolExpanded: opts.isToolExpanded,
-              onToggleToolExpanded: opts.onToggleToolExpanded,
-              onRequestUpdate: opts.onRequestUpdate,
-              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              basePath: opts.basePath,
-              localMediaPreviewRoots: opts.localMediaPreviewRoots,
-              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-              embedSandboxMode: opts.embedSandboxMode,
-              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-            },
+            buildGroupedMessageRenderOptions(group, item, index, opts),
             opts.onOpenSidebar,
           ),
         )}
@@ -687,17 +697,6 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
-/** Compact token count formatter (e.g. 128000 → "128k"). */
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
-}
-
 function renderMessageMeta(meta: GroupMeta | null) {
   if (!meta) {
     return nothing;
@@ -707,18 +706,24 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   // Token counts: ↑input ↓output
   if (meta.input) {
-    parts.push(html`<span class="msg-meta__tokens">↑${fmtTokens(meta.input)}</span>`);
+    parts.push(html`<span class="msg-meta__tokens">↑${formatCompactTokenCount(meta.input)}</span>`);
   }
   if (meta.output) {
-    parts.push(html`<span class="msg-meta__tokens">↓${fmtTokens(meta.output)}</span>`);
+    parts.push(
+      html`<span class="msg-meta__tokens">↓${formatCompactTokenCount(meta.output)}</span>`,
+    );
   }
 
   // Cache: R/W
   if (meta.cacheRead) {
-    parts.push(html`<span class="msg-meta__cache">R${fmtTokens(meta.cacheRead)}</span>`);
+    parts.push(
+      html`<span class="msg-meta__cache">R${formatCompactTokenCount(meta.cacheRead)}</span>`,
+    );
   }
   if (meta.cacheWrite) {
-    parts.push(html`<span class="msg-meta__cache">W${fmtTokens(meta.cacheWrite)}</span>`);
+    parts.push(
+      html`<span class="msg-meta__cache">W${formatCompactTokenCount(meta.cacheWrite)}</span>`,
+    );
   }
 
   // Cost
@@ -1381,6 +1386,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
+  onAssistantAttachmentLoaded?: () => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1432,7 +1438,12 @@ function renderAssistantAttachments(
                     : nothing}
               </div>
               ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                ? html`<audio
+                    controls
+                    preload="metadata"
+                    src=${attachmentUrl}
+                    @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+                  ></audio>`
                 : availability.status === "unavailable"
                   ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
@@ -1452,7 +1463,12 @@ function renderAssistantAttachments(
           }
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <video controls preload="metadata" src=${attachmentUrl}></video>
+              <video
+                controls
+                preload="metadata"
+                src=${attachmentUrl}
+                @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+              ></video>
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
@@ -1613,6 +1629,9 @@ function renderGroupedMessage(
     duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
+    // True when the tool's turn still produced a clean assistant reply: a failed
+    // internal tool then renders collapsed, not as a primary error banner. #89683
+    turnSucceeded?: boolean;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -1623,6 +1642,7 @@ function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1695,10 +1715,12 @@ function renderGroupedMessage(
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const reserveActionSpace = hasActions && !isToolMessage;
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     hasActions ? "has-copy" : "",
+    reserveActionSpace ? "chat-bubble--has-actions" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -1722,7 +1744,7 @@ function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError);
+  const toolMessageHasError = toolCards.some(isToolCardError) && opts.turnSucceeded !== true;
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -1764,7 +1786,11 @@ function renderGroupedMessage(
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses}"
+      data-message-id=${messageKey}
+      data-message-text=${extractedText || nothing}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
@@ -1818,6 +1844,7 @@ function renderGroupedMessage(
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
+                        opts.onAssistantAttachmentLoaded,
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
@@ -1875,6 +1902,7 @@ function renderGroupedMessage(
               opts.basePath,
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
+              opts.onAssistantAttachmentLoaded,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

@@ -1,3 +1,8 @@
+/**
+ * Fast embedded-runner E2E mocks.
+ *
+ * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
+ */
 import { vi } from "vitest";
 
 type EmbeddedRunnerFastRunMockOptions = {
@@ -16,6 +21,7 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
+/** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
 }): void {
@@ -50,6 +56,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   }));
 }
 
+/** Installs mocks that route embedded attempts through a caller-provided fast run function. */
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
@@ -170,6 +177,7 @@ function resolveMockHarnessId(params: {
     : "openclaw";
 }
 
+/** Installs deterministic backoff mocks for retry/timeout E2E tests. */
 export function installEmbeddedRunnerBackoffE2eMocks(
   options: EmbeddedRunnerBackoffMockOptions,
 ): void {

@@ -1,3 +1,5 @@
+// Subagent formatting helpers expose compact durations and status text.
+import { truncateUtf16Safe } from "./utf16-slice.js";
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
@@ -28,10 +30,10 @@ export function truncateLine(value: string, maxLength: number) {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  return `${truncateUtf16Safe(value, maxLength).trimEnd()}...`;
 }
 
-export type TokenUsageLike = {
+type TokenUsageLike = {
   totalTokens?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;

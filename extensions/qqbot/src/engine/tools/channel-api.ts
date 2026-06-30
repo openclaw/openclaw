@@ -8,11 +8,24 @@
  * validation, fetch, and structured response formatting.
  */
 
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30000;
+const CHANNEL_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+
+function resolveChannelApiSsrfPolicy(url: string): SsrFPolicy {
+  return {
+    hostnameAllowlist: [new URL(url).hostname],
+    allowRfc2544BenchmarkRange: true,
+  };
+}
 
 /**
  * Channel API call parameters.
@@ -23,6 +36,8 @@ export interface ChannelApiParams {
   path: string;
   body?: Record<string, unknown>;
   query?: Record<string, string>;
+  confirmed?: boolean;
+  bulkConfirmed?: boolean;
 }
 
 /**
@@ -34,7 +49,9 @@ export const ChannelApiSchema = {
   properties: {
     method: {
       type: "string",
-      description: "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE.",
+      description:
+        "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE. " +
+        "Use DELETE and other mutating methods only after explicit user intent and target confirmation.",
       enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     },
     path: {
@@ -46,7 +63,8 @@ export const ChannelApiSchema = {
     body: {
       type: "object",
       description:
-        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it.",
+        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it. " +
+        "For write requests, include only fields the user explicitly asked to change.",
     },
     query: {
       type: "object",
@@ -54,6 +72,16 @@ export const ChannelApiSchema = {
         "URL query parameters as key/value pairs appended to the path. " +
         'For example, { "limit": "100", "after": "0" } becomes ?limit=100&after=0.',
       additionalProperties: { type: "string" },
+    },
+    confirmed: {
+      type: "boolean",
+      description:
+        "Required true for DELETE requests after the user confirms the exact QQ resource to delete.",
+    },
+    bulkConfirmed: {
+      type: "boolean",
+      description:
+        "Required true in addition to confirmed for bulk DELETE requests such as deleting all announcements.",
     },
   },
   required: ["method", "path"],
@@ -93,6 +121,56 @@ function validatePath(path: string): string | null {
   }
   if (!/^\/[a-zA-Z0-9\-._~:@!$&'()*+,;=/%]+$/.test(path) && path !== "/") {
     return "path contains unsupported characters";
+  }
+  for (const segment of path.split("/").slice(1)) {
+    let decodedSegment: string;
+    try {
+      decodedSegment = decodeURIComponent(segment);
+    } catch {
+      return "path contains invalid percent encoding";
+    }
+    if (decodedSegment.includes("/") || decodedSegment.includes("\\")) {
+      return "path contains encoded path separators";
+    }
+    if (decodedSegment === "." || decodedSegment === "..") {
+      return "path must not contain . or .. segments";
+    }
+  }
+  return null;
+}
+
+function decodePathSegments(path: string): string[] | null {
+  try {
+    return path
+      .replace(/\/+$/, "")
+      .split("/")
+      .slice(1)
+      .map((segment) => decodeURIComponent(segment));
+  } catch {
+    return null;
+  }
+}
+
+function isBulkAnnouncementDeletePath(path: string): boolean {
+  const segments = decodePathSegments(path);
+  return Boolean(
+    segments &&
+    segments.length === 4 &&
+    segments[0]?.toLowerCase() === "guilds" &&
+    segments[2]?.toLowerCase() === "announces" &&
+    segments[3]?.toLowerCase() === "all",
+  );
+}
+
+function validateDeleteConfirmation(params: ChannelApiParams): string | null {
+  if (params.method.toUpperCase() !== "DELETE") {
+    return null;
+  }
+  if (!params.confirmed) {
+    return "DELETE requests require confirmed=true after the user confirms the exact QQ resource.";
+  }
+  if (isBulkAnnouncementDeletePath(params.path) && !params.bulkConfirmed) {
+    return "Deleting all announcements requires bulkConfirmed=true after a separate bulk-delete confirmation.";
   }
   return null;
 }
@@ -143,6 +221,11 @@ export async function executeChannelApi(
     return json({ error: pathError });
   }
 
+  const confirmationError = validateDeleteConfirmation({ ...params, method });
+  if (confirmationError) {
+    return json({ error: confirmationError, path: params.path });
+  }
+
   if (
     (method === "GET" || method === "DELETE") &&
     params.body &&
@@ -174,8 +257,16 @@ export async function executeChannelApi(
     debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
 
     let res: Response;
+    let release: (() => Promise<void>) | undefined;
     try {
-      res = await fetch(url, fetchOptions);
+      const guarded = await fetchWithSsrFGuard({
+        url,
+        init: fetchOptions,
+        auditContext: "qqbot-channel-api",
+        policy: resolveChannelApiSsrfPolicy(url),
+      });
+      res = guarded.response;
+      release = guarded.release;
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === "AbortError") {
@@ -194,47 +285,53 @@ export async function executeChannelApi(
       clearTimeout(timeoutId);
     }
 
-    debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
-
-    const rawBody = await res.text();
-    if (!rawBody || rawBody.trim() === "") {
-      if (res.ok) {
-        return json({ success: true, status: res.status, path: params.path });
-      }
-      return json({
-        error: `API returned ${res.status} ${res.statusText}`,
-        status: res.status,
-        path: params.path,
-      });
-    }
-
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(rawBody);
-    } catch {
-      parsed = rawBody;
-    }
+      debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
-    if (!res.ok) {
-      const errMsg =
-        typeof parsed === "object" && parsed && "message" in parsed
-          ? String((parsed as { message?: unknown }).message)
-          : `${res.status} ${res.statusText}`;
-      debugError(`[qqbot-channel-api] Error [${method} ${params.path}]: ${errMsg}`);
+      const rawBody = res.ok
+        ? await readProviderTextResponse(res, "QQ channel API response")
+        : await readResponseTextLimited(res, CHANNEL_API_ERROR_BODY_LIMIT_BYTES);
+      if (!rawBody || rawBody.trim() === "") {
+        if (res.ok) {
+          return json({ success: true, status: res.status, path: params.path });
+        }
+        return json({
+          error: `API returned ${res.status} ${res.statusText}`,
+          status: res.status,
+          path: params.path,
+        });
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        parsed = rawBody;
+      }
+
+      if (!res.ok) {
+        const errMsg =
+          typeof parsed === "object" && parsed && "message" in parsed
+            ? String((parsed as { message?: unknown }).message)
+            : `${res.status} ${res.statusText}`;
+        debugError(`[qqbot-channel-api] Error [${method} ${params.path}]: ${errMsg}`);
+        return json({
+          error: errMsg,
+          status: res.status,
+          path: params.path,
+          details: parsed,
+        });
+      }
+
       return json({
-        error: errMsg,
+        success: true,
         status: res.status,
         path: params.path,
-        details: parsed,
+        data: parsed,
       });
+    } finally {
+      await release?.();
     }
-
-    return json({
-      success: true,
-      status: res.status,
-      path: params.path,
-      data: parsed,
-    });
   } catch (err) {
     return json({
       error: formatErrorMessage(err),

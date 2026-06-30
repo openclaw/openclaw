@@ -1,9 +1,16 @@
+// Gateway maintenance timers.
+// Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  abortTrackedChatRunById,
+  type ChatAbortControllerEntry,
+  type RestartRecoveryCandidate,
+} from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -35,6 +42,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: Pick<
     ChatRunState,
     | "abortedRuns"
@@ -128,6 +136,8 @@ export function startGatewayMaintenanceTimers(params: {
       return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      // Keep idempotency records for active runs so retries cannot create
+      // duplicate chat/agent work while a command is still draining.
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
       }
@@ -184,7 +194,30 @@ export function startGatewayMaintenanceTimers(params: {
     };
 
     for (const [runId, entry] of params.chatAbortControllers) {
+      if (entry.projectSessionTerminalPending === true) {
+        continue;
+      }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+        continue;
+      }
+      if (entry.projectSessionTerminalPersistence) {
+        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
+        const sessionKey = entry.sessionKey.trim();
+        const sessionId = entry.sessionId.trim();
+        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
+          params.restartRecoveryCandidates.set(runId, {
+            runId,
+            lifecycleGeneration,
+            sessionKey,
+            sessionId,
+            observedAt: entry.projectSessionTerminalObservedAt,
+          });
+        }
+        params.chatAbortControllers.delete(runId);
+        continue;
+      }
+      if (entry.projectSessionActive === false) {
+        params.chatAbortControllers.delete(runId);
         continue;
       }
       abortTrackedChatRunById(params, {
@@ -195,8 +228,8 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
-      if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
+    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
+      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);

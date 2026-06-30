@@ -1,3 +1,4 @@
+// Proxy capture env helpers build proxy-related env vars for child processes.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
 import process from "node:process";
@@ -8,9 +9,13 @@ import {
   resolveDebugProxyDbPath,
 } from "./paths.js";
 
+// Environment contract for debug proxy capture. These vars are passed to child
+// processes and provider transports so capture sessions share one store/proxy.
 export const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 export const OPENCLAW_DEBUG_PROXY_URL = "OPENCLAW_DEBUG_PROXY_URL";
+/** @deprecated Capture storage now lives in the shared state database. */
 export const OPENCLAW_DEBUG_PROXY_DB_PATH = "OPENCLAW_DEBUG_PROXY_DB_PATH";
+/** @deprecated Capture payloads now live in the shared state database. */
 export const OPENCLAW_DEBUG_PROXY_BLOB_DIR = "OPENCLAW_DEBUG_PROXY_BLOB_DIR";
 export const OPENCLAW_DEBUG_PROXY_CERT_DIR = "OPENCLAW_DEBUG_PROXY_CERT_DIR";
 export const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
@@ -20,7 +25,9 @@ export type DebugProxySettings = {
   enabled: boolean;
   required: boolean;
   proxyUrl?: string;
+  /** @deprecated Capture storage now lives in the shared state database. */
   dbPath: string;
+  /** @deprecated Capture payloads now live in the shared state database. */
   blobDir: string;
   certDir: string;
   sessionId: string;
@@ -38,6 +45,8 @@ export function resolveDebugProxySettings(
 ): DebugProxySettings {
   const enabled = isTruthy(env[OPENCLAW_DEBUG_PROXY_ENABLED]);
   const explicitSessionId = env[OPENCLAW_DEBUG_PROXY_SESSION_ID]?.trim() || undefined;
+  // Local implicit sessions stay stable within one process so repeated callers
+  // write to the same capture session until an explicit id overrides it.
   const sessionId = explicitSessionId ?? (cachedImplicitSessionId ??= randomUUID());
   return {
     enabled,
@@ -56,18 +65,19 @@ export function applyDebugProxyEnv(
   params: {
     proxyUrl: string;
     sessionId: string;
-    dbPath?: string;
-    blobDir?: string;
     certDir?: string;
   },
 ): NodeJS.ProcessEnv {
+  // Child process env forces proxy capture and standard proxy variables while
+  // preserving unrelated environment values.
+  const baseEnv = { ...env };
+  delete baseEnv.OPENCLAW_DEBUG_PROXY_DB_PATH;
+  delete baseEnv.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
   return {
-    ...env,
+    ...baseEnv,
     [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
     [OPENCLAW_DEBUG_PROXY_REQUIRE]: "1",
     [OPENCLAW_DEBUG_PROXY_URL]: params.proxyUrl,
-    [OPENCLAW_DEBUG_PROXY_DB_PATH]: params.dbPath ?? resolveDebugProxyDbPath(env),
-    [OPENCLAW_DEBUG_PROXY_BLOB_DIR]: params.blobDir ?? resolveDebugProxyBlobDir(env),
     [OPENCLAW_DEBUG_PROXY_CERT_DIR]: params.certDir ?? resolveDebugProxyCertDir(env),
     [OPENCLAW_DEBUG_PROXY_SESSION_ID]: params.sessionId,
     HTTP_PROXY: params.proxyUrl,
@@ -95,6 +105,8 @@ export function createDebugProxyWebSocketAgent(settings: DebugProxySettings): Ag
   }) as Agent | undefined;
 }
 
+// Configured URLs win over ambient capture settings; callers use this when a
+// channel/provider already exposes an explicit proxy option.
 export function resolveEffectiveDebugProxyUrl(configuredProxyUrl?: string): string | undefined {
   const explicit = configuredProxyUrl?.trim();
   if (explicit) {

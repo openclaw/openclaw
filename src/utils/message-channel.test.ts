@@ -1,14 +1,24 @@
+// Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  INTERNAL_NON_DELIVERY_CHANNELS,
+  NATIVE_APPROVAL_CHANNELS,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
+  isNativeApprovalChannel,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
+
+const INTERNAL_NON_DELIVERY_CHANNELS = [
+  "heartbeat",
+  "cron",
+  "webhook",
+  "voice",
+  "sessions_send",
+] as const;
 
 const emptyRegistry = createTestRegistry([]);
 const demoAliasPlugin: ChannelPlugin = {
@@ -69,6 +79,19 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
     expect(isInternalNonDeliveryChannel("")).toBe(false);
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
+  });
+
+  it("lists native chat exec approval channels", () => {
+    for (const channel of NATIVE_APPROVAL_CHANNELS) {
+      expect(isNativeApprovalChannel(channel)).toBe(true);
+    }
+    // Channels without a bundled approval-handler.runtime must not claim native approval.
+    expect(isNativeApprovalChannel("feishu")).toBe(false);
+    expect(isNativeApprovalChannel("msteams")).toBe(false);
+    expect(isNativeApprovalChannel("line")).toBe(false);
+    expect(isNativeApprovalChannel("heartbeat")).toBe(false);
+    expect(isNativeApprovalChannel("")).toBe(false);
+    expect(isNativeApprovalChannel("TELEGRAM")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

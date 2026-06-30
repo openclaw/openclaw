@@ -1,3 +1,4 @@
+// Tool Call Repair module implements payload behavior.
 import {
   consumeLineBreak,
   END_TOOL_REQUEST,
@@ -10,16 +11,25 @@ import {
   skipWhitespace,
 } from "./grammar.js";
 
+/** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
+  /** Parsed JSON arguments object. */
   arguments: Record<string, unknown>;
+  /** Exclusive end offset of the parsed block. */
   end: number;
+  /** Tool name parsed from bracket, Harmony, or XML-ish syntax. */
   name: string;
+  /** Original text slice that produced this block. */
   raw: string;
+  /** Inclusive start offset of the parsed block. */
   start: number;
 };
 
+/** Parser limits and allowlist options for plain-text tool-call repair. */
 export type PlainTextToolCallParseOptions = {
+  /** Optional allowlist of tool names that may be repaired. */
   allowedToolNames?: Iterable<string>;
+  /** Maximum JSON payload size accepted for one repaired call. */
   maxPayloadBytes?: number;
 };
 
@@ -281,19 +291,9 @@ function consumeOptionalXmlishFunctionClose(text: string, start: number): number
   return consumeXmlishFunctionClose(text, start) ?? start;
 }
 
-function parseXmlishPlainTextToolCallBlockEndAt(
-  text: string,
-  start: number,
-  options?: PlainTextToolCallParseOptions,
-): number | null {
+function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): number | null {
   const opening = parseXmlishOpening(text, start);
   if (!opening) {
-    return null;
-  }
-  const allowedToolNames = options?.allowedToolNames
-    ? new Set(options.allowedToolNames)
-    : undefined;
-  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
     return null;
   }
 
@@ -389,6 +389,7 @@ export function parseStandalonePlainTextToolCallBlocks(
   return blocks.length > 0 ? blocks : null;
 }
 
+/** Removes full-line standalone plain-text tool-call blocks from user-visible text. */
 export function stripPlainTextToolCallBlocks(text: string): string {
   if (
     !text ||

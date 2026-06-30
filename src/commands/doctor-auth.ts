@@ -1,4 +1,4 @@
-import fs from "node:fs";
+/** Doctor notes for auth profile health, OAuth refresh failures, and legacy Codex config. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -16,6 +16,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -25,11 +26,6 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../agents/auth-profiles/paths.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -118,6 +114,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
+/** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
@@ -145,14 +142,6 @@ type AuthProfileHealthTarget = {
   agentDir: string;
   isDefault: boolean;
 };
-
-function hasLocalAuthProfileStoreSource(agentDir: string): boolean {
-  return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
-  );
-}
 
 function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
   return labelAgents ? `${title} (agent: ${agentId})` : title;
@@ -183,6 +172,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
   return [...targets.values()];
 }
 
+/** Returns the short doctor hint for disabled or cooldown auth profiles. */
 export function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
@@ -215,6 +205,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
   }
 }
 
+/** Formats provider OAuth refresh failures as actionable doctor note lines. */
 export function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
@@ -242,6 +233,9 @@ async function resolveAuthIssueHint(
 ): Promise<string | null> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
+  }
+  if (issue.reasonCode === "malformed_api_key") {
+    return "Paste the API key value, not an OpenClaw onboarding command.";
   }
   const providerHint = await formatAuthDoctorHint({
     cfg,
@@ -316,29 +310,34 @@ async function noteAuthProfileHealthForTarget(params: {
   });
 
   const findIssues = () =>
-    summary.profiles.filter(
-      (profile) =>
+    summary.profiles.filter((profile) => {
+      if (profile.type === "api_key") {
+        return profile.status === "missing";
+      }
+      return (
         (profile.type === "oauth" || profile.type === "token") &&
         (profile.status === "expired" ||
           profile.status === "expiring" ||
-          profile.status === "missing"),
-    );
+          profile.status === "missing")
+      );
+    });
 
   let issues = findIssues();
   if (issues.length === 0) {
     return;
   }
 
-  const shouldRefresh = await params.prompter.confirmAutoFix({
-    message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
-    initialValue: true,
-  });
+  const refreshTargets = issues.filter(
+    (issue) => issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
+  );
+  const shouldRefresh =
+    refreshTargets.length > 0 &&
+    (await params.prompter.confirmAutoFix({
+      message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
+      initialValue: true,
+    }));
 
   if (shouldRefresh) {
-    const refreshTargets = issues.filter(
-      (issue) =>
-        issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
-    );
     const errors: string[] = [];
     for (const profile of refreshTargets) {
       try {
@@ -393,6 +392,7 @@ async function noteAuthProfileHealthForTarget(params: {
   }
 }
 
+/** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
 export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

@@ -1,3 +1,4 @@
+// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -18,7 +19,12 @@ import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
+import {
+  blockArtCodeBlockCopyPayloadEncoding,
+  encodeBlockArtCodeBlockCopyPayload,
+} from "./chat/code-block-copy-payload.ts";
 import { truncateText } from "./format.ts";
+import { inferBasePathFromPathname, normalizeBasePath, tabFromPath } from "./navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
@@ -69,6 +75,7 @@ const allowedAttrs = [
   "src",
   "alt",
   "data-code",
+  "data-code-encoding",
   "type",
   "aria-label",
 ];
@@ -84,8 +91,238 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
+const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
+const DOCS_ORIGIN = "https://docs.openclaw.ai";
+const DOCS_ROOT_SEGMENTS = new Set([
+  "agent-runtime-architecture",
+  "announcements",
+  "auth-credential-semantics",
+  "automation",
+  "brave-search",
+  "channels",
+  "ci",
+  "clawhub",
+  "cli",
+  "concepts",
+  "date-time",
+  "debug",
+  "diagnostics",
+  "gateway",
+  "help",
+  "index",
+  "install",
+  "logging",
+  "maturity-scorecard",
+  "network",
+  "nodes",
+  "openclaw-agent-runtime",
+  "perplexity",
+  "plan",
+  "platforms",
+  "plugins",
+  "prose",
+  "providers",
+  "refactor",
+  "reference",
+  "security",
+  "specs",
+  "start",
+  "tools",
+  "tts",
+  "vps",
+  "web",
+]);
+const DOCS_SHORTLINK_PATHS = new Set([
+  "/AGENTS.default",
+  "/RELEASING",
+  "/agent",
+  "/agent-loop",
+  "/agent-send",
+  "/agent-workspace",
+  "/android",
+  "/anthropic",
+  "/architecture",
+  "/audio",
+  "/auth-monitoring",
+  "/azure",
+  "/background-process",
+  "/bash",
+  "/bonjour",
+  "/browser",
+  "/browser-linux-troubleshooting",
+  "/bun",
+  "/camera",
+  "/clawd",
+  "/clawdhub",
+  "/compaction",
+  "/configuration",
+  "/context",
+  "/context-engine",
+  "/control-ui",
+  "/cron",
+  "/cron-jobs",
+  "/cron-vs-heartbeat",
+  "/dashboard",
+  "/device-models",
+  "/discord",
+  "/discovery",
+  "/docker",
+  "/doctor",
+  "/duckduckgo-search",
+  "/elevated",
+  "/exa-search",
+  "/experiments/plans/cron-add-hardening",
+  "/experiments/plans/group-policy-hardening",
+  "/faq",
+  "/gateway-lock",
+  "/gcp",
+  "/gemini-search",
+  "/getting-started",
+  "/glm",
+  "/gmail-pubsub",
+  "/grammy",
+  "/grok-search",
+  "/group-messages",
+  "/groups",
+  "/health",
+  "/heartbeat",
+  "/hubs",
+  "/images",
+  "/imessage",
+  "/ios",
+  "/kimi-search",
+  "/line",
+  "/linux",
+  "/location",
+  "/location-command",
+  "/lore",
+  "/mac/bun",
+  "/mac/canvas",
+  "/mac/child-process",
+  "/mac/dev-setup",
+  "/mac/health",
+  "/mac/icon",
+  "/mac/logging",
+  "/mac/menu-bar",
+  "/mac/peekaboo",
+  "/mac/permissions",
+  "/mac/release",
+  "/mac/remote",
+  "/mac/signing",
+  "/mac/skills",
+  "/mac/voice-overlay",
+  "/mac/voicewake",
+  "/mac/webchat",
+  "/mac/xpc",
+  "/macos",
+  "/mattermost",
+  "/mcp",
+  "/message",
+  "/messages",
+  "/minimax",
+  "/mistral",
+  "/model",
+  "/model-failover",
+  "/models",
+  "/moonshot",
+  "/multi-agent",
+  "/nix",
+  "/northflank",
+  "/oauth",
+  "/onboarding",
+  "/openai",
+  "/opencode",
+  "/opencode-go",
+  "/openrouter",
+  "/pairing",
+  "/pi",
+  "/pi-dev",
+  "/plugin",
+  "/podman",
+  "/poll",
+  "/presence",
+  "/provider-routing",
+  "/qianfan",
+  "/queue",
+  "/quickstart",
+  "/railway",
+  "/remote",
+  "/remote-gateway-readme",
+  "/render",
+  "/rpc",
+  "/sandbox",
+  "/sandboxing",
+  "/session",
+  "/session-tool",
+  "/sessions",
+  "/setup",
+  "/showcase",
+  "/signal",
+  "/skill-workshop",
+  "/skills",
+  "/skills-config",
+  "/slack",
+  "/slash-commands",
+  "/subagents",
+  "/tailscale",
+  "/talk",
+  "/telegram",
+  "/templates/AGENTS",
+  "/templates/BOOT",
+  "/templates/BOOTSTRAP",
+  "/templates/HEARTBEAT",
+  "/templates/IDENTITY",
+  "/templates/SOUL",
+  "/templates/TOOLS",
+  "/templates/USER",
+  "/test",
+  "/thinking",
+  "/timezone",
+  "/troubleshooting",
+  "/tui",
+  "/typebox",
+  "/updating",
+  "/voicewake",
+  "/web-fetch",
+  "/webchat",
+  "/webhook",
+  "/whatsapp",
+  "/windows",
+  "/wizard",
+  "/xiaomi",
+  "/zai",
+]);
+const APP_RESOURCE_ROOT_SEGMENTS = new Set([
+  "__openclaw",
+  "__openclaw__",
+  "_next",
+  "api",
+  "apple-touch-icon.png",
+  "assets",
+  "avatar",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.json",
+  "manifest.webmanifest",
+  "media",
+  "res",
+  "socket.io",
+  "sw.js",
+  "static",
+  "ws",
+]);
+const APP_RESOURCE_PATH_PREFIXES = [
+  ["plugins", "diffs"],
+  ["plugins", "diffs-language-pack"],
+];
+type WindowWithControlUiBasePath = Window &
+  typeof globalThis & {
+    [key: string]: unknown;
+  };
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
@@ -143,6 +380,98 @@ function isHostLocalFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
 }
 
+function isControlUiRoutePath(pathname: string): boolean {
+  if (tabFromPath(pathname) !== null) {
+    return true;
+  }
+  const basePath = currentControlUiBasePath();
+  if (!basePath) {
+    return false;
+  }
+  if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) {
+    return false;
+  }
+  return tabFromPath(pathname, basePath) !== null;
+}
+
+function currentControlUiBasePath(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const configured = (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  if (typeof configured === "string") {
+    return normalizeBasePath(configured);
+  }
+  return inferBasePathFromPathname(window.location.pathname);
+}
+
+function pathSegments(pathname: string): string[] {
+  return pathname.split("/").filter(Boolean);
+}
+
+function stripCurrentControlUiBasePath(pathname: string): string[] {
+  const segments = pathSegments(pathname);
+  const baseSegments = pathSegments(currentControlUiBasePath());
+  if (
+    baseSegments.length === 0 ||
+    baseSegments.some((segment, index) => segments[index] !== segment)
+  ) {
+    return segments;
+  }
+  return segments.slice(baseSegments.length);
+}
+
+function segmentsStartWith(segments: string[], prefix: string[]): boolean {
+  return prefix.every((segment, index) => segments[index] === segment);
+}
+
+function isControlUiResourcePath(segments: string[]): boolean {
+  if (segments.includes("__openclaw__") || segments.includes("__openclaw")) {
+    return true;
+  }
+  const segment = segments[0];
+  if (!segment || APP_RESOURCE_ROOT_SEGMENTS.has(segment)) {
+    return true;
+  }
+  return APP_RESOURCE_PATH_PREFIXES.some((prefix) => segmentsStartWith(segments, prefix));
+}
+
+function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
+  if (DOCS_SHORTLINK_PATHS.has(normalizedPath)) {
+    return true;
+  }
+  const segment = segments[0];
+  return segment ? DOCS_ROOT_SEGMENTS.has(segment) : false;
+}
+
+function normalizeDocsRootHref(href: string): string {
+  const trimmed = href.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return href;
+  }
+  try {
+    const url = new URL(trimmed, DOCS_ORIGIN);
+    if (url.origin !== DOCS_ORIGIN) {
+      return href;
+    }
+    const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
+    if (isControlUiRoutePath(normalizedPath)) {
+      return href;
+    }
+    const segments = pathSegments(normalizedPath);
+    const resourceSegments = stripCurrentControlUiBasePath(normalizedPath);
+    if (isControlUiResourcePath(resourceSegments)) {
+      return href;
+    }
+    if (isDocsRootPath(normalizedPath, segments)) {
+      return url.href;
+    }
+    return href;
+  } catch {
+    return href;
+  }
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -163,9 +492,14 @@ function installHooks() {
       return;
     }
 
+    const normalizedHref = normalizeDocsRootHref(href);
+    if (normalizedHref !== href) {
+      node.setAttribute("href", normalizedHref);
+    }
+
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
-      const url = new URL(href, window.location.href);
+      const url = new URL(normalizedHref, window.location.href);
       if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
         node.removeAttribute("href");
         return;
@@ -206,10 +540,37 @@ function normalizeMarkdownInput(markdownLocal: string): string {
     return "";
   }
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  const suffix = truncated.truncated
+  return appendMarkdownTruncationNotice(truncated).replace(/\r\n?/g, "\n");
+}
+
+function appendMarkdownTruncationNotice(truncated: {
+  text: string;
+  truncated: boolean;
+  total: number;
+}): string {
+  const notice = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
-  return `${truncated.text}${suffix}`.replace(/\r\n?/g, "\n");
+  return `${truncated.text}${notice}`;
+}
+
+export function isMarkdownBlockArtText(value: string): boolean {
+  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const artLines = lines.filter((line) => line.trim().length > 0);
+  if (artLines.length < 2) {
+    return false;
+  }
+
+  // QR generators commonly use spaces plus upper/lower/full block glyphs.
+  // Require multiple glyph-only lines so ordinary prose with a stray block character stays markdown.
+  let glyphCount = 0;
+  for (const line of artLines) {
+    if (!BLOCK_ART_LINE_RE.test(line) || !BLOCK_ART_GLYPH_RE.test(line)) {
+      return false;
+    }
+    glyphCount += Array.from(line).filter((char) => BLOCK_ART_GLYPH_RE.test(char)).length;
+  }
+  return glyphCount >= 8;
 }
 
 function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | null {
@@ -364,6 +725,60 @@ function codeClassAttribute(lang: string, highlighted: string): string {
     lang ? `language-${lang}` : "",
   ].filter(Boolean);
   return classes.length > 0 ? ` class="${escapeHtml(classes.join(" "))}"` : "";
+}
+
+function renderCodeElement(
+  text: string,
+  lang: string,
+  options: { blockArt?: boolean } = {},
+): string {
+  if (options.blockArt || isMarkdownBlockArtText(text)) {
+    return `<pre><code class="markdown-block-art">${escapeHtml(text)}</code></pre>`;
+  }
+  const highlighted = highlightCode(text, lang);
+  const classAttr = codeClassAttribute(lang, highlighted);
+  return `<pre><code${classAttr}>${highlighted}</code></pre>`;
+}
+
+function renderCodeBlock(
+  text: string,
+  lang: string,
+  env: unknown,
+  options: { blockArt?: boolean; copyText?: string } = {},
+): string {
+  const blockArt = options.blockArt || isMarkdownBlockArtText(text);
+  const codeBlock = renderCodeElement(text, lang, { blockArt });
+  if (!shouldRenderCodeBlockCopy(env)) {
+    return codeBlock;
+  }
+  const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
+  const copyText = options.copyText ?? text;
+  const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
+  const attrSafe = escapeHtml(copyPayload);
+  const encodingAttr = blockArt
+    ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
+    : "";
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
+
+  const trimmed = text.trim();
+  const isJson =
+    lang === "json" ||
+    (!lang &&
+      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
+
+  if (isJson) {
+    const lineCount = text.split("\n").length;
+    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
+  }
+
+  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+}
+
+function codeBlockCopyTextFromMarkdownToken(content: string): string {
+  return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
 export const md = new MarkdownIt({
@@ -637,60 +1052,17 @@ md.renderer.rules.fence = (tokens, idx, _options, env) => {
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
-  const text = token.content;
-  const highlighted = highlightCode(text, lang);
-  const classAttr = codeClassAttribute(lang, highlighted);
-  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
-  if (!shouldRenderCodeBlockCopy(env)) {
-    return codeBlock;
-  }
-  const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
-  const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
-
-  const trimmed = text.trim();
-  const isJson =
-    lang === "json" ||
-    (!lang &&
-      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
-
-  if (isJson) {
-    const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
-    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
-  }
-
-  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+  return renderCodeBlock(token.content, lang, env, {
+    copyText: codeBlockCopyTextFromMarkdownToken(token.content),
+  });
 };
 
 // Override indented code blocks (code_block) with the same treatment as fence
 md.renderer.rules.code_block = (tokens, idx, _options, env) => {
-  const token = tokens[idx];
-  const text = token.content;
-  const highlighted = highlightCode(text, "");
-  const classAttr = codeClassAttribute("", highlighted);
-  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
-  if (!shouldRenderCodeBlockCopy(env)) {
-    return codeBlock;
-  }
-  const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
-  const header = `<div class="code-block-header">${copyBtn}</div>`;
-
-  const trimmed = text.trim();
-  const isJson =
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"));
-
-  if (isJson) {
-    const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
-    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
-  }
-
-  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+  const content = tokens[idx].content;
+  return renderCodeBlock(content, "", env, {
+    copyText: codeBlockCopyTextFromMarkdownToken(content),
+  });
 };
 
 export function toSanitizedMarkdownHtml(
@@ -698,27 +1070,36 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const input = rawInput.trim();
   if (!input) {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${input}`;
+  const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${renderInput}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
       return cached;
     }
   }
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  const suffix = truncated.truncated
-    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
-    : "";
+  const truncated = truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
+  if (isMarkdownBlockArtText(truncated.text)) {
+    const rendered = renderCodeBlock(appendMarkdownTruncationNotice(truncated), "", renderOptions, {
+      blockArt: true,
+    });
+    const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+      setCachedMarkdown(cacheKey, sanitized);
+    }
+    return sanitized;
+  }
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const html = toEscapedPlainTextHtml(appendMarkdownTruncationNotice(truncated));
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
@@ -727,11 +1108,11 @@ export function toSanitizedMarkdownHtml(
   }
   let rendered: string;
   try {
-    rendered = md.render(`${truncated.text}${suffix}`, renderOptions);
+    rendered = md.render(appendMarkdownTruncationNotice(truncated), renderOptions);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    const escaped = escapeHtml(appendMarkdownTruncationNotice(truncated));
     rendered = `<pre class="code-block">${escaped}</pre>`;
   }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
@@ -757,6 +1138,21 @@ export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
+  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  if (isMarkdownBlockArtText(rawInput)) {
+    const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
+    installHooks();
+    return DOMPurify.sanitize(
+      renderCodeBlock(
+        appendMarkdownTruncationNotice(truncated),
+        "",
+        normalizeMarkdownRenderOptions(options),
+        { blockArt: true },
+      ),
+      sanitizeOptions,
+    );
+  }
+
   const input = normalizeMarkdownInput(markdownLocal);
   if (!input) {
     return "";

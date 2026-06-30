@@ -1,5 +1,8 @@
+// Runtime fetch adapter preserves undici dispatcher support and normalizes
+// headers/FormData before calling the runtime fetch implementation.
 import type { Dispatcher } from "undici";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+import { isFormDataLike } from "./form-data.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
@@ -10,19 +13,12 @@ type RuntimeFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 
 type FormDataEntryValueWithOptionalName = FormDataEntryValue & { name?: string };
 
-function isFormDataLike(value: unknown): value is FormData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as FormData).entries === "function" &&
-    (value as { [Symbol.toStringTag]?: unknown })[Symbol.toStringTag] === "FormData"
-  );
-}
-
 function normalizeRuntimeFormData(
   body: unknown,
   RuntimeFormData: RuntimeFormDataCtor | undefined,
 ): BodyInit | null | undefined {
+  // Node global FormData and undici runtime FormData can differ; rebuild into
+  // the runtime constructor so multipart uploads stream correctly.
   if (!isFormDataLike(body) || typeof RuntimeFormData !== "function") {
     return body as BodyInit | null | undefined;
   }

@@ -1,10 +1,15 @@
+// Covers canonical config schema defaults, validation, and sensitive redaction.
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
+import {
+  DiscordConfigSchema,
+  SlackConfigSchema,
+  TelegramConfigSchema,
+} from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -110,6 +115,7 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
@@ -123,6 +129,19 @@ describe("config schema", () => {
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
+  });
+
+  it("accepts qmd query rerank override", () => {
+    const result = OpenClawSchema.safeParse({
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          rerank: false,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -234,6 +253,66 @@ describe("config schema", () => {
     }
   });
 
+  it("accepts stdio transport for command-bearing MCP servers", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          myTool: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem"],
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported transport values for MCP servers", () => {
+    for (const transport of ["tcp", "websocket", "grpc", ""]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              bad: {
+                url: "https://mcp.example.com/mcp",
+                transport,
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects stdio transport for URL-only MCP servers (command required)", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            url: "https://mcp.example.com/mcp",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects stdio transport with whitespace-only command", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            command: "   ",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 
@@ -284,7 +363,8 @@ describe("config schema", () => {
     expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("discord")).toHaveProperty("commentary");
-    expect(progressPropsFor("telegram")).not.toHaveProperty("commentary");
+    expect(progressPropsFor("slack")).toHaveProperty("commentary");
+    expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
@@ -298,7 +378,9 @@ describe("config schema", () => {
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
     );
-    expect(res.uiHints["channels.telegram.streaming.progress.commentary"]).toBeUndefined();
+    expect(res.uiHints["channels.telegram.streaming.progress.commentary"]?.label).toBe(
+      "Telegram Progress Commentary",
+    );
     expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
       "Mattermost Progress Label",
     );
@@ -456,7 +538,7 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts progress commentary only for Discord streaming config", () => {
+  it("accepts progress commentary for shared progress streaming config", () => {
     expect(
       DiscordConfigSchema.safeParse({
         streaming: {
@@ -473,7 +555,16 @@ describe("config schema", () => {
           progress: { commentary: true },
         },
       }).success,
-    ).toBe(false);
+    ).toBe(true);
+
+    expect(
+      SlackConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("keeps per-agent model overrides limited to model selection", () => {
@@ -621,7 +712,7 @@ describe("config schema", () => {
       ToolsSchema.parse({
         toolSearch: {
           enabled: true,
-          mode: "tools",
+          mode: "directory",
           codeTimeoutMs: 5000,
           searchDefaultLimit: 4,
           maxSearchLimit: 12,
@@ -629,7 +720,7 @@ describe("config schema", () => {
       })?.toolSearch,
     ).toEqual({
       enabled: true,
-      mode: "tools",
+      mode: "directory",
       codeTimeoutMs: 5000,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,
@@ -642,6 +733,38 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts install policy exec config in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      security: {
+        installPolicy: {
+          enabled: true,
+          targets: ["skill", "plugin"],
+          exec: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-install-policy",
+            args: ["--json"],
+            timeoutMs: 5000,
+            noOutputTimeoutMs: 2500,
+            maxOutputBytes: 65536,
+            env: {
+              POLICY_MODE: "strict",
+            },
+            passEnv: ["OPENCLAW_STATE_DIR"],
+            trustedDirs: ["/usr/local/bin"],
+            allowInsecurePath: false,
+            allowSymlinkCommand: false,
+          },
+        },
+      },
+    });
+
+    expect(parsed.security?.installPolicy?.targets).toEqual(["skill", "plugin"]);
+    expect(parsed.security?.installPolicy?.exec?.source).toBe("exec");
+    expect(parsed.security?.installPolicy?.exec?.command).toBe(
+      "/usr/local/bin/openclaw-install-policy",
+    );
   });
 
   it("accepts Code Mode config in the runtime zod schema", () => {

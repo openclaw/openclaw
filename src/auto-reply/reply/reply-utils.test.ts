@@ -1,14 +1,14 @@
+// Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
-  hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import {
@@ -149,7 +149,7 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
-  it("records skip reasons for silent/empty payloads", () => {
+  it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
       {
@@ -158,6 +158,21 @@ describe("normalizeReplyPayload", () => {
         reason: "silent",
       },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
+      {
+        name: "internalArtifact <channel|>",
+        payload: { text: "<channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact set-thought",
+        payload: { text: "set-thought <channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact box-drawing separator",
+        payload: { text: "───" },
+        reason: "silent",
+      },
     ] as const;
     for (const testCase of cases) {
       const reasons: string[] = [];
@@ -232,6 +247,16 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses quoted NO_REPLY string payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '"NO_REPLY"' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -283,6 +308,16 @@ describe("normalizeReplyPayload", () => {
   it("strips JSON NO_REPLY action text but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: '{"action":"NO_REPLY"}',
+      mediaUrl: "https://example.com/img.png",
+    });
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("");
+    expect(reply.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("strips quoted NO_REPLY string text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: '"NO_REPLY"',
       mediaUrl: "https://example.com/img.png",
     });
     const reply = expectNormalizedReply(result);
@@ -448,6 +483,27 @@ describe("typing controller", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
+
+  it("can send the first typing signal without periodic keepalive refreshes", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 30_000,
+      keepalive: false,
+    });
+
+    await typing.startTypingLoop();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await typing.startTypingLoop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveTypingMode", () => {
@@ -494,6 +550,17 @@ describe("resolveTypingMode", () => {
           sourceReplyDeliveryMode: "message_tool_only" as const,
         },
         expected: "message",
+      },
+      {
+        name: "configured instant typing mode wins over message-tool-only default",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: true,
+          wasMentioned: false,
+          isHeartbeat: false,
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expected: "instant",
       },
       {
         name: "default mentioned group chat",
@@ -739,7 +806,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("starts typing and refreshes ttl on text for thinking mode", async () => {
+  it("starts typing on reasoning delta and refreshes ttl on text for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -747,8 +814,15 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
+    // Reasoning delta starts the typing loop and refreshes TTL,
+    // even before any renderable assistant text has arrived.
     await signaler.signalReasoningDelta();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+
+    // Once typing is active, text delta only refreshes TTL.
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
@@ -806,6 +880,19 @@ describe("createTypingSignaler", () => {
     }
   });
 
+  it("starts typing on execution activity for active reply modes", async () => {
+    for (const mode of ["instant", "message", "thinking"] as const) {
+      const typing = createMockTypingController();
+      const signaler = createTypingSignaler({ typing, mode, isHeartbeat: false });
+
+      await signaler.signalExecutionActivity?.();
+
+      expect(typing.startTypingLoop, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(typing.refreshTypingTtl, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(typing.startTypingOnText, `mode=${mode}`).not.toHaveBeenCalled();
+    }
+  });
+
   it("suppresses typing when disabled", async () => {
     const disabledCases = [
       { mode: "instant" as const, isHeartbeat: true },
@@ -818,6 +905,7 @@ describe("createTypingSignaler", () => {
       await signaler.signalRunStart();
       await signaler.signalTextDelta("hi");
       await signaler.signalReasoningDelta();
+      await signaler.signalExecutionActivity?.();
 
       expect(typing.startTypingLoop, `mode=${params.mode}`).not.toHaveBeenCalled();
       expect(typing.startTypingOnText, `mode=${params.mode}`).not.toHaveBeenCalled();
@@ -1414,14 +1502,5 @@ describe("extractShortModelName", () => {
     for (const [input, expected] of cases) {
       expect(extractShortModelName(input), input).toBe(expected);
     }
-  });
-});
-
-describe("hasTemplateVariables", () => {
-  it("handles empty, static, and repeated variable checks", () => {
-    expect(hasTemplateVariables("")).toBe(false);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
   });
 });

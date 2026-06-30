@@ -1,11 +1,13 @@
+// Whatsapp tests cover web auto reply utils plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -22,33 +24,55 @@ import {
   resolveMentionTargets,
   resolveOwnerList,
 } from "./mentions.js";
-import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+type TestMessageOverrides = {
+  admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
+  body?: string;
+  mentionedJids?: string[];
+  selfE164?: string;
+  selfJid?: string;
+  selfLid?: string;
+};
 
-const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
-  ({
-    id: "m1",
-    from: "120363401234567890@g.us",
-    conversationId: "120363401234567890@g.us",
-    to: "15551234567@s.whatsapp.net",
-    accountId: "default",
-    body: "",
-    chatType: "group",
-    chatId: "120363401234567890@g.us",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
-    ...overrides,
-  }) as WebInboundMsg;
+const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => {
+  const conversationId = overrides.admission?.conversation?.id ?? "120363401234567890@g.us";
+  const conversationKind = overrides.admission?.conversation?.kind ?? "group";
+  return createTestWebInboundMessage({
+    event: { id: "m1" },
+    payload: { body: overrides.body ?? "" },
+    platform: {
+      chatJid: conversationId,
+      recipientJid: "15551234567@s.whatsapp.net",
+      selfE164: overrides.selfE164,
+      selfJid: overrides.selfJid,
+      selfLid: overrides.selfLid,
+    },
+    admission: {
+      ...overrides.admission,
+      accountId: overrides.admission?.accountId ?? "default",
+      conversation: {
+        kind: conversationKind,
+        id: conversationId,
+        ...overrides.admission?.conversation,
+      },
+      sender: {
+        id: conversationId,
+        ...overrides.admission?.sender,
+      },
+      senderAccess: {
+        reasonCode:
+          conversationKind === "direct" ? "dm_policy_allowlisted" : "group_policy_allowed",
+        ...overrides.admission?.senderAccess,
+      },
+    },
+    group: {
+      mentions: {
+        jids: overrides.mentionedJids,
+      },
+    },
+  });
+};
 
 function getSessionSnapshotForTest(
   cfg: OpenClawConfig,
@@ -108,7 +132,7 @@ describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
   function expectMentioned(
-    msg: WebInboundMsg,
+    msg: AdmittedWebInboundMessage,
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
@@ -151,9 +175,12 @@ describe("isBotMentionedFromTargets", () => {
       // Direct chat with self, not a group — the original "ignore mentions
       // in self-chat" suppression still applies here so that mentioning the
       // owner in their own DM does not falsely trigger the bot.
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "@owner ping",
       mentionedJids: ["999@s.whatsapp.net"],
       selfE164: "+999",
@@ -162,9 +189,12 @@ describe("isBotMentionedFromTargets", () => {
     expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
@@ -266,8 +296,10 @@ describe("getSessionSnapshot", () => {
         const storePath = path.join(root, "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
-        await saveSessionStore(storePath, {
-          [sessionKey]: {
+        await upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
             lastChannel: "whatsapp",
@@ -303,7 +335,11 @@ describe("web auto-reply util", () => {
   describe("mentions diagnostics", () => {
     it("returns normalized debug fields and mention outcome", () => {
       const msg = makeMsg({
-        from: "777@lid",
+        admission: {
+          conversation: {
+            id: "777@lid",
+          },
+        },
         body: "openclaw ping",
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
@@ -329,6 +365,15 @@ describe("web auto-reply util", () => {
   });
 
   describe("elide", () => {
+    const hasLoneSurrogate = (value: string): boolean =>
+      Array.from(value).some((char) => {
+        if (char.length !== 1) {
+          return false;
+        }
+        const codeUnit = char.charCodeAt(0);
+        return codeUnit >= 0xd800 && codeUnit <= 0xdfff;
+      });
+
     it("returns undefined for undefined input", () => {
       expect(elide(undefined)).toBe(undefined);
     });
@@ -339,6 +384,20 @@ describe("web auto-reply util", () => {
 
     it("truncates and annotates when over limit", () => {
       expect(elide("abcdef", 3)).toBe("abc… (truncated 3 chars)");
+    });
+
+    it("does not split surrogate pairs when the limit lands inside an emoji", () => {
+      const output = elide("😀😀😀", 5);
+
+      expect(output).toBe("😀😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
+    });
+
+    it("keeps a complete astral character when it fits before the limit", () => {
+      const output = elide("ab😀cd", 4);
+
+      expect(output).toBe("ab😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
     });
   });
 

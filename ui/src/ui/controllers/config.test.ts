@@ -1,3 +1,4 @@
+// Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
@@ -44,6 +45,7 @@ function createState(): ConfigState {
     connected: false,
     lastError: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     updateRunning: false,
   };
@@ -1141,6 +1143,29 @@ describe("runUpdate", () => {
     });
   });
 
+  it("surfaces managed-service handoff command when the gateway cannot start it", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "skipped", reason: "managed-service-handoff-unavailable" },
+      handoff: {
+        status: "unavailable",
+        command: "openclaw update --yes",
+        message:
+          "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateStatusBanner).toEqual({
+      tone: "warn",
+      text: "Update skipped: managed-service-handoff-unavailable. Run `openclaw update --yes` from a shell outside the Gateway process.",
+    });
+  });
+
   it("stores the expected post-update version when update.run succeeds", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: true,
@@ -1156,6 +1181,27 @@ describe("runUpdate", () => {
     await runUpdate(state);
 
     expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.pendingUpdateHandoff).toBe(false);
+    expect(state.updateStatusBanner).toBeNull();
+  });
+
+  it("tracks managed-service handoff updates for reconnect verification", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+      },
+      handoff: { status: "started" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBeNull();
+    expect(state.pendingUpdateHandoff).toBe(true);
     expect(state.updateStatusBanner).toBeNull();
   });
 });

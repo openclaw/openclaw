@@ -1,3 +1,8 @@
+/**
+ * Usage-state and failure cooldown tests for auth profiles.
+ * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
+ * persistence hooks without contacting real providers.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
@@ -1083,6 +1088,19 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
+  });
+
+  it("cancels WHAM HTTP error response bodies", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    const response = new Response("server busy", { status: 500 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchMock.mockResolvedValueOnce(response);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(cancel).toHaveBeenCalledOnce();
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
   });
 

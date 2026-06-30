@@ -1,3 +1,4 @@
+// Loads global dotenv files into process environment when requested.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,8 @@ import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 
+// Global dotenv loading imports operator-level gateway env files without
+// overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
 
 type DotEnvEntry = {
@@ -19,7 +22,15 @@ type LoadedDotEnvFile = {
   entries: DotEnvEntry[];
 };
 
-function readGlobalRuntimeDotEnvFile(params: {
+type GlobalRuntimeDotEnvOptions = {
+  additionalEnvPaths?: string[];
+  entryFilter?: (key: string, value: string) => boolean;
+  quiet?: boolean;
+  stateEnvPath?: string;
+};
+
+export function readDotEnvFile(params: {
+  entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
@@ -49,17 +60,18 @@ function readGlobalRuntimeDotEnvFile(params: {
   const entries: DotEnvEntry[] = [];
   for (const [rawKey, value] of Object.entries(parsed)) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (key) {
+    if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });
     }
   }
   return { filePath: params.filePath, entries };
 }
 
-function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
+function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
   const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
   const firstSeen = new Map<string, { value: string; filePath: string }>();
+  const appliedKeysByFile = new Map<string, string[]>();
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
@@ -69,6 +81,8 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       const previous = firstSeen.get(key);
       if (previous) {
         if (previous.value !== value) {
+          // First file wins for deterministic startup; conflicts are logged once
+          // after parsing so sensitive values are not printed.
           const conflictKey = `${previous.filePath}\u0000${file.filePath}`;
           const existing = conflicts.get(conflictKey);
           if (existing) {
@@ -86,6 +100,12 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       firstSeen.set(key, { value, filePath: file.filePath });
       if (process.env[key] === undefined) {
         process.env[key] = value;
+        const appliedKeys = appliedKeysByFile.get(file.filePath);
+        if (appliedKeys) {
+          appliedKeys.push(key);
+        } else {
+          appliedKeysByFile.set(file.filePath, [key]);
+        }
       }
     }
   }
@@ -100,11 +120,14 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
     );
   }
+  return appliedKeysByFile;
 }
 
-export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
+/** Load global runtime dotenv files into `process.env` with first-wins precedence. */
+export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) {
   const quiet = opts?.quiet ?? true;
   const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");
+  const globalEnvPaths = [...new Set([stateEnvPath, ...(opts?.additionalEnvPaths ?? [])])];
   const defaultStateEnvPath = path.join(
     resolveRequiredHomeDir(process.env, os.homedir),
     ".openclaw",
@@ -113,20 +136,30 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvP
   const hasExplicitNonDefaultStateDir =
     process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
-  const parsedFiles = [readGlobalRuntimeDotEnvFile({ filePath: stateEnvPath, quiet })];
+  const globalEnvs = globalEnvPaths.map((filePath) =>
+    readDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
+  );
+  const parsedFiles = [...globalEnvs];
+  let gatewayEnv: LoadedDotEnvFile | null = null;
   if (!hasExplicitNonDefaultStateDir) {
-    parsedFiles.push(
-      readGlobalRuntimeDotEnvFile({
-        filePath: path.join(
-          resolveRequiredHomeDir(process.env, os.homedir),
-          ".config",
-          "openclaw",
-          "gateway.env",
-        ),
-        quiet,
-      }),
-    );
+    gatewayEnv = readDotEnvFile({
+      entryFilter: opts?.entryFilter,
+      filePath: path.join(
+        resolveRequiredHomeDir(process.env, os.homedir),
+        ".config",
+        "openclaw",
+        "gateway.env",
+      ),
+      quiet,
+    });
+    parsedFiles.push(gatewayEnv);
   }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  loadParsedDotEnvFiles(parsed);
+  const appliedKeysByFile = loadParsedDotEnvFiles(parsed);
+  return {
+    stateEnvAppliedKeys: globalEnvs.flatMap((file) =>
+      file ? (appliedKeysByFile.get(file.filePath) ?? []) : [],
+    ),
+    gatewayEnvAppliedKeys: gatewayEnv ? (appliedKeysByFile.get(gatewayEnv.filePath) ?? []) : [],
+  };
 }

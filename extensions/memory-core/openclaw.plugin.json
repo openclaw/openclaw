@@ -5,8 +5,12 @@
   },
   "kind": "memory",
   "contracts": {
-    "memoryEmbeddingProviders": ["local"],
     "tools": ["memory_get", "memory_search"]
+  },
+  "toolMetadata": {
+    "memory_get": {
+      "replaySafe": true
+    }
   },
   "commandAliases": [
     {

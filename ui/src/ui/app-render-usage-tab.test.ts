@@ -2,22 +2,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { LazyView } from "./lazy-view.ts";
 import type { UsageProps } from "./views/usageTypes.ts";
 
-const loadUsageMock = vi.hoisted(() => vi.fn(async () => {}));
 const renderUsageMock = vi.hoisted(() => vi.fn((_props: UsageProps) => null));
 
-vi.mock("./controllers/usage.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./controllers/usage.ts")>();
-  return {
-    ...actual,
-    loadUsage: loadUsageMock,
-  };
-});
+type UsageViewModule = typeof import("./views/usage.ts");
 
-vi.mock("./views/usage.ts", () => ({
-  renderUsage: renderUsageMock,
-}));
+function createLoadedUsageView(): LazyView<UsageViewModule> {
+  return {
+    read: () => ({ renderUsage: renderUsageMock }) as unknown as UsageViewModule,
+    retry: () => {},
+    error: () => undefined,
+    hasError: () => false,
+    pending: () => false,
+  };
+}
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
@@ -37,6 +37,10 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     usageQueryDraft: "",
     usageQueryDebounceTimer: null,
     usageTimeZone: "local",
+    connected: true,
+    client: {
+      request: vi.fn(async () => ({})),
+    },
     agentsList: {
       defaultId: "main",
       mainKey: "agent:main:main",
@@ -52,7 +56,7 @@ describe("renderUsageTab", () => {
   });
 
   it("passes configured agents to the usage view", () => {
-    renderUsageTab(createState());
+    renderUsageTab(createState(), createLoadedUsageView());
 
     expect(renderUsageMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -62,9 +66,12 @@ describe("renderUsageTab", () => {
   });
 
   it("reloads usage when selecting an agent scope", () => {
-    const state = createState();
+    const request = vi.fn(async () => ({}));
+    const state = createState({
+      client: { request } as unknown as AppViewState["client"],
+    });
 
-    renderUsageTab(state);
+    renderUsageTab(state, createLoadedUsageView());
     expect(renderUsageMock).toHaveBeenCalled();
     const props = renderUsageMock.mock.calls[0]?.[0];
     if (!props) {
@@ -73,6 +80,13 @@ describe("renderUsageTab", () => {
     props.callbacks.filters.onAgentChange("research");
 
     expect(state.usageAgentId).toBe("research");
-    expect(loadUsageMock).toHaveBeenCalledWith(state);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      expect.objectContaining({ agentId: "research" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "usage.cost",
+      expect.objectContaining({ agentId: "research" }),
+    );
   });
 });

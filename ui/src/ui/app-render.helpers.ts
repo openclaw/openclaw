@@ -1,7 +1,9 @@
+// Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,
+  flushChatQueueAfterIdleSessionReconciliation,
   refreshChat,
   refreshChatAvatar,
   scopedAgentParamsForSession,
@@ -14,9 +16,11 @@ import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatModelSelect,
+  renderChatQuotaPill,
   resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
+import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -135,25 +139,45 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
   return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
 }
 
+function chatMessageCacheForState(state: AppViewState) {
+  return (state.chatMessagesBySession ??= new Map());
+}
+
+function saveChatMessagesForSession(state: AppViewState, sessionKey: string) {
+  cacheChatMessages(chatMessageCacheForState(state), state, { sessionKey }, state.chatMessages);
+}
+
+function restoreChatMessagesForSession(state: AppViewState, sessionKey: string): unknown[] {
+  return readChatMessagesFromCache(chatMessageCacheForState(state), state, { sessionKey });
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
   persistChatComposerState(state, previousSessionKey);
   saveChatQueueForSession(state, previousSessionKey);
+  saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
-  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
+  const chatSessionState = state as unknown as {
+    currentSessionId?: string | null;
+    reconnectResumeSessionId?: string | null;
+  };
+  chatSessionState.currentSessionId = null;
+  chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
-  state.chatMessages = [];
+  state.chatReplyTarget = null;
+  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
   state.activityEntries = [];
   state.activityExpandedIds = new Set();
   state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
+  state.chatVerboseLevel = null;
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
@@ -390,6 +414,7 @@ export function renderChatControls(state: AppViewState) {
     >
       ${renderChatModelSelect(state)}
     </div>
+    ${renderChatQuotaPill(state)}
     <div class="chat-settings-popover-wrapper">
       <button
         class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
@@ -623,8 +648,13 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
-export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+function switchChatSessionInternal(
+  state: AppViewState,
+  nextSessionKey: string,
+  opts?: { awaitInitialLoad?: boolean },
+): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
+  const previousSessionsResult = state.sessionsResult;
   const nextSessionRow =
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
@@ -644,32 +674,73 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     nextSessionKey,
     true,
   );
-  void syncSelectedSessionMessageSubscription(
+  const subscriptionSync = syncSelectedSessionMessageSubscription(
     state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
-  void loadChatHistory(state as unknown as ChatState);
-  void refreshSessionOptions(state);
+  const historyLoad = loadChatHistory(state as unknown as ChatState);
+  const sessionsRefresh = refreshSessionOptions(state);
+  flushChatQueueAfterIdleSessionReconciliation(
+    state as unknown as Parameters<typeof flushChatQueueAfterIdleSessionReconciliation>[0],
+    nextSessionKey,
+    historyLoad,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
+  if (opts?.awaitInitialLoad) {
+    void sessionsRefresh;
+    return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
+  }
+  void subscriptionSync;
+  void historyLoad;
+  void sessionsRefresh;
+  return undefined;
+}
+
+export function switchChatSession(state: AppViewState, nextSessionKey: string): void {
+  void switchChatSessionInternal(state, nextSessionKey);
+}
+
+export function switchChatSessionAndWait(
+  state: AppViewState,
+  nextSessionKey: string,
+): Promise<void> {
+  return (
+    switchChatSessionInternal(state, nextSessionKey, { awaitInitialLoad: true }) ??
+    Promise.resolve()
+  );
+}
+
+export function dismissRealtimeTalkError(state: AppViewState) {
+  if (state.realtimeTalkStatus !== "error") {
+    return;
+  }
+  const talkHost = state as unknown as {
+    realtimeTalkSession?: { stop(): void } | null;
+  };
+  talkHost.realtimeTalkSession?.stop();
+  talkHost.realtimeTalkSession = null;
+  state.realtimeTalkActive = false;
+  state.realtimeTalkStatus = "idle";
+  state.realtimeTalkDetail = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
 }
 
 export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
   state.chatError = null;
-  if (state.realtimeTalkStatus === "error") {
-    const talkHost = state as unknown as {
-      realtimeTalkSession?: { stop(): void } | null;
-    };
-    talkHost.realtimeTalkSession?.stop();
-    talkHost.realtimeTalkSession = null;
-    state.realtimeTalkActive = false;
-    state.realtimeTalkStatus = "idle";
-    state.realtimeTalkDetail = null;
-    state.realtimeTalkTranscript = null;
-    state.resetRealtimeTalkConversation?.();
-  }
 }
 
-export async function createChatSession(state: AppViewState): Promise<boolean> {
+export type CreateChatSessionIntent = { source: "user" };
+
+export async function createChatSession(
+  state: AppViewState,
+  intent?: CreateChatSessionIntent,
+): Promise<boolean> {
+  if (intent?.source !== "user") {
+    return false;
+  }
   if (!state.client || !state.connected) {
     return false;
   }
@@ -687,11 +758,11 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const parentSessionKey = state.sessionsResult?.sessions.some(
-    (row) => row.key === previousSessionKey,
-  )
-    ? previousSessionKey
-    : undefined;
+  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  const parentSessionKey =
+    normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
+      ? undefined
+      : normalizedPreviousSessionKey;
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {
@@ -783,17 +854,18 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   return html`
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
+        // Group aria-label already says "Color mode"; per-button label only needs
+        // the differentiating mode name (System/Light/Dark).
         const label = t(opt.labelKey);
-        const tooltip = t("common.colorModeOption", { mode: label });
         return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${tooltip}
-            aria-label=${tooltip}
-            data-tooltip=${tooltip}
+            title=${label}
+            aria-label=${label}
+            data-tooltip=${label}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

@@ -1,8 +1,14 @@
+/**
+ * Warms and queries provider-auth availability for model catalogs. The module
+ * keeps per-agent auth snapshots process-current so model listing can avoid
+ * repeated env/profile/plugin discovery on hot paths.
+ */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -25,28 +31,20 @@ import {
   type RuntimeProviderAuthLookup,
 } from "./model-auth.js";
 import { loadModelCatalog } from "./model-catalog.js";
+import {
+  cancelCurrentProviderAuthWarmWorker,
+  claimCurrentProviderAuthStateGeneration,
+  clearCurrentProviderAuthState,
+  clearCurrentProviderAuthWarmWorker,
+  getCurrentProviderAuthStates,
+  isCurrentProviderAuthStateGeneration,
+  publishProviderAuthWarmSnapshot,
+  setCurrentProviderAuthWarmWorker,
+  type PreparedProviderAuthState,
+  type ProviderAuthWarmSnapshot,
+} from "./model-provider-auth-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
-
-// Prepared runtime fact: which providers have available auth given the
-// current cfg + env. Populated explicitly at gateway startup and on config
-// reload; consulted by hasAuthForModelProvider so every model-listing call
-// (pickers, /models, status commands, CLI) skips the per-provider plugin
-// discovery and external-CLI probing on the hot path.
-
-type PreparedProviderAuthState = {
-  agentId: string;
-  configFingerprint: string;
-  providers: ReadonlyMap<string, boolean>;
-};
-
-export type ProviderAuthWarmSnapshot = {
-  agents: Array<{
-    agentId: string;
-    configFingerprint: string;
-    providers: Array<[string, boolean]>;
-  }>;
-};
 
 type ProviderAuthWarmWorkerResult =
   | {
@@ -81,35 +79,9 @@ type ProviderAuthWarmWorkerRunner = (params: {
 const PROVIDER_AUTH_WARM_WORKER_TIMEOUT_MS = 120_000;
 const PROVIDER_AUTH_WARM_CANCEL_POLL_MS = 25;
 
-// One entry per configured agent, keyed by agentId. Populated by the provider
-// auth warm path; consulted by hasAuthForModelProvider on every model-listing call.
-let currentProviderAuthStates: ReadonlyMap<string, PreparedProviderAuthState> | null = null;
 const configFingerprintCache = new WeakMap<OpenClawConfig, string>();
-// Generation counter guards against an in-flight warm publishing stale
-// state after a subsequent warm or clear has invalidated it.
-let currentProviderAuthStateGeneration = 0;
-let currentProviderAuthWarmWorker:
-  | {
-      worker: Worker;
-      cancelled: boolean;
-    }
-  | undefined;
-
-function cancelCurrentProviderAuthWarmWorker(): void {
-  const current = currentProviderAuthWarmWorker;
-  if (!current) {
-    return;
-  }
-  current.cancelled = true;
-  currentProviderAuthWarmWorker = undefined;
-  void current.worker.terminate();
-}
-
-export function clearCurrentProviderAuthState(): void {
-  currentProviderAuthStates = null;
-  currentProviderAuthStateGeneration += 1;
-  cancelCurrentProviderAuthWarmWorker();
-}
+/** Clears process-current warmed provider auth state. */
+export { clearCurrentProviderAuthState };
 
 function resolvePreparedStateForCaller(params: {
   states: ReadonlyMap<string, PreparedProviderAuthState> | null;
@@ -142,6 +114,7 @@ function resolveProviderAuthConfigFingerprint(cfg: OpenClawConfig | undefined): 
   return fingerprint;
 }
 
+/** Resolves whether auth is available for a model provider in the caller's runtime scope. */
 export async function hasAuthForModelProvider(params: {
   provider: string;
   modelApi?: string;
@@ -153,6 +126,7 @@ export async function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
+  allowPreparedRuntimeAuth?: boolean;
   runtimeAuthLookup?: RuntimeProviderAuthLookup;
   resolveRuntimeAuthLookup?: () => RuntimeProviderAuthLookup;
 }): Promise<boolean> {
@@ -163,7 +137,7 @@ export async function hasAuthForModelProvider(params: {
   // compute so callers that narrow the scope — e.g. gateway `models.list`
   // with `runtimeAuthDiscovery: false`, or callers with a non-warmed
   // workspaceDir — get the answer they asked for.
-  const preparedStates = currentProviderAuthStates;
+  const preparedStates = getCurrentProviderAuthStates();
   const workspaceDir = params.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const configFingerprint = resolveProviderAuthConfigFingerprint(params.cfg);
   const preparedState = resolvePreparedStateForCaller({
@@ -188,8 +162,8 @@ export async function hasAuthForModelProvider(params: {
     configFingerprint === preparedState.configFingerprint &&
     workspaceDir === expectedWorkspaceDir &&
     (params.agentDir === undefined || params.agentDir === expectedAgentDir) &&
-    params.discoverExternalCliAuth !== false &&
-    params.allowPluginSyntheticAuth !== false &&
+    (params.allowPreparedRuntimeAuth === true ||
+      (params.discoverExternalCliAuth !== false && params.allowPluginSyntheticAuth !== false)) &&
     params.env === undefined &&
     params.store === undefined &&
     params.modelApi === undefined;
@@ -244,6 +218,7 @@ export async function hasAuthForModelProvider(params: {
   return false;
 }
 
+/** Creates a cached provider-auth checker bound to one agent/runtime context. */
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -252,6 +227,7 @@ export function createProviderAuthChecker(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
+  allowPreparedRuntimeAuth?: boolean;
 }): (provider: string, modelApi?: string) => Promise<boolean> {
   const authCache = new Map<string, boolean>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
@@ -272,6 +248,7 @@ export function createProviderAuthChecker(params: {
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
       discoverExternalCliAuth: params.discoverExternalCliAuth,
+      allowPreparedRuntimeAuth: params.allowPreparedRuntimeAuth,
       resolveRuntimeAuthLookup: () =>
         (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
           cfg: params.cfg,
@@ -295,19 +272,6 @@ function serializeProviderAuthStates(
       providers: [...state.providers.entries()],
     })),
   };
-}
-
-function publishProviderAuthWarmSnapshot(snapshot: ProviderAuthWarmSnapshot): void {
-  currentProviderAuthStates = new Map(
-    snapshot.agents.map((state) => [
-      state.agentId,
-      {
-        agentId: state.agentId,
-        configFingerprint: state.configFingerprint,
-        providers: new Map(state.providers),
-      },
-    ]),
-  );
 }
 
 function resolveProviderConfigApi(
@@ -342,6 +306,7 @@ function shouldOmitFalsePreparedAuthForProcessSyntheticProvider(params: {
     .some((ref) => eligibleRefs.has(normalizeProviderId(ref)));
 }
 
+/** Builds a provider auth snapshot for every configured agent. */
 export async function buildCurrentProviderAuthStateSnapshot(
   cfg: OpenClawConfig,
   options: {
@@ -428,30 +393,6 @@ export async function buildCurrentProviderAuthStateSnapshot(
     });
   }
   return serializeProviderAuthStates(states);
-}
-
-export async function warmCurrentProviderAuthState(
-  cfg: OpenClawConfig,
-  options: { isCancelled?: () => boolean } = {},
-): Promise<void> {
-  // Claim a fresh generation; any concurrent warm or clear bumps this and
-  // turns our published state stale.
-  currentProviderAuthStateGeneration += 1;
-  const ownGeneration = currentProviderAuthStateGeneration;
-  const isWarmStale = () =>
-    options.isCancelled?.() === true || ownGeneration !== currentProviderAuthStateGeneration;
-  const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
-    isCancelled: isWarmStale,
-  });
-  if (isWarmStale()) {
-    return;
-  }
-  if (options.isCancelled?.() || ownGeneration !== currentProviderAuthStateGeneration) {
-    // A newer warm or clear ran while we were building; skip publication so
-    // the newer answer wins.
-    return;
-  }
-  publishProviderAuthWarmSnapshot(snapshot);
 }
 
 function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {
@@ -584,7 +525,7 @@ function runProviderAuthWarmWorker(params: {
     worker,
     cancelled: false,
   };
-  currentProviderAuthWarmWorker = handle;
+  setCurrentProviderAuthWarmWorker(handle);
   return new Promise<ProviderAuthWarmSnapshot>((resolve, reject) => {
     let settled = false;
     const finish = (complete: () => void) => {
@@ -592,9 +533,7 @@ function runProviderAuthWarmWorker(params: {
         return;
       }
       settled = true;
-      if (currentProviderAuthWarmWorker === handle) {
-        currentProviderAuthWarmWorker = undefined;
-      }
+      clearCurrentProviderAuthWarmWorker(handle);
       if (timer) {
         clearTimeout(timer);
       }
@@ -644,7 +583,7 @@ function runProviderAuthWarmWorker(params: {
           resolve({ agents: [] });
           return;
         }
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       });
     });
     worker.once("exit", (code) => {
@@ -665,6 +604,7 @@ function runProviderAuthWarmWorker(params: {
   });
 }
 
+/** Warms process-current provider auth state in a worker thread. */
 export async function warmCurrentProviderAuthStateOffMainThread(
   cfg: OpenClawConfig,
   options: {
@@ -674,11 +614,10 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     runWorker?: ProviderAuthWarmWorkerRunner;
   } = {},
 ): Promise<void> {
-  currentProviderAuthStateGeneration += 1;
-  const ownGeneration = currentProviderAuthStateGeneration;
+  const ownGeneration = claimCurrentProviderAuthStateGeneration();
   cancelCurrentProviderAuthWarmWorker();
   const isWarmStale = () =>
-    options.isCancelled?.() === true || ownGeneration !== currentProviderAuthStateGeneration;
+    options.isCancelled?.() === true || !isCurrentProviderAuthStateGeneration(ownGeneration);
   if (isWarmStale()) {
     return;
   }
@@ -699,18 +638,4 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     return;
   }
   publishProviderAuthWarmSnapshot(snapshot);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

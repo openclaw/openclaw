@@ -1,5 +1,10 @@
+// Gateway Talk relay session lifecycle helpers.
+// Enforces TTL and connection ownership for process-local relay sessions.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
+/**
+ * Shared TTL and connection-ownership checks for Talk relay session maps.
+ */
 type TalkRelayLifecycleSession = {
   connId: string;
   expiresAtMs: number;
@@ -17,6 +22,7 @@ function isExpiredTalkRelaySession(
   return expiresAtMs === undefined || validNowMs > expiresAtMs;
 }
 
+/** Closes every expired relay session in the provided process-local map. */
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
@@ -33,6 +39,7 @@ export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycl
   }
 }
 
+/** Returns the active session only when it belongs to the current connection. */
 export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: ReadonlyMap<string, TSession>;
   sessionId: string;
@@ -48,6 +55,8 @@ export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycl
     nowMs === undefined ||
     isExpiredTalkRelaySession(session, nowMs)
   ) {
+    // A stale or cross-connection id is closed before throwing so callers do
+    // not leave provider sessions alive after ownership checks fail.
     if (session) {
       params.closeSession(session);
     }

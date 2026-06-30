@@ -1,8 +1,11 @@
+// Fetches and normalizes MiniMax provider usage records.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -409,13 +412,16 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,
     });
   }
 
-  const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;
+  const data = await readProviderJsonResponse<MinimaxUsageResponse>(res, "minimax usage").catch(
+    () => null,
+  );
   if (!isRecord(data)) {
     return {
       provider: "minimax",

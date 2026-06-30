@@ -1,3 +1,4 @@
+// Filters volatile files from backup manifests.
 import path from "node:path";
 
 /**
@@ -59,7 +60,7 @@ function filePathCandidates(input: string): string[] {
   return [normalized, normalizePosix(`/${normalized}`)];
 }
 
-export type VolatileFilterPlan = {
+type VolatileFilterPlan = {
   /** Canonical state directories the filter should treat as volatile anchors. */
   stateDirs: string[];
 };

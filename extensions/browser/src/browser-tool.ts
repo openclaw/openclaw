@@ -1,3 +1,9 @@
+/**
+ * Browser agent tool registration.
+ *
+ * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
+ * maps high-level actions onto browser control client calls.
+ */
 import crypto from "node:crypto";
 import {
   executeActAction,
@@ -157,6 +163,7 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 }
 
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
   "targetId",
   "ref",
   "doubleClick",
@@ -184,10 +191,31 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "timeoutMs",
 ] as const;
 
+const LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS = new Set<
+  (typeof LEGACY_BROWSER_ACT_REQUEST_KEYS)[number]
+>(["targetId"]);
+
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    const request = { ...(requestParam as Record<string, unknown>) };
+    const hasMismatchedKind =
+      typeof request.kind === "string" &&
+      typeof params.kind === "string" &&
+      request.kind !== params.kind;
+    for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+      if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+        continue;
+      }
+      // Flattened act fields are legacy shape repair. Only the tab scope is
+      // safe across kind mismatches; action-specific fields can corrupt the
+      // explicit nested request.
+      if (hasMismatchedKind && !LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS.has(key)) {
+        continue;
+      }
+      request[key] = params[key];
+    }
+    return request as Parameters<typeof browserAct>[1];
   }
 
   const kind = readStringParam(params, "kind");
@@ -195,7 +223,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     return undefined;
   }
 
-  const request: Record<string, unknown> = { kind };
+  const request: Record<string, unknown> = {};
   for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
     if (!Object.hasOwn(params, key)) {
       continue;
@@ -234,7 +262,15 @@ async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
 }): Promise<BrowserNodeTarget | null> {
+  if (params.allowHostControl === false) {
+    if (params.target === "node" || params.requestedNode) {
+      throw new Error("Node browser control is disabled by sandbox policy.");
+    }
+    return null;
+  }
+
   const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
@@ -330,6 +366,7 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
+    { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
@@ -441,6 +478,7 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
+/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -508,6 +546,7 @@ export function createBrowserTool(opts?: {
           requestedNode: requestedNode ?? undefined,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          allowHostControl: opts?.allowHostControl,
         });
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery

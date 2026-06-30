@@ -1,3 +1,4 @@
+// Provider auth tests cover credential resolution, setup state, and auth method contracts.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
@@ -98,6 +99,89 @@ describe("provider auth profile helpers", () => {
         }),
       }),
     ]);
+  });
+
+  it("filters auth profile API-key resolution by credential type", async () => {
+    vi.resetModules();
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-profile",
+        },
+      },
+    };
+    const resolveApiKeyForProfile = vi.fn(
+      async (params: { store: AuthProfileStore; profileId: string }) => {
+        const profile = params.store.profiles[params.profileId];
+        if (profile?.type === "oauth") {
+          return {
+            apiKey: profile.access,
+            provider: profile.provider,
+            profileId: params.profileId,
+            profileType: profile.type,
+          };
+        }
+        if (profile?.type === "api_key" && profile.key) {
+          return {
+            apiKey: profile.key,
+            provider: profile.provider,
+            profileId: params.profileId,
+            profileType: profile.type,
+          };
+        }
+        return null;
+      },
+    );
+
+    vi.doMock("../agents/agent-scope-config.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
+      resolveApiKeyForProfile,
+    }));
+    vi.doMock("../agents/auth-profiles/order.js", () => ({
+      resolveAuthProfileOrder: ({
+        provider,
+        store: profileStore,
+      }: {
+        provider: string;
+        store: AuthProfileStore;
+      }) =>
+        Object.entries(profileStore.profiles)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([profileId]) => profileId),
+    }));
+    vi.doMock("../agents/auth-profiles/store.js", () => ({
+      ensureAuthProfileStore: vi.fn(() => store),
+      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
+      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      updateAuthProfileStoreWithLock: vi.fn(),
+    }));
+
+    const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
+
+    await expect(
+      resolveProviderAuthProfileApiKey({
+        provider: "openai",
+        profileTypes: ["api_key"],
+      }),
+    ).resolves.toBe("sk-profile");
+    expect(resolveApiKeyForProfile).toHaveBeenCalledTimes(1);
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "openai:key" }),
+    );
   });
 
   it("only discovers external CLI auth when provider resolution opts in", async () => {
@@ -203,6 +287,25 @@ describe("provider auth profile helpers", () => {
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        Accept: "application/json",
+        Authorization: "Bearer github-token",
+        "Copilot-Integration-Id": "vscode-chat",
+      }),
+    );
+  });
+
+  it("rejects malformed Copilot proxy hints", async () => {
+    vi.resetModules();
+
+    const { deriveCopilotApiBaseUrlFromToken } = await import("./provider-auth.js");
+
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
+    ).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
@@ -232,6 +335,30 @@ describe("provider auth profile helpers", () => {
         },
       }),
     ).rejects.toThrow("Copilot token response has invalid expires_at");
+  });
+
+  it("cancels Copilot token exchange error bodies", async () => {
+    vi.resetModules();
+
+    const response = new Response("bad credentials", { status: 401 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = vi.fn(async () => response);
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl,
+        cachePath: "/tmp/copilot-token.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save failed token");
+        },
+      }),
+    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
+
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {

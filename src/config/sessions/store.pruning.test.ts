@@ -1,16 +1,26 @@
+// Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
   collectSessionMaintenancePreserveKeys,
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
+  isGatewayModelRunSessionKey,
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
+  resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
+  shouldRunModelRunPrune,
 } from "./store-maintenance.js";
-import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
+import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  pruneStaleModelRunEntries,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -73,6 +83,302 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
+  });
+});
+
+describe("resolveQuotaSuspensionEntryMaintenance", () => {
+  it("returns an entry-scoped patch when a suspended session should resume", () => {
+    const now = Date.now();
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      now,
+      ttlMs: 30_000,
+    });
+
+    expect(result).toEqual({
+      patch: {
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "resuming",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      resumed: { laneId: "main" },
+      cleared: false,
+    });
+  });
+
+  it("returns an entry-scoped cleanup patch after the resume window expires", () => {
+    const now = Date.now();
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      now,
+      ttlMs: 30_000,
+    });
+
+    expect(result).toEqual({
+      patch: { quotaSuspension: undefined },
+      cleared: true,
+    });
+  });
+});
+
+describe("applyFileBackedSessionStoreMaintenance", () => {
+  it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      [
+        "stale",
+        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
+      ],
+      [
+        "stale-shared",
+        {
+          sessionId: "shared-session",
+          sessionFile: "shared-old.jsonl",
+          updatedAt: now - 30 * DAY_MS,
+        },
+      ],
+      ["fresh-shared", { sessionId: "shared-session", updatedAt: now }],
+      ["active", { sessionId: "active-session", updatedAt: now - 30 * DAY_MS }],
+    ]);
+    const archiveCalls: Array<{
+      removedSessionFiles: Array<[string, string | undefined]>;
+      referencedSessionIds: Set<string>;
+    }> = [];
+    let trajectoryCleanupReferencedIds: Set<string> | undefined;
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      activeSessionKey: "active",
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async (params) => {
+          archiveCalls.push({
+            removedSessionFiles: [...params.removedSessionFiles],
+            referencedSessionIds: new Set(params.referencedSessionIds),
+          });
+          return new Set();
+        },
+        removeRemovedSessionTrajectoryArtifacts: async (params) => {
+          trajectoryCleanupReferencedIds = new Set(params.referencedSessionIds);
+        },
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(store.stale).toBeUndefined();
+    expect(store["stale-shared"]).toBeUndefined();
+    expect(store).toHaveProperty("fresh-shared");
+    expect(store).toHaveProperty("active");
+    expect(archiveCalls).toEqual([
+      {
+        removedSessionFiles: [
+          ["stale-session", "stale.jsonl"],
+          ["shared-session", "shared-old.jsonl"],
+        ],
+        referencedSessionIds: new Set(["shared-session", "active-session"]),
+      },
+    ]);
+    expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+
+  it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {
+    const now = Date.now();
+    const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
+    const store: Record<string, SessionEntry> = {
+      [staleProbe]: makeEntry(now - 2 * DAY_MS),
+    };
+    for (let i = 0; i < 50; i++) {
+      store[`agent:main:explicit:real-${i}`] = makeEntry(now - 3 * DAY_MS);
+    }
+    let report: { modelRunPruned: number; pruned: number; capped: number } | undefined;
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 50,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      maintenanceOverride: { mode: "enforce" },
+      onMaintenanceApplied: (applied) => {
+        report = {
+          modelRunPruned: applied.modelRunPruned,
+          pruned: applied.pruned,
+          capped: applied.capped,
+        };
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(report?.modelRunPruned).toBe(1);
+    expect(report?.capped).toBe(0);
+    expect(store[staleProbe]).toBeUndefined();
+    expect(Object.keys(store)).toHaveLength(50);
+    for (let i = 0; i < 50; i++) {
+      expect(store).toHaveProperty(`agent:main:explicit:real-${i}`);
+    }
+  });
+});
+
+describe("pruneStaleModelRunEntries", () => {
+  it("removes only stale generated gateway model-run sessions", () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const store = makeStore([
+      [staleModelRun, makeEntry(now - 25 * 60 * 60 * 1000)],
+      [recentModelRun, makeEntry(now)],
+      ["agent:main:explicit:model-run-not-a-uuid", makeEntry(now - 10 * DAY_MS)],
+      [
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+        makeEntry(now - 10 * DAY_MS),
+      ],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:cron:job:run:123", makeEntry(now - 10 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleModelRunEntries(store, DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store[staleModelRun]).toBeUndefined();
+    expect(store).toHaveProperty(recentModelRun);
+    expect(store).toHaveProperty("agent:main:explicit:model-run-not-a-uuid");
+    expect(store).toHaveProperty(
+      "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+    );
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:cron:job:run:123");
+  });
+
+  it("honors preserve keys and disabled retention", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([[staleModelRun, makeEntry(Date.now() - 10 * DAY_MS)]]);
+
+    expect(
+      pruneStaleModelRunEntries(store, DAY_MS, { preserveKeys: new Set([staleModelRun]) }),
+    ).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, null)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
+  it("matches only explicit model-run uuid session keys", () => {
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+    expect(isGatewayModelRunSessionKey("agent:main:explicit:model-run-not-a-uuid")).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
+    // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
+    expect(
+      isGatewayModelRunSessionKey("explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Empty agent id segment: not a canonical `agent:<id>:` scoped key.
+    expect(
+      isGatewayModelRunSessionKey("agent::explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Extra colon segment between agent id and `explicit:` — rest starts
+    // with `extra:` and fails the predicate's regex.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:extra:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    // Whitespace-padded keys are non-canonical even though parseAgentSessionKey
+    // trims before normalizing; the predicate intentionally checks the original
+    // key shape before accepting a model-run key.
+    expect(
+      isGatewayModelRunSessionKey(
+        "  agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000  ",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches canonical keys whose agent id begins with model-run-", () => {
+    // Guards against an over-tight fix that confuses the agent id segment
+    // with the `explicit:model-run-<uuid>` rest segment.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:model-run-foo:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves case-insensitive matching for canonical keys", () => {
+    // normalizeLowercaseStringOrEmpty + parseAgentSessionKey's normalization
+    // lower-case everything outside opaque peer IDs, so a mixed-case
+    // canonical key still matches.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:Main:Explicit:Model-Run-123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -198,6 +504,15 @@ describe("capEntryCount", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it("treats generated ACP bridge sessions as disposable", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
+        ...makeEntry(Date.now()),
+        chatType: "group",
+      }),
+    ).toBe(false);
+  });
+
   it("does not protect synthetic sessions just because they carry group metadata", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {
@@ -252,6 +567,22 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+  });
+
+  it("defaults gateway model-run probes to fixed 24h retention", () => {
+    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
+  });
+
+  it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
+    const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
+    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
+    expect(shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60 })).toBe(false);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60, force: true }),
+    ).toBe(true);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 50, force: true }),
+    ).toBe(false);
   });
 
   it("batches normal entry-count maintenance for production-sized caps", () => {

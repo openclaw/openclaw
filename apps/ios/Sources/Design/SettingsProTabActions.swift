@@ -42,9 +42,9 @@ extension SettingsProTab {
                 self.diagnosticCheckRow(
                     icon: "antenna.radiowaves.left.and.right",
                     title: "Gateway Link",
-                    detail: self.appModel.gatewayDisplayStatusText,
-                    value: self.gatewayConnected ? "online" : "offline",
-                    color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                    detail: self.gatewayStatusDetail,
+                    value: self.gatewayStatusValue,
+                    color: self.gatewayStatusColor)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "dot.radiowaves.left.and.right",
@@ -56,16 +56,16 @@ extension SettingsProTab {
                 self.diagnosticCheckRow(
                     icon: "waveform",
                     title: "Talk Config",
-                    detail: self.appModel.talkMode.gatewayTalkTransportLabel,
-                    value: self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing",
-                    color: self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary)
+                    detail: self.gatewayTalkConfigDetail,
+                    value: self.gatewayTalkConfigValue,
+                    color: self.gatewayTalkConfigColor)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "bell",
                     title: "Notifications",
                     detail: "Approval and event alert channel",
                     value: self.notificationStatusText,
-                    color: self.notificationStatusText == "Allowed" ? OpenClawBrand.ok : .secondary)
+                    color: self.notificationStatus.color)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "rectangle.on.rectangle",
@@ -132,19 +132,11 @@ extension SettingsProTab {
     }
 
     func reconnectGateway() async {
+        guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
         defer { self.isReconnectingGateway = false }
         await self.gatewayController.connectLastKnown()
-    }
-
-    func refreshGateway() async {
-        guard !self.isRefreshingGateway else { return }
-        self.isRefreshingGateway = true
-        defer { self.isRefreshingGateway = false }
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
     }
 
     @MainActor
@@ -153,17 +145,20 @@ extension SettingsProTab {
         self.isRefreshingGateway = true
         defer { self.isRefreshingGateway = false }
 
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
+        if !self.appModel.isAppleReviewDemoModeEnabled {
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+            self.gatewayController.restartDiscovery()
+            await self.appModel.refreshGatewayOverviewIfConnected()
+        }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
+        self.registerForRemoteNotificationsIfEnrollmentReady()
 
         let issueCount = SettingsDiagnostics.issueCount(
-            gatewayConnected: self.gatewayConnected,
+            gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
-            talkConfigLoaded: self.appModel.talkMode.gatewayTalkConfigLoaded,
-            notificationStatusText: self.notificationStatusText)
+            talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
+            notificationsAllowed: self.notificationStatus == .allowed)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -197,7 +192,7 @@ extension SettingsProTab {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host, port: port) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
     }
@@ -217,6 +212,14 @@ extension SettingsProTab {
         let stagedLink = self.stagedGatewaySetupLink
         guard !raw.isEmpty || stagedLink != nil else {
             self.setupStatusText = "Paste a setup code to continue."
+            return false
+        }
+
+        if AppleReviewDemoMode.isSetupCode(raw) {
+            self.stagedGatewaySetupLink = nil
+            self.setupCode = ""
+            self.setupStatusText = "Apple Review demo mode enabled."
+            self.appModel.enterAppleReviewDemoMode()
             return false
         }
 
@@ -272,13 +275,22 @@ extension SettingsProTab {
         Task { await self.connectAfterScannedGatewayLink() }
     }
 
+    func handleScannedSetupCode(_ code: String) {
+        guard AppleReviewDemoMode.isSetupCode(code) else { return }
+        self.showQRScanner = false
+        self.setupCode = ""
+        self.stagedGatewaySetupLink = nil
+        self.setupStatusText = "Apple Review demo mode enabled."
+        self.appModel.enterAppleReviewDemoMode()
+    }
+
     func connectAfterScannedGatewayLink() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let port = self.resolvedManualPort(host: host) else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host, port: port) else { return }
         await self.connectManual()
     }
 
@@ -307,13 +319,14 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int, useTLS: Bool) async -> Bool {
+    func preflightGateway(host: String, port: Int) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         self.setupStatusText = "Checking gateway reachability..."
         let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
         if !ok {
@@ -406,45 +419,55 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     func handleNotificationAction() {
-        if self.notificationStatusText == "Allowed" || self.notificationStatusText == "Not Allowed" {
-            self.openSystemSettings()
+        if self.notificationStatus.shouldOpenNotificationSettings {
+            self.openNotificationSettings()
             return
         }
+        guard self.notificationStatus == .notSet else { return }
 
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            self.showNotificationRelayDisclosure = true
+            return
+        }
+        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    func requestNotificationAuthorizationFromSettings() {
+        guard !self.isRequestingNotificationAuthorization else { return }
+        PushEnrollmentConsent.markDisclosureAccepted()
+        self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
                 .alert,
                 .badge,
                 .sound,
             ])) ?? false
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
-                self.notificationStatusText = granted ? "Allowed" : "Not Allowed"
-                self.notificationActionText = granted ? "Open System Settings" : "Open System Settings"
+                self.isRequestingNotificationAuthorization = false
+                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
+                guard granted else { return }
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     @MainActor
+    func registerForRemoteNotificationsIfEnrollmentReady() {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationStatus.allowsNotifications else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    @MainActor
     func applyNotificationStatus(_ status: UNAuthorizationStatus) {
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            self.notificationStatusText = "Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .denied:
-            self.notificationStatusText = "Not Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .notDetermined:
-            self.notificationStatusText = "Not Set"
-            self.notificationActionText = "Request Access"
-        @unknown default:
-            self.notificationStatusText = "Unknown"
-            self.notificationActionText = "Open System Settings"
-        }
+        self.notificationStatus = SettingsNotificationStatus(status)
     }
 
     func persistGatewayToken(_ value: String) {
@@ -465,20 +488,36 @@ extension SettingsProTab {
             instanceId: instanceId)
     }
 
-    func openSystemSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+    func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
 
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: "Gateway"
+        case .approvals: "Approvals"
         case .permissions: "Permissions"
+        case .channels: "Channels"
         case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
         case .about: "About"
+        }
+    }
+
+    func subtitle(for route: SettingsRoute) -> String {
+        switch route {
+        case .gateway: "Pairing, diagnostics, and Tailscale checks."
+        case .approvals: "Review pending agent actions."
+        case .permissions: "Control device capabilities."
+        case .channels: "Message routing and external clients."
+        case .voice: "Talk mode and wake phrase settings."
+        case .diagnostics: "Run local health checks."
+        case .privacy: "Data and device privacy controls."
+        case .notifications: "Alert permissions and delivery."
+        case .about: "Version and support details."
         }
     }
 
@@ -589,6 +628,21 @@ extension SettingsProTab {
         return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
     }
 
+    var gatewayTalkActiveVoiceDetail: String {
+        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
+        return "\(title) • \(subtitle)"
+    }
+
+    var gatewayTalkLastIssueDetail: String? {
+        let detail = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? nil : detail
+    }
+
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
         if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
@@ -602,7 +656,56 @@ extension SettingsProTab {
     }
 
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        !self.appModel.isAppleReviewDemoModeEnabled &&
+            GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    var gatewayStatusDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
+    }
+
+    var gatewayStatusValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.gatewayConnected ? "online" : "offline"
+    }
+
+    var gatewayStatusColor: Color {
+        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
+        return self.gatewayConnected ? OpenClawBrand.ok : .secondary
+    }
+
+    var gatewayDiagnosticConnected: Bool {
+        self.appModel.isAppleReviewDemoModeEnabled || self.gatewayConnected
+    }
+
+    var gatewayDiagnosticTalkConfigLoaded: Bool {
+        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.talkMode.gatewayTalkConfigLoaded
+    }
+
+    var approvalEmptyDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Live gateway requests are disabled in demo mode."
+        }
+        if self.notificationsNeedAttention {
+            return "Foreground approvals still appear while OpenClaw is connected."
+        }
+        return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
+    }
+
+    var gatewayTalkConfigDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
+        return self.appModel.talkMode.gatewayTalkTransportLabel
+    }
+
+    var gatewayTalkConfigValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
+    }
+
+    var gatewayTalkConfigColor: Color {
+        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
+        return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
     }
 
     var gatewayAddress: String {
@@ -621,6 +724,46 @@ extension SettingsProTab {
         return "\(enabled) enabled"
     }
 
+    var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
+        self.appModel.pendingExecApprovalPrompt
+    }
+
+    var approvalsDetail: String {
+        if self.notificationsNeedAttention {
+            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
+        }
+        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+    }
+
+    var notificationsNeedAttention: Bool {
+        switch self.notificationStatus {
+        case .allowed, .checking:
+            false
+        case .notAllowed, .notSet, .unknown:
+            true
+        }
+    }
+
+    var approvalItems: [SettingsApprovalItem] {
+        guard let pendingApproval else { return [] }
+        return [
+            SettingsApprovalItem(
+                id: "pending-real",
+                icon: "terminal.fill",
+                title: pendingApproval.commandPreview ?? "Review gateway action",
+                detail: "Agent: \(self.appModel.activeAgentName)",
+                priority: self.appModel.pendingExecApprovalPromptResolving ? "Resolving" : "High",
+                color: OpenClawBrand.danger),
+            SettingsApprovalItem(
+                id: "pending-context",
+                icon: "doc.text.fill",
+                title: pendingApproval.allowsAllowAlways ? "Permission can be saved" : "One-time approval",
+                detail: "Gateway request",
+                priority: pendingApproval.allowsAllowAlways ? "Medium" : "Review",
+                color: OpenClawBrand.warn),
+        ]
+    }
+
     var voiceDetail: String {
         if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
         if self.talkEnabled { return "Talk on" }
@@ -633,6 +776,7 @@ extension SettingsProTab {
     }
 
     var diagnosticsHealthValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         if self.gatewayConnected { return "ready" }
         if self.gatewayController.gateways.isEmpty { return "check" }
         return "partial"
@@ -659,5 +803,45 @@ extension SettingsProTab {
         case .whileUsing: "While Using"
         case .always: "Always"
         }
+    }
+
+    var notificationStatusText: String {
+        self.notificationStatus.text
+    }
+
+    var notificationActionText: String {
+        self.notificationStatus.actionTitle
+    }
+
+    var notificationStatusDetail: String {
+        switch self.notificationStatus {
+        case .checking:
+            "Checking iOS notification permission."
+        case .allowed:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .notAllowed:
+            "Notifications have been denied. Enable them in iOS Settings."
+        case .notSet:
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
+        }
+    }
+
+    var notificationRelayDetail: String {
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
+            return """
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
+            delivery data.
+            """
+        }
+        return "This build is not configured to use OpenClaw's hosted push relay."
+    }
+
+    var notificationRelayDisclosureMessage: String {
+        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }

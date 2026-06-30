@@ -1,3 +1,7 @@
+/**
+ * Playwright-backed browser interaction tools, including clicks, form input,
+ * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
+ */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
@@ -12,6 +16,7 @@ import {
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -36,6 +41,15 @@ import {
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
 import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
+import {
+  ANNOTATION_MAX_LABELS_DEFAULT,
+  type AnnotationItem,
+  buildOverlayClearScript,
+  buildOverlayInjectionScript,
+  type CoordinateSpace,
+  planAnnotations,
+  type RawAnnotationInput,
+} from "./screenshot-annotate.js";
 
 type TargetOpts = {
   cdpUrl: string;
@@ -500,6 +514,7 @@ function createAbortPromiseWithListener(
     },
   };
 }
+/** Highlights a role ref in the target page for visual inspection. */
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -514,6 +529,7 @@ export async function highlightViaPlaywright(opts: {
   }
 }
 
+/** Clicks or double-clicks a role ref or selector with dialog and navigation guards. */
 export async function clickViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -551,6 +567,7 @@ export async function clickViaPlaywright(opts: {
       void forceDisconnectPlaywrightForTarget({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
         reason: "click aborted",
       }).catch(() => {});
     };
@@ -624,6 +641,7 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
+/** Clicks absolute page coordinates with optional double-click and navigation guard. */
 export async function clickCoordsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -660,6 +678,7 @@ export async function clickCoordsViaPlaywright(opts: {
   }).finally(cleanup);
 }
 
+/** Hovers a role ref or selector on the target page. */
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -691,6 +710,7 @@ export async function hoverViaPlaywright(opts: {
   }
 }
 
+/** Drags from one role ref or selector to another. */
 export async function dragViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -729,6 +749,7 @@ export async function dragViaPlaywright(opts: {
   }
 }
 
+/** Selects one or more option values on a select-like element. */
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -775,6 +796,7 @@ export async function selectOptionViaPlaywright(opts: {
   }
 }
 
+/** Presses a keyboard key against a ref, selector, or focused page. */
 export async function pressKeyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -814,6 +836,7 @@ export async function pressKeyViaPlaywright(opts: {
   }
 }
 
+/** Types text into a ref, selector, or focused page. */
 export async function typeViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -895,6 +918,7 @@ export async function typeViaPlaywright(opts: {
   }
 }
 
+/** Fills multiple form fields with per-field selector/ref/type support. */
 export async function fillFormViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -971,6 +995,7 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+/** Evaluates JavaScript in the page after browser action policy validation. */
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -984,6 +1009,10 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  const fnSource = normalizeBrowserEvaluateFunctionSource(
+    fnText,
+    opts.ref ? { argumentName: "el" } : undefined,
+  );
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
@@ -1006,6 +1035,7 @@ export async function evaluateViaPlaywright(opts: {
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "evaluate aborted",
     }).catch(() => {});
   });
@@ -1033,10 +1063,13 @@ export async function evaluateViaPlaywright(opts: {
         "args",
         `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate(el) : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate(el);
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1050,9 +1083,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
         `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
       const evalPromise = locator.evaluate(elementEvaluator, {
-        fnBody: fnText,
+        fnSource,
         timeoutMs: evaluateTimeout,
       });
       const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
@@ -1072,10 +1105,13 @@ export async function evaluateViaPlaywright(opts: {
       "args",
       `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate() : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate();
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1089,9 +1125,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
       `,
-    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
+    ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
     const evalPromise = page.evaluate(browserEvaluator, {
-      fnBody: fnText,
+      fnSource,
       timeoutMs: evaluateTimeout,
     });
     const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
@@ -1109,6 +1145,7 @@ export async function evaluateViaPlaywright(opts: {
   }
 }
 
+/** Scrolls a role ref or selector into view. */
 export async function scrollIntoViewViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1140,6 +1177,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
   }
 }
 
+/** Waits for load state, timeout, URL, text, ref, or selector conditions. */
 export async function waitForViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1212,6 +1250,7 @@ export async function waitForViaPlaywright(opts: {
   }
 }
 
+/** Captures a screenshot from the target page or element. */
 export async function takeScreenshotViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1249,6 +1288,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   return { buffer };
 }
 
+/** Captures a screenshot with Browser plugin labels over interactive elements. */
 export async function screenshotWithLabelsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1256,7 +1296,15 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   maxLabels?: number;
   type?: "png" | "jpeg";
   timeoutMs?: number;
-}): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
+  fullPage?: boolean;
+  ref?: string;
+  element?: string;
+}): Promise<{
+  buffer: Buffer;
+  labels: number;
+  skipped: number;
+  annotations: AnnotationItem[];
+}> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -1264,119 +1312,152 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const maxLabels =
     typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
       ? Math.max(1, Math.floor(opts.maxLabels))
-      : 150;
+      : ANNOTATION_MAX_LABELS_DEFAULT;
 
-  const viewport = await page.evaluate(() => ({
-    scrollX: window.scrollX || 0,
-    scrollY: window.scrollY || 0,
+  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
+  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const space: CoordinateSpace = opts.fullPage
+    ? "fullpage"
+    : refKey || elementSelector
+      ? "element"
+      : "viewport";
+
+  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
+  // boundingBoxes into document-space inputs; the viewport size lets the helper
+  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
+  // as skipped (in viewport capture mode).
+  const view = await page.evaluate(() => ({
+    x: window.scrollX || 0,
+    y: window.scrollY || 0,
     width: window.innerWidth || 0,
     height: window.innerHeight || 0,
   }));
+  const scroll = { x: view.x, y: view.y };
 
-  const refs = Object.keys(opts.refs ?? {});
-  const boxes: Array<{ ref: string; x: number; y: number; w: number; h: number }> = [];
-  let skipped = 0;
-
-  for (const ref of refs) {
-    if (boxes.length >= maxLabels) {
-      skipped += 1;
-      continue;
+  let elementRect: { x: number; y: number; width: number; height: number } | undefined;
+  if (space === "element") {
+    const box = await resolveElementBoundingBoxForLabels(page, refKey, elementSelector);
+    if (!box) {
+      throw new Error(
+        `screenshotWithLabelsViaPlaywright: element not found for ${
+          refKey ? `ref="${refKey}"` : `selector="${elementSelector ?? ""}"`
+        }`,
+      );
     }
-    try {
-      const box = await refLocator(page, ref).boundingBox();
-      if (!box) {
-        skipped += 1;
-        continue;
-      }
-      const x0 = box.x;
-      const y0 = box.y;
-      const x1 = box.x + box.width;
-      const y1 = box.y + box.height;
-      const vx0 = viewport.scrollX;
-      const vy0 = viewport.scrollY;
-      const vx1 = viewport.scrollX + viewport.width;
-      const vy1 = viewport.scrollY + viewport.height;
-      if (x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1) {
-        skipped += 1;
-        continue;
-      }
-      boxes.push({
-        ref,
-        x: x0 - viewport.scrollX,
-        y: y0 - viewport.scrollY,
-        w: Math.max(1, box.width),
-        h: Math.max(1, box.height),
-      });
-    } catch {
-      skipped += 1;
-    }
+    // Convert viewport-space bbox to document space.
+    elementRect = {
+      x: box.x + scroll.x,
+      y: box.y + scroll.y,
+      width: box.width,
+      height: box.height,
+    };
   }
 
-  try {
-    if (boxes.length > 0) {
-      await page.evaluate((labels) => {
-        const existing = document.querySelectorAll("[data-openclaw-labels]");
-        existing.forEach((el) => el.remove());
-
-        const root = document.createElement("div");
-        root.setAttribute("data-openclaw-labels", "1");
-        root.style.position = "fixed";
-        root.style.left = "0";
-        root.style.top = "0";
-        root.style.zIndex = "2147483647";
-        root.style.pointerEvents = "none";
-        root.style.fontFamily =
-          '"SF Mono","SFMono-Regular",Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace';
-
-        const clamp = (value: number, min: number, max: number) =>
-          Math.min(max, Math.max(min, value));
-
-        for (const label of labels) {
-          const box = document.createElement("div");
-          box.setAttribute("data-openclaw-labels", "1");
-          box.style.position = "absolute";
-          box.style.left = `${label.x}px`;
-          box.style.top = `${label.y}px`;
-          box.style.width = `${label.w}px`;
-          box.style.height = `${label.h}px`;
-          box.style.border = "2px solid #ffb020";
-          box.style.boxSizing = "border-box";
-
-          const tag = document.createElement("div");
-          tag.setAttribute("data-openclaw-labels", "1");
-          tag.textContent = label.ref;
-          tag.style.position = "absolute";
-          tag.style.left = `${label.x}px`;
-          tag.style.top = `${clamp(label.y - 18, 0, 20000)}px`;
-          tag.style.background = "#ffb020";
-          tag.style.color = "#1a1a1a";
-          tag.style.fontSize = "12px";
-          tag.style.lineHeight = "14px";
-          tag.style.padding = "1px 4px";
-          tag.style.borderRadius = "3px";
-          tag.style.boxShadow = "0 1px 2px rgba(0,0,0,0.35)";
-          tag.style.whiteSpace = "nowrap";
-
-          root.appendChild(box);
-          root.appendChild(tag);
-        }
-
-        document.documentElement.appendChild(root);
-      }, boxes);
+  const refKeys = Object.keys(opts.refs ?? {});
+  const inputs: RawAnnotationInput[] = [];
+  let bboxFailures = 0;
+  for (const ref of refKeys) {
+    const box = await refLocator(page, ref)
+      .boundingBox()
+      .catch(() => null);
+    if (!box) {
+      bboxFailures += 1;
+      continue;
     }
+    inputs.push({
+      ref,
+      role: opts.refs[ref].role,
+      name: opts.refs[ref].name,
+      doc: {
+        x: box.x + scroll.x,
+        y: box.y + scroll.y,
+        width: box.width,
+        height: box.height,
+      },
+    });
+  }
 
-    const buffer = await page.screenshot({ type, timeout: opts.timeoutMs });
-    return { buffer, labels: boxes.length, skipped };
+  const plan = planAnnotations({
+    inputs,
+    space,
+    scroll,
+    viewport: { width: view.width, height: view.height },
+    elementRect,
+    maxLabels,
+  });
+
+  try {
+    if (plan.overlayItems.length > 0) {
+      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
+      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
+    }
+    const buffer =
+      space === "element"
+        ? await captureElementScreenshotForLabels(
+            page,
+            refKey,
+            elementSelector,
+            type,
+            opts.timeoutMs,
+          )
+        : await page.screenshot({
+            type,
+            fullPage: Boolean(opts.fullPage),
+            timeout: opts.timeoutMs,
+          });
+    return {
+      // `labels` reports overlay boxes actually drawn on the captured image
+      // (in-viewport, within budget); off-viewport refs are surfaced via
+      // `annotations` but not drawn, and are reflected in `skipped`.
+      buffer,
+      labels: plan.overlayItems.length,
+      skipped: plan.skipped + bboxFailures,
+      annotations: plan.annotations,
+    };
   } finally {
-    await page
-      .evaluate(() => {
-        const existing = document.querySelectorAll("[data-openclaw-labels]");
-        existing.forEach((el) => el.remove());
-      })
-      .catch(() => {});
+    await page.evaluate(buildOverlayClearScript()).catch(() => {});
   }
 }
 
+async function resolveElementBoundingBoxForLabels(
+  page: Page,
+  refKey: string | undefined,
+  cssSelector: string | undefined,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  if (refKey) {
+    try {
+      return await refLocator(page, refKey).boundingBox();
+    } catch {
+      return null;
+    }
+  }
+  if (cssSelector) {
+    try {
+      return await page.locator(cssSelector).first().boundingBox();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function captureElementScreenshotForLabels(
+  page: Page,
+  refKey: string | undefined,
+  cssSelector: string | undefined,
+  type: "png" | "jpeg",
+  timeoutMs: number | undefined,
+): Promise<Buffer> {
+  if (refKey) {
+    return await refLocator(page, refKey).screenshot({ type, timeout: timeoutMs });
+  }
+  if (cssSelector) {
+    return await page.locator(cssSelector).first().screenshot({ type, timeout: timeoutMs });
+  }
+  throw new Error("captureElementScreenshotForLabels: requires refKey or cssSelector");
+}
+
+/** Sets file inputs for a role ref or selector with strict existing-path checks. */
 export async function setInputFilesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1610,6 +1691,7 @@ async function executeSingleAction(
   return undefined;
 }
 
+/** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
   action: BrowserActRequest;
@@ -1668,6 +1750,7 @@ export async function executeActViaPlaywright(opts: {
   }
 }
 
+/** Executes a bounded sequence of browser actions and returns per-step results. */
 export async function batchViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

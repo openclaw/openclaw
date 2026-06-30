@@ -1,3 +1,4 @@
+/** Gateway transcript message shape accepted by ACP replay extraction. */
 export type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;
@@ -9,7 +10,7 @@ export type GatewayChatContentBlock = {
   thinking?: string;
 };
 
-export type ReplayChunk = {
+type ReplayChunk = {
   sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
   text: string;
 };

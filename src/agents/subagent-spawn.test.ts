@@ -1,3 +1,5 @@
+// Subagent spawn tests cover target policy, session patching, runtime model
+// persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,6 +17,8 @@ const hoisted = vi.hoisted(() => ({
   pruneLegacyStoreKeysMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
+  dispatchGatewayMethodInProcessMock: vi.fn(),
+  hasInProcessGatewayContextMock: vi.fn(),
   resolveAgentConfigMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
@@ -47,6 +51,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function gatewayRequestRecords(): Record<string, unknown>[] {
+  // Gateway calls are the seam proof for spawn orchestration; assertions inspect
+  // structured requests instead of matching rendered text.
   return hoisted.callGatewayMock.mock.calls.map((call) => requireRecord(call[0]));
 }
 
@@ -63,6 +69,8 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
+      dispatchGatewayMethodInProcessMock: hoisted.dispatchGatewayMethodInProcessMock,
+      hasInProcessGatewayContextMock: hoisted.hasInProcessGatewayContextMock,
       getRuntimeConfig: () => hoisted.configOverride,
       loadSessionStoreMock: hoisted.loadSessionStoreMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
@@ -84,6 +92,8 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.pruneLegacyStoreKeysMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
+    hoisted.dispatchGatewayMethodInProcessMock.mockReset();
+    hoisted.hasInProcessGatewayContextMock.mockReset().mockReturnValue(false);
     hoisted.resolveAgentConfigMock.mockReset();
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -177,6 +187,51 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
+  it("registers the target agent id for cross-agent task attribution", async () => {
+    hoisted.configOverride = createConfigOverride({
+      session: {
+        scope: "global",
+      },
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["worker"],
+            },
+          },
+          {
+            id: "worker",
+            workspace: "/tmp/workspace-worker",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "attribute worker run",
+        agentId: "worker",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:worker:subagent:/);
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.childSessionKey).toBe(result.childSessionKey);
+    expect(registerInput.agentId).toBe("worker");
+    expect(registerInput.requesterSessionKey).toBe("global");
+    expect(registerInput.requesterAgentId).toBe("main");
+  });
+
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
@@ -260,6 +315,76 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("dispatches spawned agent runs in process when a gateway context is available", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        return { runId: "run-in-process" };
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn without websocket self-connection",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.runId).toBe("run-in-process");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("spawn without websocket self-connection"),
+        sessionKey: result.childSessionKey,
+      }),
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("spawn failed");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn failure cleanup",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("spawn failed");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "sessions.delete",
+      expect.objectContaining({
+        key: result.childSessionKey,
+        deleteTranscript: true,
+      }),
+      expect.objectContaining({
+        forceSyntheticClient: true,
+        syntheticScopes: ["operator.admin"],
+        timeoutMs: 60_000,
+      }),
+    );
   });
 
   it("inherits requester thinking level when no spawn or subagent default is configured", async () => {

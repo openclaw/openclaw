@@ -33,44 +33,44 @@ class GatewayBootstrapAuthTest {
   @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
-      ),
+      ) != null,
     )
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
   @Test
   fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = "stored-token",
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
@@ -295,6 +295,38 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun refreshGatewayConnection_reconnectsSavedManualEndpointAfterDisconnect() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setManualEnabled(true)
+    prefs.setManualHost("127.0.0.1")
+    prefs.setManualPort(18789)
+    prefs.setManualTls(false)
+    prefs.setGatewayToken("shared-token")
+    val runtime = NodeRuntime(app, prefs)
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "initial-token", bootstrapToken = null, password = null),
+    )
+    runtime.disconnect()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    runtime.refreshGatewayConnection()
+
+    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
+    assertEquals("127.0.0.1", endpoint.host)
+    assertEquals(18789, endpoint.port)
+    assertEquals("shared-token", readField<String?>(desired, "token"))
+  }
+
+  @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
     val runtime =
@@ -342,6 +374,25 @@ class GatewayBootstrapAuthTest {
     assertNull(prefs.loadGatewayPassword())
     assertNull(authStore.loadToken(deviceId, "node"))
     assertNull(authStore.loadToken(deviceId, "operator"))
+  }
+
+  @Test
+  fun restoredManualMicWithoutRecordAudioClearsStalePreference() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setVoiceMicEnabled(true)
+
+    val runtime = NodeRuntime(app, prefs)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(prefs.voiceMicEnabled.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
   }
 
   @Test

@@ -22,6 +22,7 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -34,6 +35,7 @@ const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
   allowIpv6UniqueLocalRange: true,
@@ -299,7 +301,9 @@ async function createVoiceRequestError(
   response: Response,
   fallbackMessage: string,
 ): Promise<Error> {
-  const raw = await response.text().catch(() => "");
+  const raw = await readResponseTextLimited(response, DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES).catch(
+    () => "",
+  );
   const parsed = coerceDiscordErrorBody(raw);
   if (response.status === 429) {
     throw createRateLimitError(response, {
@@ -347,7 +351,7 @@ async function requestVoiceUploadUrl(params: {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
     }
-    return (await res.json()) as UploadUrlResponse;
+    return await readProviderJsonResponse<UploadUrlResponse>(res, "discord.voice.upload-url");
   } finally {
     await release();
   }

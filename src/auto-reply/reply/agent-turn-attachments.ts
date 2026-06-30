@@ -1,3 +1,4 @@
+/** Resolves media attachments available to the current agent turn. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,10 +16,12 @@ const agentTurnMediaRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-media.runtime.js"),
 );
 
+/** Lazily loads media runtime dependencies for agent-turn attachments. */
 export function loadAgentTurnMediaRuntime() {
   return agentTurnMediaRuntimeLoader.load();
 }
 
+/** Runtime surface needed to resolve agent-turn media attachments. */
 export type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
@@ -41,17 +44,16 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
-export function hasPotentialAgentTurnAttachments(ctx: MsgContext): boolean {
-  return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
-}
-
+/** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   runtime?: AgentTurnAttachmentRuntime;
   includeRecentHistoryImages?: boolean;
+  includeAttachmentIndexes?: boolean;
 }): Promise<{
   attachments: AgentTurnAttachment[];
+  attachmentIndexes?: number[];
   recentHistoryImages: RecentInboundHistoryImage[];
 }> {
   const includeRecentHistoryImages = params.includeRecentHistoryImages ?? true;
@@ -94,6 +96,7 @@ export async function resolveAgentTurnAttachments(params: {
     }),
   });
   const results: AgentTurnAttachment[] = [];
+  const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
     const mediaType = attachment.mime ?? "application/octet-stream";
@@ -113,6 +116,7 @@ export async function resolveAgentTurnAttachments(params: {
         mediaType,
         data: buffer.toString("base64"),
       });
+      resultIndexes.push(attachment.index);
       const historyImage = historyAttachmentByIndex.get(attachment.index);
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
@@ -144,21 +148,19 @@ export async function resolveAgentTurnAttachments(params: {
     !currentImageResolved &&
     (!hasCurrentMedia || hasCurrentImageCandidate)
   ) {
+    // History images are only used when the current turn did not already provide an image.
     for (const attachment of historyAttachments) {
       await resolveImageAttachment(attachment);
     }
   }
-  return { attachments: results, recentHistoryImages: resolvedHistoryImages };
+  return {
+    attachments: results,
+    ...(params.includeAttachmentIndexes ? { attachmentIndexes: resultIndexes } : {}),
+    recentHistoryImages: resolvedHistoryImages,
+  };
 }
 
-export async function resolveAgentAttachments(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  runtime?: AgentTurnAttachmentRuntime;
-}): Promise<AgentTurnAttachment[]> {
-  return (await resolveAgentTurnAttachments(params)).attachments;
-}
-
+/** Converts inline image content into ACP attachment payloads. */
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {

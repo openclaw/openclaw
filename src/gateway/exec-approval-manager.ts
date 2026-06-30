@@ -1,3 +1,5 @@
+// Gateway exec approval manager.
+// Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +20,8 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 }
 
 function scheduleResolvedEntryCleanup(cleanup: () => void): void {
+  // Resolved approvals stay visible briefly so node.invoke sanitizers can
+  // consume a just-approved id after the UI decision races the command retry.
   const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
   unrefTimer(timer);
 }
@@ -38,6 +42,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
+  approvalReviewerDeviceIds?: string[];
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
   consumedDecision?: ExecApprovalDecision;
@@ -115,16 +120,6 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }, timerDelayMs);
     this.pending.set(record.id, entry);
     return promise;
-  }
-
-  /**
-   * @deprecated Use register() instead for explicit separation of registration and waiting.
-   */
-  async waitForDecision(
-    record: ExecApprovalRecord<TPayload>,
-    timeoutMs: number,
-  ): Promise<ExecApprovalDecision | null> {
-    return this.register(record, timeoutMs);
   }
 
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {

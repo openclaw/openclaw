@@ -1,3 +1,6 @@
+/**
+ * Unit tests for the shared POST JSON endpoint helper used by gateway HTTP surfaces.
+ */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -25,12 +28,8 @@ vi.mock("./method-scopes.js", () => {
   };
 });
 
-const {
-  readJsonBodyOrError,
-  sendJson: _sendJson,
-  sendMethodNotAllowed,
-  sendMissingScopeForbidden,
-} = await import("./http-common.js");
+const { readJsonBodyOrError, sendMethodNotAllowed, sendMissingScopeForbidden } =
+  await import("./http-common.js");
 const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
   await import("./http-utils.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");

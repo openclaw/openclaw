@@ -1,23 +1,41 @@
+// Formats port probe results for diagnostics and CLI output.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
+/** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
+export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
   );
   if (raw.includes("openclaw")) {
     return "gateway";
   }
-  if (raw.includes("ssh")) {
-    const portToken = String(port);
-    const tunnelPattern = new RegExp(
-      `-(l|r)\\s*${portToken}\\b|-(l|r)${portToken}\\b|:${portToken}\\b`,
+  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
+  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
+  const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
+  const hasSshExecutable =
+    hasSshCommand ||
+    /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
+      commandLine,
     );
-    if (!raw || tunnelPattern.test(raw)) {
-      return "ssh";
-    }
+  if (hasSshCommand) {
     return "ssh";
+  }
+  if (hasSshExecutable) {
+    // The probe row already proves this process owns the queried port. Exact
+    // ssh executables may get their forwards from ssh_config or host aliases.
+    return "ssh";
+  }
+  if (
+    command === "sshd" ||
+    /(?:^|[/\\])sshd(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command)
+  ) {
+    return "non_gateway";
+  }
+  if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
+    return "non_gateway";
   }
   return "unknown";
 }
@@ -48,6 +66,8 @@ function parseListenerAddress(address: string): { host: string; port: number } |
   return Number.isFinite(port) ? { host, port } : null;
 }
 
+// Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
+// in the IPv6 family so the benign loopback-pair detection stays conservative.
 function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   if (host === "127.0.0.1" || host === "localhost") {
     return "ipv4";
@@ -70,6 +90,7 @@ function isExpectedGatewayBindAddress(host: string): boolean {
   return classifyLoopbackAddressFamily(host) !== null || isWildcardAddress(host);
 }
 
+/** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
 export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
@@ -93,6 +114,7 @@ export function isSingleExpectedGatewayListener(listeners: PortListener[], port:
   );
 }
 
+/** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,6 +149,7 @@ export function isDualStackLoopbackGatewayListeners(
   return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
 }
 
+/** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   return (
     isSingleExpectedGatewayListener(listeners, port) ||
@@ -134,6 +157,7 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
+/** Builds user-facing remediation hints for processes occupying a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
@@ -151,7 +175,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
       "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
     );
   }
-  if (kinds.has("unknown")) {
+  if (kinds.has("unknown") || kinds.has("non_gateway")) {
     hints.push("Another process is listening on this port.");
   }
   if (listeners.length > 1 && !expectedGatewayListeners) {
@@ -162,6 +186,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
+/** Formats one listener row for CLI diagnostics. */
 export function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -170,6 +195,7 @@ export function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
+/** Formats free/busy port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status !== "busy") {
     return [`Port ${diagnostics.port} is free.`];

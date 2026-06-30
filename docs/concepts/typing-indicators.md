@@ -15,7 +15,8 @@ When `agents.defaults.typingMode` is **unset**, OpenClaw keeps the legacy behavi
 
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.
-- **Group chats without a mention**: typing starts only when message text begins streaming.
+- **Group chats without a mention**: typing starts when the admitted run has
+  user-visible activity, such as harness execution activity or message text.
 - **Heartbeat runs**: typing starts when the heartbeat run begins if the
   resolved heartbeat target is a typing-capable chat and typing is not disabled.
 
@@ -26,13 +27,14 @@ Set `agents.defaults.typingMode` to one of:
 - `never` - no typing indicator, ever.
 - `instant` - start typing **as soon as the model loop begins**, even if the run
   later returns only the silent reply token.
-- `thinking` - start typing on the **first reasoning delta** (requires
-  `reasoningLevel: "stream"` for the run).
-- `message` - start typing on the **first non-silent text delta** (ignores
-  the `NO_REPLY` silent token).
+- `thinking` - start typing on the **first reasoning delta** or on active
+  harness execution after the turn is accepted.
+- `message` - start typing on the **first user-visible reply activity**, such as
+  active harness execution or a non-silent text delta. Silent reply tokens such
+  as `NO_REPLY` do not count as text activity.
 
 Order of "how early it fires":
-`never` → `message` → `thinking` → `instant`
+`never` → `message`/`thinking` → `instant`
 
 ## Configuration
 
@@ -62,11 +64,10 @@ Override mode or cadence per session:
 
 ## Notes
 
-- `message` mode won't show typing for silent-only replies when the whole
-  payload is the exact silent token (for example `NO_REPLY` / `no_reply`,
-  matched case-insensitively).
-- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
-  If the model doesn't emit reasoning deltas, typing won't start.
+- `message` mode does not start from silent reply tokens, but active execution
+  can still show typing before any assistant text is available.
+- `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`),
+  and it can also start from active execution before reasoning deltas arrive.
 - Heartbeat typing is a liveness signal for the resolved delivery target. It
   starts at heartbeat run start instead of following `message` or `thinking`
   stream timing. Set `typingMode: "never"` to disable it.

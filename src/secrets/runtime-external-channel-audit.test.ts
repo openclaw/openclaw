@@ -1,3 +1,4 @@
+/** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -88,11 +89,7 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
 function mockBundledPublicArtifactMiss() {
   loadBundledPluginPublicArtifactModuleSyncMock.mockImplementation(
     (params: { dirName: string; artifactBasename: string }) => {
-      if (
-        params.dirName === "googlechat" &&
-        (params.artifactBasename === "secret-contract-api.js" ||
-          params.artifactBasename === "contract-api.js")
-      ) {
+      if (params.dirName === "googlechat" && params.artifactBasename === "secret-contract-api.js") {
         return createGoogleChatSecretContractApi();
       }
       throw new Error(
@@ -199,12 +196,10 @@ function expectMetadataBackedContractsWereUsed(
       dirName: channelId,
       artifactBasename: "secret-contract-api.js",
     });
-    if (channelId !== "googlechat") {
-      expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-        dirName: channelId,
-        artifactBasename: "contract-api.js",
-      });
-    }
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: channelId,
+      artifactBasename: "contract-api.js",
+    });
   }
 }
 
@@ -421,7 +416,9 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             enabled: true,
             tts: {
               providers: {
-                openai: { apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY") },
+                openai: {
+                  apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY"),
+                },
               },
             },
           },
@@ -545,5 +542,37 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.zalo.accounts.disabled.webhookSecret",
     ]);
     expectMetadataBackedContractsWereUsed();
+  });
+
+  it("resolves Feishu top-level appSecret SecretRef for the implicit default account", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: ref("FEISHU_APP_SECRET"),
+            accounts: {
+              "resource-shrimp": {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "inline-secret-here", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: { FEISHU_APP_SECRET: "default-secret" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.appSecret": "default-secret",
+      "channels.feishu.accounts.resource-shrimp.appSecret": "inline-secret-here",
+    });
+    expect(snapshot.warnings).toStrictEqual([]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
   });
 });

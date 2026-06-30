@@ -1,4 +1,7 @@
+// Config gateway methods expose config get/set/patch/apply/schema operations
+// with validation, redaction restoration, secret prep, and reload planning.
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -23,12 +26,11 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
-  validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+} from "../../config/io.js";
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import {
   redactConfigObject,
   redactConfigSnapshot,
@@ -37,8 +39,14 @@ import {
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "../../config/validation.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { isPlainObject } from "../../infra/plain-object.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -124,6 +132,194 @@ function requireConfigBaseHash(
   return true;
 }
 
+function formatConfigPatchPath(parentPath: string, key: string): string {
+  return parentPath ? `${parentPath}.${key}` : key;
+}
+
+function readConfigPatchReplacePaths(params: unknown): Set<string> {
+  const rawPaths = (params as { replacePaths?: unknown }).replacePaths;
+  return normalizeConfigPatchReplacePaths(Array.isArray(rawPaths) ? rawPaths : undefined);
+}
+
+function collectDestructiveArrayPatchPaths(params: {
+  base: unknown;
+  patch: unknown;
+  merged: unknown;
+  path?: string;
+}): string[] {
+  if (!isPlainObject(params.patch) || !isPlainObject(params.base)) {
+    return [];
+  }
+
+  const merged = isPlainObject(params.merged) ? params.merged : {};
+  const paths: string[] = [];
+  for (const [key, patchValue] of Object.entries(params.patch)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    const path = formatConfigPatchPath(params.path ?? "", key);
+    const baseValue = params.base[key];
+    const mergedValue = merged[key];
+
+    if (Array.isArray(baseValue)) {
+      if (patchValue === null || !Array.isArray(patchValue)) {
+        paths.push(path);
+        continue;
+      }
+      if (Array.isArray(mergedValue)) {
+        if (isConfigPatchIdKeyedArray(baseValue)) {
+          if (!idKeyedArrayPreservesBaseIds(baseValue, mergedValue)) {
+            paths.push(path);
+            continue;
+          }
+          paths.push(
+            ...collectDestructiveIdKeyedArrayEntryPatchPaths({
+              base: baseValue,
+              patch: patchValue,
+              merged: mergedValue,
+              path,
+            }),
+          );
+        } else if (!arrayPreservesBaseEntries(baseValue, mergedValue)) {
+          paths.push(path);
+          continue;
+        }
+      }
+    } else if (isPlainObject(baseValue) && !isPlainObject(patchValue)) {
+      paths.push(...collectBaseArrayPaths(baseValue, path));
+      continue;
+    }
+
+    if (isPlainObject(patchValue)) {
+      paths.push(
+        ...collectDestructiveArrayPatchPaths({
+          base: baseValue,
+          patch: patchValue,
+          merged: mergedValue,
+          path,
+        }),
+      );
+    }
+  }
+  return paths;
+}
+
+function collectBaseArrayPaths(base: unknown, path: string): string[] {
+  if (Array.isArray(base)) {
+    return [path];
+  }
+  if (!isPlainObject(base)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(base)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    paths.push(...collectBaseArrayPaths(value, formatConfigPatchPath(path, key)));
+  }
+  return paths;
+}
+
+function isConfigPatchObjectWithStringId(
+  value: unknown,
+): value is Record<string, unknown> & { id: string } {
+  return isPlainObject(value) && typeof value.id === "string" && value.id.length > 0;
+}
+
+function isConfigPatchIdKeyedArray(
+  value: unknown[],
+): value is Array<Record<string, unknown> & { id: string }> {
+  return value.every(isConfigPatchObjectWithStringId);
+}
+
+function idKeyedArrayPreservesBaseIds(
+  base: Array<Record<string, unknown> & { id: string }>,
+  merged: unknown[],
+): boolean {
+  const mergedIds = new Set(
+    merged.filter(isConfigPatchObjectWithStringId).map((entry) => entry.id),
+  );
+  return base.every((entry) => mergedIds.has(entry.id));
+}
+
+function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean {
+  const unmatchedMerged = [...merged];
+  for (const baseEntry of base) {
+    const matchIndex = unmatchedMerged.findIndex((mergedEntry) =>
+      isDeepStrictEqual(mergedEntry, baseEntry),
+    );
+    if (matchIndex === -1) {
+      return false;
+    }
+    unmatchedMerged.splice(matchIndex, 1);
+  }
+  return true;
+}
+
+function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
+  base: unknown[];
+  patch: unknown[];
+  merged: unknown[];
+  path: string;
+}): string[] {
+  if (!isConfigPatchIdKeyedArray(params.base)) {
+    return [];
+  }
+  const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
+  const mergedById = new Map(
+    params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
+  );
+  const paths: string[] = [];
+  for (const patchEntry of params.patch) {
+    if (!isConfigPatchObjectWithStringId(patchEntry)) {
+      continue;
+    }
+    const baseEntry = baseById.get(patchEntry.id);
+    const mergedEntry = mergedById.get(patchEntry.id);
+    if (!baseEntry || !mergedEntry) {
+      continue;
+    }
+    paths.push(
+      ...collectDestructiveArrayPatchPaths({
+        base: baseEntry,
+        patch: patchEntry,
+        merged: mergedEntry,
+        path: `${params.path}[]`,
+      }),
+    );
+  }
+  return paths;
+}
+
+function rejectDestructiveArrayPatchWithoutIntent(params: {
+  currentConfig: OpenClawConfig;
+  mergedConfig: unknown;
+  patch: unknown;
+  replacePaths: Set<string>;
+  respond: RespondFn;
+}): boolean {
+  const destructivePaths = collectDestructiveArrayPatchPaths({
+    base: params.currentConfig,
+    patch: params.patch,
+    merged: params.mergedConfig,
+  });
+  const unconfirmedPaths = destructivePaths.filter((path) => !params.replacePaths.has(path));
+  if (unconfirmedPaths.length === 0) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `config.patch would remove entries from array path(s): ${unconfirmedPaths.join(", ")}. ` +
+        `Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.`,
+    ),
+  );
+  return true;
+}
+
 async function readConfigWriteSnapshotOrRespond(
   params: unknown,
   respond: RespondFn,
@@ -179,7 +375,7 @@ export function resolveConfigOpenCommand(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Start-Process -LiteralPath '${escapePowerShellSingleQuotedString(configPath)}'`,
+        `Start-Process -FilePath '${escapePowerShellSingleQuotedString(configPath)}'`,
       ],
     };
   }
@@ -398,7 +594,7 @@ async function respondWithConfigRestartWrite(params: {
   uiHints: ConfigRedactionHints;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
-  const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+  const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
     mode: params.mode,
@@ -416,7 +612,7 @@ async function respondWithConfigRestartWrite(params: {
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
-        path: sentinelPath,
+        persisted: sentinelPersisted,
         payload,
       },
     },
@@ -620,9 +816,11 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const replacePaths = readConfigPatchReplacePaths(params);
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
       // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
+      replaceArrayPaths: replacePaths,
     });
     const schemaPatch = loadSchemaWithPlugins();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
@@ -635,6 +833,17 @@ export const configHandlers: GatewayRequestHandlers = {
           restoredMerge.humanReadableMessage ?? "invalid config",
         ),
       );
+      return;
+    }
+    if (
+      rejectDestructiveArrayPatchWithoutIntent({
+        currentConfig: snapshot.config,
+        mergedConfig: restoredMerge.result,
+        patch: parsedRes.parsed,
+        replacePaths,
+        respond,
+      })
+    ) {
       return;
     }
     const restoredChangedPaths = diffConfigPaths(snapshot.config, restoredMerge.result);

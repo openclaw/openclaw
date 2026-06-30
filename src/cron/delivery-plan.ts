@@ -1,3 +1,4 @@
+/** Resolves cron delivery and failure-notification routing from job config. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -35,6 +36,11 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+function normalizeThreadIdentity(value: unknown): string | undefined {
+  const normalized = normalizeOptionalThreadValue(value);
+  return normalized == null ? undefined : String(normalized);
+}
+
 function resolveAnnounceChannel(params: {
   channel?: CronMessageChannel;
   to?: string;
@@ -42,6 +48,8 @@ function resolveAnnounceChannel(params: {
   if (params.channel && params.channel !== "last") {
     return params.channel;
   }
+  // A prefixed recipient like "slack:C123" is enough to infer the channel when
+  // the cron config intentionally leaves channel at "last" or unset.
   return (
     (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
     params.channel ??
@@ -95,13 +103,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     };
   }
 
-  const isIsolatedAgentTurn =
-    job.payload.kind === "agentTurn" &&
+  const isDetachedOutputJob =
+    (job.payload.kind === "agentTurn" || job.payload.kind === "command") &&
     typeof job.sessionTarget === "string" &&
     (job.sessionTarget === "isolated" ||
       job.sessionTarget === "current" ||
       job.sessionTarget.startsWith("session:"));
-  const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
+  // Isolated/current/session output jobs default to announce delivery so their
+  // result reaches the initiating session unless the job opts out.
+  const resolvedMode = isDetachedOutputJob ? "announce" : "none";
 
   return {
     mode: resolvedMode,
@@ -196,6 +206,7 @@ export function resolveFailureDestination(
 
   const resolvedMode = mode ?? "announce";
   if (resolvedMode === "webhook" && !to) {
+    // Webhook failure destinations are only useful with a concrete URL/target.
     return null;
   }
 
@@ -207,6 +218,7 @@ export function resolveFailureDestination(
   };
 
   if (delivery && isSameDeliveryTarget(delivery, result)) {
+    // Avoid sending the same failure text through the primary delivery route twice.
     return null;
   }
 
@@ -224,6 +236,7 @@ function isSameDeliveryTarget(
 
   const primaryTo = normalizeOptionalString(delivery.to);
   const primaryAccountId = normalizeOptionalString(delivery.accountId);
+  const primaryThreadId = normalizeThreadIdentity(delivery.threadId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
@@ -238,6 +251,7 @@ function isSameDeliveryTarget(
   return (
     failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId
+    failurePlan.accountId === primaryAccountId &&
+    primaryThreadId === undefined
   );
 }

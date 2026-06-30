@@ -1,3 +1,6 @@
+// Control UI tests cover chat picker pagination behavior.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,7 +21,12 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function sessionRow(key: string, label: string, updatedAt: number) {
+function sessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options: { spawnedBy?: string } = {},
+) {
   return {
     contextTokens: null,
     displayName: label,
@@ -31,6 +39,7 @@ function sessionRow(key: string, label: string, updatedAt: number) {
     status: "done",
     totalTokens: 0,
     updatedAt,
+    ...(options.spawnedBy ? { spawnedBy: options.spawnedBy } : {}),
   };
 }
 
@@ -90,7 +99,7 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
     server = await startControlUiE2eServer();
@@ -215,6 +224,117 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       await expect
         .poll(async () => page.getByRole("button", { name: "Load more sessions" }).count())
         .toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("skips hidden subagent-only pages when loading more chat sessions through the GUI", async () => {
+    const baseTime = Date.parse("2026-06-04T12:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { offset: 4 },
+              response: sessionsListResponse(
+                [sessionRow("agent:main:work", "Main work", baseTime - 240_000)],
+                { hasMore: false, nextOffset: null, offset: 4, totalCount: 177 },
+              ),
+            },
+            {
+              match: { offset: 2 },
+              response: sessionsListResponse(
+                [
+                  sessionRow(
+                    "agent:main:spawn-child:second",
+                    "Subagent second",
+                    baseTime - 120_000,
+                    { spawnedBy: "agent:main:main" },
+                  ),
+                  sessionRow("agent:main:spawn-child:third", "Subagent third", baseTime - 180_000, {
+                    spawnedBy: "agent:main:main",
+                  }),
+                ],
+                { hasMore: true, nextOffset: 4, offset: 2, totalCount: 177 },
+              ),
+            },
+            {
+              match: {},
+              response: sessionsListResponse(
+                [
+                  sessionRow("agent:main:main", "Main chat", baseTime - 60_000),
+                  sessionRow("agent:main:spawn-child:first", "Subagent first", baseTime - 90_000, {
+                    spawnedBy: "agent:main:main",
+                  }),
+                ],
+                { hasMore: true, nextOffset: 2, totalCount: 177 },
+              ),
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Chat session" }).click();
+
+      await page.getByRole("option", { name: /Main chat/u }).waitFor({ timeout: 10_000 });
+      await page.getByText("1", { exact: true }).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => page.getByRole("option", { name: /Subagent first/u }).count())
+        .toBe(0);
+
+      await page.getByRole("button", { name: "Load more sessions" }).click();
+
+      const hiddenPageRequest = await waitForSessionsRequest(
+        gateway,
+        (params) => params.offset === 2,
+      );
+      expect(requestParams(hiddenPageRequest)).toMatchObject({
+        configuredAgentsOnly: true,
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 50,
+        offset: 2,
+      });
+      const visiblePageRequest = await waitForSessionsRequest(
+        gateway,
+        (params) => params.offset === 4,
+      );
+      expect(requestParams(visiblePageRequest)).toMatchObject({
+        configuredAgentsOnly: true,
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 50,
+        offset: 4,
+      });
+
+      await page.getByRole("option", { name: /Main work/u }).waitFor({ timeout: 10_000 });
+      await page.getByText("2", { exact: true }).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => page.getByRole("option", { name: /Subagent second/u }).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Load more sessions" }).count())
+        .toBe(0);
+
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const artifactDir = path.join(process.cwd(), ".artifacts", "pr-89323-control-ui-proof");
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "chat-picker-hidden-page-skip.png"),
+        });
+      }
     } finally {
       await context.close();
     }

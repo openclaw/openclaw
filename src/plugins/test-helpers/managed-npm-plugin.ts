@@ -1,7 +1,9 @@
+// Managed npm plugin test helpers create package fixtures for managed plugin tests.
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePluginNpmProjectDir } from "../install-paths.js";
 
+/** Writes a managed npm plugin fixture and returns its package directory. */
 export function writeManagedNpmPlugin(params: {
   stateDir: string;
   packageName: string;

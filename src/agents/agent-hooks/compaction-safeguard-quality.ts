@@ -1,9 +1,12 @@
+/** Quality contract, fallback, and audit helpers for compaction safeguard summaries. */
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
+// Compaction summary quality helpers. They define the structured summary contract
+// and audit whether summaries preserve pending asks plus exact identifiers.
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
@@ -20,6 +23,7 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+/** Wraps operator-provided compaction instruction text as untrusted prompt data. */
 export function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
     label,
@@ -38,6 +42,8 @@ function resolveExactIdentifierSectionInstruction(
   if (policy === "custom") {
     const custom = summarizationInstructions?.identifierInstructions?.trim();
     if (custom) {
+      // Operator text is runtime data, not prompt authority. Wrap it as
+      // untrusted data before inserting it into compaction instructions.
       const customBlock = wrapUntrustedInstructionBlock(
         "For ## Exact identifiers, apply this operator-defined policy text",
         custom,
@@ -50,6 +56,7 @@ function resolveExactIdentifierSectionInstruction(
   return STRICT_EXACT_IDENTIFIERS_INSTRUCTION;
 }
 
+/** Build the required structured summary instructions for compaction. */
 export function buildCompactionStructureInstructions(
   customInstructions?: string,
   summarizationInstructions?: CompactionSummarizationInstructions,
@@ -94,6 +101,7 @@ function hasRequiredSummarySections(summary: string): boolean {
   return true;
 }
 
+/** Return a structured fallback summary when model output is missing/invalid. */
 export function buildStructuredFallbackSummary(
   previousSummary: string | undefined,
   _summarizationInstructions?: CompactionSummarizationInstructions,
@@ -121,6 +129,8 @@ export function buildStructuredFallbackSummary(
   ].join("\n");
 }
 
+/** Append an already-formatted summary section without disturbing empty summaries. */
+/** Appends a bounded post-compaction section to an existing summary. */
 export function appendSummarySection(summary: string, section: string): string {
   if (!section) {
     return summary;
@@ -153,6 +163,7 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
   return summary.includes(identifier);
 }
 
+/** Extracts likely exact identifiers that summaries should preserve literally. */
 export function extractOpaqueIdentifiers(text: string): string[] {
   const matches =
     text.match(
@@ -218,6 +229,8 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   return overlapCount >= requiredMatches;
 }
 
+/** Audit summary structure, exact identifier preservation, and latest-ask coverage. */
+/** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
   identifiers: string[];

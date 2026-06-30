@@ -1,3 +1,4 @@
+// Reset helpers classify session keys and route reset config by session/channel type.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -5,6 +6,7 @@ import {
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
+/** Public reset policy exports plus helpers that classify direct, group, and thread sessions. */
 export {
   DEFAULT_RESET_AT_HOUR,
   DEFAULT_RESET_MODE,
@@ -20,6 +22,7 @@ import type { SessionResetType } from "./reset-policy.js";
 
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
+/** Returns true when a session key is known to represent a thread. */
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
   return Boolean(resolveLoadedSessionThreadInfo(sessionKey).threadId);
 }
@@ -29,6 +32,7 @@ export function resolveSessionResetType(params: {
   isGroup?: boolean;
   isThread?: boolean;
 }): SessionResetType {
+  // Thread wins over group because thread-specific reset policy should apply to grouped replies.
   if (params.isThread || isThreadSessionKey(params.sessionKey)) {
     return "thread";
   }
@@ -74,6 +78,7 @@ export function resolveChannelResetConfig(params: {
   }
   const normalized = normalizeMessageChannel(params.channel);
   const fallback = normalizeOptionalLowercaseString(params.channel);
+  // Channel ids can arrive as public message-channel names or raw provider keys.
   const key = normalized ?? fallback;
   if (!key) {
     return undefined;

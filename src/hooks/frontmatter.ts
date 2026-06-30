@@ -1,3 +1,4 @@
+// Hook frontmatter helpers parse metadata blocks from hook files.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
@@ -19,6 +20,7 @@ import type {
   ParsedHookFrontmatter,
 } from "./types.js";
 
+/** Parse HOOK.md frontmatter into the generic hook frontmatter record. */
 export function parseFrontmatter(content: string): ParsedHookFrontmatter {
   return parseFrontmatterBlock(content);
 }
@@ -45,6 +47,7 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   return spec;
 }
 
+/** Resolve OpenClaw hook metadata from the manifest block in HOOK.md frontmatter. */
 export function resolveOpenClawMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
@@ -69,6 +72,7 @@ export function resolveOpenClawMetadata(
   };
 }
 
+/** Resolve invocation policy from top-level hook frontmatter flags. */
 export function resolveHookInvocationPolicy(
   frontmatter: ParsedHookFrontmatter,
 ): HookInvocationPolicy {
@@ -77,6 +81,7 @@ export function resolveHookInvocationPolicy(
   };
 }
 
+/** Resolve the config key for a hook, honoring metadata hookKey overrides. */
 export function resolveHookKey(hookName: string, entry?: HookEntry): string {
   return entry?.metadata?.hookKey ?? hookName;
 }

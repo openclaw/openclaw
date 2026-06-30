@@ -1,19 +1,60 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /** Pending exclusive store write plus the promise hooks for its caller. */
 export type StoreWriterTask = {
+  /** Write operation to run once earlier tasks for the same store path finish. */
   fn: () => Promise<unknown>;
+  /** Resolves the caller's promise with the write result. */
   resolve: (value: unknown) => void;
+  /** Rejects the caller's promise with the write failure or test cleanup error. */
   reject: (reason: unknown) => void;
 };
 
 /** Per-store-path FIFO queue that serializes file writes within one process. */
 export type StoreWriterQueue = {
+  /** True while a drain loop owns this queue. */
   running: boolean;
+  /** Writes waiting behind the active drain. */
   pending: StoreWriterTask[];
+  /** Active drain promise, reused by waiters until the current batch settles. */
   drainPromise: Promise<void> | null;
 };
 
 /** Store writer queues keyed by the canonical store path. */
-export type StoreWriterQueues = Map<string, StoreWriterQueue>;
+type StoreWriterQueues = Map<string, StoreWriterQueue>;
+
+type ActiveStoreWriter = {
+  active: boolean;
+  parent: ActiveStoreWriter | undefined;
+  queues: StoreWriterQueues;
+  storePath: string;
+};
+
+const activeStoreWriters = new AsyncLocalStorage<ActiveStoreWriter>();
+
+function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
+  let active = activeStoreWriters.getStore();
+  while (active) {
+    if (active.active && active.queues === queues && active.storePath === storePath) {
+      return true;
+    }
+    active = active.parent;
+  }
+  return false;
+}
+
+async function runActiveStoreWriter<T>(
+  queues: StoreWriterQueues,
+  storePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const writer = { active: true, parent: activeStoreWriters.getStore(), queues, storePath };
+  try {
+    return await activeStoreWriters.run(writer, fn);
+  } finally {
+    writer.active = false;
+  }
+}
 
 function getOrCreateStoreWriterQueue(
   queues: StoreWriterQueues,
@@ -83,6 +124,7 @@ export async function runQueuedStoreWrite<T>(params: {
   storePath: string;
   label: string;
   fn: () => Promise<T>;
+  reentrant?: boolean;
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -91,10 +133,15 @@ export async function runQueuedStoreWrite<T>(params: {
       )}`,
     );
   }
+  // Explicit reentrancy keeps one logical read/decide/write section on the
+  // active lane; ordinary async children must queue behind the current writer.
+  if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
+    return await params.fn();
+  }
   const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
   return await new Promise<T>((resolve, reject) => {
     const task: StoreWriterTask = {
-      fn: async () => await params.fn(),
+      fn: async () => await runActiveStoreWriter(params.queues, params.storePath, params.fn),
       resolve: (value) => resolve(value as T),
       reject,
     };

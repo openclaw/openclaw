@@ -1,3 +1,4 @@
+// Covers agent harness selection, fallback behavior, and compaction routing.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -13,10 +14,15 @@ import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
-import type { AgentHarness } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
+} from "./types.js";
 
 const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
   createAttemptResult("openclaw"),
@@ -24,6 +30,9 @@ const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
 const compactAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
   resolveModelAsync: vi.fn(),
+}));
+const providerOwnerMocks = vi.hoisted(() => ({
+  resolveProviderRefOwnership: vi.fn(),
 }));
 
 vi.mock("./builtin-openclaw.js", () => ({
@@ -41,6 +50,9 @@ vi.mock("../model-auth.js", () => ({
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
+vi.mock("../../plugins/providers.js", () => ({
+  resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
+}));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
@@ -50,6 +62,8 @@ beforeEach(() => {
     model: { id: "gpt-5.5", provider: "openai" },
   });
   compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
+  providerOwnerMocks.resolveProviderRefOwnership.mockReset();
+  providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({ status: "unowned" });
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -81,6 +95,7 @@ afterEach(() => {
   agentRunAttempt.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
   compactAuthMocks.getApiKeyForModel.mockReset();
+  providerOwnerMocks.resolveProviderRefOwnership.mockReset();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
@@ -133,6 +148,8 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
 }
 
 function createContextEngineRequiringAssembly(): ContextEngine {
+  // Selection tests use this to prove fallback cannot cross into a harness
+  // that lacks required context-engine host capabilities.
   return {
     info: {
       id: "lossless-claw",
@@ -156,6 +173,8 @@ function createContextEngineRequiringAssembly(): ContextEngine {
 }
 
 function registerFailingCodexHarness(): void {
+  // Forces the selected plugin runtime to throw so fallback behavior is
+  // exercised through runAgentHarnessAttempt, not only selectAgentHarness.
   registerAgentHarness(
     {
       id: "codex",
@@ -186,6 +205,8 @@ function registerSuccessfulCodexHarness(): void {
 }
 
 function groupSenderDenyAllConfig(): OpenClawConfig {
+  // Mirrors Telegram sender policy shape used when selection must preserve
+  // channel/group sender tool constraints across fallback attempts.
   return {
     channels: {
       telegram: {
@@ -480,6 +501,30 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
   });
 
+  it.each([
+    {
+      name: "narrow allowlist",
+      config: { tools: { allow: ["message"] } } as OpenClawConfig,
+    },
+    {
+      name: "specific denylist",
+      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
+    },
+    {
+      name: "narrow profile",
+      config: { tools: { profile: "coding" } } as OpenClawConfig,
+    },
+  ])("marks plugin side questions restricted for a $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
+  });
+
+  it.each([
+    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
+    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
+  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
+  });
+
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
@@ -603,6 +648,141 @@ describe("selectAgentHarness", () => {
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
+  it("passes manifest provider owners into plugin support checks", () => {
+    providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
+      status: "owned",
+      pluginIds: ["anthropic"],
+    });
+    const supports = vi.fn(() => ({
+      supported: false as const,
+      reason: "provider is owned by a native plugin",
+    }));
+    const config = providerRuntimeConfig("anthropic", "copilot");
+    registerAgentHarness({
+      id: "copilot",
+      label: "Copilot",
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+    });
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4.6",
+        config,
+        agentHarnessRuntimeOverride: "copilot",
+      }),
+    ).toThrow("provider is owned by a native plugin");
+
+    expect(providerOwnerMocks.resolveProviderRefOwnership).toHaveBeenCalledWith({
+      provider: "anthropic",
+      config,
+    });
+    expect(supports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4.6",
+        requestedRuntime: "copilot",
+        providerOwnerStatus: "owned",
+        providerOwnerPluginIds: ["anthropic"],
+      }),
+    );
+  });
+
+  it("passes ambiguous provider ownership into plugin support checks", () => {
+    providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
+      status: "ambiguous",
+      pluginIds: ["first-owner", "second-owner"],
+    });
+    const supports = vi.fn(() => ({
+      supported: false as const,
+      reason: "provider ownership is ambiguous",
+    }));
+    const config = providerRuntimeConfig("custom-proxy", "copilot");
+    registerAgentHarness({
+      id: "copilot",
+      label: "Copilot",
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+    });
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "custom-proxy",
+        modelId: "proxy-model",
+        config,
+        agentHarnessRuntimeOverride: "copilot",
+      }),
+    ).toThrow("provider ownership is ambiguous");
+
+    expect(supports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom-proxy",
+        providerOwnerStatus: "ambiguous",
+        providerOwnerPluginIds: ["first-owner", "second-owner"],
+      }),
+    );
+  });
+
+  it("passes resolved provider model shape into plugin support checks", () => {
+    const supports = vi.fn(() => ({
+      supported: false as const,
+      reason: "unsupported test provider",
+    }));
+    const config = {
+      models: {
+        providers: {
+          "custom-proxy": {
+            api: "openai-completions",
+            baseUrl: "https://provider.example/v1",
+            request: { auth: { mode: "provider-default" as const } },
+            agentRuntime: { id: "copilot" },
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                api: "openai-responses",
+                baseUrl: "https://model.example/v1",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8_192,
+                maxTokens: 1_024,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    registerAgentHarness({
+      id: "copilot",
+      label: "Copilot",
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+    });
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "custom-proxy",
+        modelId: "gpt-test",
+        config,
+        agentHarnessRuntimeOverride: "copilot",
+      }),
+    ).toThrow("unsupported test provider");
+
+    expect(supports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom-proxy",
+        modelId: "gpt-test",
+        modelProvider: expect.objectContaining({
+          api: "openai-responses",
+          baseUrl: "https://model.example/v1",
+          request: { auth: { mode: "provider-default" } },
+        }),
+      }),
+    );
+  });
+
   it("honors explicit OpenClaw runtime overrides when selecting a harness", async () => {
     registerSuccessfulCodexHarness();
 
@@ -613,6 +793,7 @@ describe("selectAgentHarness", () => {
     });
 
     expect(harness.id).toBe("openclaw");
+    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
 
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
@@ -797,6 +978,7 @@ describe("selectAgentHarness", () => {
         workspaceDir: "/tmp/workspace",
         provider: "openai",
         model: "gpt-5.5",
+        authProfileId: "main-profile",
         agentHarnessId: "codex",
         config: {
           agents: {
@@ -814,7 +996,105 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).toMatchObject({
       agentDir: "/tmp/main-agent",
       agentId: "main",
+      resolvedApiKey: "test-key",
+      runtimeModel: {
+        id: "gpt-5.5",
+        provider: "openai",
+      },
     });
+  });
+
+  it("routes internal post-context-engine compaction through the harness private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactAfterContextEngine = vi.fn(
+      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+        ok: true,
+        compacted: false,
+        result: {
+          summary: "native follow-up queued",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          details: { request: "after_context_engine" },
+        },
+      }),
+    );
+    const harness: AgentHarness & {
+      compactAfterContextEngine(
+        params: AgentHarnessCompactParams,
+      ): Promise<AgentHarnessCompactResult | undefined>;
+    } = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+      compactAfterContextEngine,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "native follow-up queued",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        details: { request: "after_context_engine" },
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(compact).not.toHaveBeenCalled();
   });
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
@@ -858,6 +1138,118 @@ describe("selectAgentHarness", () => {
       expect.objectContaining({
         authProfileId: "deleted-profile",
         workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("preserves resolved compaction credentials when model lookup fails", async () => {
+    compactAuthMocks.resolveModelAsync.mockRejectedValue(new Error("model lookup unavailable"));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Copilot",
+        supports: (ctx) =>
+          ctx.provider === "local-proxy"
+            ? { supported: true, priority: 100 }
+            : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+        compact,
+      },
+      { ownerPluginId: "copilot" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "local-proxy",
+        model: "proxy-model",
+        resolvedApiKey: "already-resolved",
+        agentHarnessId: "copilot",
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+
+    expect(compactAuthMocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedApiKey: "already-resolved",
+      }),
+    );
+  });
+
+  it("passes runtime model and default credentials to compaction when auth profile id is absent", async () => {
+    compactAuthMocks.resolveModelAsync.mockResolvedValue({
+      model: {
+        id: "proxy-model",
+        provider: "local-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Copilot",
+        supports: (ctx) =>
+          ctx.provider === "local-proxy"
+            ? { supported: true, priority: 100 }
+            : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+        compact,
+      },
+      { ownerPluginId: "copilot" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "local-proxy",
+        model: "proxy-model",
+        agentHarnessId: "copilot",
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+
+    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledWith(
+      "local-proxy",
+      "proxy-model",
+      expect.any(String),
+      undefined,
+      expect.objectContaining({
+        authProfileId: undefined,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(compactAuthMocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: expect.any(String),
+        model: expect.objectContaining({
+          baseUrl: "https://proxy.example/v1",
+          id: "proxy-model",
+        }),
+        profileId: undefined,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedApiKey: "test-key",
+        runtimeModel: expect.objectContaining({
+          baseUrl: "https://proxy.example/v1",
+          id: "proxy-model",
+        }),
       }),
     );
   });

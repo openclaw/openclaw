@@ -1,3 +1,4 @@
+// Control UI controller manages models gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 
@@ -40,6 +41,13 @@ export async function loadModels(client: GatewayBrowserClient): Promise<ModelCat
     inFlight,
   });
   return inFlight;
+}
+
+export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | null {
+  if (!Array.isArray(models)) {
+    return null;
+  }
+  return models as ModelCatalogEntry[];
 }
 
 async function requestModels(

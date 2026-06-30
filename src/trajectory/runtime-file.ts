@@ -1,3 +1,4 @@
+// Trajectory runtime file helpers create and append trajectory log files.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,6 +7,8 @@ import {
   safeTrajectorySessionFileName,
 } from "./paths.js";
 
+// Runtime trajectory file discovery for exporters. Pointer files are treated as
+// advisory only and must resolve to regular non-symlink files before use.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -48,6 +51,8 @@ async function readRuntimePointerFile(
         sessionId,
       }),
     );
+    // Accept the default sibling path or a runtime-dir file with the sanitized
+    // session basename; reject arbitrary pointers from stale or edited sidecars.
     if (runtimeFile !== defaultRuntimeFile && path.basename(runtimeFile) !== safeRuntimeFileName) {
       return undefined;
     }

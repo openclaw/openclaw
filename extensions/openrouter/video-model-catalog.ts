@@ -1,3 +1,4 @@
+// Openrouter plugin module implements video model catalog behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -6,6 +7,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   assertOkOrThrowHttpError,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -233,7 +235,10 @@ async function fetchOpenRouterVideoModels(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video models request failed");
-        return (await response.json()) as OpenRouterVideoModelsResponse;
+        return await readProviderJsonResponse<OpenRouterVideoModelsResponse>(
+          response,
+          "OpenRouter video models request failed",
+        );
       } finally {
         await release();
       }

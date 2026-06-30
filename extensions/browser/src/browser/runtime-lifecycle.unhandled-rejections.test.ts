@@ -1,3 +1,4 @@
+// Browser tests cover runtime lifecycle.unhandled rejections plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, resetHandlers } =
@@ -18,7 +19,6 @@ const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, re
   });
 
 const {
-  ensureExtensionRelayForProfilesMock,
   getPwAiModuleMock,
   isPwAiLoadedMock,
   startTrackedBrowserTabCleanupTimerMock,
@@ -27,7 +27,6 @@ const {
 } = vi.hoisted(() => {
   const trackedTabCleanupMockLocal = vi.fn();
   return {
-    ensureExtensionRelayForProfilesMock: vi.fn(async () => {}),
     getPwAiModuleMock: vi.fn(),
     isPwAiLoadedMock: vi.fn(() => false),
     startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMockLocal),
@@ -41,7 +40,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("./server-lifecycle.js", () => ({
-  ensureExtensionRelayForProfiles: ensureExtensionRelayForProfilesMock,
   stopKnownBrowserProfiles: stopKnownBrowserProfilesMock,
 }));
 
@@ -63,7 +61,6 @@ const { isPlaywrightDialogRaceUnhandledRejection } = await import("./unhandled-r
 beforeEach(() => {
   resetHandlers();
   registerUnhandledRejectionHandlerMock.mockClear();
-  ensureExtensionRelayForProfilesMock.mockClear();
   getPwAiModuleMock.mockClear();
   isPwAiLoadedMock.mockReset().mockReturnValue(false);
   startTrackedBrowserTabCleanupTimerMock.mockClear();

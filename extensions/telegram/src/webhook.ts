@@ -1,3 +1,4 @@
+// Telegram plugin module implements webhook behavior.
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
@@ -414,13 +415,6 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     shutDown = true;
-    void withTelegramApiErrorLogging({
-      operation: "deleteWebhook",
-      runtime,
-      fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
-    }).catch(() => {
-      // withTelegramApiErrorLogging has already emitted the failure.
-    });
     server.close();
     void bot.stop();
     status.noteWebhookStop();

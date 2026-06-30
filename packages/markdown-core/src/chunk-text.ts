@@ -1,3 +1,4 @@
+// Markdown Core module implements chunk text behavior.
 function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
   if (!text) {
     return [];
@@ -18,6 +19,8 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
+    // Parenthesized spans often contain rewritten links or file references;
+    // avoid splitting them unless the window has no safer outside break.
     if (char === "(") {
       depth += 1;
       continue;
@@ -39,7 +42,28 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   return { lastNewline, lastWhitespace };
 }
 
-/** Splits plain text at readable boundaries while avoiding breaks inside parentheses. */
+/**
+ * Keeps UTF-16 chunk boundaries from separating a supplementary-plane character.
+ * A one-unit positive limit still needs to emit an entire surrogate pair.
+ */
+export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
+  if (
+    end >= text.length ||
+    text.charCodeAt(end - 1) < 0xd800 ||
+    text.charCodeAt(end - 1) > 0xdbff ||
+    text.charCodeAt(end) < 0xdc00 ||
+    text.charCodeAt(end) > 0xdfff
+  ) {
+    return end;
+  }
+  return end - 1 > start ? end - 1 : end + 1;
+}
+
+/**
+ * Splits plain text into size-bounded chunks at readable boundaries.
+ *
+ * Returns the original text as one chunk when the limit is non-positive.
+ */
 export function chunkText(text: string, limit: number): string[] {
   const early = resolveChunkEarlyReturn(text, limit);
   if (early) {
@@ -56,8 +80,14 @@ export function chunkText(text: string, limit: number): string[] {
     const windowEnd = Math.min(text.length, cursor + limit);
     const window = text.slice(cursor, windowEnd);
     const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+    // Prefer block boundaries, then spaces, then a hard size cut when no
+    // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;
-    const end = breakOffset > 0 ? cursor + breakOffset : windowEnd;
+    const end = avoidTrailingHighSurrogateBreak(
+      text,
+      cursor,
+      breakOffset > 0 ? cursor + breakOffset : windowEnd,
+    );
     chunks.push(text.slice(cursor, end));
     cursor = end;
     while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {

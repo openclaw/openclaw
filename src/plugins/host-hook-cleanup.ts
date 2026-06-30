@@ -1,9 +1,11 @@
+/** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
 import fs from "node:fs";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import {
+  cleanupPluginHostSessionStore,
+  clearPluginOwnedSessionState,
+} from "../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
@@ -16,12 +18,17 @@ import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
+export { clearPluginOwnedSessionState };
+
+/** Failure captured while running plugin cleanup hooks. */
+/** Failure captured while running one plugin cleanup callback. */
 export type PluginHostCleanupFailure = {
   pluginId: string;
   hookId: string;
   error: unknown;
 };
 
+/** Aggregate cleanup result for plugin host state. */
 export type PluginHostCleanupResult = {
   cleanupCount: number;
   failures: PluginHostCleanupFailure[];
@@ -31,174 +38,6 @@ type ResolveCleanupSessionStorePaths = () => readonly string[];
 
 function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
-}
-
-function collectStoredSessionEntrySlotKeys(entry: SessionEntry, pluginId?: string): Set<string> {
-  const slotKeys = new Set<string>();
-  const storedSlotKeys = entry.pluginExtensionSlotKeys;
-  if (!storedSlotKeys) {
-    return slotKeys;
-  }
-  const records =
-    pluginId === undefined
-      ? Object.values(storedSlotKeys)
-      : storedSlotKeys[pluginId]
-        ? [storedSlotKeys[pluginId]]
-        : [];
-  for (const record of records) {
-    for (const slotKey of Object.values(record)) {
-      const normalized = normalizeSessionEntrySlotKey(slotKey);
-      if (normalized.ok) {
-        slotKeys.add(normalized.key);
-      }
-    }
-  }
-  return slotKeys;
-}
-
-function collectPromotedSessionEntrySlotKeys(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): Set<string> {
-  const slotKeys = collectStoredSessionEntrySlotKeys(entry, pluginId);
-  for (const slotKey of sessionEntrySlotKeys ?? []) {
-    slotKeys.add(slotKey);
-  }
-  return slotKeys;
-}
-
-function clearPromotedSessionEntrySlots(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-  options: { includeStoredSlotKeys?: boolean; pruneSlotOwnership?: boolean } = {},
-): void {
-  const slotKeys =
-    options.includeStoredSlotKeys === false && sessionEntrySlotKeys
-      ? new Set(sessionEntrySlotKeys)
-      : collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  const entryRecord = entry as Record<string, unknown>;
-  for (const slotKey of slotKeys) {
-    delete entryRecord[slotKey];
-  }
-  if (!options.pruneSlotOwnership || !entry.pluginExtensionSlotKeys) {
-    return;
-  }
-  const pruneRecord = (record: Record<string, string>): void => {
-    for (const [namespace, slotKey] of Object.entries(record)) {
-      const normalized = normalizeSessionEntrySlotKey(slotKey);
-      if (normalized.ok && slotKeys.has(normalized.key)) {
-        delete record[namespace];
-      }
-    }
-  };
-  if (pluginId) {
-    const record = entry.pluginExtensionSlotKeys[pluginId];
-    if (record) {
-      pruneRecord(record);
-      if (Object.keys(record).length === 0) {
-        delete entry.pluginExtensionSlotKeys[pluginId];
-      }
-    }
-  } else {
-    for (const record of Object.values(entry.pluginExtensionSlotKeys)) {
-      pruneRecord(record);
-    }
-    for (const [ownerPluginId, record] of Object.entries(entry.pluginExtensionSlotKeys)) {
-      if (Object.keys(record).length === 0) {
-        delete entry.pluginExtensionSlotKeys[ownerPluginId];
-      }
-    }
-  }
-  if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
-    delete entry.pluginExtensionSlotKeys;
-  }
-}
-
-export function clearPluginOwnedSessionState(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): void {
-  clearPromotedSessionEntrySlots(entry, pluginId, sessionEntrySlotKeys);
-  if (!pluginId) {
-    delete entry.pluginExtensions;
-    delete entry.pluginExtensionSlotKeys;
-    delete entry.pluginNextTurnInjections;
-    return;
-  }
-  if (entry.pluginExtensions) {
-    delete entry.pluginExtensions[pluginId];
-    if (Object.keys(entry.pluginExtensions).length === 0) {
-      delete entry.pluginExtensions;
-    }
-  }
-  if (entry.pluginExtensionSlotKeys) {
-    delete entry.pluginExtensionSlotKeys[pluginId];
-    if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
-      delete entry.pluginExtensionSlotKeys;
-    }
-  }
-  if (entry.pluginNextTurnInjections) {
-    delete entry.pluginNextTurnInjections[pluginId];
-    if (Object.keys(entry.pluginNextTurnInjections).length === 0) {
-      delete entry.pluginNextTurnInjections;
-    }
-  }
-}
-
-function hasPromotedSessionEntrySlot(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): boolean {
-  const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  if (slotKeys.size === 0) {
-    return false;
-  }
-  const entryRecord = entry as Record<string, unknown>;
-  for (const slotKey of slotKeys) {
-    if (Object.hasOwn(entryRecord, slotKey)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function hasPluginOwnedSessionState(
-  entry: SessionEntry,
-  pluginId?: string,
-  sessionEntrySlotKeys?: ReadonlySet<string>,
-): boolean {
-  if (hasPromotedSessionEntrySlot(entry, pluginId, sessionEntrySlotKeys)) {
-    return true;
-  }
-  if (!pluginId) {
-    return Boolean(
-      entry.pluginExtensions || entry.pluginExtensionSlotKeys || entry.pluginNextTurnInjections,
-    );
-  }
-  return Boolean(
-    entry.pluginExtensions?.[pluginId] ||
-    entry.pluginExtensionSlotKeys?.[pluginId] ||
-    entry.pluginNextTurnInjections?.[pluginId],
-  );
-}
-
-function matchesCleanupSession(
-  entryKey: string,
-  entry: SessionEntry,
-  sessionKey?: string,
-): boolean {
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalizedSessionKey) {
-    return true;
-  }
-  return (
-    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
-    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
-  );
 }
 
 function resolveExistingSessionStorePaths(cfg: OpenClawConfig): string[] {
@@ -240,6 +79,7 @@ async function clearPluginOwnedSessionStores(params: {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   storePaths?: readonly string[];
   resolveStorePaths?: ResolveCleanupSessionStorePaths;
+  shouldCleanup?: () => boolean;
 }): Promise<number> {
   if (!params.pluginId && !params.sessionKey) {
     return 0;
@@ -247,29 +87,17 @@ async function clearPluginOwnedSessionStores(params: {
   const storePaths = resolveCleanupSessionStorePaths(params);
   let cleared = 0;
   for (const storePath of storePaths) {
-    cleared += await updateSessionStore(
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
+    cleared += await cleanupPluginHostSessionStore({
       storePath,
-      (store) => {
-        let clearedInStore = 0;
-        const now = Date.now();
-        for (const [entryKey, entry] of Object.entries(store)) {
-          if (
-            !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-            !hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys)
-          ) {
-            continue;
-          }
-          clearPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
-          entry.updatedAt = now;
-          clearedInStore += 1;
-        }
-        return clearedInStore;
-      },
-      {
-        skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
-        takeCacheOwnership: true,
-      },
-    );
+      mode: "plugin-owned-state",
+      pluginId: params.pluginId,
+      sessionKey: params.sessionKey,
+      sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+      shouldCleanup: params.shouldCleanup,
+    });
   }
   return cleared;
 }
@@ -281,6 +109,7 @@ async function clearPromotedSessionEntrySlotStores(params: {
   sessionEntrySlotKeys: ReadonlySet<string>;
   storePaths?: readonly string[];
   resolveStorePaths?: ResolveCleanupSessionStorePaths;
+  shouldCleanup?: () => boolean;
 }): Promise<number> {
   if ((!params.pluginId && !params.sessionKey) || params.sessionEntrySlotKeys.size === 0) {
     return 0;
@@ -288,32 +117,17 @@ async function clearPromotedSessionEntrySlotStores(params: {
   const storePaths = resolveCleanupSessionStorePaths(params);
   let cleared = 0;
   for (const storePath of storePaths) {
-    cleared += await updateSessionStore(
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
+    cleared += await cleanupPluginHostSessionStore({
       storePath,
-      (store) => {
-        let clearedInStore = 0;
-        const now = Date.now();
-        for (const [entryKey, entry] of Object.entries(store)) {
-          if (
-            !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-            !hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys)
-          ) {
-            continue;
-          }
-          clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys, {
-            includeStoredSlotKeys: false,
-            pruneSlotOwnership: true,
-          });
-          entry.updatedAt = now;
-          clearedInStore += 1;
-        }
-        return clearedInStore;
-      },
-      {
-        skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
-        takeCacheOwnership: true,
-      },
-    );
+      mode: "promoted-slots",
+      pluginId: params.pluginId,
+      sessionKey: params.sessionKey,
+      sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+      shouldCleanup: params.shouldCleanup,
+    });
   }
   return cleared;
 }
@@ -339,6 +153,8 @@ function collectSessionEntrySlotKeys(
   return slotKeys;
 }
 
+/** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
+/** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
 export async function runPluginHostCleanup(params: {
   cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;
@@ -352,6 +168,7 @@ export async function runPluginHostCleanup(params: {
   preserveSchedulerOwnerRegistry?: PluginRegistry | null;
   sessionStorePaths?: readonly string[];
   resolveSessionStorePaths?: ResolveCleanupSessionStorePaths;
+  skipPersistentSessionState?: boolean;
 }): Promise<PluginHostCleanupResult> {
   const failures: PluginHostCleanupFailure[] = [];
   const shouldCleanup = params.shouldCleanup ?? (() => true);
@@ -366,7 +183,7 @@ export async function runPluginHostCleanup(params: {
   const restartPromotedSessionEntrySlotKeys =
     params.restartPromotedSessionEntrySlotKeys ?? sessionEntrySlotKeys;
   let persistentCleanupCount = 0;
-  if (shouldCleanup()) {
+  if (!params.skipPersistentSessionState && shouldCleanup()) {
     try {
       persistentCleanupCount =
         params.reason === "restart"
@@ -377,6 +194,7 @@ export async function runPluginHostCleanup(params: {
               sessionEntrySlotKeys: restartPromotedSessionEntrySlotKeys,
               storePaths: params.sessionStorePaths,
               resolveStorePaths: params.resolveSessionStorePaths,
+              shouldCleanup,
             })
           : await clearPluginOwnedSessionStores({
               cfg: params.cfg ?? getRuntimeConfig(),
@@ -385,6 +203,7 @@ export async function runPluginHostCleanup(params: {
               sessionEntrySlotKeys,
               storePaths: params.sessionStorePaths,
               resolveStorePaths: params.resolveSessionStorePaths,
+              shouldCleanup,
             });
     } catch (error) {
       failures.push({
@@ -549,6 +368,7 @@ function collectRestartPromotedSessionEntrySlotKeys(
   return staleSlotKeys;
 }
 
+/** Cleans up plugin host state when a registry snapshot is replaced. */
 export async function cleanupReplacedPluginHostRegistry(params: {
   cfg: OpenClawConfig;
   previousRegistry?: PluginRegistry | null;

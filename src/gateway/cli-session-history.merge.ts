@@ -1,3 +1,5 @@
+// Imported CLI history merge helpers.
+// Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
@@ -57,6 +59,8 @@ function resolveComparableRole(message: unknown): string | undefined {
   return readStringValue((message as { role?: unknown }).role);
 }
 
+// External identity survives text edits, so it is the strongest match signal
+// for imported messages from Claude CLI or similar external histories.
 type ImportedExternalIdentity = {
   externalId: string;
   importedFrom?: string;
@@ -134,6 +138,7 @@ function compareHistoryMessages(
   return a.order - b.order;
 }
 
+/** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];

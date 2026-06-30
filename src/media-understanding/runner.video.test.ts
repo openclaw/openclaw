@@ -1,3 +1,5 @@
+// Video runner tests cover provider request wiring, auth/config precedence, and
+// provider output handling for video attachments.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -20,6 +22,11 @@ vi.mock("../agents/api-key-rotation.js", () => ({
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
   return createEmptyCapabilityProviderMockModule();
+});
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
 });
 
 type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
@@ -171,5 +178,64 @@ describe("runCapability video provider wiring", () => {
         },
       );
     });
+  });
+
+  it("does not use provider api config as video auth modelApi", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    resolveApiKeyForProvider.mockClear();
+
+    await withTempDir({ prefix: "openclaw-video-provider-api-" }, async (isolatedAgentDir) => {
+      await withVideoFixture("openclaw-video-provider-api", async ({ ctx, media, cache }) => {
+        let seenApiKey: string | undefined;
+        const cfg = {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                models: [],
+              },
+            },
+          },
+          tools: {
+            media: {
+              video: {
+                enabled: true,
+                models: [{ provider: "openai", model: "video-model" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "video",
+          cfg,
+          ctx,
+          agentDir: isolatedAgentDir,
+          attachments: cache,
+          media,
+          providerRegistry: new Map([
+            [
+              "openai",
+              {
+                id: "openai",
+                capabilities: ["video"],
+                describeVideo: async (req) => {
+                  seenApiKey = req.apiKey;
+                  return { text: "video ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenApiKey).toBe("test-key");
+      });
+    });
+
+    const firstCall = resolveApiKeyForProvider.mock.calls[0]?.[0];
+    expect(firstCall?.provider).toBe("openai");
+    expect(firstCall?.modelApi).toBeUndefined();
   });
 });

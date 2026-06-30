@@ -1,3 +1,4 @@
+// Control UI view renders config screen content.
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
@@ -1183,6 +1184,7 @@ function createConfigEphemeralState(): ConfigEphemeralState {
 
 const cvs = createConfigEphemeralState();
 let lastConfigContextKey: string | null = null;
+let lastFormModeForScroll: ConfigProps["formMode"] | null = null;
 
 function resetConfigEphemeralState() {
   Object.assign(cvs, createConfigEphemeralState());
@@ -1221,6 +1223,7 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 export function resetConfigViewStateForTests() {
   resetConfigEphemeralState();
   lastConfigContextKey = null;
+  lastFormModeForScroll = null;
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -1236,6 +1239,31 @@ export function renderConfig(props: ConfigProps) {
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
+  const resetContentScroll = (target: EventTarget | null) => {
+    queueMicrotask(() => {
+      const origin = target instanceof Element ? target : null;
+      const content =
+        origin?.closest(".config-main")?.querySelector<HTMLElement>(".config-content") ??
+        globalThis.document?.querySelector<HTMLElement>(".config-content");
+      if (!content) {
+        return;
+      }
+      if (typeof content.scrollTo === "function") {
+        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    });
+  };
+
+  // Reset scroll position when switching between form and raw mode
+  if (lastFormModeForScroll !== null && lastFormModeForScroll !== formMode) {
+    resetContentScroll(null);
+  }
+  lastFormModeForScroll = formMode;
+
   const currentContextKey = configContextKey(props);
   if (lastConfigContextKey !== currentContextKey) {
     resetConfigEphemeralState();
@@ -1299,24 +1327,6 @@ export function renderConfig(props: ConfigProps) {
 
   const settingsLayout = props.settingsLayout ?? "tabs";
   const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
-
-  const resetContentScroll = (target: EventTarget | null) => {
-    queueMicrotask(() => {
-      const origin = target instanceof Element ? target : null;
-      const content = origin
-        ?.closest(".config-main")
-        ?.querySelector<HTMLElement>(".config-content");
-      if (!content) {
-        return;
-      }
-      if (typeof content.scrollTo === "function") {
-        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        return;
-      }
-      content.scrollTop = 0;
-      content.scrollLeft = 0;
-    });
-  };
 
   function renderAccordionNav() {
     return html`

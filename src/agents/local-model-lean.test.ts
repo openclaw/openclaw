@@ -1,7 +1,12 @@
+/**
+ * Regression coverage for local-model lean tool filtering.
+ * Verifies agent scope, default flags, preserve lists, and message-tool overrides.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
+  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -224,5 +229,45 @@ describe("local model lean tool filtering", () => {
         sessionKey: "agent:gemma:main",
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
+  });
+
+  it("defaults lean runs to structured Tool Search controls", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    const resolved = applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" });
+
+    expect(resolved).not.toBe(cfg);
+    expect(resolved?.tools?.toolSearch).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+    expect(cfg.tools?.toolSearch).toBeUndefined();
+  });
+
+  it("preserves explicit Tool Search operator config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+      tools: {
+        toolSearch: false,
+      },
+    };
+
+    expect(applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" })).toBe(cfg);
   });
 });

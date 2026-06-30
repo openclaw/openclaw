@@ -1,6 +1,14 @@
+// Crestodian probes check local tools and Gateway health with bounded subprocess/network work.
 import { spawn } from "node:child_process";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
+/**
+ * Local environment probes used by Crestodian overview loading.
+ *
+ * Probes are bounded by output and timeout limits so setup/status commands do
+ * not hang or retain unbounded child output.
+ */
+/** Result from probing a local command binary. */
 export type LocalCommandProbe = {
   command: string;
   found: boolean;
@@ -16,6 +24,7 @@ function appendBounded(previous: string, chunk: string, limit: number): string {
   return next.length > limit ? next.slice(-limit) : next;
 }
 
+/** Probe a command by running a small version command with bounded output and timeout. */
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
@@ -56,6 +65,7 @@ export async function probeLocalCommand(
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      // Some CLIs ignore SIGTERM; destroy pipes after a short grace window to finish promptly.
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
         child.stdout.destroy();
@@ -84,6 +94,7 @@ export async function probeLocalCommand(
         finish(timeoutResult());
         return;
       }
+      // Version output can arrive on stdout or stderr depending on the CLI.
       const text = `${stdout}\n${stderr}`.trim().split(/\r?\n/)[0]?.trim();
       finish({
         command,
@@ -95,6 +106,7 @@ export async function probeLocalCommand(
   });
 }
 
+/** Probe a Gateway URL by translating it to its HTTP /healthz endpoint. */
 export async function probeGatewayUrl(
   url: string,
   opts: { timeoutMs?: number } = {},
@@ -104,8 +116,9 @@ export async function probeGatewayUrl(
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
   try {
-    const response = await fetch(healthUrl, {
+    response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -118,5 +131,6 @@ export async function probeGatewayUrl(
     };
   } finally {
     clearTimeout(timeout);
+    await response?.body?.cancel().catch(() => undefined);
   }
 }

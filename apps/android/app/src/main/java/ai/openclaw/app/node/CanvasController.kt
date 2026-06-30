@@ -48,7 +48,8 @@ class CanvasController {
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
-  private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
+  private val scaffoldAssetUrl = CanvasActionTrust.scaffoldAssetUrl
+  private val localA2uiAssetUrl = CanvasActionTrust.localA2uiAssetUrl
 
   private fun clampJpegQuality(quality: Double?): Int {
     val q = (quality ?: 0.82).coerceIn(0.1, 1.0)
@@ -87,9 +88,14 @@ class CanvasController {
     reload()
   }
 
-  fun currentUrl(): String? = url
+  /** Shows the app-owned A2UI renderer that is allowed to dispatch native actions. */
+  fun showLocalA2ui() {
+    this.url = localA2uiAssetUrl
+    _currentUrl.value = localA2uiAssetUrl
+    reload()
+  }
 
-  fun isDefaultCanvas(): Boolean = url == null
+  fun currentUrl(): String? = url
 
   fun setDebugStatusEnabled(enabled: Boolean) {
     debugStatusEnabled = enabled
@@ -194,24 +200,6 @@ class CanvasController {
         wv.evaluateJavascript(javaScript) { result ->
           cont.resume(result ?: "")
         }
-      }
-    }
-
-  suspend fun snapshotPngBase64(maxWidth: Int?): String =
-    withContext(Dispatchers.Main) {
-      val wv = webView ?: throw IllegalStateException("no webview")
-      val bmp = wv.captureBitmap()
-      try {
-        val scaled = bmp.scaleForMaxWidth(maxWidth)
-        try {
-          val out = ByteArrayOutputStream()
-          scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
-          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-        } finally {
-          if (scaled !== bmp) scaled.recycle()
-        }
-      } finally {
-        bmp.recycle()
       }
     }
 

@@ -1,3 +1,6 @@
+// Shared Gateway session projection types.
+// Keeps server methods and Control UI payloads aligned.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -5,6 +8,7 @@ import type {
   SessionGoal,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
+import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -14,6 +18,8 @@ import type {
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+// Shared Gateway session response contracts. Server methods, UI adapters, and
+// tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
@@ -23,6 +29,7 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
+/** Runtime status surfaced for the latest session run. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
@@ -60,7 +67,10 @@ export type GatewaySessionRow = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -82,6 +92,8 @@ export type GatewaySessionRow = {
   parentSessionKey?: string;
   childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
+  /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
+  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
   agentRuntime?: GatewayAgentRuntime;

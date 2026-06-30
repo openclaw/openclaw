@@ -1,3 +1,4 @@
+// Web Content Core tests cover provider runtime shared behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasWebProviderEntryCredential,
@@ -28,6 +29,15 @@ describe("resolveWebProviderConfig", () => {
 describe("readWebProviderEnvValue", () => {
   it("normalizes env credentials before returning them", () => {
     expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " key\r\nvalue🙂 " })).toBe("keyvalue");
+  });
+
+  it("strips embedded controls from env credentials while preserving ordinary spaces", () => {
+    expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " sk-\u0000ab\tc\u007f\u0085 " })).toBe(
+      "sk-abc",
+    );
+    expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " Bearer token value " })).toBe(
+      "Bearer token value",
+    );
   });
 });
 

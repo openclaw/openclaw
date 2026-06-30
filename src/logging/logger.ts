@@ -1,9 +1,13 @@
+// Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  emitDiagnosticEventWithTrustedTraceContext,
+} from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
@@ -21,27 +25,12 @@ import {
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
-
-type ProcessWithBuiltinModule = NodeJS.Process & {
-  getBuiltinModule?: (id: string) => unknown;
-};
-
-function canUseNodeFs(): boolean {
-  const getBuiltinModule = (process as ProcessWithBuiltinModule).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
-  try {
-    return getBuiltinModule("fs") !== undefined;
-  } catch {
-    return false;
-  }
-}
 
 function resolveDefaultLogDir(): string {
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
@@ -56,8 +45,6 @@ function resolveDefaultLogFile(defaultLogDir: string): string {
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
 export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
 
-const LOG_PREFIX = "openclaw";
-const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_ROTATED_LOG_FILES = 5;
@@ -358,9 +345,23 @@ function findLogTraceContext(
   return undefined;
 }
 
+function resolveLogTraceContext(
+  bindings: Record<string, unknown> | undefined,
+  numericArgs: readonly unknown[],
+): { trace?: DiagnosticTraceContext; trustedTraceContext: boolean } {
+  const explicitTrace = findLogTraceContext(bindings, numericArgs);
+  if (explicitTrace) {
+    return { trace: explicitTrace, trustedTraceContext: false };
+  }
+  const activeTrace = getActiveDiagnosticTraceContext();
+  return activeTrace
+    ? { trace: activeTrace, trustedTraceContext: true }
+    : { trustedTraceContext: false };
+}
+
 function buildTraceFileLogFields(logObj: TsLogRecord): Record<string, string> | undefined {
   const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
-  const trace = findLogTraceContext(bindings, args) ?? getActiveDiagnosticTraceContext();
+  const { trace } = resolveLogTraceContext(bindings, args);
   if (!trace) {
     return undefined;
   }
@@ -409,7 +410,7 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     | undefined;
   const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
 
-  const trace = findLogTraceContext(bindings, numericArgs) ?? getActiveDiagnosticTraceContext();
+  const { trace, trustedTraceContext } = resolveLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
   const structuredBindings = isPlainLogRecordObject(structuredArg) ? structuredArg : undefined;
   if (structuredBindings) {
@@ -455,14 +456,17 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     .filter((name): name is string => Boolean(name));
 
   return {
-    type: "log.record" as const,
-    level: meta?.logLevelName ?? "INFO",
-    message,
-    ...(loggerName ? { loggerName } : {}),
-    ...(loggerParents?.length ? { loggerParents } : {}),
-    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
-    ...(Object.keys(code).length > 0 ? { code } : {}),
-    ...(trace ? { trace } : {}),
+    event: {
+      type: "log.record" as const,
+      level: meta?.logLevelName ?? "INFO",
+      message,
+      ...(loggerName ? { loggerName } : {}),
+      ...(loggerParents?.length ? { loggerParents } : {}),
+      ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
+      ...(Object.keys(code).length > 0 ? { code } : {}),
+      ...(trace ? { trace } : {}),
+    },
+    trustedTraceContext,
   };
 }
 
@@ -477,9 +481,11 @@ function redactLogRecordForTransport<T extends LogObj>(record: T): T {
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
     try {
-      emitDiagnosticEvent(
-        buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord),
-      );
+      const record = buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord);
+      const emit = record.trustedTraceContext
+        ? emitDiagnosticEventWithTrustedTraceContext
+        : emitDiagnosticEvent;
+      emit(record.event);
     } catch {
       // never block on logging failures
     }
@@ -746,13 +752,6 @@ export const testApi = {
   shouldSkipMutatingLoggingConfigRead,
 };
 export { testApi as __test__ };
-
-function formatLocalDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 function defaultRollingPathForToday(): string {
   return rollingPathForDate(DEFAULT_LOG_DIR, new Date());
