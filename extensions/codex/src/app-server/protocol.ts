@@ -397,6 +397,7 @@ export type CodexLoginAccountParams =
 
 export type CodexPluginSummary = {
   id: string;
+  remotePluginId?: string;
   name: string;
   source?: JsonObject;
   installed: boolean;
