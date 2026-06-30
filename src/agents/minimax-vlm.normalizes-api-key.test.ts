@@ -213,7 +213,9 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     const ONE_MIB = 1024 * 1024;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        for (let i = 0; i < 18; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
         controller.close();
       },
       cancel() {
@@ -251,15 +253,22 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const chunk = Buffer.alloc(ONE_MIB, 0x41);
       const writeMore = () => {
         // Stop writing once the client cancels (socket is destroyed).
-        if (socketDestroyed) return;
-        for (let i = 0; i < 4 && !socketDestroyed; i++) {
+        if (socketDestroyed) {
+          return;
+        }
+        for (let i = 0; i < 4; i++) {
+          if (socketDestroyed) {
+            return;
+          }
           bytesWritten += chunk.length;
           if (!res.write(chunk)) {
             res.once("drain", writeMore);
             return;
           }
         }
-        if (!socketDestroyed) setImmediate(writeMore);
+        if (!socketDestroyed) {
+          setImmediate(writeMore);
+        }
       };
       writeMore();
     });
@@ -269,7 +278,9 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const port = (server.address() as { port: number }).port;
 
     try {
@@ -282,7 +293,9 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
         }),
       ).rejects.toThrow("MiniMax VLM: JSON response exceeds");
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
