@@ -779,13 +779,7 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("indexes orphaned cron-run deleted archives when session store entry is gone", async () => {
-    // When a cron archive has no session-meta and no session store entry,
-    // the message-level cron check no longer fires (it was removed because it
-    // incorrectly caught human-typed [cron:...] prefixes). The [cron: prefixed
-    // user message is still stripped by sanitizeSessionText, but assistant
-    // responses are indexed. Real cron sessions are caught by the session store
-    // classification or the record-level isCronRunGeneratedRecord check.
+  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const jsonlLines = [
       JSON.stringify({
@@ -804,11 +798,9 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    // The [cron: user message is stripped by sanitizeSessionText, but the
-    // assistant response is indexed since no session-meta or store classifies
-    // this as a cron session.
-    expect(entry.content).toBe("Assistant: Internal cron output that must stay out.");
-    expect(entry.generatedByCronRun).toBeFalsy();
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.generatedByCronRun).toBe(true);
   });
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
@@ -832,12 +824,21 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("indexes human-typed [cron: content in non-cron reset archives", async () => {
+  it("indexes human-typed [cron: content when it follows prior user messages in a reset archive", async () => {
     // A normal (non-cron) session where the user typed a message starting
-    // with [cron:...]. After reset, the archive should stay indexed so
-    // memory_search can surface the unrelated remembered facts.
+    // with [cron:...] after prior conversation. The archive should stay
+    // indexed so memory_search can surface the unrelated remembered facts.
+    // See https://github.com/openclaw/openclaw/issues/98241.
     const archivePath = path.join(tmpDir, "human-session.jsonl.reset.2026-06-30T10-00-00.000Z");
     const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Hello, I need help with something." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Sure, what do you need?" },
+      }),
       JSON.stringify({
         type: "message",
         message: {
@@ -868,8 +869,9 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    // The archive content should be indexed, not wiped. The [cron: prefixed
-    // user message is stripped by sanitizeSessionText, but the rest stays.
+    // The [cron: user message is stripped by sanitizeSessionText, but the
+    // surrounding conversation and the remembered facts stay indexed because
+    // the [cron: message is NOT the first user message.
     expect(entry.content).toContain("Acme Robotics");
     expect(entry.content).toContain("digest job timed out");
     expect(entry.generatedByCronRun).toBeFalsy();
