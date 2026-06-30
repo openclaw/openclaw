@@ -135,6 +135,23 @@ describe("memory host event journal helpers", () => {
         },
       ],
     });
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: "2026-04-05T12:15:00.000Z",
+      query: "daily placeholder",
+      reason: "unpromotable-short-term-snippet",
+      eligibleResultCount: 1,
+      skippedResultCount: 1,
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 5,
+          endLine: 6,
+          score: 0.7,
+          reason: "unpromotable-short-term-snippet",
+        },
+      ],
+    });
 
     const legacyEvents = await readMemoryHostEvents({ workspaceDir });
     const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
@@ -146,7 +163,13 @@ describe("memory host event journal helpers", () => {
       "memory.recall.skipped",
       "memory.recall.recorded",
       "memory.recall.skipped",
+      "memory.recall.skipped",
     ]);
+    expect(records.at(-1)).toMatchObject({
+      type: "memory.recall.skipped",
+      reason: "unpromotable-short-term-snippet",
+      results: [expect.objectContaining({ reason: "unpromotable-short-term-snippet" })],
+    });
   });
 });
 
