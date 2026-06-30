@@ -3205,6 +3205,7 @@ async function runEmbeddedAgentInternal(
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
               profileRotated: false,
+              timedOut,
             });
             if (
               promptFailoverDecision.action === "rotate_profile" &&

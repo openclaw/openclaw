@@ -52,6 +52,7 @@ type PromptDecisionParams = {
   harnessOwnsTransport?: boolean;
   promptTimeoutFallbackSafe?: boolean;
   profileRotated: boolean;
+  timedOut?: boolean;
 };
 
 type AssistantDecisionParams = {
@@ -77,7 +78,7 @@ type RunFailoverDecisionParams =
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
-  return params.timedOut || (params.failoverFailure && params.failoverReason !== "timeout");
+    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
   );
 }
 
@@ -92,11 +93,10 @@ function isTerminalFormatFailure(params: {
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  return (
-    params.failoverFailure &&
-    params.failoverReason !== "timeout" &&
-    !isTerminalFormatFailure(params)
-  );
+  if (isTerminalFormatFailure(params)) {
+    return false;
+  }
+  return params.timedOut || (params.failoverFailure && params.failoverReason !== "timeout");
 }
 
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
@@ -195,10 +195,14 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason,
       };
     }
-    if (params.fallbackConfigured && params.failoverFailure && !isTerminalFormatFailure(params)) {
+    if (
+      params.fallbackConfigured &&
+      (params.failoverFailure || params.timedOut) &&
+      !isTerminalFormatFailure(params)
+    ) {
       return {
         action: "fallback_model",
-        reason: params.failoverReason ?? "unknown",
+        reason: params.timedOut ? "timeout" : (params.failoverReason ?? "unknown"),
       };
     }
     return {
