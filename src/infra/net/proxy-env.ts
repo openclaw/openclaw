@@ -150,7 +150,11 @@ export function shouldUseEnvHttpProxyForUrl(
  * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
+  // Lowercase no_proxy takes precedence: if explicitly set (even to empty),
+  // use it directly without falling back to uppercase NO_PROXY. This matches
+  // undici's EnvHttpProxyAgent precedence semantics.
+  const noProxyRaw = normalizeProxyEnvValue(env.no_proxy);
+  const raw = noProxyRaw !== undefined ? noProxyRaw : normalizeProxyEnvValue(env.NO_PROXY);
   if (!raw) {
     return false;
   }
