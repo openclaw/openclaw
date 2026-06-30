@@ -674,6 +674,9 @@ struct OpenClawApp: App {
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
                     self.applyAppearancePreference()
+                    if newValue == .active {
+                        OpenClawNotchPresenter.showIfNeeded()
+                    }
                 }
         }
     }

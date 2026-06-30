@@ -66,6 +66,8 @@ Sources/Model/NodeAppModel+WatchNotifyNormalization.swift
 Sources/Model/NodeAppModel.swift
 Sources/Model/WatchReplyCoordinator.swift
 Sources/Motion/MotionService.swift
+Sources/Notch/OpenClawNotchLogoView.swift
+Sources/Notch/OpenClawNotchPresenter.swift
 Sources/Onboarding/GatewayOnboardingReset.swift
 Sources/Onboarding/OnboardingStateStore.swift
 Sources/Onboarding/OnboardingWizardSteps.swift
