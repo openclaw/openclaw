@@ -197,7 +197,7 @@ describe("plugin text transforms", () => {
           toolCall: {
             type: "toolCall",
             id: "call-1",
-            name: "[MASKED]_greet",
+            name: "search",
             arguments: {
               query: "[MASKED]",
               nested: { note: "ask [MASKED] again" },
@@ -205,7 +205,11 @@ describe("plugin text transforms", () => {
             },
           },
         } as never);
-        stream.push({ type: "done", reason: "stop" } as never);
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: makeAssistantMessage("final"),
+        } as never);
         stream.end();
       });
       return stream;
@@ -229,7 +233,9 @@ describe("plugin text transforms", () => {
     const endEvent = events.find((e) => e?.type === "toolcall_end") as
       | { toolCall?: { name?: string; arguments?: Record<string, unknown> } }
       | undefined;
-    expect(endEvent?.toolCall?.name).toBe("John_greet");
+    // Tool name is preserved — only arguments are transformed to avoid
+    // breaking tool routing by renaming a registered tool identifier.
+    expect(endEvent?.toolCall?.name).toBe("search");
     expect(endEvent?.toolCall?.arguments).toEqual({
       query: "John",
       nested: { note: "ask John again" },

@@ -62,6 +62,9 @@ function transformContentText(content: unknown, replacements?: PluginTextReplace
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
+  if (Object.hasOwn(next, "arguments")) {
+    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+  }
   return next;
 }
 
@@ -107,9 +110,8 @@ function transformToolCallText(
     return toolCall;
   }
   const next = { ...toolCall };
-  if (typeof next.name === "string") {
-    next.name = applyPluginTextReplacements(next.name, replacements);
-  }
+  // Only transform arguments, not the tool name — renaming a tool can
+  // break execution by routing to an unknown or unintended tool.
   if (Object.hasOwn(next, "arguments")) {
     next.arguments = transformToolCallArgumentText(next.arguments, replacements);
   }
