@@ -489,8 +489,8 @@ function findLastUserMessage(messages: unknown[]): string | undefined {
 }
 
 /** Canonical OpenClaw-normalized tool-call content-block types (see agents/tool-call-id.ts TOOL_CALL_TYPES).
- *  Includes snake_case variants (tool_use, tool_call, function_call) that appear in
- *  Anthropic API response blocks and ACP events before normalization. */
+ *  Includes snake_case and lowercase variants that appear in persisted transcript records
+ *  (chat/tool-content.ts, gateway/chat-display-projection.ts, utils/transcript-tools.ts). */
 const CONTENT_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -498,6 +498,9 @@ const CONTENT_TOOL_CALL_BLOCK_TYPES = new Set([
   "tool_use",
   "tool_call",
   "function_call",
+  "toolcall",
+  "tooluse",
+  "functioncall",
 ]);
 
 function hasAssistantToolCalls(message: unknown): boolean {
