@@ -180,10 +180,10 @@ function getConfiguredMemoryEmbeddingProvider(
   cfg: OpenClawConfig,
 ): ReturnType<typeof getMemoryEmbeddingProvider> {
   const directAdapter = getMemoryEmbeddingProvider(providerId);
-  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
-  if (directAdapter && !providerConfig?.baseUrl?.trim()) {
+  if (directAdapter) {
     return directAdapter;
   }
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
   if (!ownerApi) {
     return undefined;
