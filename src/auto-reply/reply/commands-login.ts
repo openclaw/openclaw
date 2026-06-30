@@ -66,7 +66,7 @@ function canStartCodexLogin(params: HandleCommandsParams): boolean {
 }
 
 function normalizeSurface(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(String(value ?? "")).replace(/_/gu, "-");
+  return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "").replace(/_/gu, "-");
 }
 
 function hasPrivateTarget(value: unknown): boolean {
