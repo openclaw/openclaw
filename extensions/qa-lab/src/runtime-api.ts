@@ -6,6 +6,36 @@ export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 export {
+  channelBehaviorConversation,
+  channelBehaviorInboundMessage,
+  channelBehaviorTarget,
+  collectChannelBehaviorScenarioRequirements,
+  defineChannelBehaviorScenario,
+  matchesChannelBehaviorOutbound,
+} from "./channel-behavior-scenario.js";
+export type {
+  ChannelBehaviorScenarioChannel,
+  ChannelBehaviorScenarioDefinition,
+  ChannelBehaviorScenarioDefinitionInput,
+  ChannelBehaviorScenarioExpectation,
+  ChannelBehaviorScenarioInbound,
+  ChannelBehaviorScenarioNoReplyExpectation,
+  ChannelBehaviorScenarioReplyExpectation,
+  ChannelBehaviorScenarioReplyRequirement,
+  ChannelBehaviorScenarioRequirements,
+  ChannelBehaviorScenarioRestartHooks,
+  ChannelBehaviorScenarioStep,
+  ChannelBehaviorScenarioStepInput,
+  ChannelBehaviorScenarioThreadRequirement,
+  ChannelScenarioCreateThreadInput,
+  ChannelScenarioDriver,
+  ChannelScenarioProviderMetadata,
+  ChannelScenarioSendInboundInput,
+  ChannelScenarioSendReplyInput,
+  ChannelScenarioWaitForNoOutboundInput,
+  ChannelScenarioWaitForOutboundInput,
+} from "./channel-behavior-scenario.js";
+export {
   buildQaTarget,
   createQaBusThread,
   deleteQaBusMessage,

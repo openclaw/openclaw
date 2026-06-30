@@ -1,0 +1,287 @@
+// Qa Lab tests cover reusable channel behavior scenario contracts.
+import { describe, expect, it } from "vitest";
+import {
+  channelBehaviorConversation,
+  channelBehaviorInboundMessage,
+  channelBehaviorTarget,
+  collectChannelBehaviorScenarioRequirements,
+  defineChannelBehaviorScenario,
+  matchesChannelBehaviorOutbound,
+  type ChannelScenarioDriver,
+} from "./channel-behavior-scenario.js";
+import type { QaBusMessage } from "./runtime-api.js";
+
+function outboundMessage(overrides: Partial<QaBusMessage> = {}): QaBusMessage {
+  return {
+    accountId: "default",
+    conversation: { id: "qa-room", kind: "channel" },
+    direction: "outbound",
+    id: "m-out",
+    reactions: [],
+    senderId: "openclaw",
+    text: "reply text",
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+describe("channel behavior scenarios", () => {
+  it("defines channel behavior scenarios with stable generated step ids", () => {
+    const scenario = defineChannelBehaviorScenario({
+      id: "channels.thread-reply",
+      channel: { id: "qa-room", kind: "channel", title: "QA Room" },
+      gatewayConfigPatch: {
+        messages: { visibleReplies: "automatic" },
+      },
+      steps: [
+        {
+          name: "starts in channel",
+          inbound: {
+            text: "start the thread check",
+          },
+          expect: {
+            kind: "reply",
+            textIncludes: ["thread check"],
+          },
+        },
+        {
+          id: "quiet-reply",
+          name: "stays quiet after unrelated reply",
+          reply: { required: true, toStepId: "step-1" },
+          expect: {
+            kind: "no-reply",
+            quietMs: 250,
+          },
+        },
+      ],
+    });
+
+    expect(scenario.steps.map((step) => step.id)).toEqual(["step-1", "quiet-reply"]);
+    expect(scenario.channel).toEqual({
+      id: "qa-room",
+      kind: "channel",
+      title: "QA Room",
+    });
+  });
+
+  it("rejects empty scenarios and duplicate step ids", () => {
+    expect(() =>
+      defineChannelBehaviorScenario({
+        id: "channels.empty",
+        channel: { id: "qa-room", kind: "channel" },
+        steps: [],
+      }),
+    ).toThrow("channel behavior scenario channels.empty must define at least one step");
+
+    expect(() =>
+      defineChannelBehaviorScenario({
+        id: "channels.duplicate",
+        channel: { id: "qa-room", kind: "channel" },
+        steps: [
+          { id: "same", name: "first", expect: { kind: "no-reply" } },
+          { id: "same", name: "second", expect: { kind: "no-reply" } },
+        ],
+      }),
+    ).toThrow("duplicate channel behavior step id: same");
+  });
+
+  it("summarizes driver capabilities needed by channel steps", () => {
+    const scenario = defineChannelBehaviorScenario({
+      id: "channels.full-boundary",
+      channel: { id: "qa-room", kind: "channel" },
+      steps: [
+        {
+          id: "restart",
+          name: "restart before send",
+          restart: { beforeStep: true, reason: "dedupe proof" },
+          inbound: {
+            text: "post after restart",
+            toolCalls: [{ name: "message.send" }],
+          },
+          thread: { createBeforeStep: true, title: "QA thread" },
+          reply: { required: true, threadId: "thread-1", toStepId: "setup" },
+          expect: { kind: "reply", threadId: "thread-1", textIncludes: ["done"] },
+        },
+      ],
+    });
+
+    expect(collectChannelBehaviorScenarioRequirements(scenario)).toEqual({
+      needsGatewayRestart: true,
+      needsProviderMetadata: true,
+      needsReplyTargeting: true,
+      needsThread: true,
+    });
+  });
+
+  it("treats reply thread targets as thread requirements", () => {
+    const scenario = defineChannelBehaviorScenario({
+      id: "channels.threaded-reply-target",
+      channel: { id: "qa-room", kind: "channel" },
+      steps: [
+        {
+          id: "reply-to-thread",
+          name: "reply to thread",
+          reply: { required: true, threadId: "thread-1" },
+          expect: { kind: "no-reply" },
+        },
+      ],
+    });
+
+    expect(collectChannelBehaviorScenarioRequirements(scenario)).toMatchObject({
+      needsReplyTargeting: true,
+      needsThread: true,
+    });
+  });
+
+  it("formats QA-channel targets and conversations from a shared channel shape", () => {
+    expect(channelBehaviorTarget({ id: "alice", kind: "direct" })).toBe("dm:alice");
+    expect(channelBehaviorTarget({ id: "qa-room", kind: "channel" })).toBe("channel:qa-room");
+    expect(channelBehaviorTarget({ id: "qa-room", kind: "group" })).toBe("group:qa-room");
+    expect(channelBehaviorTarget({ id: "qa-room", kind: "channel" }, { threadId: "t1" })).toBe(
+      "thread:qa-room/t1",
+    );
+    expect(() =>
+      channelBehaviorTarget({ id: "alice", kind: "direct" }, { threadId: "t1" }),
+    ).toThrow("only channel scenarios can target thread replies");
+    expect(() =>
+      channelBehaviorTarget({ id: "qa-room", kind: "group" }, { threadId: "t1" }),
+    ).toThrow("only channel scenarios can target thread replies");
+    expect(
+      channelBehaviorConversation({ id: "qa-room", kind: "channel", title: "QA Room" }),
+    ).toEqual({
+      id: "qa-room",
+      kind: "channel",
+      title: "QA Room",
+    });
+  });
+
+  it("builds inbound message input from scenario channel and step defaults", () => {
+    const scenario = defineChannelBehaviorScenario({
+      id: "channels.inbound",
+      channel: { id: "qa-room", kind: "channel" },
+      steps: [
+        {
+          id: "send",
+          name: "send message",
+          inbound: { text: "hello" },
+          expect: { kind: "reply", textIncludes: ["hello"] },
+        },
+      ],
+    });
+
+    expect(channelBehaviorInboundMessage(scenario, scenario.steps[0])).toEqual({
+      conversation: { id: "qa-room", kind: "channel" },
+      senderId: "qa-operator",
+      text: "hello",
+    });
+  });
+
+  it("matches expected outbound replies by conversation, sender, thread, and text", () => {
+    const expectation = {
+      kind: "reply" as const,
+      senderId: "openclaw",
+      textIncludes: ["reply", "text"],
+      threadId: "thread-1",
+    };
+
+    expect(
+      matchesChannelBehaviorOutbound(outboundMessage({ threadId: "thread-1" }), {
+        channel: { id: "qa-room", kind: "channel" },
+        expectation,
+      }),
+    ).toBe(true);
+    expect(
+      matchesChannelBehaviorOutbound(
+        outboundMessage({
+          conversation: { id: "other-room", kind: "channel" },
+          threadId: "thread-1",
+        }),
+        {
+          channel: { id: "qa-room", kind: "channel" },
+          expectation,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      matchesChannelBehaviorOutbound(
+        outboundMessage({
+          conversation: { id: "qa-room", kind: "direct" },
+          threadId: "thread-1",
+        }),
+        {
+          channel: { id: "qa-room", kind: "channel" },
+          expectation,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      matchesChannelBehaviorOutbound(
+        outboundMessage({ text: "not enough", threadId: "thread-1" }),
+        {
+          channel: { id: "qa-room", kind: "channel" },
+          expectation,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("types channel scenario drivers around E2E transport primitives", async () => {
+    const calls: string[] = [];
+    const driver = {
+      async createThread(_input) {
+        calls.push("createThread");
+        return {
+          accountId: "default",
+          conversationId: "qa-room",
+          createdAt: 1,
+          createdBy: "openclaw",
+          id: "thread-1",
+          title: "QA thread",
+        };
+      },
+      async observeProviderMetadata() {
+        calls.push("observeProviderMetadata");
+        return { provider: "mock-openai" };
+      },
+      async restartGateway(_hooks) {
+        calls.push("restartGateway");
+      },
+      async sendInbound(_input) {
+        calls.push("sendInbound");
+        return outboundMessage({ direction: "inbound", id: "m-in", senderId: "qa-operator" });
+      },
+      async sendReplyTo(_input) {
+        calls.push("sendReplyTo");
+        return outboundMessage({ id: "m-reply", threadId: "thread-1" });
+      },
+      async waitForNoOutbound(_input) {
+        calls.push("waitForNoOutbound");
+      },
+      async waitForOutbound(_input) {
+        calls.push("waitForOutbound");
+        return outboundMessage({ id: "m-out", threadId: "thread-1" });
+      },
+    } satisfies ChannelScenarioDriver;
+
+    await driver.restartGateway({ beforeStep: true });
+    await driver.createThread({ channel: { id: "qa-room", kind: "channel" } });
+    await driver.sendInbound({ message: { text: "hello" } });
+    await driver.waitForOutbound({
+      channel: { id: "qa-room", kind: "channel" },
+      expectation: { kind: "reply", textIncludes: ["hello"] },
+    });
+    await driver.waitForNoOutbound({ quietMs: 10 });
+    await driver.sendReplyTo({ text: "reply", threadId: "thread-1" });
+    await driver.observeProviderMetadata();
+
+    expect(calls).toEqual([
+      "restartGateway",
+      "createThread",
+      "sendInbound",
+      "waitForOutbound",
+      "waitForNoOutbound",
+      "sendReplyTo",
+      "observeProviderMetadata",
+    ]);
+  });
+});

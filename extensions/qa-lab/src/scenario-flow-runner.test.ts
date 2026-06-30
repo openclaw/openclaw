@@ -217,6 +217,17 @@ describe("scenario-flow-runner", () => {
                   expr: 'typeof plugin.createCodexPluginInstallGate === "function"',
                 },
               },
+              {
+                set: "channelScenarios",
+                value: {
+                  expr: 'await qaImport("./channel-behavior-scenario.js")',
+                },
+              },
+              {
+                assert: {
+                  expr: 'typeof channelScenarios.defineChannelBehaviorScenario === "function"',
+                },
+              },
             ],
             detailsExpr: '"loaded"',
           },

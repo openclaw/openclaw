@@ -35,6 +35,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
+  "./channel-behavior-scenario.js": () => import("./channel-behavior-scenario.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
