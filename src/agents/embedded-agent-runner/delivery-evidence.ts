@@ -19,6 +19,8 @@ type AgentPayloadLike = {
   attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: unknown;
 };
 
 type AgentDeliveryEvidence = {

@@ -7967,6 +7967,46 @@ describe("dispatchReplyFromConfig", () => {
     ]);
   });
 
+  it("suppresses isCommentary payloads from final replies by default", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async () =>
+      [
+        { text: "commentary...", isCommentary: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls).toHaveLength(1);
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
+  });
+
+  it("delivers isCommentary final replies when the channel opts in", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const replyResolver = async () =>
+      [
+        { text: "commentary...", isCommentary: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
+      "commentary...",
+      "The answer is 42",
+    ]);
+  });
+
   it("does not synthesize opted-in final reasoning payloads into TTS media", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
@@ -7987,6 +8027,28 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reasoningPayload);
+  });
+
+  it("does not synthesize opted-in final commentary payloads into TTS media", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const commentaryPayload = {
+      text: "commentary...",
+      isCommentary: true,
+    } satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver: async () => commentaryPayload,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commentaryPayload);
   });
 
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
@@ -8048,6 +8110,69 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(blockReplySentTexts).toEqual(["thinking...", "The answer is 42"]);
+    const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
+      .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
+      .filter((call) => call.kind === "block");
+    expect(blockTtsCalls.map((call) => call.payload?.text)).toEqual(["The answer is 42"]);
+  });
+
+  it("suppresses isCommentary payloads from block replies by default", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return { text: "The answer is 42" };
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    expect(blockReplySentTexts).not.toContain("commentary...");
+    expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("delivers opted-in block commentary payloads without applying TTS", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    expect(blockReplySentTexts).toEqual(["commentary...", "The answer is 42"]);
     const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
       .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
       .filter((call) => call.kind === "block");

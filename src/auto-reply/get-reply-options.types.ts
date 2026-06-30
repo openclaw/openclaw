@@ -165,6 +165,8 @@ export type GetReplyOptions = {
   commentaryProgressEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
+  /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
+  commentaryPayloadsEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

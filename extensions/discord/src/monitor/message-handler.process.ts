@@ -668,7 +668,7 @@ async function processDiscordMessageInner(
       );
       return null;
     }
-    if (payload.isReasoning) {
+    if (payload.isReasoning || payload.isCommentary) {
       return payload;
     }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
@@ -1131,6 +1131,9 @@ async function processDiscordMessageInner(
             : undefined,
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
+          ? draftPreview.commentaryProgressEnabled
+          : undefined,
+        commentaryPayloadsEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
         reasoningPayloadsEnabled: true,
