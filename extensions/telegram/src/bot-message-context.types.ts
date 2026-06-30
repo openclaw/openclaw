@@ -16,8 +16,6 @@ export type TelegramMediaRef = {
   path: string;
   contentType?: string;
   stickerMetadata?: StickerMetadata;
-  // Album flushes process one captioned primary message while sibling messages
-  // remain in the prompt cache; keep their ids so context can hydrate each one.
   sourceMessageId?: string;
 };
 
