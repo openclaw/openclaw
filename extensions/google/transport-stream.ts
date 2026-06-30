@@ -3,7 +3,6 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
   getEnvApiKey,
-  sanitizeSurrogates,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -16,6 +15,8 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -28,7 +29,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
@@ -85,29 +85,6 @@ type GoogleGenerateContentRequest = {
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
-const GOOGLE_TOOL_RESULT_MAX_CHARS = 8000;
-const GOOGLE_IMAGE_TOOL_RESULT_TYPES = new Set(["image", "image_url", "input_image"]);
-const GOOGLE_AUDIO_TOOL_RESULT_TYPES = new Set(["audio", "input_audio", "output_audio"]);
-const GOOGLE_MEDIA_ONLY_TOOL_RESULT_TYPES = new Set([
-  ...GOOGLE_IMAGE_TOOL_RESULT_TYPES,
-  ...GOOGLE_AUDIO_TOOL_RESULT_TYPES,
-]);
-const GOOGLE_INLINE_DATA_URI_PATTERN =
-  /(^|[^A-Za-z0-9_])data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+(?:;[a-z0-9.+-]+=[^,;"'\s]+|;base64)*,[^\s"'<>)]+)/gi;
-const GOOGLE_SECRET_FIELD_RE =
-  /(?:api[_-]?key|auth(?:orization)?|credential|password|secret|token)/i;
-const GOOGLE_MIME_KEY_CANDIDATES = [
-  "mimeType",
-  "mime_type",
-  "mediaType",
-  "media_type",
-  "contentType",
-  "content_type",
-];
-const GOOGLE_TEXTUAL_MIME_PATTERN =
-  /^(?:text\/|application\/(?:json|ld\+json|x-ndjson|xml|javascript|x-www-form-urlencoded)|[^/]+\/[^+]+\+(?:json|xml)$)/i;
-const GOOGLE_OPAQUE_OR_BINARY_FIELD_RE =
-  /^(?:blob|buffer|bytes|encrypted_content|encrypted_stdout)$/i;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -169,159 +146,6 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
-
-function isGoogleToolResultRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readGoogleToolResultMimeType(value: unknown): string | undefined {
-  if (!isGoogleToolResultRecord(value)) {
-    return undefined;
-  }
-  for (const key of GOOGLE_MIME_KEY_CANDIDATES) {
-    const mimeType = value[key];
-    if (typeof mimeType === "string" && mimeType.trim().length > 0) {
-      return mimeType;
-    }
-  }
-  return undefined;
-}
-
-function isGoogleBinaryMimeType(mimeType: string): boolean {
-  const normalized = mimeType.split(";", 1)[0]?.trim().toLowerCase();
-  return normalized ? !GOOGLE_TEXTUAL_MIME_PATTERN.test(normalized) : false;
-}
-
-function describeOmittedGoogleToolResultValue(value: unknown, label: string): string {
-  const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
-  return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
-}
-
-function redactGoogleInlineDataUris(value: string): string {
-  return value.replace(
-    GOOGLE_INLINE_DATA_URI_PATTERN,
-    (_match, prefix: string, uri: string) => `${prefix}[inline data URI: ${uri.length} chars]`,
-  );
-}
-
-function stringifyGoogleStructuredToolResultBlock(
-  block: Record<string, unknown>,
-): string | undefined {
-  const seen = new WeakSet<object>();
-  try {
-    const serialized = JSON.stringify(
-      block,
-      function structuredGoogleToolResultReplacer(this: unknown, key, value) {
-        if (GOOGLE_SECRET_FIELD_RE.test(key)) {
-          return "[REDACTED]";
-        }
-        if (GOOGLE_OPAQUE_OR_BINARY_FIELD_RE.test(key)) {
-          return `[omitted ${key}]`;
-        }
-        if (key === "data") {
-          const mimeType = readGoogleToolResultMimeType(this);
-          if (mimeType && isGoogleBinaryMimeType(mimeType)) {
-            return describeOmittedGoogleToolResultValue(value, "binary data");
-          }
-        }
-        if (typeof value === "bigint") {
-          return value.toString();
-        }
-        if (typeof value === "string") {
-          return redactGoogleInlineDataUris(value);
-        }
-        if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
-          return undefined;
-        }
-        if (!value || typeof value !== "object") {
-          return value;
-        }
-        if (seen.has(value)) {
-          return "[Circular]";
-        }
-        seen.add(value);
-        return value;
-      },
-    );
-    if (!serialized || serialized === "{}") {
-      return undefined;
-    }
-    return serialized;
-  } catch {
-    return undefined;
-  }
-}
-
-function truncateGoogleToolResultText(text: string): string {
-  if (text.length <= GOOGLE_TOOL_RESULT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, GOOGLE_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
-}
-
-function extractGoogleToolResultText(blocks: readonly unknown[]): string {
-  const explicitTexts: string[] = [];
-  const structuredTexts: string[] = [];
-  for (const block of blocks) {
-    if (!isGoogleToolResultRecord(block)) {
-      continue;
-    }
-    if (typeof block.type === "string" && GOOGLE_MEDIA_ONLY_TOOL_RESULT_TYPES.has(block.type)) {
-      continue;
-    }
-    if (block.type === "text") {
-      const text = typeof block.text === "string" ? block.text : "";
-      if (text) {
-        explicitTexts.push(text);
-      }
-      continue;
-    }
-    const structured = stringifyGoogleStructuredToolResultBlock(block);
-    if (structured) {
-      structuredTexts.push(structured);
-    }
-  }
-  if (explicitTexts.length > 0) {
-    return sanitizeSurrogates(explicitTexts.join("\n"));
-  }
-  return sanitizeSurrogates(truncateGoogleToolResultText(structuredTexts.join("\n")));
-}
-
-function describeGoogleToolResultMediaPlaceholder(parts: readonly unknown[]): string | undefined {
-  let hasImage = false;
-  let hasAudio = false;
-
-  for (const part of parts) {
-    if (!isGoogleToolResultRecord(part)) {
-      continue;
-    }
-    const type = typeof part.type === "string" ? part.type : undefined;
-    const normalizedMime = readGoogleToolResultMimeType(part)?.toLowerCase();
-    if (
-      (type && GOOGLE_IMAGE_TOOL_RESULT_TYPES.has(type)) ||
-      normalizedMime?.startsWith("image/")
-    ) {
-      hasImage = true;
-    }
-    if (
-      (type && GOOGLE_AUDIO_TOOL_RESULT_TYPES.has(type)) ||
-      normalizedMime?.startsWith("audio/")
-    ) {
-      hasAudio = true;
-    }
-  }
-
-  if (hasImage && hasAudio) {
-    return "(see attached media)";
-  }
-  if (hasAudio) {
-    return "(see attached audio)";
-  }
-  if (hasImage) {
-    return "(see attached image)";
-  }
-  return undefined;
-}
 
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
@@ -826,14 +650,14 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "toolResult") {
-      const textResult = extractGoogleToolResultText(msg.content);
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",
           )
         : [];
-      const mediaPlaceholder = describeGoogleToolResultMediaPlaceholder(msg.content);
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
         : (mediaPlaceholder ?? "");

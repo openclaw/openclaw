@@ -2187,20 +2187,14 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    expect(params.contents[1]).toEqual({
-      role: "user",
-      parts: [
-        {
-          functionResponse: {
-            name: "lookup",
-            response: {
-              output:
-                '{"type":"json","value":{"city":"Paris","temperatureC":21},"apiToken":"[REDACTED]"}',
-            },
-          },
-        },
-      ],
-    });
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse).toMatchObject({ name: "lookup" });
+    expect(functionResponse.response.output).toContain('"city":"Paris"');
+    expect(functionResponse.response.output).toContain('"temperatureC":21');
+    expect(functionResponse.response.output).toContain('"apiToken":"');
+    expect(functionResponse.response.output).not.toContain("secret-token-123");
   });
 
   it("keeps explicit Google tool-result text before structured fallback", () => {
@@ -2257,6 +2251,60 @@ describe("google transport stream", () => {
       '"encrypted_content":"[omitted encrypted_content]"',
     );
     expect(functionResponse.response.output).toContain('"text":"[inline data URI: 23 chars]"');
+  });
+
+  it("uses shared structured redaction for Google tool-result fields", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "json",
+              privateKey: "leaked-private-key-value-12345",
+              private_key: "leaked-private-key-snake-12345",
+              key: "leaked-generic-key-value-12345",
+              keyMaterial: "leaked-key-material-value-12345",
+              jwt: "leaked-jwt-value-1234567890",
+              session: "leaked-session-value-123456",
+              code: "leaked-code-value-1234567890",
+              signature: "leaked-signature-value-12345",
+              cookie: "leaked-cookie-value-123456",
+              "set-cookie": "leaked-set-cookie-value-12345",
+              paymentCredential: "leaked-payment-credential-12345",
+              cardNumber: "41111111111111112222",
+              visible: "safe-value",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse.response.output).toContain('"visible":"safe-value"');
+    for (const leakedValue of [
+      "leaked-private-key-value-12345",
+      "leaked-private-key-snake-12345",
+      "leaked-generic-key-value-12345",
+      "leaked-key-material-value-12345",
+      "leaked-jwt-value-1234567890",
+      "leaked-session-value-123456",
+      "leaked-code-value-1234567890",
+      "leaked-signature-value-12345",
+      "leaked-cookie-value-123456",
+      "leaked-set-cookie-value-12345",
+      "leaked-payment-credential-12345",
+      "41111111111111112222",
+    ]) {
+      expect(functionResponse.response.output).not.toContain(leakedValue);
+    }
   });
 
   it("keeps Google media-only tool results on media placeholders", () => {
