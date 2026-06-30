@@ -46,6 +46,40 @@ describe("extra-params: DeepSeek V4 OpenAI-compatible thinking fallback", () => 
     expect(payload.reasoning_effort).toBe("high");
   });
 
+  it("does not inject thinking on OpenRouter-routed DeepSeek V4 (provider id)", () => {
+    // The OpenAI-completions builder auto-detects thinkingFormat: "openrouter" for
+    // provider === "openrouter" and emits `reasoning: { effort }`. The native DeepSeek
+    // wrapper must not also fire, otherwise both `reasoning_effort` and `reasoning.effort`
+    // land in the request and DeepSeek rejects with HTTP 400.
+    const payload = runDeepSeekV4Case({
+      provider: "openrouter",
+      thinkingLevel: "high",
+    });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not inject thinking on OpenRouter-routed DeepSeek V4 (baseUrl)", () => {
+    const payload = runExtraParamsCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "deepseek-v4-pro",
+      mockProviderRuntime: true,
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "custom-proxy",
+        id: "deepseek-v4-pro",
+        baseUrl: "https://openrouter.ai/api/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        model: "deepseek-v4-pro",
+        messages: [],
+      },
+    }).payload as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
   it("does not inject thinking on canonical Microsoft Foundry", () => {
     const payload = runDeepSeekV4Case({
       provider: "microsoft-foundry",

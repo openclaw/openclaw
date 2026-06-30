@@ -933,7 +933,30 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
 }
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
+  return (
+    isDeepSeekV4OpenAICompletionsModel(model) &&
+    !isMicrosoftFoundryProviderId(model.provider) &&
+    !isOpenRouterRoutingProvider(model)
+  );
+}
+
+/**
+ * OpenRouter-routed DeepSeek V4 models are a documented OpenClaw wire-format route
+ * (`docs/providers/openrouter.md`): the OpenAI-completions builder auto-detects
+ * `thinkingFormat: "openrouter"` from `provider === "openrouter"` and emits
+ * `reasoning: { effort }`. The native DeepSeek V4 wrapper would otherwise also
+ * fire (its gate reads only user-config `compat.thinkingFormat`, which is unset
+ * for the OpenRouter route) and write a conflicting `reasoning_effort` field,
+ * causing HTTP 400 `"reasoning_effort" and "reasoning.effort" are both provided
+ * with conflicting values`. Excluding OpenRouter here matches the existing
+ * Microsoft Foundry exclusion: a non-DeepSeek-native provider should not receive
+ * the native DeepSeek thinking payload.
+ */
+function isOpenRouterRoutingProvider(model: Parameters<StreamFn>[0]): boolean {
+  if (typeof model.provider === "string" && model.provider === "openrouter") {
+    return true;
+  }
+  return typeof model.baseUrl === "string" && model.baseUrl.includes("openrouter.ai");
 }
 
 function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
