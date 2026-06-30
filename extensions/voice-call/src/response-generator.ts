@@ -31,11 +31,20 @@ export type VoiceResponseParams = {
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
+  /**
+   * Called as soon as spoken text is extracted from the first block reply,
+   * before the embedded run waits for post-turn compaction.
+   * Lets the voice-call transport start TTS without waiting for the full
+   * run to settle (#79521).
+   */
+  onEarlyText?: (text: string) => Promise<void>;
 };
 
 export type VoiceResponseResult = {
   text: string | null;
   error?: string;
+  /** True when onEarlyText was already invoked during the run. */
+  earlyTextSpoken?: boolean;
 };
 
 type VoiceResponsePayload = {
@@ -222,6 +231,7 @@ export async function generateVoiceResponse(
     userMessage,
     coreConfig,
     agentRuntime,
+    onEarlyText,
   } = params;
 
   if (!coreConfig) {
@@ -321,6 +331,7 @@ export async function generateVoiceResponse(
     // Collect payloads via onBlockReply callback so TTS can receive text
     // before post-turn compaction completes (#79521).
     const blockReplyPayloads: VoiceResponsePayload[] = [];
+    let earlyTextSpoken = false;
 
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
@@ -350,6 +361,17 @@ export async function generateVoiceResponse(
       blockReplyBreak: "text_end",
       onBlockReply: (payload) => {
         blockReplyPayloads.push(payload);
+        // Start TTS as soon as the first block reply delivers usable spoken
+        // text, without waiting for the embedded run to finish compaction.
+        if (!earlyTextSpoken && onEarlyText) {
+          const earlyText = extractSpokenTextFromPayloads([payload]);
+          if (earlyText) {
+            earlyTextSpoken = true;
+            onEarlyText(earlyText).catch((err) => {
+              console.error("[voice-call] Early TTS delivery failed:", err);
+            });
+          }
+        }
       },
     });
 
@@ -363,7 +385,7 @@ export async function generateVoiceResponse(
       return { text: null, error: "Response generation was aborted" };
     }
 
-    return { text };
+    return { text, earlyTextSpoken: earlyTextSpoken || undefined };
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, error: String(err) };

@@ -520,6 +520,101 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionFile).toBeUndefined();
   });
 
+  it("delivers early TTS via onEarlyText before the embedded run settles", async () => {
+    // Simulate a run where the block reply fires immediately but the
+    // embedded run only settles after a post-turn compaction delay.
+    let resolveRun: (value: {
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }) => void = () => {};
+    const runSettled = new Promise<{
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }>((resolve) => {
+      resolveRun = resolve;
+    });
+
+    const onEarlyTextCalls: string[] = [];
+
+    const delayedRunEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        // Fire block reply synchronously — this is the early delivery window.
+        args.onBlockReply?.({ text: '{"spoken":"Early bird text."}' });
+        // The real embedded runner would now wait for compaction.
+        // We defer settlement to prove the caller does not wait for it.
+        const settled = await runSettled;
+        return settled;
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime([]);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent: delayedRunEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+    const coreConfig = {} as CoreConfig;
+
+    const responsePromise = generateVoiceResponse({
+      voiceConfig,
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+      onEarlyText: async (text) => {
+        onEarlyTextCalls.push(text);
+      },
+    });
+
+    // Prove onEarlyText fired before the run settled: the run is still
+    // pending (runSettled hasn't resolved), but onEarlyText should have
+    // been called synchronously during the onBlockReply callback.
+    // Flush the microtask queue so the async onEarlyText body runs.
+    await new Promise<void>((r) => {
+      setTimeout(r, 0);
+    });
+
+    expect(onEarlyTextCalls).toStrictEqual(["Early bird text."]);
+
+    // The response promise should still be pending.
+    resolveRun({
+      payloads: [{ text: '{"spoken":"stale"}' }],
+      meta: { durationMs: 50, aborted: false },
+    });
+    const result = await responsePromise;
+
+    expect(result.earlyTextSpoken).toBe(true);
+    // Still returns the full extracted text for logging, but marks it as early-spoken.
+    expect(result.text).toBe("Early bird text.");
+  });
+
+  it("returns earlyTextSpoken false when no block reply arrived before run settled", async () => {
+    const { runtime } = createAgentRuntime([{ text: '{"spoken":"Fallback text."}' }]);
+    const onEarlyText = vi.fn();
+
+    const directResult = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-456",
+      from: "+15550002222",
+      transcript: [],
+      userMessage: "test",
+      onEarlyText,
+    });
+
+    expect(directResult.earlyTextSpoken).toBeUndefined();
+    expect(onEarlyText).not.toHaveBeenCalled();
+    expect(directResult.text).toBe("Fallback text.");
+  });
+
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
