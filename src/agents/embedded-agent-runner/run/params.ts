@@ -39,10 +39,22 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+export type CurrentInboundReplyMetadata = {
+  currentMessageId?: string;
+  threadId?: string;
+  replyToId?: string;
+  replyToIdFull?: string;
+  replyTargetPresent?: boolean;
+  quotePresent?: boolean;
+  replyChainPresent?: boolean;
+  replyChainMessageIds?: string[];
+};
+
 export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  reply?: CurrentInboundReplyMetadata;
 };
 
 export type RunEmbeddedAgentParams = {
