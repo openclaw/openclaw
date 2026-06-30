@@ -660,11 +660,10 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
               item.type === "image",
           )
         : [];
+      const mediaPlaceholder = describeGoogleToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
-        : imageContent.length > 0
-          ? "(see attached image)"
-          : "";
+        : (mediaPlaceholder ?? "");
       const imageParts = imageContent.map((imageBlock) => ({
         inlineData: {
           mimeType: imageBlock.mimeType,
