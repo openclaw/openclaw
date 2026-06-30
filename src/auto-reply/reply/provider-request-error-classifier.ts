@@ -12,6 +12,7 @@ export type ProviderRequestErrorCode =
   | "provider_authentication_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
+  | "provider_model_unavailable"
   | "provider_rate_limit_or_quota_error";
 
 /** Structured provider error classification for reply failure handling. */
@@ -33,6 +34,14 @@ export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 
+/**
+ * User-facing copy for a configured model the provider no longer serves.
+ * Distinct from generic failures because retrying or starting a new session
+ * cannot help: the model id itself must be changed in config.
+ */
+export const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
+  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+
 /** Classifies provider request failures that are actionable for users. */
 export function classifyProviderRequestError(
   err: unknown,
@@ -46,6 +55,17 @@ export function classifyProviderRequestError(
     return {
       code: "provider_authentication_error",
       userMessage: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+      technicalMessage,
+    };
+  }
+  // Detect retired/unavailable models structurally via the typed failover
+  // reason set at resolution time (run.ts), not by matching provider error
+  // text. Free-text provider rejections without a typed reason are left to the
+  // failover layer that owns error classification.
+  if (isFailoverError(err) && err.reason === "model_not_found") {
+    return {
+      code: "provider_model_unavailable",
+      userMessage: PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE,
       technicalMessage,
     };
   }

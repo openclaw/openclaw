@@ -1005,6 +1005,8 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const durableReasoningPayloadsEnabled =
+    resolvedReasoningLevel === "on" || Boolean(reasoningLane.stream);
   const streamToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
@@ -1600,13 +1602,19 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
-      return projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([payload], {
+      const keepReasoningLane = payload.isReasoning === true && durableReasoningPayloadsEnabled;
+      const payloadForPlan = keepReasoningLane ? { ...payload } : payload;
+      if (keepReasoningLane) {
+        delete payloadForPlan.isReasoning;
+      }
+      const normalized = projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([payloadForPlan], {
           cfg,
           sessionKey: ctxPayload.SessionKey,
           surface: "telegram",
         }),
       )[0];
+      return normalized;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {
@@ -2411,6 +2419,7 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
