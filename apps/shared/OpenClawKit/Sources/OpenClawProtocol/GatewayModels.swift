@@ -2300,6 +2300,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
+    public let adoptdashboard: Bool?
 
     public init(
         key: String?,
@@ -2309,7 +2310,8 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String?,
         emitcommandhooks: Bool?,
         task: String?,
-        message: String?)
+        message: String?,
+        adoptdashboard: Bool?)
     {
         self.key = key
         self.agentid = agentid
@@ -2319,6 +2321,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
+        self.adoptdashboard = adoptdashboard
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2330,6 +2333,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
+        case adoptdashboard = "adoptDashboard"
     }
 }
 

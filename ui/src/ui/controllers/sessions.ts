@@ -84,6 +84,7 @@ type CreateSessionParams = {
   model?: string;
   parentSessionKey?: string;
   emitCommandHooks?: boolean;
+  adoptDashboard?: boolean;
 };
 
 type CreateSessionResult = {
