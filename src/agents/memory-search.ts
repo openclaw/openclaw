@@ -186,10 +186,7 @@ function getConfiguredMemoryEmbeddingProvider(
     // endpoint instead of the default public API.
     const providerConfig = cfg.models?.providers?.[providerId];
     if (providerConfig) {
-      const hasCustomBaseUrl = Boolean(
-        providerConfig.baseUrl?.trim() ||
-        (providerConfig as Record<string, unknown>).baseURL as string | undefined,
-      );
+      const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
       if (hasCustomBaseUrl) {
         return undefined;
       }

@@ -148,10 +148,7 @@ function getAdapter(
     // generic provider path which respects the configured endpoint.
     const providerConfig = config?.models?.providers?.[id];
     if (providerConfig) {
-      const hasCustomBaseUrl = Boolean(
-        providerConfig.baseUrl?.trim() ||
-        (providerConfig as Record<string, unknown>).baseURL as string | undefined,
-      );
+      const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
       if (!hasCustomBaseUrl) {
         return adapter;
       }
@@ -189,8 +186,7 @@ export function resolveEmbeddingProviderFallbackModel(
   // Skip built-in adapter when provider has a custom base URL.
   const providerConfig = config?.models?.providers?.[providerId];
   const skipLegacy = legacyAdapter && providerConfig && Boolean(
-    providerConfig.baseUrl?.trim() ||
-    (providerConfig as Record<string, unknown>).baseURL as string | undefined,
+    providerConfig.baseUrl?.trim(),
   );
   const adapter = skipLegacy
     ? getEmbeddingProvider(providerId, config)

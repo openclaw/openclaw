@@ -161,10 +161,7 @@ async function createConfiguredEmbeddingProvider(params: {
   // a custom base URL, skip the direct adapter so memory embeddings use the
   // generic provider path which respects the configured endpoint.
   const providerCfg = params.cfg.models?.providers?.[providerId];
-  const hasCustomBaseUrl = providerCfg && Boolean(
-    providerCfg.baseUrl?.trim() ||
-    (providerCfg as Record<string, unknown>).baseURL as string | undefined,
-  );
+  const hasCustomBaseUrl = Boolean(providerCfg?.baseUrl?.trim());
   if (adapter && !hasCustomBaseUrl) {
     const provider = await createWithAdapter(adapter);
     if (!provider) {
