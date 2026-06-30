@@ -21,6 +21,7 @@ import {
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -607,7 +608,15 @@ async function processDiscordMessageInner(
   // streaming config flag: `on` delivers a durable 🧠 blockquote, `stream` renders the
   // live window lane (counted in the summary bar), `off` shows nothing in either lane.
   const reasoningLevel = ((): "on" | "stream" | "off" => {
-    const cfgDefault = cfg.agents?.defaults?.reasoningDefault;
+    // Config default mirrors core run selection (get-reply-directives.ts) and the
+    // Telegram resolver: the agent's own reasoningDefault wins over the global one,
+    // else "off". Without this, an agent-scoped default would run reasoning on but
+    // Discord would resolve delivery off and drop the durable 🧠 lane.
+    const normalizedAgentId = (route.agentId ?? "").trim().toLowerCase() || "main";
+    const agentEntryDefault = cfg.agents?.list?.find(
+      (entry) => ((entry?.id ?? "").trim().toLowerCase() || "main") === normalizedAgentId,
+    )?.reasoningDefault;
+    const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
     const configDefault: "on" | "stream" | "off" =
       cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";
     const sessionKey = ctxPayload.SessionKey;
@@ -1227,8 +1236,10 @@ async function processDiscordMessageInner(
           if (shouldYieldDraftProgress()) {
             return;
           }
-          // Count only what actually streams to the window draft (post-yield).
-          if (payload.phase === "start") {
+          // Count only work-tool starts. message/react/typing are non-work tools
+          // the compositor rejects from the draft, so they must not inflate the
+          // collapse bar (same predicate the compositor gates rendering on).
+          if (payload.phase === "start" && isChannelProgressDraftWorkToolName(payload.name)) {
             progressToolCalls += 1;
           }
           await draftPreview.pushToolProgress(
