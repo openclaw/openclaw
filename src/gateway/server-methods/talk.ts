@@ -452,11 +452,11 @@ async function resolveTalkResponseFromConfig(params: {
       talkProviderConfig: providerInputConfig,
       timeoutMs: typeof selectedBaseTts.timeoutMs === "number" ? selectedBaseTts.timeoutMs : 30_000,
     }) ?? providerInputConfig;
-  const responseConfig = params.includeSecrets
-    ? resolvedConfig
-    : sourceProviderConfig.apiKey === undefined
-      ? resolvedConfig
-      : { ...resolvedConfig, apiKey: sourceProviderConfig.apiKey };
+  const responseConfig = projectTalkResolvedProviderConfig({
+    includeSecrets: params.includeSecrets,
+    sourceProviderConfig,
+    resolvedConfig,
+  });
 
   return {
     ...payload,
@@ -466,6 +466,25 @@ async function resolveTalkResponseFromConfig(params: {
       config: responseConfig,
     },
   };
+}
+
+function projectTalkResolvedProviderConfig(params: {
+  includeSecrets: boolean;
+  sourceProviderConfig: TalkProviderConfig;
+  resolvedConfig: TalkProviderConfig;
+}): TalkProviderConfig {
+  if (!params.includeSecrets) {
+    return params.sourceProviderConfig.apiKey === undefined
+      ? params.resolvedConfig
+      : { ...params.resolvedConfig, apiKey: params.sourceProviderConfig.apiKey };
+  }
+
+  // includeSecrets authorizes the active Talk provider key only. Keep resolver
+  // defaults in the resolved payload, but do not turn arbitrary provider-owned
+  // secret-like fields into a new native-client credential surface.
+  const projected = redactConfigObject(params.resolvedConfig) as TalkProviderConfig;
+  const apiKey = normalizeOptionalString(params.resolvedConfig.apiKey);
+  return apiKey === undefined ? projected : { ...projected, apiKey };
 }
 
 async function resolveTalkProviderInputConfig(params: {
