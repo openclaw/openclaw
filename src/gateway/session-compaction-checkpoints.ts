@@ -8,12 +8,16 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
-import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isCompactionCheckpointTranscriptFileName,
+  parseCompactionCheckpointTranscriptFileName,
+} from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import {
   branchSessionFromCompactionCheckpoint,
@@ -26,7 +30,11 @@ import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  resolveFullyUsableCompactionCheckpoints,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -79,6 +87,10 @@ export type BranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  // Disk-discovered checkpoints are absent from stored entry metadata, so the
+  // explicit compaction API resolves the checkpoint and injects it here; the
+  // accessor still forks + writes the entry in one storage-sized mutation.
+  checkpoint?: SessionCompactionCheckpoint;
 };
 
 export type RestoreCheckpointSessionParams = {
@@ -86,6 +98,12 @@ export type RestoreCheckpointSessionParams = {
   sessionKey: string;
   sessionStoreKey?: string;
   checkpointId: string;
+  // See BranchCheckpointSessionParams.checkpoint: lets a disk-discovered
+  // checkpoint flow through the accessor without bypassing the mutation boundary.
+  checkpoint?: SessionCompactionCheckpoint;
+  // Discovered checkpoint list to persist onto the restored entry, healing the
+  // stored metadata in the same mutation when the checkpoint was disk-found.
+  compactionCheckpoints?: SessionCompactionCheckpoint[];
 };
 
 export type PersistSessionCompactionCheckpointParams = {
@@ -213,6 +231,13 @@ async function statCheckpointSnapshotBytes(
     }),
   );
   return bytesByPath;
+}
+
+function normalizeFileTimestampMs(value: number): number | undefined {
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
 }
 
 /** Resolve the stored checkpoint reason from compaction trigger state. */
@@ -415,6 +440,13 @@ export async function readSessionLeafStateFromTranscriptAsync(
   return null;
 }
 
+export async function readSessionLeafIdFromTranscriptAsync(
+  sessionFile: string,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
+): Promise<string | null> {
+  return (await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes))?.leafId ?? null;
+}
+
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
@@ -542,6 +574,9 @@ function cloneCheckpointSessionEntry(params: {
   parentSessionKey?: string;
   totalTokens?: number;
   preserveCompactionCheckpoints?: boolean;
+  // When restoring a disk-discovered checkpoint, persist the discovered list so
+  // the healed metadata becomes canonical; falls back to existing entry metadata.
+  compactionCheckpoints?: SessionCompactionCheckpoint[];
 }): SessionEntry {
   return {
     ...params.currentEntry,
@@ -570,7 +605,7 @@ function cloneCheckpointSessionEntry(params: {
     label: params.label ?? params.currentEntry.label,
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
     compactionCheckpoints: params.preserveCompactionCheckpoints
-      ? params.currentEntry.compactionCheckpoints
+      ? (params.compactionCheckpoints ?? params.currentEntry.compactionCheckpoints)
       : undefined,
   };
 }
@@ -584,6 +619,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
+    ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
     forkTranscriptFromCheckpoint: async (checkpoint) =>
       await forkCheckpointTranscriptFromStoredBoundary({ checkpoint }),
     buildEntry: ({ currentEntry, forkedTranscript }) => {
@@ -610,6 +646,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
     sessionKey: params.sessionKey,
     checkpointId: params.checkpointId,
     ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
+    ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
     forkTranscriptFromCheckpoint: async (checkpoint) =>
       await forkCheckpointTranscriptFromStoredBoundary({ checkpoint }),
     buildEntry: ({ currentEntry, forkedTranscript }) =>
@@ -619,6 +656,9 @@ async function restoreCheckpointSessionFromStoredBoundary(
         nextSessionFile: forkedTranscript.sessionFile,
         totalTokens: forkedTranscript.totalTokens,
         preserveCompactionCheckpoints: true,
+        ...(params.compactionCheckpoints
+          ? { compactionCheckpoints: params.compactionCheckpoints }
+          : {}),
       }),
   });
 }
@@ -822,6 +862,120 @@ export function listSessionCompactionCheckpoints(
   return sessionStoreCheckpoints(entry).toSorted((a, b) => b.createdAt - a.createdAt);
 }
 
+function resolveSessionCompactionCheckpointTranscriptPath(params: {
+  entry: Pick<SessionEntry, "sessionId" | "sessionFile"> | undefined;
+  sessionKey: string;
+  storePath: string;
+}): string | null {
+  if (!params.entry?.sessionId) {
+    return null;
+  }
+  const agentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  try {
+    return resolveSessionFilePath(
+      params.entry.sessionId,
+      params.entry,
+      resolveSessionFilePathOptions({ storePath: params.storePath, agentId }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function discoverSessionCompactionCheckpointsFromDisk(params: {
+  entry: Pick<SessionEntry, "sessionId" | "sessionFile"> | undefined;
+  sessionKey: string;
+  storePath: string;
+  knownCheckpoints: SessionCompactionCheckpoint[];
+}): Promise<SessionCompactionCheckpoint[]> {
+  const sessionFile = resolveSessionCompactionCheckpointTranscriptPath(params);
+  if (!sessionFile || !params.entry?.sessionId) {
+    return [];
+  }
+  const sessionDir = path.dirname(sessionFile);
+  const checkpointTranscriptBase = path.parse(sessionFile).name;
+  const knownIds = new Set(params.knownCheckpoints.map((checkpoint) => checkpoint.checkpointId));
+  const knownFiles = new Set(
+    params.knownCheckpoints
+      .map((checkpoint) => checkpoint.preCompaction.sessionFile?.trim())
+      .filter((filePath): filePath is string => Boolean(filePath)),
+  );
+  let dirEntries: string[];
+  try {
+    dirEntries = await fs.readdir(sessionDir);
+  } catch {
+    return [];
+  }
+
+  const discovered: SessionCompactionCheckpoint[] = [];
+  for (const fileName of dirEntries) {
+    const parsed = parseCompactionCheckpointTranscriptFileName(fileName);
+    if (
+      !parsed ||
+      parsed.sessionId !== checkpointTranscriptBase ||
+      knownIds.has(parsed.checkpointId)
+    ) {
+      continue;
+    }
+    const checkpointFile = path.join(sessionDir, fileName);
+    if (knownFiles.has(checkpointFile)) {
+      continue;
+    }
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stat = await fs.stat(checkpointFile);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) {
+      continue;
+    }
+    const [preSessionId, preLeafId] = await Promise.all([
+      readSessionIdFromTranscriptHeaderAsync(checkpointFile),
+      readSessionLeafIdFromTranscriptAsync(checkpointFile),
+    ]);
+    if (!preSessionId || !preLeafId) {
+      continue;
+    }
+    const createdAt = normalizeFileTimestampMs(stat.mtimeMs);
+    if (createdAt === undefined) {
+      continue;
+    }
+    discovered.push({
+      checkpointId: parsed.checkpointId,
+      sessionKey: params.sessionKey,
+      sessionId: params.entry.sessionId,
+      createdAt,
+      reason: "manual",
+      preCompaction: {
+        sessionId: preSessionId,
+        sessionFile: checkpointFile,
+        leafId: preLeafId,
+      },
+      postCompaction: {
+        sessionId: params.entry.sessionId,
+        sessionFile,
+      },
+    });
+  }
+  return discovered;
+}
+
+export async function listSessionCompactionCheckpointsWithFilesAsync(params: {
+  entry: Pick<SessionEntry, "sessionId" | "sessionFile" | "compactionCheckpoints"> | undefined;
+  sessionKey: string;
+  storePath: string;
+}): Promise<SessionCompactionCheckpoint[]> {
+  const stored = resolveFullyUsableCompactionCheckpoints(params.entry);
+  const discovered = await discoverSessionCompactionCheckpointsFromDisk({
+    entry: params.entry,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    knownCheckpoints: stored,
+  });
+  return [...stored, ...discovered].toSorted((a, b) => b.createdAt - a.createdAt);
+}
+
 export function getSessionCompactionCheckpoint(params: {
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined;
   checkpointId: string;
@@ -831,6 +985,21 @@ export function getSessionCompactionCheckpoint(params: {
     return undefined;
   }
   return listSessionCompactionCheckpoints(params.entry).find(
+    (checkpoint) => checkpoint.checkpointId === checkpointId,
+  );
+}
+
+export async function getSessionCompactionCheckpointWithFilesAsync(params: {
+  entry: Pick<SessionEntry, "sessionId" | "sessionFile" | "compactionCheckpoints"> | undefined;
+  sessionKey: string;
+  storePath: string;
+  checkpointId: string;
+}): Promise<SessionCompactionCheckpoint | undefined> {
+  const checkpointId = params.checkpointId.trim();
+  if (!checkpointId) {
+    return undefined;
+  }
+  return (await listSessionCompactionCheckpointsWithFilesAsync(params)).find(
     (checkpoint) => checkpoint.checkpointId === checkpointId,
   );
 }

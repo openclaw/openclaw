@@ -1,11 +1,12 @@
 /**
  * Gateway session compaction RPC tests.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -106,6 +107,10 @@ function expectMainCompactionResult(
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(expectedCompacted);
+}
+
+async function canonicalizeExpectedExistingPath(filePath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(filePath)), path.basename(filePath));
 }
 
 test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
@@ -403,6 +408,308 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   testState.agentsConfig = undefined;
+});
+
+test("sessions.compaction.* discovers checkpoint transcript files when store metadata is missing", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir);
+  const preCompactionSession = fixture.preCompactionSession;
+  const preCompactionSessionFile = fixture.preCompactionSessionFile;
+  if (!preCompactionSession || !preCompactionSessionFile) {
+    throw new Error("expected pre-compaction fixture snapshot");
+  }
+  const { SessionManager } = await getSessionManagerModule();
+  const checkpointId = randomUUID();
+  const checkpointFile = path.join(
+    dir,
+    `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
+  );
+  await fs.copyFile(preCompactionSessionFile, checkpointFile);
+  await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+  const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
+  const expectedCheckpointFile = await canonicalizeExpectedExistingPath(checkpointFile);
+  const expectedSessionFile = await canonicalizeExpectedExistingPath(fixture.sessionFile);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const listedSessions = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        compactionCheckpointCount?: number;
+        latestCompactionCheckpoint?: {
+          checkpointId: string;
+          createdAt: number;
+          reason: string;
+        };
+      }>;
+    }>(ws, "sessions.list", {});
+    const main = listedSessions.payload?.sessions.find(
+      (session) => session.key === "agent:main:main",
+    );
+    expect(main?.compactionCheckpointCount).toBe(1);
+    expect(main?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+    expect(Number.isInteger(main?.latestCompactionCheckpoint?.createdAt)).toBe(true);
+    expect(main?.latestCompactionCheckpoint?.createdAt).toBe(expectedCreatedAt);
+
+    const described = await rpcReq<{
+      session: {
+        key: string;
+        compactionCheckpointCount?: number;
+        latestCompactionCheckpoint?: {
+          checkpointId: string;
+          createdAt: number;
+          reason: string;
+        };
+      } | null;
+    }>(ws, "sessions.describe", { key: "main" });
+    expect(described.ok).toBe(true);
+    expect(described.payload?.session?.key).toBe("agent:main:main");
+    expect(described.payload?.session?.compactionCheckpointCount).toBe(1);
+    expect(described.payload?.session?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+    expect(described.payload?.session?.latestCompactionCheckpoint?.createdAt).toBe(
+      expectedCreatedAt,
+    );
+
+    const listedCheckpoints = await rpcReq<{
+      ok: true;
+      key: string;
+      checkpoints: Array<{
+        checkpointId: string;
+        createdAt: number;
+        preCompaction: { sessionFile: string };
+      }>;
+    }>(ws, "sessions.compaction.list", { key: "main" });
+    expect(listedCheckpoints.ok).toBe(true);
+    expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.checkpointId).toBe(checkpointId);
+    expect(Number.isInteger(listedCheckpoints.payload?.checkpoints[0]?.createdAt)).toBe(true);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.preCompaction.sessionFile).toBe(
+      expectedCheckpointFile,
+    );
+
+    const checkpoint = await rpcReq<{
+      ok: true;
+      checkpoint: {
+        checkpointId: string;
+        preCompaction: { sessionId?: string; sessionFile?: string; leafId?: string };
+        postCompaction: { sessionId?: string; sessionFile?: string };
+      };
+    }>(ws, "sessions.compaction.get", {
+      key: "main",
+      checkpointId,
+    });
+    expect(checkpoint.ok).toBe(true);
+    expect(checkpoint.payload?.checkpoint).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionId: preCompactionSession.getSessionId(),
+        sessionFile: expectedCheckpointFile,
+        leafId: fixture.preCompactionLeafId,
+      },
+      postCompaction: {
+        sessionId: fixture.sessionId,
+        sessionFile: expectedSessionFile,
+      },
+    });
+
+    const branched = await rpcReq<{
+      ok: true;
+      sourceKey: string;
+      key: string;
+      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+    }>(ws, "sessions.compaction.branch", {
+      key: "main",
+      checkpointId,
+    });
+    expect(branched.ok).toBe(true);
+    expect(branched.payload?.sourceKey).toBe("agent:main:main");
+    expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    const branchedSessionFile = branched.payload?.entry.sessionFile;
+    if (!branchedSessionFile) {
+      throw new Error("expected branched disk checkpoint session file");
+    }
+    const branchedSession = SessionManager.open(branchedSessionFile, dir);
+    expect(branchedSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
+
+    const restored = await rpcReq<{
+      ok: true;
+      key: string;
+      sessionId: string;
+      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+    }>(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId,
+    });
+    expect(restored.ok).toBe(true);
+    expect(restored.payload?.key).toBe("agent:main:main");
+    expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
+    expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+    expect(restored.payload?.entry.compactionCheckpoints?.[0]).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionFile: expectedCheckpointFile,
+      },
+    });
+    const restoredSessionFile = restored.payload?.entry.sessionFile;
+    if (!restoredSessionFile) {
+      throw new Error("expected restored disk checkpoint session file");
+    }
+    const restoredSession = SessionManager.open(restoredSessionFile, dir);
+    expect(restoredSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
+
+    const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { compactionCheckpoints?: unknown[]; sessionId?: string }
+    >;
+    expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
+    expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
+  } finally {
+    ws.close();
+  }
+});
+
+test("sessions.compaction.* ignores malformed usable-looking stored checkpoint metadata when disk checkpoint matches", async () => {
+  const { dir } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir);
+  const preCompactionSession = fixture.preCompactionSession;
+  const preCompactionSessionFile = fixture.preCompactionSessionFile;
+  if (!preCompactionSession || !preCompactionSessionFile) {
+    throw new Error("expected pre-compaction fixture snapshot");
+  }
+  const { SessionManager } = await getSessionManagerModule();
+  const checkpointId = randomUUID();
+  const checkpointFile = path.join(
+    dir,
+    `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
+  );
+  await fs.copyFile(preCompactionSessionFile, checkpointFile);
+  await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+  const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
+  const expectedCheckpointFile = await canonicalizeExpectedExistingPath(checkpointFile);
+  const expectedSessionFile = await canonicalizeExpectedExistingPath(fixture.sessionFile);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+        compactionCheckpoints: [
+          {
+            checkpointId,
+            sessionKey: "agent:main:main",
+            sessionId: fixture.sessionId,
+            createdAt: 1_700_000_002_000,
+            reason: "manual",
+            preCompaction: {
+              sessionId: preCompactionSession.getSessionId(),
+            },
+            postCompaction: {
+              sessionId: fixture.sessionId,
+              sessionFile: fixture.sessionFile,
+            },
+          },
+        ] as unknown as SessionEntry["compactionCheckpoints"],
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const listedCheckpoints = await rpcReq<{
+      ok: true;
+      key: string;
+      checkpoints: Array<{
+        checkpointId: string;
+        createdAt: number;
+        preCompaction: { sessionFile: string };
+      }>;
+    }>(ws, "sessions.compaction.list", { key: "main" });
+    expect(listedCheckpoints.ok).toBe(true);
+    expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.checkpointId).toBe(checkpointId);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.preCompaction.sessionFile).toBe(
+      expectedCheckpointFile,
+    );
+
+    const checkpoint = await rpcReq<{
+      ok: true;
+      checkpoint: {
+        checkpointId: string;
+        preCompaction: { sessionId?: string; sessionFile?: string; leafId?: string };
+        postCompaction: { sessionId?: string; sessionFile?: string };
+      };
+    }>(ws, "sessions.compaction.get", {
+      key: "main",
+      checkpointId,
+    });
+    expect(checkpoint.ok).toBe(true);
+    expect(checkpoint.payload?.checkpoint).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionId: preCompactionSession.getSessionId(),
+        sessionFile: expectedCheckpointFile,
+        leafId: fixture.preCompactionLeafId,
+      },
+      postCompaction: {
+        sessionId: fixture.sessionId,
+        sessionFile: expectedSessionFile,
+      },
+    });
+
+    const branched = await rpcReq<{
+      ok: true;
+      sourceKey: string;
+      key: string;
+      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+    }>(ws, "sessions.compaction.branch", {
+      key: "main",
+      checkpointId,
+    });
+    expect(branched.ok).toBe(true);
+    expect(branched.payload?.sourceKey).toBe("agent:main:main");
+    expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    const branchedSessionFile = branched.payload?.entry.sessionFile;
+    if (!branchedSessionFile) {
+      throw new Error("expected branched disk checkpoint session file");
+    }
+    const branchedSession = SessionManager.open(branchedSessionFile, dir);
+    expect(branchedSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
+
+    const restored = await rpcReq<{
+      ok: true;
+      key: string;
+      sessionId: string;
+      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+    }>(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId,
+    });
+    expect(restored.ok).toBe(true);
+    expect(restored.payload?.key).toBe("agent:main:main");
+    expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
+    expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+    expect(restored.payload?.entry.compactionCheckpoints?.[0]).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionFile: expectedCheckpointFile,
+      },
+    });
+    const restoredSessionFile = restored.payload?.entry.sessionFile;
+    if (!restoredSessionFile) {
+      throw new Error("expected restored disk checkpoint session file");
+    }
+    const restoredSession = SessionManager.open(restoredSessionFile, dir);
+    expect(restoredSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
+  } finally {
+    ws.close();
+  }
 });
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {

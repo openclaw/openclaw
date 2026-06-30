@@ -14,6 +14,7 @@ import {
   cleanupCompactionCheckpointSnapshot,
   createFileBackedCompactionCheckpointStore,
   forkCompactionCheckpointTranscriptAsync,
+  listSessionCompactionCheckpointsWithFilesAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
   persistSessionCompactionCheckpoint,
@@ -161,6 +162,10 @@ async function persistMainCheckpoint(
   });
 }
 
+function canonicalizeExpectedExistingPath(filePath: string): string {
+  return path.join(fsSync.realpathSync(path.dirname(filePath)), path.basename(filePath));
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -281,6 +286,66 @@ describe("session-compaction-checkpoints", () => {
       copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
     }
+  });
+
+  test("discovers valid checkpoint transcript files when store metadata is missing", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-discover-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "before disk discovery",
+      timestamp: Date.now(),
+    });
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "checkpoint discovery fixture" }],
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      timestamp: Date.now(),
+    } as AssistantMessage);
+    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const checkpointId = "11111111-1111-4111-8111-111111111111";
+    const checkpointFile = path.join(
+      dir,
+      `${path.parse(sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
+    );
+    await fs.copyFile(sessionFile, checkpointFile);
+    await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+    const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
+    const expectedCheckpointFile = canonicalizeExpectedExistingPath(checkpointFile);
+    const expectedSessionFile = canonicalizeExpectedExistingPath(sessionFile);
+
+    const checkpoints = await listSessionCompactionCheckpointsWithFilesAsync({
+      entry: {
+        sessionId: session.getSessionId(),
+        sessionFile,
+      },
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "sessions.json"),
+    });
+
+    expect(checkpoints).toHaveLength(1);
+    expect(Number.isInteger(checkpoints[0]?.createdAt)).toBe(true);
+    expect(checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
+    expect(checkpoints[0]).toMatchObject({
+      checkpointId,
+      sessionKey: "agent:main:main",
+      sessionId: session.getSessionId(),
+      reason: "manual",
+      preCompaction: {
+        sessionId: session.getSessionId(),
+        sessionFile: expectedCheckpointFile,
+        leafId,
+      },
+      postCompaction: {
+        sessionId: session.getSessionId(),
+        sessionFile: expectedSessionFile,
+      },
+    });
   });
 
   test("async capture follows terminal leaf controls instead of their inactive parent", async () => {

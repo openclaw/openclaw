@@ -557,6 +557,13 @@ export type BranchSessionFromCompactionCheckpointParams = {
   sourceStoreKey?: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
+  /**
+   * Pre-resolved checkpoint to fork from. Supplied when the caller discovered a
+   * checkpoint absent from the stored entry metadata (e.g. disk-found). Accepted
+   * only when it still matches the writer-locked entry's id and session identity,
+   * so a stale gateway discovery cannot fork a checkpoint into a row that changed.
+   */
+  checkpoint?: SessionCompactionCheckpoint;
 };
 
 export type RestoreSessionFromCompactionCheckpointParams = {
@@ -572,6 +579,13 @@ export type RestoreSessionFromCompactionCheckpointParams = {
   sessionStoreKey?: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
+  /**
+   * Pre-resolved checkpoint to fork from. Supplied when the caller discovered a
+   * checkpoint absent from the stored entry metadata (e.g. disk-found). Accepted
+   * only when it still matches the writer-locked entry's id and session identity,
+   * so a stale gateway discovery cannot fork a checkpoint into a row that changed.
+   */
+  checkpoint?: SessionCompactionCheckpoint;
 };
 
 export type TemporarySessionMappingPreservationResult<T> = {
@@ -1384,6 +1398,8 @@ type ApplySessionCompactionCheckpointMutationParams = {
   readKey: string;
   storePath: string;
   writeKey: string;
+  /** Pre-resolved checkpoint; used only when it matches the locked entry's id and session id. */
+  checkpoint?: SessionCompactionCheckpoint;
 };
 
 async function applySessionCompactionCheckpointMutation(
@@ -1396,10 +1412,23 @@ async function applySessionCompactionCheckpointMutation(
       if (!currentEntry?.sessionId) {
         return { status: "missing-session" };
       }
-      const checkpoint = findSessionCompactionCheckpoint({
-        entry: currentEntry,
-        checkpointId: params.checkpointId,
-      });
+      // The pre-resolved checkpoint is disk-discovered at the gateway before this
+      // writer-locked load. Accept it only when it still matches the locked entry's
+      // id and session identity; otherwise re-read stored metadata so a row that
+      // changed between discovery and this mutation fails safe instead of forking a
+      // stale checkpoint into the current session.
+      const injectedCheckpoint =
+        params.checkpoint &&
+        params.checkpoint.checkpointId === params.checkpointId.trim() &&
+        params.checkpoint.sessionId === currentEntry.sessionId
+          ? params.checkpoint
+          : undefined;
+      const checkpoint =
+        injectedCheckpoint ??
+        findSessionCompactionCheckpoint({
+          entry: currentEntry,
+          checkpointId: params.checkpointId,
+        });
       if (!checkpoint) {
         return { status: "missing-checkpoint" };
       }
@@ -1440,6 +1469,7 @@ export async function branchSessionFromCompactionCheckpoint(
     readKey: params.sourceStoreKey ?? params.sourceKey,
     storePath: params.storePath,
     writeKey: params.nextKey,
+    ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
   });
 }
 
@@ -1458,6 +1488,7 @@ export async function restoreSessionFromCompactionCheckpoint(
     readKey: params.sessionStoreKey ?? params.sessionKey,
     storePath: params.storePath,
     writeKey: params.sessionKey,
+    ...(params.checkpoint ? { checkpoint: params.checkpoint } : {}),
   });
 }
 
