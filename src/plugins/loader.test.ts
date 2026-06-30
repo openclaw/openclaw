@@ -1521,12 +1521,12 @@ describe("loadOpenClawPlugins", () => {
       "utf8",
     );
     fs.writeFileSync(
-      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
+      path.join(pluginSdkDir, "qa-runtime.js"),
       "export const internal = true;\n",
       "utf8",
     );
     fs.writeFileSync(
-      path.join(aliasDir, "ssrf-runtime-internal.js"),
+      path.join(aliasDir, "qa-runtime.js"),
       "export const staleInternal = true;\n",
       "utf8",
     );
@@ -1542,7 +1542,7 @@ describe("loadOpenClawPlugins", () => {
     });
     expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
     expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
+    expect(fs.existsSync(path.join(aliasDir, "qa-runtime.js"))).toBe(false);
   });
 
   it("keeps private QA plugin-sdk filenames out of bundled source markers", () => {
