@@ -589,4 +589,64 @@ describe("CronService failure alerts", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("truncates failure alert error text on UTF-16 code-point boundary", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
+    const longError = `${"x".repeat(199)}🎉trailing`;
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: longError,
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: { failureAlert: { enabled: true, after: 1 } },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "utf16 boundary job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const alertText = alertCallArg(sendCronFailureAlert).text;
+    expect(typeof alertText).toBe("string");
+    if (typeof alertText !== "string") {
+      throw new Error("expected failure alert text");
+    }
+
+    // Verify no dangling surrogates in the truncated error text.
+    // Must check every character including the last: a dangling high surrogate
+    // at the final position would be missed by stopping at length-1.
+    for (let i = 0; i < alertText.length; i++) {
+      const cu = alertText.charCodeAt(i);
+      if (cu >= 0xd800 && cu <= 0xdbff) {
+        expect(alertText.charCodeAt(i + 1) >= 0xdc00 && alertText.charCodeAt(i + 1) <= 0xdfff).toBe(
+          true,
+        );
+      }
+      if (cu >= 0xdc00 && cu <= 0xdfff) {
+        expect(
+          i > 0 && alertText.charCodeAt(i - 1) >= 0xd800 && alertText.charCodeAt(i - 1) <= 0xdbff,
+        ).toBe(true);
+      }
+    }
+
+    // Verify the emoji was excluded (truncated at the safe boundary before it)
+    expect(alertText).not.toContain("🎉");
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

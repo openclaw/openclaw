@@ -8,6 +8,7 @@ import {
   FILE_TYPE_SNIFF_MAX_BYTES,
   imageMimeFromFormat,
   isAudioFileName,
+  isGifMedia,
   kindFromMime,
   mimeTypeFromFilePath,
   normalizeMimeType,
@@ -268,6 +269,29 @@ describe("isAudioFileName", () => {
     { fileName: "voice.bin", expected: false },
   ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
     expectAudioFileNameCase(fileName, expected);
+  });
+});
+
+describe("isGifMedia", () => {
+  it.each([
+    {
+      opts: { contentType: "image/gif; charset=binary" },
+      expected: true,
+    },
+    {
+      opts: { contentType: " IMAGE/GIF " },
+      expected: true,
+    },
+    {
+      opts: { contentType: "image/png" },
+      expected: false,
+    },
+    {
+      opts: { fileName: "animation.GIF" },
+      expected: true,
+    },
+  ] as const)("detects GIF media from normalized metadata %#", ({ opts, expected }) => {
+    expect(isGifMedia(opts)).toBe(expected);
   });
 });
 

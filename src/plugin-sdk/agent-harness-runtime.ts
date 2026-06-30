@@ -28,6 +28,10 @@ import { truncateUtf16Safe } from "../utils.js";
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
@@ -45,6 +49,12 @@ export type {
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputOption,
+  AgentHarnessUserInputPromptOptions,
+  AgentHarnessUserInputQuestion,
+} from "../agents/harness/user-input-bridge.js";
 export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -152,6 +162,13 @@ export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
 export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
+  emptyAgentHarnessUserInputAnswers,
+  formatAgentHarnessUserInputPrompt,
+  normalizeAgentHarnessUserInputAnswer,
+} from "../agents/harness/user-input-bridge.js";
+export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
@@ -163,6 +180,10 @@ export {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
+export {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "../agents/provider-request-config.js";
 export {
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
@@ -269,7 +290,17 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+/**
+ * @deprecated Use appendSessionTranscriptMessageByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
+ * session identity instead of an active JSONL transcript file.
+ */
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+/**
+ * @deprecated Use publishSessionTranscriptUpdateByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
+ * a session identity instead of an active JSONL transcript file.
+ */
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,

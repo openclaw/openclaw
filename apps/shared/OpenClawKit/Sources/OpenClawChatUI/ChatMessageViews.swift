@@ -274,7 +274,7 @@ private struct ChatMessageBody: View {
                     text: text,
                     context: .user,
                     variant: self.markdownVariant,
-                    font: .system(size: 14),
+                    font: .body,
                     textColor: textColor)
             } else {
                 ChatAssistantTextBody(
@@ -747,7 +747,7 @@ private struct ChatAssistantTextBody: View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
+                let font = segment.kind == .thinking ? Font.callout.italic() : Font.body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,

@@ -113,6 +113,10 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
+function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEntry): boolean {
+  return entry.source === "telegram" && entry.type === "chat_window";
+}
+
 function replyTargetToChainEntry(replyTarget: TelegramReplyTarget): TelegramReplyChainEntry {
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
@@ -378,6 +382,17 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const shouldSuppressPersistedDmChatWindowContext =
+    !isGroup &&
+    previousTimestamp !== undefined &&
+    dmThreadId == null &&
+    visibleReplyChain.length === 0 &&
+    !visibleReplyTarget;
+  // Existing plain DMs already carry their history through the persistent
+  // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
+  const visiblePromptContext = shouldSuppressPersistedDmChatWindowContext
+    ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
+    : promptContext;
   const body = formatInboundEnvelope({
     channel: "Telegram",
     from: conversationLabel,
@@ -488,6 +503,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...(senderId ? { id: senderId } : {}),
       name: senderName,
       username: senderUsername || undefined,
+      isBot: msg.from?.is_bot,
     },
     conversation: {
       kind: conversationKind,
@@ -559,7 +575,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {

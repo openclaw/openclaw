@@ -3000,7 +3000,7 @@ refresh_gateway_service_if_loaded() {
     if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
         ui_success "Gateway service restarted"
     else
-        ui_warn "Gateway service restart failed; continuing"
+        ui_warn "Gateway service restart failed; continuing. Run: openclaw gateway restart"
         return 0
     fi
 

@@ -24,6 +24,9 @@ In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
 `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
 tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
 the local node-host service all use the same safe loopback transport.
+When discovery returns both raw Tailnet IPs and stable hostnames, the app
+prefers Tailscale MagicDNS or LAN names so remote connections survive address
+changes better.
 If the local tunnel port differs from the remote gateway port, set
 `gateway.remote.remotePort` to the port on the remote host.
 

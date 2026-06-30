@@ -145,12 +145,20 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             restartsThisHour: [],
           };
 
-          if (now - record.lastRestartAt <= cooldownMs) {
+          const continuingPendingRestart =
+            status.running !== true &&
+            status.restartPending === true &&
+            (status.reconnectAttempts ?? 0) === 0;
+
+          // A timed-out recovery stop uses the first start request to mark
+          // restartPending; the next monitor pass must finish that same recovery
+          // instead of waiting behind this monitor's fresh-restart cooldown.
+          if (!continuingPendingRestart && now - record.lastRestartAt <= cooldownMs) {
             continue;
           }
 
           pruneOldRestarts(record, now);
-          if (record.restartsThisHour.length >= maxRestartsPerHour) {
+          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -161,9 +169,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          record.lastRestartAt = now;
-          record.restartsThisHour.push({ at: now });
-          restartRecords.set(key, record);
+          if (!continuingPendingRestart) {
+            record.lastRestartAt = now;
+            record.restartsThisHour.push({ at: now });
+            restartRecords.set(key, record);
+          }
 
           try {
             if (status.running) {
