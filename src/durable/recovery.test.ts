@@ -82,6 +82,89 @@ describe("durable workflow recovery", () => {
     }
   });
 
+  it("marks persisted running agent turns lost after the store is reopened", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    let runningWorkflowRunId = "";
+    let runningStepId = "";
+    let waitingWorkflowRunId = "";
+
+    const setupStore = openDurableWorkflowSqliteStore({ path: dbPath });
+    try {
+      const running = setupStore.createRun({
+        workflowId: DURABLE_AGENT_TURN_WORKFLOW_ID,
+        idempotencyKey: "run-running-after-restart",
+        status: "running",
+        recoveryState: "running",
+        metadata: { sessionKey: "agent:test:running-after-restart" },
+        now: 100,
+      });
+      const runningStep = setupStore.createStep({
+        workflowRunId: running.workflowRunId,
+        stepId: "agent_invocation",
+        stepType: "agent",
+        status: "running",
+        recoveryState: "running",
+        now: 100,
+      });
+      const waiting = setupStore.createRun({
+        workflowId: DURABLE_AGENT_TURN_WORKFLOW_ID,
+        idempotencyKey: "run-waiting-after-restart",
+        status: "waiting",
+        recoveryState: "waiting_signal",
+        metadata: { sessionKey: "agent:test:waiting-after-restart" },
+        now: 100,
+      });
+      runningWorkflowRunId = running.workflowRunId;
+      runningStepId = runningStep.stepId;
+      waitingWorkflowRunId = waiting.workflowRunId;
+    } finally {
+      setupStore.close();
+    }
+
+    const restartedStore = openDurableWorkflowSqliteStore({ path: dbPath });
+    try {
+      const result = reconcileDurableAgentTurnsOnGatewayStartup({
+        store: restartedStore,
+        processInstanceId: "process-after-restart",
+        now: 200,
+      });
+
+      expect(result).toEqual({ scanned: 2, markedLost: 1 });
+      expect(restartedStore.getRun(runningWorkflowRunId)).toMatchObject({
+        workflowRunId: runningWorkflowRunId,
+        status: "lost",
+        recoveryState: "lost",
+        completedAt: 200,
+      });
+      expect(restartedStore.getRun(waitingWorkflowRunId)).toMatchObject({
+        workflowRunId: waitingWorkflowRunId,
+        status: "waiting",
+        recoveryState: "waiting_signal",
+      });
+      expect(restartedStore.listSteps(runningWorkflowRunId)).toMatchObject([
+        {
+          stepId: runningStepId,
+          status: "lost",
+          recoveryState: "lost",
+          completedAt: 200,
+        },
+      ]);
+      expect(restartedStore.getTimeline(runningWorkflowRunId)).toMatchObject([
+        {
+          eventType: "agent.turn.lost",
+          payload: expect.objectContaining({
+            processInstanceId: "process-after-restart",
+            reason: "gateway_startup_reconciliation",
+          }),
+        },
+      ]);
+    } finally {
+      restartedStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("marks only stale running agent turns lost during periodic recovery", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-"));
     const store = openDurableWorkflowSqliteStore({

@@ -203,6 +203,7 @@ export type CreateDurableWorkflowRunInput = {
   sourceType?: string;
   sourceRef?: string;
   inputRef?: string;
+  completedAt?: number;
   checkpointRef?: string;
   parentWorkflowRunId?: string;
   parentStepId?: string;
@@ -358,6 +359,7 @@ export type ClaimDurableWorkflowStepInput = {
 
 export type DurableWorkflowStoreStats = {
   path: string;
+  schemaVersion: number;
   runs: number;
   events: number;
   steps: number;

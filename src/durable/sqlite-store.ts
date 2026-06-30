@@ -158,8 +158,16 @@ type DurableWorkflowSignalRow = {
 };
 
 type CountRow = { count: number | bigint };
+type DurableSchemaMigrationRow = {
+  schema_name: string;
+  version: number | bigint;
+  applied_at: number | bigint;
+  metadata_json: string | null;
+};
 
 const DURABLE_WORKFLOW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
+export const DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION = 1;
+const DURABLE_WORKFLOW_SQLITE_SCHEMA_NAME = "durable_workflows";
 
 function optionalText(value: string | undefined): string | null {
   return value && value.trim() ? value : null;
@@ -324,7 +332,73 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnDefinition: str
   }
 }
 
+function ensureDurableSchemaMigrationsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS durable_schema_migrations (
+      schema_name TEXT NOT NULL PRIMARY KEY,
+      version INTEGER NOT NULL,
+      applied_at INTEGER NOT NULL,
+      metadata_json TEXT
+    );
+  `);
+}
+
+function readDurableWorkflowSchemaVersion(db: DatabaseSync): number {
+  const row = db
+    .prepare("SELECT * FROM durable_schema_migrations WHERE schema_name = ?")
+    .get(DURABLE_WORKFLOW_SQLITE_SCHEMA_NAME) as DurableSchemaMigrationRow | undefined;
+  return Number(row?.version ?? 0);
+}
+
+function assertDurableWorkflowSchemaVersionSupported(currentVersion: number): void {
+  if (currentVersion > DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION) {
+    throw new Error(
+      `Durable workflow schema version ${currentVersion} is newer than supported version ${DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION}`,
+    );
+  }
+}
+
+function recordDurableWorkflowSchemaVersion(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion === DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION) {
+    return;
+  }
+  const metadata = JSON.stringify({
+    kind: previousVersion === 0 ? "fresh-install" : "schema-upgrade",
+    previousVersion,
+  });
+  const existing = db
+    .prepare("SELECT * FROM durable_schema_migrations WHERE schema_name = ?")
+    .get(DURABLE_WORKFLOW_SQLITE_SCHEMA_NAME) as DurableSchemaMigrationRow | undefined;
+  if (existing) {
+    db.prepare(
+      `UPDATE durable_schema_migrations
+          SET version = ?,
+              applied_at = ?,
+              metadata_json = ?
+        WHERE schema_name = ?`,
+    ).run(
+      DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION,
+      Date.now(),
+      metadata,
+      DURABLE_WORKFLOW_SQLITE_SCHEMA_NAME,
+    );
+    return;
+  }
+  db.prepare(
+    `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+     VALUES (?, ?, ?, ?)`,
+  ).run(
+    DURABLE_WORKFLOW_SQLITE_SCHEMA_NAME,
+    DURABLE_WORKFLOW_SQLITE_SCHEMA_VERSION,
+    Date.now(),
+    metadata,
+  );
+}
+
 function ensureDurableWorkflowSchema(db: DatabaseSync): void {
+  ensureDurableSchemaMigrationsTable(db);
+  const previousVersion = readDurableWorkflowSchemaVersion(db);
+  assertDurableWorkflowSchemaVersionSupported(previousVersion);
   db.exec(`
     CREATE TABLE IF NOT EXISTS durable_workflow_runs (
       workflow_run_id TEXT NOT NULL PRIMARY KEY,
@@ -507,6 +581,7 @@ function ensureDurableWorkflowSchema(db: DatabaseSync): void {
   for (const column of ["claimed_by TEXT", "claim_expires_at INTEGER", "heartbeat_at INTEGER"]) {
     ensureColumn(db, "durable_workflow_steps", column);
   }
+  recordDurableWorkflowSchemaVersion(db, previousVersion);
 }
 
 function count(db: DatabaseSync, sql: string, values: SQLInputValue[] = []): number {
@@ -529,7 +604,15 @@ export function openDurableWorkflowSqliteStore(options?: {
     foreignKeys: true,
     synchronous: "NORMAL",
   });
-  ensureDurableWorkflowSchema(db);
+  try {
+    ensureDurableWorkflowSchema(db);
+  } catch (err) {
+    walMaintenance.close();
+    if (db.isOpen) {
+      db.close();
+    }
+    throw err;
+  }
 
   return {
     createRun(input: CreateDurableWorkflowRunInput): DurableWorkflowRun {
@@ -580,7 +663,7 @@ export function openDurableWorkflowSqliteStore(options?: {
           optionalText(input.inputRef),
           now,
           now,
-          null,
+          input.completedAt ?? null,
           recoveryState,
           optionalText(input.checkpointRef),
           optionalText(input.parentWorkflowRunId),
@@ -1386,6 +1469,7 @@ export function openDurableWorkflowSqliteStore(options?: {
     getStats(): DurableWorkflowStoreStats {
       return {
         path: pathname,
+        schemaVersion: readDurableWorkflowSchemaVersion(db),
         runs: count(db, "SELECT COUNT(*) AS count FROM durable_workflow_runs"),
         events: count(db, "SELECT COUNT(*) AS count FROM durable_workflow_events"),
         steps: count(db, "SELECT COUNT(*) AS count FROM durable_workflow_steps"),

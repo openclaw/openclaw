@@ -1181,6 +1181,13 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 
+CREATE TABLE IF NOT EXISTS durable_schema_migrations (
+  schema_name TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  applied_at INTEGER NOT NULL,
+  metadata_json TEXT
+);
+
 CREATE TABLE IF NOT EXISTS durable_workflow_runs (
   workflow_run_id TEXT NOT NULL PRIMARY KEY,
   workflow_id TEXT NOT NULL,
