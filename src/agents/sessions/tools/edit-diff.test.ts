@@ -168,6 +168,32 @@ describe("applyEditsToNormalizedContent", () => {
     expect(result.newContent).toBe("const x = ZZ;");
   });
 
+  it("fuzzy match with length-neutral NFKC line maps offsets correctly", () => {
+    // Regression test for the NFKC fast path bug (compare string equality,
+    // not just length). \uFB01 (ﬁ) expands to "fi" (+1 char) under NFKC
+    // while e+\u0301 (combining acute) composes to é (-1 char). Net effect
+    // is length-neutral (both 15 chars), but X shifts from original offset 2
+    // to NFKC offset 3. The old buggy fast path (length-only comparison)
+    // would return the NFKC offset directly, misplacing the splice start
+    // and duplicating X in the output.
+    const content = [
+      "\uFB01 X e\u0301 = \u2018val\u2019;",
+      "footer",
+    ].join("\n");
+
+    // Smart quotes in content trigger fuzzy matching against ASCII quotes
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: "X e\u0301 = 'val';", newText: "Y = 'new';" }],
+      "test.ts",
+    );
+
+    const lines = result.newContent.split("\n");
+    // X must be consumed (replaced), not duplicated; ﬁ ligature preserved
+    expect(lines[0]).toBe("\uFB01 Y = 'new';");
+    expect(lines[1]).toBe("footer");
+  });
+
   it("baseContent is always the original content", () => {
     const content = "line with smart\u2019s\nline with trailing   ";
 

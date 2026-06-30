@@ -212,8 +212,11 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  */
 function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEnd = false): number {
   const nfkcLine = origLine.normalize("NFKC");
-  // Fast path: NFKC did not change the line length, so positions map 1:1.
-  if (nfkcLine.length === origLine.length) {
+  // Fast path: NFKC did not change the line at all, so positions map 1:1.
+  // We compare the full strings, not just lengths, because NFKC can shift
+  // character positions while preserving total length (e.g., "ﬁ X é" and
+  // "fi X é" are both length 6, but "X" moves from offset 2 to offset 3).
+  if (nfkcLine === origLine) {
     return Math.min(normOffset, origLine.length);
   }
 
