@@ -166,9 +166,23 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer((socket) => {
+        socket.on("error", () => {
+          // The requester destroys the socket as soon as the newline-free
+          // pending response exceeds the cap, so the producer may see EPIPE.
+        });
         socket.on("data", () => {
-          // Stream a newline-free body larger than JSONL_SOCKET_MAX_BUFFER_BYTES.
-          socket.write("x".repeat(1024 * 1024 + 1024));
+          const chunk = "x".repeat(64 * 1024);
+          let writtenBytes = 0;
+          const writeChunk = () => {
+            while (writtenBytes <= testApi.JSONL_SOCKET_MAX_BUFFER_BYTES) {
+              writtenBytes += Buffer.byteLength(chunk, "utf8");
+              if (!socket.write(chunk)) {
+                socket.once("drain", writeChunk);
+                return;
+              }
+            }
+          };
+          writeChunk();
         });
       });
       const listening = await listenOnSocket(server, socketPath);

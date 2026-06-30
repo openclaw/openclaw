@@ -3,7 +3,7 @@ import net from "node:net";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-const JSONL_SOCKET_MAX_BUFFER_BYTES = 1024 * 1024;
+const JSONL_SOCKET_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 /**
  * Sends one JSONL request line, half-closes the write side, and waits for an accepted response line.
@@ -77,5 +77,5 @@ export async function requestJsonlSocket<T>(params: {
   });
 }
 
-export const testApi = { resolveJsonlSocketTimeoutMs };
+export const testApi = { JSONL_SOCKET_MAX_BUFFER_BYTES, resolveJsonlSocketTimeoutMs };
 export { testApi as __test__ };
