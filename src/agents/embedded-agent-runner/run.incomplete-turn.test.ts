@@ -2785,6 +2785,79 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("retries when cumulative replayMetadata is dirty but currentAttemptReplayMetadata proves clean", () => {
+    // Regression for #97877: prior-turn tool activity left cumulative
+    // replayMetadata.hadPotentialSideEffects=true, but the current 5xx
+    // attempt produced no tools and has clean per-attempt metadata.
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "test-model",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          // Cumulative: dirty from prior turns
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          // Per-attempt: clean — current model call ran no tools
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry when currentAttemptReplayMetadata records side effects", () => {
+    // Current attempt ran tools; must not retry even if cumulative
+    // replayMetadata accidentally appears clean.
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "test-model",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("retries when both replayMetadata and currentAttemptReplayMetadata are clean", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "test-model",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llamacpp",
