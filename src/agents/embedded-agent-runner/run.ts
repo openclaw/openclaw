@@ -241,7 +241,7 @@ import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInSession,
+  truncateOversizedToolResultsInRuntimeTranscript,
 } from "./tool-result-truncation.js";
 import type {
   EmbeddedAgentMeta,
@@ -2982,17 +2982,19 @@ async function runEmbeddedAgentInternal(
                   lastCompactionTokensAfter = Math.floor(compactResult.result.tokensAfter);
                 }
                 if (preflightRecovery?.route === "compact_then_truncate") {
-                  const truncResult = await truncateOversizedToolResultsInSession({
-                    sessionFile: activeSessionFile,
+                  const truncResult = await truncateOversizedToolResultsInRuntimeTranscript({
+                    scope: {
+                      sessionId: activeSessionId,
+                      sessionKey: params.sessionKey ?? activeSessionId,
+                      sessionFile: activeSessionFile,
+                      agentId: sessionAgentId,
+                    },
                     contextWindowTokens: ctxInfo.tokens,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
                       contextWindowTokens: ctxInfo.tokens,
                       cfg: params.config,
                       agentId: sessionAgentId,
                     }),
-                    sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    agentId: sessionAgentId,
                     config: params.config,
                   });
                   if (truncResult.truncated) {
@@ -3052,13 +3054,15 @@ async function runEmbeddedAgentInternal(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
-                const truncResult = await truncateOversizedToolResultsInSession({
-                  sessionFile: activeSessionFile,
+                const truncResult = await truncateOversizedToolResultsInRuntimeTranscript({
+                  scope: {
+                    sessionId: activeSessionId,
+                    sessionKey: params.sessionKey ?? activeSessionId,
+                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                  },
                   contextWindowTokens,
                   maxCharsOverride: toolResultMaxChars,
-                  sessionId: activeSessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: sessionAgentId,
                   config: params.config,
                 });
                 if (truncResult.truncated) {
