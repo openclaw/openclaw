@@ -379,4 +379,42 @@ describe("Google embedding-batch file-content streaming (real HTTP server)", () 
     expect(err?.message).toMatch(/gemini\.batch-file-content: JSONL line exceeds/);
     console.log(`[gemini-batch-proof] over-cap: oversized JSONL line (17 MiB) rejected before full buffering — ${err?.message}`);
   });
+
+  it("ignores streamed output records for unknown request ids", async () => {
+    const requests = makeRequests(3);
+    const unknownCount = 10_000;
+    writeDownload = (res) => {
+      function* lines() {
+        yield JSON.stringify({ key: "r0", embedding: { values: [1, 0, 0] } });
+        for (let index = 0; index < unknownCount; index += 1) {
+          yield JSON.stringify({
+            key: `unknown-${index}`,
+            embedding: { values: [0, 1, 0] },
+          });
+        }
+        yield JSON.stringify({ key: "r1", embedding: { values: [0, 1, 0] } });
+        yield JSON.stringify({ key: "r2", embedding: { values: [0, 0, 1] } });
+      }
+      writeJsonl(res, lines());
+    };
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    const result = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.size).toBe(requests.length);
+    expect([...result.keys()]).toEqual(["r0", "r1", "r2"]);
+    expect(result.get("r0")).toEqual([1, 0, 0]);
+    expect(result.get("r1")).toEqual([0, 1, 0]);
+    expect(result.get("r2")).toEqual([0, 0, 1]);
+    expect(result.has("unknown-0")).toBe(false);
+    expect(result.has(`unknown-${unknownCount - 1}`)).toBe(false);
+  });
 });
