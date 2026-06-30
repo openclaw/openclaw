@@ -2,11 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
-  createQaFlowChannelScenarioDriver,
   defineChannelBehaviorScenario,
   defineChannelBehaviorScenarioFromConversation,
   runChannelBehaviorScenario as runDefinedChannelBehaviorScenario,
 } from "./channel-behavior-scenario.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import type { QaTransportState } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -40,6 +40,31 @@ async function runLoadedScenarioFlow(
 
   const state = createQaBusState();
   let waitCount = 0;
+  const createTransport = () => {
+    const transport = createQaChannelTransport(state);
+    transport.waitForNoOutbound = async () => undefined;
+    transport.waitForOutbound = async (input) => {
+      waitCount += 1;
+      await params.onWaitForOutboundMessage?.({ waitCount, state });
+      const match = state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound")
+        .slice(input.sinceIndex ?? 0)
+        .find(
+          (message) =>
+            message.conversation.id === (input.expectation.conversationId ?? input.channel?.id) &&
+            (!input.channel || message.conversation.kind === input.channel.kind) &&
+            (input.expectation.textIncludes ?? []).every((needle) => message.text.includes(needle)),
+        );
+      if (match) {
+        return match;
+      }
+      throw new Error(
+        `timed out after ${input.expectation.timeoutMs}ms waiting for outbound marker`,
+      );
+    };
+    return transport;
+  };
   const api = {
     env: {},
     state,
@@ -85,29 +110,7 @@ async function runLoadedScenarioFlow(
     ) =>
       await runDefinedChannelBehaviorScenario(
         defineChannelBehaviorScenario(input),
-        createQaFlowChannelScenarioDriver({
-          state,
-          sendInboundMessage: state.addInboundMessage.bind(state),
-          waitForNoOutbound: async () => undefined,
-          waitForOutboundMessage: async (
-            stateLocal: QaTransportState,
-            predicate,
-            timeoutMs,
-            options,
-          ) => {
-            waitCount += 1;
-            await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
-            const match = stateLocal
-              .getSnapshot()
-              .messages.filter((message) => message.direction === "outbound")
-              .slice(options?.sinceIndex ?? 0)
-              .find(predicate);
-            if (match) {
-              return match;
-            }
-            throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
-          },
-        }),
+        createTransport(),
       ),
     runConversation: async (
       input: Parameters<typeof defineChannelBehaviorScenarioFromConversation>[0],
@@ -118,29 +121,7 @@ async function runLoadedScenarioFlow(
             scenarioId: scenario.id,
           }),
         ),
-        createQaFlowChannelScenarioDriver({
-          state,
-          sendInboundMessage: state.addInboundMessage.bind(state),
-          waitForNoOutbound: async () => undefined,
-          waitForOutboundMessage: async (
-            stateLocal: QaTransportState,
-            predicate,
-            timeoutMs,
-            options,
-          ) => {
-            waitCount += 1;
-            await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
-            const match = stateLocal
-              .getSnapshot()
-              .messages.filter((message) => message.direction === "outbound")
-              .slice(options?.sinceIndex ?? 0)
-              .find(predicate);
-            if (match) {
-              return match;
-            }
-            throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
-          },
-        }),
+        createTransport(),
       ),
     runScenario: async (_name: string, steps: QaFlowStep[]) => {
       const stepResults = [];
@@ -304,11 +285,6 @@ describe("scenario-flow-runner", () => {
               {
                 assert: {
                   expr: 'typeof channelScenarios.runChannelBehaviorScenario === "function"',
-                },
-              },
-              {
-                assert: {
-                  expr: 'typeof channelScenarios.createQaFlowChannelScenarioDriver === "function"',
                 },
               },
             ],

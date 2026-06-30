@@ -1,4 +1,5 @@
 // Qa Lab tests cover reusable channel behavior scenario contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -6,13 +7,13 @@ import {
   channelBehaviorInboundMessage,
   channelBehaviorTarget,
   collectChannelBehaviorScenarioRequirements,
-  createQaFlowChannelScenarioDriver,
   defineChannelBehaviorScenario,
   defineChannelBehaviorScenarioFromConversation,
   matchesChannelBehaviorOutbound,
   runChannelBehaviorScenario,
-  type ChannelScenarioDriver,
 } from "./channel-behavior-scenario.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
+import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaBusMessage } from "./runtime-api.js";
 
 function outboundMessage(overrides: Partial<QaBusMessage> = {}): QaBusMessage {
@@ -27,6 +28,10 @@ function outboundMessage(overrides: Partial<QaBusMessage> = {}): QaBusMessage {
     timestamp: 1,
     ...overrides,
   };
+}
+
+function createTestTransport(overrides: Partial<QaTransportAdapter> = {}): QaTransportAdapter {
+  return Object.assign(createQaChannelTransport(createQaBusState()), overrides);
 }
 
 describe("channel behavior scenarios", () => {
@@ -324,9 +329,9 @@ describe("channel behavior scenarios", () => {
     ).toBe(false);
   });
 
-  it("types channel scenario drivers around E2E transport primitives", async () => {
+  it("types qa transport adapters around E2E channel primitives", async () => {
     const calls: string[] = [];
-    const driver = {
+    const transport = createTestTransport({
       async createThread(_input) {
         calls.push("createThread");
         return {
@@ -360,18 +365,18 @@ describe("channel behavior scenarios", () => {
         calls.push("waitForOutbound");
         return outboundMessage({ id: "m-out", threadId: "thread-1" });
       },
-    } satisfies ChannelScenarioDriver;
+    });
 
-    await driver.restartGateway({ beforeStep: true });
-    await driver.createThread({ channel: { id: "qa-room", kind: "channel" } });
-    await driver.sendInbound({ message: { text: "hello" } });
-    await driver.waitForOutbound({
+    await transport.restartGateway({ beforeStep: true });
+    await transport.createThread({ channel: { id: "qa-room", kind: "channel" } });
+    await transport.sendInbound({ message: { text: "hello" } });
+    await transport.waitForOutbound({
       channel: { id: "qa-room", kind: "channel" },
       expectation: { kind: "reply", textIncludes: ["hello"] },
     });
-    await driver.waitForNoOutbound({ quietMs: 10 });
-    await driver.sendReplyTo({ text: "reply", threadId: "thread-1" });
-    await driver.observeProviderMetadata();
+    await transport.waitForNoOutbound({ quietMs: 10 });
+    await transport.sendReplyTo({ text: "reply", threadId: "thread-1" });
+    await transport.observeProviderMetadata();
 
     expect(calls).toEqual([
       "restartGateway",
@@ -413,7 +418,7 @@ describe("channel behavior scenarios", () => {
         },
       ],
     });
-    const driver = {
+    const transport = createTestTransport({
       async createThread() {
         throw new Error("unexpected thread create");
       },
@@ -451,9 +456,9 @@ describe("channel behavior scenarios", () => {
           text: "done QA-DM-BASELINE-OK",
         });
       },
-    } satisfies ChannelScenarioDriver;
+    });
 
-    const result = await runChannelBehaviorScenario(scenario, driver);
+    const result = await runChannelBehaviorScenario(scenario, transport);
 
     expect(result.lastOutbound?.text).toBe("done QA-DM-BASELINE-OK");
     expect(result.steps.map((step) => step.stepId)).toEqual(["reply", "quiet"]);
@@ -482,7 +487,7 @@ describe("channel behavior scenarios", () => {
         },
       ],
     });
-    const driver = {
+    const transport = createTestTransport({
       async createThread() {
         throw new Error("unexpected thread create");
       },
@@ -504,9 +509,9 @@ describe("channel behavior scenarios", () => {
       async waitForOutbound() {
         throw new Error("unexpected outbound wait");
       },
-    } satisfies ChannelScenarioDriver;
+    });
 
-    await expect(runChannelBehaviorScenario(scenario, driver)).rejects.toThrow(
+    await expect(runChannelBehaviorScenario(scenario, transport)).rejects.toThrow(
       "declares reply targeting",
     );
   });
@@ -529,7 +534,7 @@ describe("channel behavior scenarios", () => {
       ],
     });
     let waitedThreadId: string | undefined;
-    const driver = {
+    const transport = createTestTransport({
       async createThread() {
         return {
           accountId: "default",
@@ -571,58 +576,45 @@ describe("channel behavior scenarios", () => {
           threadId: input.expectation.threadId,
         });
       },
-    } satisfies ChannelScenarioDriver;
+    });
 
-    await runChannelBehaviorScenario(scenario, driver);
+    await runChannelBehaviorScenario(scenario, transport);
 
     expect(waitedThreadId).toBe("thread-1");
   });
 
-  it("adapts QA flow runtime functions into a channel scenario driver", async () => {
+  it("uses qa-channel transport defaults for channel scenario primitives", async () => {
     const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
+    transport.handleAction = async ({ args }) => ({
+      details: {
+        thread: {
+          accountId: "default",
+          conversationId: String(args.channelId),
+          createdAt: 1,
+          createdBy: "openclaw",
+          id: "thread-1",
+          title: typeof args.title === "string" ? args.title : "QA thread",
+        },
+      },
+    });
     state.addOutboundMessage({
       to: "dm:alice",
       text: "old reply",
     });
-    const driver = createQaFlowChannelScenarioDriver({
-      state,
-      createThread: async ({ channelId, title }) => ({
-        thread: {
-          accountId: "default",
-          conversationId: channelId,
-          createdAt: 1,
-          createdBy: "openclaw",
-          id: "thread-1",
-          title: title ?? "QA thread",
-        },
-      }),
-      sendInboundMessage: state.addInboundMessage.bind(state),
-      waitForNoOutbound: async () => undefined,
-      waitForOutboundMessage: async (stateLocal, predicate, _timeoutMs, options) => {
-        const match = stateLocal
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .slice(options?.sinceIndex ?? 0)
-          .find(predicate);
-        if (!match) {
-          throw new Error("missing outbound");
-        }
-        return match;
-      },
-    });
-    const cursor = driver.getOutboundCursor?.();
+    const cursor = transport.getOutboundCursor();
     state.addOutboundMessage({
       to: "dm:alice",
       text: "new reply QA-DM-BASELINE-OK",
     });
 
-    const inbound = await driver.sendInbound({
+    const inbound = await transport.sendInbound({
       channel: { id: "alice", kind: "direct" },
       message: {
         text: "hello",
       },
     });
-    const outbound = await driver.waitForOutbound({
+    const outbound = await transport.waitForOutbound({
       channel: { id: "alice", kind: "direct" },
       expectation: {
         kind: "reply",
@@ -630,8 +622,9 @@ describe("channel behavior scenarios", () => {
       },
       sinceIndex: cursor,
     });
-    const thread = await driver.createThread({
+    const thread = await transport.createThread({
       channel: { id: "qa-room", kind: "channel" },
+      cfg: {} as OpenClawConfig,
       title: "QA thread",
     });
 

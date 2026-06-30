@@ -1,25 +1,25 @@
+// Qa Lab plugin module defines reusable channel behavior scenario contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   QaBusAttachment,
   QaBusConversation,
-  QaBusInboundMessageInput,
   QaBusMessage,
   QaBusThread,
   QaBusToolCall,
 } from "./protocol.js";
-// Qa Lab plugin module defines reusable channel behavior scenario contracts.
-import type { QaTransportState } from "./qa-transport.js";
+import {
+  matchesQaTransportOutbound,
+  qaTransportChannelConversation,
+  type QaTransportAdapter,
+  type QaTransportChannel,
+  type QaTransportInbound,
+  type QaTransportReplyExpectation,
+  type QaTransportRestartHooks,
+} from "./qa-transport.js";
 
-export type ChannelBehaviorScenarioChannel = {
-  id: string;
-  kind: QaBusConversation["kind"];
-  title?: string;
-};
+export type ChannelBehaviorScenarioChannel = QaTransportChannel;
 
-export type ChannelBehaviorScenarioRestartHooks = {
-  afterStep?: boolean;
-  beforeStep?: boolean;
-  reason?: string;
-};
+export type ChannelBehaviorScenarioRestartHooks = QaTransportRestartHooks;
 
 export type ChannelBehaviorScenarioThreadRequirement = {
   channelId?: string;
@@ -35,24 +35,9 @@ export type ChannelBehaviorScenarioReplyRequirement = {
   toStepId?: string;
 };
 
-export type ChannelBehaviorScenarioInbound = {
-  attachments?: QaBusAttachment[];
-  senderId?: string;
-  senderName?: string;
-  text: string;
-  threadId?: string;
-  threadTitle?: string;
-  toolCalls?: QaBusToolCall[];
-};
+export type ChannelBehaviorScenarioInbound = QaTransportInbound;
 
-export type ChannelBehaviorScenarioReplyExpectation = {
-  kind: "reply";
-  conversationId?: string;
-  senderId?: string;
-  textIncludes?: readonly string[];
-  threadId?: string;
-  timeoutMs?: number;
-};
+export type ChannelBehaviorScenarioReplyExpectation = QaTransportReplyExpectation;
 
 export type ChannelBehaviorScenarioNoReplyExpectation = {
   kind: "no-reply";
@@ -97,47 +82,6 @@ export type ChannelBehaviorScenarioRequirements = {
   needsProviderMetadata: boolean;
   needsReplyTargeting: boolean;
   needsThread: boolean;
-};
-
-export type ChannelScenarioSendInboundInput = {
-  channel?: ChannelBehaviorScenarioChannel;
-  message: ChannelBehaviorScenarioInbound;
-};
-
-export type ChannelScenarioWaitForOutboundInput = {
-  channel?: ChannelBehaviorScenarioChannel;
-  expectation: ChannelBehaviorScenarioReplyExpectation;
-  sinceIndex?: number;
-};
-
-export type ChannelScenarioWaitForNoOutboundInput = {
-  quietMs?: number;
-  sinceIndex?: number;
-};
-
-export type ChannelScenarioCreateThreadInput = {
-  channel?: ChannelBehaviorScenarioChannel;
-  title?: string;
-};
-
-export type ChannelScenarioSendReplyInput = {
-  channel?: ChannelBehaviorScenarioChannel;
-  replyToMessageId?: string;
-  text: string;
-  threadId?: string;
-};
-
-export type ChannelScenarioProviderMetadata = Record<string, unknown>;
-
-export type ChannelScenarioDriver = {
-  createThread: (input: ChannelScenarioCreateThreadInput) => Promise<QaBusThread>;
-  getOutboundCursor?: () => number;
-  observeProviderMetadata: () => Promise<ChannelScenarioProviderMetadata | null>;
-  restartGateway: (hooks?: ChannelBehaviorScenarioRestartHooks) => Promise<void>;
-  sendInbound: (input: ChannelScenarioSendInboundInput) => Promise<QaBusMessage>;
-  sendReplyTo: (input: ChannelScenarioSendReplyInput) => Promise<QaBusMessage>;
-  waitForNoOutbound: (input: ChannelScenarioWaitForNoOutboundInput) => Promise<void>;
-  waitForOutbound: (input: ChannelScenarioWaitForOutboundInput) => Promise<QaBusMessage>;
 };
 
 export type ChannelBehaviorScenarioStepResult = {
@@ -204,23 +148,6 @@ export type ChannelBehaviorConversationInput = {
   turns: readonly ChannelBehaviorConversationTurnInput[];
 };
 
-export type QaFlowChannelScenarioDriverParams = {
-  createThread?: (input: { channelId: string; title?: string }) => Promise<unknown>;
-  sendInboundMessage: (input: QaBusInboundMessageInput) => Promise<QaBusMessage> | QaBusMessage;
-  state: QaTransportState;
-  waitForNoOutbound: (
-    state: QaTransportState,
-    timeoutMs?: number,
-    options?: { sinceIndex?: number },
-  ) => Promise<void>;
-  waitForOutboundMessage: (
-    state: QaTransportState,
-    predicate: (message: QaBusMessage) => boolean,
-    timeoutMs?: number,
-    options?: { sinceIndex?: number },
-  ) => Promise<QaBusMessage>;
-};
-
 export function defineChannelBehaviorScenario(
   input: ChannelBehaviorScenarioDefinitionInput,
 ): ChannelBehaviorScenarioDefinition {
@@ -253,7 +180,8 @@ export function defineChannelBehaviorScenario(
 
 export async function runChannelBehaviorScenario(
   scenario: ChannelBehaviorScenarioDefinition,
-  driver: ChannelScenarioDriver,
+  transport: QaTransportAdapter,
+  options: { cfg?: OpenClawConfig } = {},
 ): Promise<ChannelBehaviorScenarioRunResult> {
   const results: ChannelBehaviorScenarioStepResult[] = [];
   let lastOutbound: QaBusMessage | undefined;
@@ -265,17 +193,18 @@ export async function runChannelBehaviorScenario(
       );
     }
     if (step.restart?.beforeStep) {
-      await driver.restartGateway(step.restart);
+      await transport.restartGateway(step.restart);
     }
 
     const thread =
       step.thread?.createBeforeStep === true
-        ? await driver.createThread({
+        ? await transport.createThread({
             channel: scenario.channel,
+            cfg: options.cfg,
             title: step.thread.title,
           })
         : undefined;
-    const outboundCursor = driver.getOutboundCursor?.();
+    const outboundCursor = transport.getOutboundCursor();
     const inboundInput =
       thread && step.inbound && !step.inbound.threadId
         ? {
@@ -285,7 +214,7 @@ export async function runChannelBehaviorScenario(
           }
         : step.inbound;
     const inbound = inboundInput
-      ? await driver.sendInbound({
+      ? await transport.sendInbound({
           channel: scenario.channel,
           message: inboundInput,
         })
@@ -297,14 +226,14 @@ export async function runChannelBehaviorScenario(
         : step.expect;
     const outbound =
       expectation.kind === "reply"
-        ? await driver.waitForOutbound({
+        ? await transport.waitForOutbound({
             channel: scenario.channel,
             expectation,
             sinceIndex: outboundCursor,
           })
         : undefined;
     if (expectation.kind === "no-reply") {
-      await driver.waitForNoOutbound({
+      await transport.waitForNoOutbound({
         quietMs: expectation.quietMs,
         sinceIndex: outboundCursor,
       });
@@ -314,7 +243,7 @@ export async function runChannelBehaviorScenario(
     }
 
     if (step.restart?.afterStep) {
-      await driver.restartGateway(step.restart);
+      await transport.restartGateway(step.restart);
     }
 
     results.push({
@@ -372,58 +301,6 @@ export function defineChannelBehaviorScenarioFromConversation(
   };
 }
 
-export function createQaFlowChannelScenarioDriver(
-  params: QaFlowChannelScenarioDriverParams,
-): ChannelScenarioDriver {
-  return {
-    async createThread(input) {
-      if (!params.createThread) {
-        throw new Error("channel scenario driver cannot create threads without createThread");
-      }
-      const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-      const payload = await params.createThread({
-        channelId: channel.id,
-        ...(input.title ? { title: input.title } : {}),
-      });
-      return readThreadPayload(payload);
-    },
-    getOutboundCursor() {
-      return params.state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound").length;
-    },
-    async observeProviderMetadata() {
-      return null;
-    },
-    async restartGateway() {
-      throw new Error("channel scenario driver restartGateway is not wired for this flow");
-    },
-    async sendInbound(input) {
-      const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-      return await params.sendInboundMessage(buildInboundMessageInput(channel, input.message));
-    },
-    async sendReplyTo() {
-      throw new Error("channel scenario driver sendReplyTo is not wired for this flow");
-    },
-    async waitForNoOutbound(input) {
-      await params.waitForNoOutbound(params.state, input.quietMs, { sinceIndex: input.sinceIndex });
-    },
-    async waitForOutbound(input) {
-      const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-      return await params.waitForOutboundMessage(
-        params.state,
-        (message) =>
-          matchesChannelBehaviorOutbound(message, {
-            channel,
-            expectation: input.expectation,
-          }),
-        input.expectation.timeoutMs,
-        { sinceIndex: input.sinceIndex },
-      );
-    },
-  };
-}
-
 export function collectChannelBehaviorScenarioRequirements(
   scenario: ChannelBehaviorScenarioDefinition,
 ): ChannelBehaviorScenarioRequirements {
@@ -467,12 +344,7 @@ export function channelBehaviorTarget(
 export function channelBehaviorConversation(
   channel: ChannelBehaviorScenarioChannel,
 ): QaBusConversation {
-  const normalized = normalizeChannel(channel);
-  return {
-    id: normalized.id,
-    kind: normalized.kind,
-    ...(normalized.title ? { title: normalized.title } : {}),
-  };
+  return qaTransportChannelConversation(normalizeChannel(channel));
 }
 
 export function channelBehaviorInboundMessage(
@@ -496,63 +368,7 @@ export function matchesChannelBehaviorOutbound(
     expectation: ChannelBehaviorScenarioReplyExpectation;
   },
 ): boolean {
-  const conversationId = params.expectation.conversationId ?? params.channel.id;
-  if (message.direction !== "outbound") {
-    return false;
-  }
-  if (message.conversation.id !== conversationId) {
-    return false;
-  }
-  if (message.conversation.kind !== params.channel.kind) {
-    return false;
-  }
-  if (params.expectation.senderId && message.senderId !== params.expectation.senderId) {
-    return false;
-  }
-  if (params.expectation.threadId && message.threadId !== params.expectation.threadId) {
-    return false;
-  }
-  return (params.expectation.textIncludes ?? []).every((needle) => message.text.includes(needle));
-}
-
-function buildInboundMessageInput(
-  channel: ChannelBehaviorScenarioChannel,
-  message: ChannelBehaviorScenarioInbound,
-) {
-  return {
-    ...message,
-    conversation: channelBehaviorConversation(channel),
-    senderId: message.senderId?.trim() || "qa-operator",
-  };
-}
-
-function readThreadPayload(payload: unknown): QaBusThread {
-  if (!isRecord(payload) || !isRecord(payload.thread)) {
-    throw new Error("channel scenario thread-create action did not return a thread");
-  }
-  const thread = payload.thread;
-  if (
-    typeof thread.id !== "string" ||
-    typeof thread.accountId !== "string" ||
-    typeof thread.conversationId !== "string" ||
-    typeof thread.title !== "string" ||
-    typeof thread.createdAt !== "number" ||
-    typeof thread.createdBy !== "string"
-  ) {
-    throw new Error("channel scenario thread-create action returned an invalid thread");
-  }
-  return {
-    id: thread.id,
-    accountId: thread.accountId,
-    conversationId: thread.conversationId,
-    title: thread.title,
-    createdAt: thread.createdAt,
-    createdBy: thread.createdBy,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return matchesQaTransportOutbound(message, params);
 }
 
 function normalizeChannel(channel: ChannelBehaviorScenarioChannel): ChannelBehaviorScenarioChannel {

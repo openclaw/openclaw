@@ -27,7 +27,7 @@ import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
+import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 import {
   callPluginToolsMcp,
   createSession,
@@ -84,7 +84,7 @@ import {
 type QaSuiteScenarioFlowEnv = {
   lab: unknown;
   webSessionIds: Set<string>;
-  transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
+  transport: QaSuiteRuntimeEnv["transport"];
 } & Omit<QaSuiteRuntimeEnv, "transport">;
 
 function activeMemoryToggleKey(sessionKey: string) {
