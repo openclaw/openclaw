@@ -101,6 +101,8 @@ type GatewayGmailRestartAbortController = {
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
+  /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
+  cancelled?: boolean;
 };
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
@@ -184,6 +186,7 @@ type GatewayReloadHandlerParams = {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
@@ -446,12 +449,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           nextConfig,
           changedPaths: plan.changedPaths,
           beforeReplace: stopChannelsBeforePluginReplace,
+          isAborted: () => pluginReloadAborted,
         });
-        for (const channel of pluginReloadResult.restartChannels) {
-          channelsToRestart.add(channel);
+        // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
+        // skip metadata/runtime updates when the reload was cancelled mid-flight.
+        if (!pluginReloadAborted) {
+          for (const channel of pluginReloadResult.restartChannels) {
+            channelsToRestart.add(channel);
+          }
+          activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          resetPreparedModelRuntimeStateForHotReload();
         }
-        activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
-        resetPreparedModelRuntimeStateForHotReload();
       }
     }
     if (plan.restartCron) {

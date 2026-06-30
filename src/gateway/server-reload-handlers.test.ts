@@ -1875,4 +1875,102 @@ describe("deferred channel reload abort generation", () => {
       hoisted.activeTaskBlockers.length = 0;
     }
   });
+
+  it("abort inside beforeReplace prevents plugin metadata/runtime replacement and channel restart", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    let receivedIsAborted = false;
+    let reloadWasCancelled = false;
+    const reloadPlugins = vi.fn(
+      async (params: {
+        nextConfig: OpenClawConfig;
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+        isAborted?: () => boolean;
+      }): Promise<GatewayPluginReloadResult> => {
+        if (params.isAborted) receivedIsAborted = true;
+        await params.beforeReplace(new Set(["whatsapp"]));
+        if (params.isAborted?.()) {
+          reloadWasCancelled = true;
+          return { restartChannels: new Set(), activeChannels: new Set(), cancelled: true };
+        }
+        return { restartChannels: new Set(), activeChannels: new Set() };
+      },
+    );
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: channels.start,
+      stopChannel: channels.stop,
+      stopPostReadySidecars: vi.fn(),
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels,
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    const pluginReloadPlan: GatewayReloadPlan = {
+      changedPaths: ["plugins.enabled"],
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: ["plugins.enabled"],
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: false,
+      restartHealthMonitor: false,
+      reloadPlugins: true,
+      restartChannels: new Set(),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    };
+
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-blocking-reload",
+      status: "running",
+      runtime: "subagent",
+    });
+    vi.useFakeTimers();
+
+    try {
+      const reloadPromise = applyHotReload(pluginReloadPlan, {});
+      // Advance into the waitForActiveWorkBeforeChannelReload poll loop
+      await vi.advanceTimersByTimeAsync(100);
+      abortPendingChannelReloads();
+      // Advance past the 500ms sleep → abort check fires
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(reloadPromise).resolves.toBeUndefined();
+
+      // reloadPlugins should receive the isAborted callback
+      expect(receivedIsAborted).toBe(true);
+      // reloadPlugins should detect abort and return cancelled
+      expect(reloadWasCancelled).toBe(true);
+      // beforeReplace cancellation log
+      expect(logChannels.info).toHaveBeenCalledWith(
+        "channel reload before plugin replace cancelled by in-process restart",
+      );
+      // No channel should be started — cancelledByRestart = pluginReloadAborted = true
+      expect(channels.start).not.toHaveBeenCalled();
+      expect(channels.stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      hoisted.activeTaskBlockers.length = 0;
+    }
+  });
 });
