@@ -245,4 +245,34 @@ describe("MCP HTTP fetch helpers", () => {
     expect(error.message).toContain("bad redirect");
     expect(error.message).not.toContain("[object Response]");
   });
+
+  it("drops body-less oversized OAuth error text to avoid OOM", async () => {
+    class OversizedForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({ "content-type": "application/json" });
+      body = null;
+      get ok() {
+        return false;
+      }
+      async text() {
+        return "x".repeat(1024 * 1024 + 1);
+      }
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new OversizedForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+  });
 });

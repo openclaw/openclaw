@@ -25,6 +25,7 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
+const MCP_HTTP_MAX_TEXT_RESPONSE_BYTES = 1024 * 1024;
 const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
   finalize: () => Promise<void>;
 }>((held) => {
@@ -66,7 +67,17 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     return new Response(null, init);
   }
   if (typeof response.text === "function") {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const size = Number(contentLength);
+      if (Number.isSafeInteger(size) && size > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+        return new Response(null, init);
+      }
+    }
     const text = await response.text();
+    if (text.length > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+      return new Response(null, init);
+    }
     return new Response(text, init);
   }
   return new Response(null, init);
