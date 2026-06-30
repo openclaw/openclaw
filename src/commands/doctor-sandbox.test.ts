@@ -89,4 +89,22 @@ describe("resolveSandboxScript", () => {
     expect(result?.scriptPath).toBe(path.join(repo, scriptRel));
     expect(result?.cwd).toBe(repo);
   });
+
+  it("keeps searching cwd when the launcher resolves to a package root without the script", () => {
+    // Installed/published openclaw package root: it carries the package.json marker but not
+    // scripts/sandbox-setup.sh, because the npm files allowlist drops scripts/. It resolves from
+    // argv1 before cwd, so stopping at the first root would miss the source checkout below.
+    const installed = mkTmp("ocsbx-installed-");
+    fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const entry = path.join(installed, "openclaw.mjs");
+    fs.writeFileSync(entry, "");
+
+    // Valid source checkout (cwd) that does contain the script.
+    const repo = mkRepo("ocsbx-source-");
+
+    const result = resolveSandboxScript(scriptRel, { argv1: entry, cwd: repo });
+
+    expect(result?.scriptPath).toBe(path.join(repo, scriptRel));
+    expect(result?.cwd).toBe(repo);
+  });
 });
