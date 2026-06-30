@@ -136,6 +136,11 @@ describe("classifyNoOpRearmWake", () => {
     );
     expect(wake.kind).toBe("self_rearm");
   });
+
+  it("treats an unmarked wake (no provenance or markers) as neutral", () => {
+    const wake = classifyNoOpRearmWake({ sessionKey: "s" });
+    expect(wake).toEqual({ kind: "neutral", reason: "unmarked-wake" });
+  });
 });
 
 describe("turn outcome classification", () => {
@@ -340,6 +345,23 @@ describe("NoOpRearmGuard admission + recording", () => {
       runId: "b",
       result: noOpResult(),
     });
+    expect(guard.peekStreak({ sessionKey })).toBe(0);
+  });
+
+  it("does not accrue or block neutral (unmarked) wakes even when repeated", () => {
+    let t = 1_000;
+    const guard = makeGuard(() => t);
+    const sessionKey = "s";
+    for (let i = 0; i < 10; i += 1) {
+      const decision = guard.evaluate({ sessionKey });
+      expect(decision.admit).toBe(true);
+      guard.record({
+        sessionKey,
+        wakeClass: { kind: "neutral", reason: "unmarked-wake" },
+        runId: `run-${i}`,
+        result: noOpResult(),
+      });
+    }
     expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 

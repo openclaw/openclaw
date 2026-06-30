@@ -68,13 +68,13 @@ export type NoOpRearmSelfRearmSource =
   | "restart_recovery"
   | "recovery_replay"
   | "internal_system"
-  | "human_replay"
-  | "bot_or_tool";
+  | "human_replay";
 
 export type NoOpRearmWakeClass =
   | { kind: "fresh_human_edge"; messageId?: string }
   | { kind: "structured_completion"; source: string }
   | { kind: "exempt_backend_wake"; source: "heartbeat" }
+  | { kind: "neutral"; reason: string }
   | { kind: "self_rearm"; source: NoOpRearmSelfRearmSource };
 
 export type NoOpRearmWakeInput = {
@@ -146,7 +146,9 @@ export function classifyNoOpRearmWake(
   }
 
   // Fresh human edge: a direct external_user request that is not room-event backlog
-  // and not obviously stale. Stale human backlog (room_event) must not reset.
+  // and not obviously stale. Stale human backlog must not reset, and is guarded as
+  // backlog like a room event.
+  let staleHumanBacklog = false;
   if (provenance?.kind === "external_user" && !isRoomEvent) {
     const stale =
       opts.staleHumanEdgeAfterMs !== undefined &&
@@ -156,6 +158,7 @@ export function classifyNoOpRearmWake(
       const messageId = normalizeMessageId(input.messageId);
       return messageId ? { kind: "fresh_human_edge", messageId } : { kind: "fresh_human_edge" };
     }
+    staleHumanBacklog = true;
   }
 
   // A plain heartbeat timer wake is an explicit periodic backend wake (#1142
@@ -165,6 +168,7 @@ export function classifyNoOpRearmWake(
   if (
     input.isHeartbeat === true &&
     !isRoomEvent &&
+    !staleHumanBacklog &&
     input.isContinuationWake !== true &&
     !input.isRecoveryReplay &&
     !isRestartSentinelProvenance(provenance)
@@ -172,14 +176,22 @@ export function classifyNoOpRearmWake(
     return { kind: "exempt_backend_wake", source: "heartbeat" };
   }
 
-  // Everything else is self-rearm / recovery replay subject to the streak guard.
-  return { kind: "self_rearm", source: resolveSelfRearmSource(input, isRoomEvent) };
+  // Only positively-identified self-rearm / recovery sources are guarded. An
+  // unmarked wake (no recognized provenance or marker) is neutral: it is admitted
+  // and never accrues the streak, so the guard cannot false-block ordinary turns.
+  // The incident's storm sources are all positively marked (room-event backlog,
+  // continuation, restart/pending-delivery recovery, internal_system).
+  const selfRearmSource = resolveSelfRearmSource(input, isRoomEvent || staleHumanBacklog);
+  if (selfRearmSource === undefined) {
+    return { kind: "neutral", reason: "unmarked-wake" };
+  }
+  return { kind: "self_rearm", source: selfRearmSource };
 }
 
 function resolveSelfRearmSource(
   input: NoOpRearmWakeInput,
   isRoomEvent: boolean,
-): NoOpRearmSelfRearmSource {
+): NoOpRearmSelfRearmSource | undefined {
   if (isRoomEvent) {
     return "room_event_backlog";
   }
@@ -195,7 +207,7 @@ function resolveSelfRearmSource(
   if (input.provenance?.kind === "internal_system") {
     return "internal_system";
   }
-  return "bot_or_tool";
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +512,10 @@ export class NoOpRearmGuard {
 
     if (wake.kind === "exempt_backend_wake") {
       return { admit: true, reason: "exempt-backend-wake", wake };
+    }
+
+    if (wake.kind === "neutral") {
+      return { admit: true, reason: "neutral", wake };
     }
 
     // self_rearm

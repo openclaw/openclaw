@@ -31,6 +31,7 @@ type WorkerCleanupHelpers = {
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
+  resetNoOpRearmGuard: typeof import("../src/auto-reply/reply/no-op-rearm-guard.js").resetNoOpRearmGuard;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
 };
 
@@ -85,6 +86,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       "../src/config/sessions/store-writer-state.js",
     ),
     vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+    vi.importActual<typeof import("../src/auto-reply/reply/no-op-rearm-guard.js")>(
+      "../src/auto-reply/reply/no-op-rearm-guard.js",
+    ),
   ]).then(
     ([
       contextRuntimeState,
@@ -93,6 +97,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       sessionStoreCache,
       sessionStoreWriterState,
       fileLock,
+      noOpRearmGuard,
     ]) => ({
       clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
@@ -102,6 +107,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
+      resetNoOpRearmGuard: noOpRearmGuard.resetNoOpRearmGuard,
       resetSessionWriteLockStateForTest: sessionWriteLock.resetSessionWriteLockStateForTest,
     }),
   );
@@ -398,6 +404,7 @@ afterEach(async () => {
     resetContextWindowCacheForTest,
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
+    resetNoOpRearmGuard,
     resetSessionWriteLockStateForTest,
   } = await loadWorkerCleanupHelpers();
   await drainSessionStoreWriterQueuesForTest();
@@ -407,6 +414,7 @@ afterEach(async () => {
   resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
+  resetNoOpRearmGuard();
   resetSessionWriteLockStateForTest();
   await installDefaultPluginRegistry();
 });
