@@ -776,17 +776,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
       return;
     }
+    const effectiveQueueMode = state.sessionInfo.queueMode ?? "steer";
+    const allowQueuedSend = effectiveQueueMode !== "steer";
     if (
       !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
+      (state.pendingOptimisticUserMessage ||
+        (!allowQueuedSend &&
+          (state.pendingChatRunId || (opts.local !== true && state.activeChatRunId))))
     ) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();
       return;
     }
     const runId = randomUUID();
+    const priorActiveChatRunId = state.activeChatRunId;
     try {
       if (!isBtw) {
         if (
@@ -899,7 +902,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
@@ -908,7 +911,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
-        state.activeChatRunId = null;
+        // Preserve the prior active run if this was a queued followup send.
+        // Only clear activeChatRunId when the failed send owned it.
+        if (!priorActiveChatRunId || state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        } else {
+          state.activeChatRunId = priorActiveChatRunId;
+        }
         if (state.pendingSubmitDraft?.runId === runId) {
           state.pendingSubmitDraft = null;
         }
