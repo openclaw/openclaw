@@ -133,6 +133,9 @@ facts into `MEMORY.md`), and **REM** (reflect and surface themes).
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
 - Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
+  Channel callers must be owners to change the setting; Gateway clients need
+  `operator.admin`. Read-only status and help remain available to authorized
+  command senders.
 - Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
 - Only the deep phase writes durable memory to `MEMORY.md`.
 - Human-readable phase output and diary entries are written to `DREAMS.md` (or existing `dreams.md`), with optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.

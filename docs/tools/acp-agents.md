@@ -790,6 +790,12 @@ If no target resolves, OpenClaw returns a clear error
 | `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                 |
 | `/acp install`       | Print deterministic install and enable steps.             | `/acp install`                                                |
 
+Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
+`set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require
+owner identity from external channels and `operator.admin` from internal Gateway
+clients. Authorized non-owner senders can still use `sessions`, `doctor`,
+`install`, and `help`.
+
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
 clearly when a backend lacks a capability. `/acp sessions` reads the

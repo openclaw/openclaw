@@ -25,7 +25,7 @@ scenario:
     - scripts/e2e/crestodian-first-run-spec.json
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing Crestodian first-run Docker E2E lane and records primary Docker first-run onboarding evidence; the Raspberry Pi link is secondary because this is generic Linux/container first-run proof, not Pi hardware proof.
     args:
       - --lane

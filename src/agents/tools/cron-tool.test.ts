@@ -555,35 +555,39 @@ describe("cron tool", () => {
       });
     });
 
-    it("derives agentId from an explicit cross-agent sessionKey instead of the caller's agentId", async () => {
-      // A caller in agent-123 explicitly waking an agent-456 session must
-      // NOT have agent-123's agentId paired with agent-456's sessionKey —
-      // that would canonicalize back to agent-123's main lane on the
-      // gateway side.
+    it("rejects an explicit cross-agent sessionKey", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      await tool.execute("call-wake-cross-agent", {
-        action: "wake",
-        text: "follow up",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
+      await expect(
+        tool.execute("call-wake-cross-agent", {
+          action: "wake",
+          text: "follow up",
+          sessionKey: "agent:agent-456:discord:thread-xyz",
+        }),
+      ).rejects.toThrow("cron sessionKey must match the calling agent");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects an explicit cross-agent agentId", async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      const params = expectSingleGatewayCallMethod("wake");
-      expect(params).toEqual({
-        mode: "next-heartbeat",
-        text: "follow up",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
-      });
+      await expect(
+        tool.execute("call-wake-cross-agent-id", {
+          action: "wake",
+          text: "follow up",
+          agentId: "agent-456",
+        }),
+      ).rejects.toThrow("wake agentId must match the calling agent");
+      expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
     it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
       // The gateway target resolver treats agentId as authoritative, so a
       // contradictory pair would silently canonicalize the wake onto a session
       // the caller never named. The tool rejects instead of guessing.
-      const tool = createTestCronTool({
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      });
+      const tool = createTestCronTool();
       await expect(
         tool.execute("call-wake-explicit-pair", {
           action: "wake",
@@ -595,29 +599,26 @@ describe("cron tool", () => {
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
-    it("accepts an explicit agentId that matches the agent owning the explicit sessionKey", async () => {
+    it("accepts a different session owned by the calling agent", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
       await tool.execute("call-wake-matching-pair", {
         action: "wake",
         text: "manual",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
+        sessionKey: "agent:agent-123:discord:thread-xyz",
+        agentId: "agent-123",
       });
       const params = expectSingleGatewayCallMethod("wake");
       expect(params).toEqual({
         mode: "next-heartbeat",
         text: "manual",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
+        sessionKey: "agent:agent-123:discord:thread-xyz",
+        agentId: "agent-123",
       });
     });
 
-    it("omits agentId when explicit sessionKey is not in agent:<id>:* form and no explicit agentId is given", async () => {
-      // Defence-in-depth: if the explicit sessionKey can't be parsed for an
-      // agentId, we'd rather omit it (gateway falls back to default routing
-      // for that session) than incorrectly attach the caller's agentId.
+    it("binds an unparseable explicit sessionKey to the calling agent", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
@@ -631,9 +632,7 @@ describe("cron tool", () => {
         mode: "next-heartbeat",
         text: "x",
         sessionKey: "subagent:weird:format",
-        // No agentId — explicit sessionKey wasn't parseable + no explicit
-        // override, so we deliberately drop agentId rather than inherit
-        // the caller's.
+        agentId: "agent-123",
       });
     });
 
