@@ -518,7 +518,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     reply: {
       to: telegramTo,
-      replyToId: replyHead?.messageId ?? visibleReplyTarget?.id,
+      replyToId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       messageThreadId: threadSpec.id,
     },
     message: {
@@ -595,6 +595,13 @@ export async function buildTelegramInboundContextPayload(params: {
       ReplyToForwardedDate: visibleReplyTarget?.forwardedFrom?.date
         ? visibleReplyTarget.forwardedFrom.date * 1000
         : undefined,
+      ForwardedFrom: visibleForwardOrigin?.from,
+      ForwardedFromType: visibleForwardOrigin?.fromType,
+      ForwardedFromId: visibleForwardOrigin?.fromId,
+      ForwardedDate:
+        typeof visibleForwardOrigin?.date === "number"
+          ? visibleForwardOrigin.date * 1000
+          : undefined,
       ForwardedFromUsername: visibleForwardOrigin?.fromUsername,
       ForwardedFromTitle: visibleForwardOrigin?.fromTitle,
       ForwardedFromSignature: visibleForwardOrigin?.fromSignature,
