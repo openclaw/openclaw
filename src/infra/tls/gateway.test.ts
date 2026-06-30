@@ -302,7 +302,9 @@ describe("loadGatewayTlsRuntime", () => {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const execFileAsync = promisify(execFile);
-    await execFileAsync("openssl", [
+    const opensslPath = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+    if (opensslPath) {
+    await execFileAsync(opensslPath, [
       "req",
       "-x509",
       "-newkey",
@@ -318,6 +320,9 @@ describe("loadGatewayTlsRuntime", () => {
       "-subj",
       "/CN=custom-server",
     ]);
+    } else {
+      return;
+    }
 
     const x509Before = new X509Certificate(
       await (await import("node:fs/promises")).readFile(certPath, "utf8"),
