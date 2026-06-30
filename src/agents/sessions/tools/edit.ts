@@ -78,6 +78,7 @@ type LegacyEditToolInput = Record<string, unknown> & {
 };
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
+const EDIT_MISMATCH_MESSAGE_BATCH = "Could not find edits[";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
 
 /**
@@ -175,13 +176,14 @@ function didEditLikelyApply(params: {
 }
 
 /** Pick the oldText that failed to match, so diagnostics target the right edit. */
-function pickUnmatchedOldText(currentContent: string, edits: Edit[]): string {
-  const normalizedCurrent = normalizeToLF(currentContent);
-  for (const edit of edits) {
-    if (!normalizedCurrent.includes(normalizeToLF(edit.oldText))) {
-      return edit.oldText;
-    }
+function pickUnmatchedOldText(error: Error, edits: Edit[]): string {
+  // Batch errors name the failing edit by index: "Could not find edits[i] in ..."
+  const batchMatch = error.message.match(/Could not find edits\[(\d+)\]/);
+  if (batchMatch) {
+    const idx = parseInt(batchMatch[1], 10);
+    return edits[idx]?.oldText ?? edits[0]?.oldText ?? "";
   }
+  // Single-edit mismatch: only one candidate.
   return edits[0]?.oldText ?? "";
 }
 
@@ -507,11 +509,14 @@ export function createEditToolDefinition(
               details: { diff: "", patch: "" },
             };
           }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+          if (
+            normalizedError.message.includes(EDIT_MISMATCH_MESSAGE) ||
+            normalizedError.message.includes(EDIT_MISMATCH_MESSAGE_BATCH)
+          ) {
             throw appendMismatchHint(
               normalizedError,
               currentContent,
-              pickUnmatchedOldText(currentContent, realEdits),
+              pickUnmatchedOldText(normalizedError, realEdits),
             );
           }
           // Terminal no-op: the edit matched but produced identical content.

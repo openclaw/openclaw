@@ -386,6 +386,51 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual content/);
   });
 
+  it("shows closest-line diagnostic for a batched edit miss", async () => {
+    // First edit matches; second edit uses wrong indentation and fails.
+    // The diagnostic must point at the *second* edit, not the first.
+    const filePath = await createTempFile("    return foo();\n    return bar();\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "    return foo();\n", newText: "    return FOO();\n" },
+            { oldText: "        return bar();\n", newText: "    return BAR();\n" },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/Closest line\(s\) to your oldText/);
+  });
+
+  it("skips closest-line scan when the file is large", async () => {
+    // Files over 500 lines skip the expensive Levenshtein scan to avoid stalls.
+    const manyLines =
+      Array.from({ length: 501 }, (_, i) => `const line${i} = ${i};`).join("\n") + "\n";
+    const filePath = await createTempFile(manyLines);
+    const tool = createEditTool(tmpDir);
+
+    const err = await tool
+      .execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "const lineDoesNotExist = 999;", newText: "replacement" }],
+        },
+        undefined,
+      )
+      .catch((e: unknown) => e);
+
+    expect(err instanceof Error ? err.message : String(err)).toContain("Current file contents:");
+    expect(err instanceof Error ? err.message : String(err)).not.toContain(
+      "Closest matching lines",
+    );
+  });
+
   it("does not hide unrelated errors that mention no changes", async () => {
     const filePath = await createTempFile("old content\n");
     const operations: EditOperations = {

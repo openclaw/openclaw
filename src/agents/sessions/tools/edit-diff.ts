@@ -291,6 +291,8 @@ export interface ClosestLine {
 const CLOSEST_LINE_MAX_COMPARE = 200;
 /** Lines more than 60% different from the anchor are treated as unrelated noise. */
 const CLOSEST_LINE_MAX_DISSIMILARITY = 0.6;
+/** Skip closest-line scanning on files larger than this to avoid stalling on large/generated files. */
+const CLOSEST_LINE_FILE_SEARCH_CAP = 500;
 
 function levenshtein(a: string, b: string): number {
   if (a === b) {
@@ -367,9 +369,12 @@ export function findClosestLines(
   if (anchorLine === undefined) {
     return [];
   }
+  const lines = content.split("\n");
+  if (lines.length > CLOSEST_LINE_FILE_SEARCH_CAP) {
+    return [];
+  }
   const anchorTrimmed = anchorLine.trim();
   const anchorIndent = leadingWhitespace(anchorLine);
-  const lines = content.split("\n");
   const scored: ClosestLine[] = [];
 
   for (let i = 0; i < lines.length; i++) {
