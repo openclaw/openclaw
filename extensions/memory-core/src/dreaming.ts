@@ -220,10 +220,22 @@ function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
   }
   const name = normalizeTrimmedString(job.name);
   const payloadText = normalizeTrimmedString(job.payload?.text);
+  const payloadMessage = normalizeTrimmedString(job.payload?.message);
   if (name === LEGACY_LIGHT_SLEEP_CRON_NAME && payloadText === LEGACY_LIGHT_SLEEP_EVENT_TEXT) {
     return true;
   }
-  return name === LEGACY_REM_SLEEP_CRON_NAME && payloadText === LEGACY_REM_SLEEP_EVENT_TEXT;
+  if (name === LEGACY_REM_SLEEP_CRON_NAME && payloadText === LEGACY_REM_SLEEP_EVENT_TEXT) {
+    return true;
+  }
+  // Legacy jobs migrated to the managed tag may still carry legacy event
+  // tokens in payload.message — detect and migrate them too (#97475).
+  if (name === LEGACY_LIGHT_SLEEP_CRON_NAME && payloadMessage === LEGACY_LIGHT_SLEEP_EVENT_TEXT) {
+    return true;
+  }
+  if (name === LEGACY_REM_SLEEP_CRON_NAME && payloadMessage === LEGACY_REM_SLEEP_EVENT_TEXT) {
+    return true;
+  }
+  return false;
 }
 
 function compareOptionalStrings(a: string | undefined, b: string | undefined): boolean {
@@ -938,10 +950,22 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       // Legacy dreaming tokens (light_sleep / rem_sleep) were never recognized
       // by the before_agent_reply hook, so they reached the LLM.  Without
       // bootstrap context (lightContext: true), the LLM tried to exec the
-      // double-underscore-wrapped token as a shell command.  Intercept them
-      // here so the LLM is never invoked.
+      // double-underscore-wrapped token as a shell command.
+      //
+      // When a legacy token arrives via cron, reconcile the cron job first so
+      // its payload is migrated to the canonical format.  Without reconciliation
+      // the job keeps firing with legacy tokens and becomes a silent no-op
+      // instead of running the intended dreaming cycle (#97475).
       if (hasLegacyDreamingToken && ctx.trigger === "cron") {
-        return { handled: true, reason: "memory-core: legacy dreaming token intercepted" };
+        await reconcileManagedDreamingCron({ reason: "runtime" }).catch((err) => {
+          api.logger.warn(
+            `memory-core: legacy dreaming token reconciliation failed: ${formatErrorMessage(err)}`,
+          );
+        });
+        return {
+          handled: true,
+          reason: "memory-core: legacy dreaming token intercepted and reconciled",
+        };
       }
       const hasManagedDreamingToken = includesSystemEventToken(
         event.cleanedBody,
