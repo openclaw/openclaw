@@ -180,7 +180,7 @@ function pickUnmatchedOldText(error: Error, edits: Edit[]): string {
   // Batch errors name the failing edit by index: "Could not find edits[i] in ..."
   const batchMatch = error.message.match(/Could not find edits\[(\d+)\]/);
   if (batchMatch) {
-    const idx = parseInt(batchMatch[1], 10);
+    const idx = Number.parseInt(batchMatch[1], 10);
     return edits[idx]?.oldText ?? edits[0]?.oldText ?? "";
   }
   // Single-edit mismatch: only one candidate.
