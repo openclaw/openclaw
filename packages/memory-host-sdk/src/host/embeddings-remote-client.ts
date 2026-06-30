@@ -1,6 +1,11 @@
 // Memory Host SDK module implements embeddings remote client behavior.
+import {
+  resolveDispatcherPolicyFromOverrides,
+  sanitizeConfiguredProviderRequest,
+} from "../../../../src/agents/provider-request-config.js";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
+import type { PinnedDispatcherPolicy } from "./openclaw-runtime-network.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
@@ -38,7 +43,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
-}): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
+}): Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
@@ -67,5 +77,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
     Object.assign(headers, resolveOpenClawAttributionHeaders());
   }
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+  const requestOverrides = sanitizeConfiguredProviderRequest(providerConfig?.request);
+  const dispatcherPolicy = resolveDispatcherPolicyFromOverrides(requestOverrides);
+
+  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl), dispatcherPolicy };
 }

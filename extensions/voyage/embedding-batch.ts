@@ -101,6 +101,7 @@ function buildVoyageBatchRequest<T>(params: {
   return {
     url: `${baseUrl}/${params.path}`,
     ssrfPolicy: params.client.ssrfPolicy,
+    dispatcherPolicy: params.client.dispatcherPolicy,
     init: {
       headers: buildBatchHeaders(params.client, { json: true }),
     },
@@ -126,6 +127,7 @@ async function submitVoyageBatch(params: {
     url: `${baseUrl}/batches`,
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
+    dispatcherPolicy: params.client.dispatcherPolicy,
     body: {
       input_file_id: inputFileId,
       endpoint: VOYAGE_BATCH_ENDPOINT,
@@ -306,6 +308,7 @@ export async function runVoyageEmbeddingBatches(
       await deps.withRemoteHttpResponse({
         url: `${baseUrl}/files/${completed.outputFileId}/content`,
         ssrfPolicy: params.client.ssrfPolicy,
+        dispatcherPolicy: params.client.dispatcherPolicy,
         init: {
           headers: buildBatchHeaders(params.client, { json: true }),
         },

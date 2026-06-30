@@ -1,4 +1,5 @@
 // Memory Host SDK module implements embeddings remote fetch behavior.
+import type { PinnedDispatcherPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
@@ -40,6 +41,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   body: unknown;
@@ -49,6 +51,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     url: params.url,
     headers: params.headers,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
     fetchImpl: params.fetchImpl,
     signal: params.signal,
     body: params.body,

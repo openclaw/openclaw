@@ -5,6 +5,7 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
@@ -12,6 +13,7 @@ export type OpenAiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchImpl?: typeof fetch;
   model: string;
   inputType?: string;
@@ -70,6 +72,7 @@ export async function createOpenAiEmbeddingProvider(
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
+      dispatcherPolicy: client.dispatcherPolicy,
       fetchImpl: client.fetchImpl,
       signal,
       body: {

@@ -58,4 +58,21 @@ describe("package withRemoteHttpResponse", () => {
 
     expect(deps.calls[0]).toHaveProperty("signal", controller.signal);
   });
+
+  it("forwards dispatcherPolicy to the guarded fetch", async () => {
+    const deps = makeFetchDeps();
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "https://proxy.example.test:8443",
+    };
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      dispatcherPolicy,
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    expect(deps.calls[0]).toHaveProperty("dispatcherPolicy", dispatcherPolicy);
+  });
 });

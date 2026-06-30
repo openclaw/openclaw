@@ -239,4 +239,23 @@ describe("postJson", () => {
     ).rejects.toThrow("post failed: response body too large");
     expect(canceled).toBe(true);
   });
+
+  it("forwards dispatcherPolicy to withRemoteHttpResponse", async () => {
+    remoteHttpMock.mockImplementationOnce(async () => []);
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "https://proxy.example.test:8443",
+    };
+
+    await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      dispatcherPolicy,
+      parse: () => ({}),
+    });
+
+    expect(remoteHttpMock).toHaveBeenCalledWith(expect.objectContaining({ dispatcherPolicy }));
+  });
 });

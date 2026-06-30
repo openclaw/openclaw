@@ -6,12 +6,14 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type VoyageEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   model: string;
 };
 
@@ -57,6 +59,7 @@ export async function createVoyageEmbeddingProvider(
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
+      dispatcherPolicy: client.dispatcherPolicy,
       signal,
       body,
       errorPrefix: "voyage embeddings failed",
@@ -81,11 +84,12 @@ export async function createVoyageEmbeddingProvider(
 async function resolveVoyageEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<VoyageEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: "voyage",
-    options,
-    defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
-  });
+  const { baseUrl, headers, ssrfPolicy, dispatcherPolicy } =
+    await resolveRemoteEmbeddingBearerClient({
+      provider: "voyage",
+      options,
+      defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+    });
   const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { baseUrl, headers, ssrfPolicy, dispatcherPolicy, model };
 }
