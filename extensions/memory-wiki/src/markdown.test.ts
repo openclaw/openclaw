@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  extractWikiLinks,
   renderWikiMarkdown,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -420,5 +421,67 @@ describe("toWikiPageSummary", () => {
         privacyTier: "local-private",
       },
     ]);
+  });
+});
+
+describe("extractWikiLinks", () => {
+  it("extracts real wikilinks from prose", () => {
+    const links = extractWikiLinks("See [[Alpha]] and [[Beta]] for details.", "entities/test.md");
+    expect(links).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("does not extract [[…]] inside fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Test Page",
+      "",
+      "Real link: [[RealPage]]",
+      "",
+      "```bash",
+      'if [[ "$x" == "y" ]]; then echo "ok"; fi',
+      "```",
+      "",
+      "```scala",
+      "val x: Future[Option[User]] = handle(req)",
+      "```",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    // Only the real wikilink — none from fenced code blocks.
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it("does not extract [[…]] inside inline code spans (#97945)", () => {
+    const links = extractWikiLinks(
+      "See [[RealPage]].  Never `[[ -z \"$str\" ]]` extract this.",
+      "entities/test.md",
+    );
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it("does not extract [[…]] inside tilde-fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Tilde Fence",
+      "",
+      "~~~scala",
+      "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???",
+      "~~~",
+      "",
+      "Actual link: [[ActualPage]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["ActualPage"]);
+  });
+
+  it("does not extract [[…]] inside 6-backtick fenced code blocks (#97945)", () => {
+    const markdown = [
+      "# Long Fence",
+      "",
+      "``````csharp",
+      'var result = await client.GetAsync<Response<Item>>(url, cancellationToken);',
+      "``````",
+      "",
+      "Valid: [[ValidTarget]]",
+    ].join("\n");
+    const links = extractWikiLinks(markdown, "entities/test.md");
+    expect(links).toEqual(["ValidTarget"]);
   });
 });

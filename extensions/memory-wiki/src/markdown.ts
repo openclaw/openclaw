@@ -112,6 +112,14 @@ export type WikiPageSummary = {
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
+// Strip fenced code blocks and inline code before wikilink extraction so
+// literal [[…]] text inside code regions does not produce false-positive
+// "Broken wikilink target" warnings.  The patterns are intentionally
+// conservative: they require backtick or tilde fences and do not strip raw
+// indented-code-block regions, which virtually never contain realistic
+// accidental wikilink syntax.
+const FENCED_CODE_BLOCK_PATTERN = /(?:^|\n) {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n {0,3}\1(?=\n|$)/g;
+const INLINE_CODE_PATTERN = /`[^`\n]+`/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
@@ -386,8 +394,11 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
-function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+  const codeMasked = markdown
+    .replace(FENCED_CODE_BLOCK_PATTERN, "\n")
+    .replace(INLINE_CODE_PATTERN, "``");
+  const searchable = codeMasked.replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
