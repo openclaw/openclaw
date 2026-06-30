@@ -500,6 +500,17 @@ export function stripPlainTextToolCallBlocks(
       index += 1;
       continue;
     }
+    // Only full-line-standalone blocks are leaked calls (the #97750 shape). A
+    // block with same-line visible content after it is an inline example (e.g.
+    // documentation prose); strip it and the trailing prose is orphaned. Mirror
+    // the mid-line guard above and leave it untouched.
+    const afterBlock = skipHorizontalWhitespace(text, blockEnd);
+    const fullLineStandalone =
+      afterBlock >= text.length || consumeLineBreak(text, afterBlock) !== null;
+    if (!fullLineStandalone) {
+      index += 1;
+      continue;
+    }
     result += text.slice(cursor, index);
     cursor = blockEnd;
     const afterBlockLineBreak = consumeLineBreak(text, cursor);

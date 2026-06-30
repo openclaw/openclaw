@@ -81,7 +81,10 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Let me check that.");
   });
 
-  it("keeps invoke snippets without Minimax markers", () => {
+  it("strips a standalone bare invoke snippet without Minimax markers", () => {
+    // #97750: an unfenced full-line-standalone attribute-dialect invoke block is
+    // a leaked tool call, not prose, so the plain-text strip deletes it even
+    // without a Minimax wrapper. Inline/fenced examples are preserved elsewhere.
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -94,9 +97,7 @@ describe("extractAssistantText", () => {
     });
 
     const result = extractAssistantText(msg);
-    expect(result).toBe(
-      `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
-    );
+    expect(result).toBe("Example:");
   });
 
   it("preserves normal text without tool invocations", () => {

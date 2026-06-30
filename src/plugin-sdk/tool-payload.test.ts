@@ -569,4 +569,36 @@ describe("stripPlainTextToolCallBlocks", () => {
 
     expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
+
+  it("preserves a line-leading invoke block followed by same-line prose", () => {
+    const raw =
+      '<invoke name="find"><parameter name="query">x</parameter></invoke> is the attribute form.';
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves a line-leading function_calls wrapper followed by same-line prose", () => {
+    const raw =
+      '<function_calls><invoke name="read"><parameter name="path">a.ts</parameter></invoke></function_calls> shows the wrapper.';
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("strips a real standalone invoke block on its own line", () => {
+    const raw = [
+      "before",
+      '<invoke name="exec">',
+      '<parameter name="command">ls</parameter>',
+      "</invoke>",
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("before\nafter");
+  });
+
+  it("preserves a mid-line invoke example in prose", () => {
+    const raw = 'The syntax <invoke name="x"><parameter name="y">z</parameter></invoke> is used.';
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
 });

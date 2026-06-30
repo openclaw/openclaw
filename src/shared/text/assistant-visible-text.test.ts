@@ -888,6 +888,13 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
+  it("preserves a line-leading invoke block followed by same-line prose on the delivery path", () => {
+    const input =
+      '<invoke name="find"><parameter name="query">x</parameter></invoke> is the attribute form.';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("preserves a fenced standalone invoke block through the full delivery pipeline", () => {
     // A bare/namespaced `invoke` is not an XML tool tag, so the code-aware pass
     // leaves it inside the fence; the plain-text strip must not delete it.
