@@ -109,6 +109,7 @@ export function registerControlUiAndPairingSuite(): void {
       platform: string;
       mode: "node";
       deviceFamily: string;
+      modelIdentifier?: string;
     };
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
@@ -1314,6 +1315,18 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
+      name: "Even Hub glasses",
+      identityPrefix: "openclaw-bootstrap-even-hub-glasses-node-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "glasses",
+        modelIdentifier: "Even G2",
+      },
+    },
+    {
       name: "Android",
       identityPrefix: "openclaw-bootstrap-android-node-",
       client: {
@@ -1336,7 +1349,7 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
   ])(
-    "qr setup code auto-approves $name clients when mobile metadata matches",
+    "qr setup code auto-approves $name clients when native metadata matches",
     async ({ client, identityPrefix }) => {
       const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
       const { identity, initial } = await connectSetupCodeBootstrapNode({
@@ -1389,8 +1402,8 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
-      name: "mobile client id with mismatched platform metadata",
-      identityPrefix: "openclaw-bootstrap-mobile-spoof-",
+      name: "native client id with mismatched platform metadata",
+      identityPrefix: "openclaw-bootstrap-native-spoof-",
       client: {
         id: "openclaw-android",
         version: "2026.6.2",
@@ -1400,7 +1413,7 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
     {
-      name: "valid non-mobile client id with mobile metadata",
+      name: "valid non-native client id with native metadata",
       identityPrefix: "openclaw-bootstrap-node-host-spoof-",
       client: {
         id: "node-host",
@@ -1408,6 +1421,18 @@ export function registerControlUiAndPairingSuite(): void {
         platform: "Android 16",
         mode: "node" as const,
         deviceFamily: "Android",
+      },
+    },
+    {
+      name: "Even G2 node id with mismatched runtime metadata",
+      identityPrefix: "openclaw-bootstrap-even-hub-spoof-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "watch",
+        modelIdentifier: "Even G2",
       },
     },
   ])(
