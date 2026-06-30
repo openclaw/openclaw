@@ -74,7 +74,7 @@ pnpm openclaw qa run \
 ```
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
-Crabline fake provider servers. Use `release` for Stable/LTS proof against live
+Crabline local provider servers. Use `release` for Stable/LTS proof against live
 channels. Use `all` only for explicit full-taxonomy evidence runs; it selects
 every active maturity category and can be dispatched through the `QA Profile
 Evidence` workflow with `qa_profile=all`. When a command also needs an OpenClaw
@@ -890,7 +890,7 @@ At the architecture level, the split is:
 
 Adding a channel to the YAML QA system requires the channel implementation plus
 a scenario pack that exercises the channel contract. For smoke CI coverage, add
-the matching Crabline fake provider server and expose it through the `crabline`
+the matching Crabline local provider server and expose it through the `crabline`
 driver.
 
 Do not add a new top-level QA command root when the shared `qa-lab` host can own the flow.
