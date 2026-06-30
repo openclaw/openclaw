@@ -112,6 +112,9 @@ export type WikiPageSummary = {
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
+const FENCED_CODE_BLOCK_START_PATTERN = /^(\s*)(`{3,}|~{3,})(?:\s+\S.*|\S.*)$/;
+const FENCED_CODE_BLOCK_END_PATTERN = /^(\s*)(`{3,}|~{3,})\s*$/;
+const INLINE_CODE_PATTERN = /(`+)([^`\r\n]|`(?!\1))*\1/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
@@ -386,8 +389,55 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
+function stripFencedCodeBlocks(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const result: string[] = [];
+  let fenceChar: string | null = null;
+  let fenceLength = 0;
+  let inCodeBlock = false;
+  let fenceStartIndex = -1;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (inCodeBlock) {
+      const endMatch = FENCED_CODE_BLOCK_END_PATTERN.exec(line);
+      if (endMatch && endMatch[2]![0] === fenceChar && endMatch[2]!.length >= fenceLength) {
+        inCodeBlock = false;
+        fenceChar = null;
+        fenceLength = 0;
+        fenceStartIndex = -1;
+      }
+      continue;
+    }
+
+    const startMatch = FENCED_CODE_BLOCK_START_PATTERN.exec(line);
+    if (startMatch) {
+      inCodeBlock = true;
+      fenceChar = startMatch[2]![0];
+      fenceLength = startMatch[2]!.length;
+      fenceStartIndex = index;
+      continue;
+    }
+
+    result.push(line);
+  }
+
+  // If we reach EOF while still inside a fenced block, the opening fence was
+  // malformed (no closing fence). Conservatively keep everything from the
+  // opening fence onward as prose so we don't silently drop real wikilinks.
+  if (inCodeBlock && fenceStartIndex >= 0) {
+    return [...result, ...lines.slice(fenceStartIndex)].join("\n");
+  }
+
+  return result.join("\n");
+}
+
+function stripMarkdownCodeSpans(markdown: string): string {
+  return stripFencedCodeBlocks(markdown).replace(INLINE_CODE_PATTERN, "");
+}
+
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = stripMarkdownCodeSpans(markdown).replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

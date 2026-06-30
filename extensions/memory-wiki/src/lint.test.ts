@@ -430,4 +430,130 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("ignores wikilink-like text inside fenced code blocks and inline code", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-code-wikilinks-",
+      config: { vault: { renderMode: "obsidian" } },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "real-target.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.real",
+          title: "Real Target",
+        },
+        body: "# Real Target\n",
+      }),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "with-code.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.with-code",
+          title: "With Code",
+        },
+        body: [
+          "# With Code",
+          "",
+          "A real link resolves: [[real-target]]",
+          "",
+          "```scala",
+          "val userId: String, request: Request[A]",
+          'if [[ "$name" == "Alice" ]] && [[ $count -gt 5 ]]; then',
+          '  echo "[[reply_to_current]]"',
+          "fi",
+          "```",
+          "",
+          "Inline `[[not-a-link]]` should be ignored.",
+          "",
+          "~~~bash",
+          '[[ -z "$str" ]]',
+          "~~~",
+          "",
+          "But [[missing-page]] is still broken.",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const brokenLinkMessages = result.issues
+      .filter((issue) => issue.path === "entities/with-code.md" && issue.code === "broken-wikilink")
+      .map((issue) => issue.message);
+    expect(brokenLinkMessages).toEqual(["Broken wikilink target `missing-page`."]);
+  });
+
+  it("handles edge cases in code-span stripping without dropping real links", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-code-edge-cases-",
+      config: { vault: { renderMode: "obsidian" } },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "real-target.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.real", title: "Real Target" },
+        body: "# Real Target\n",
+      }),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "edge-cases.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "entity", id: "entity.edge", title: "Edge Cases" },
+        body: [
+          "# Edge Cases",
+          "",
+          "[[real-target]] before code",
+          "",
+          "```js",
+          "// [[inside-first-block]]",
+          "```",
+          "",
+          "[[real-target]] between blocks",
+          "",
+          "~~~bash",
+          "[[inside-second-block]]",
+          "~~~",
+          "",
+          "[[real-target]] after blocks",
+          "",
+          "Inline with backticks: `` `[[multi-backtick]]` `` and `[[single-backtick]]`.",
+          "",
+          "Unclosed fenced block below (malformed markdown):",
+          "```scala",
+          "val x = [[unclosed-code]]",
+          "",
+          "[[real-target]] should still resolve after unclosed fence.",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const brokenLinkMessages = result.issues
+      .filter(
+        (issue) => issue.path === "entities/edge-cases.md" && issue.code === "broken-wikilink",
+      )
+      .map((issue) => issue.message);
+    // The malformed unclosed fence is handled conservatively: its content is kept
+    // as prose so real links after it are not swallowed, but the literal
+    // [[unclosed-code]] inside it is still linted.
+    expect(brokenLinkMessages).toEqual(["Broken wikilink target `unclosed-code`."]);
+  });
 });
