@@ -2689,8 +2689,10 @@ describe("runCli exit behavior", () => {
       },
     });
 
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
+    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
     });
 
     expect(probeGatewayReachableMock).not.toHaveBeenCalled();
