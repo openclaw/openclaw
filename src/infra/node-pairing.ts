@@ -222,7 +222,8 @@ function mergeNodePairingReplacementInput(params: {
 
 function resolveNodeApprovalRequiredScopes(pending: NodePairingPendingRecord): NodeApprovalScope[] {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
-  return resolveNodePairApprovalScopes(commands);
+  // Pass permissions too: a commandless request carrying `attach` still requires operator.admin.
+  return resolveNodePairApprovalScopes(commands, pending.permissions);
 }
 
 function toPublicPendingNodePairingRequest(

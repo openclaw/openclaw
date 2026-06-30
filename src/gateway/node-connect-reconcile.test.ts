@@ -271,4 +271,40 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectivePermissions).toEqual({ camera: false });
     expect(result.pendingPairing?.request.requestId).toBe("req-downgrade");
   });
+
+  it("makes attach effective only when the live node connection declares it", async () => {
+    const approvedDeclared = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        commands: [],
+        permissions: { attach: true },
+      }),
+      pairedNode: makePairedNode({
+        commands: [],
+        permissions: { attach: true },
+      }),
+      requestPairing: vi.fn(async () => null),
+    });
+    expect(approvedDeclared.effectivePermissions).toEqual({ attach: true });
+    expect(approvedDeclared.pendingPairing).toBeUndefined();
+
+    const requestPairing = makePendingPairingRequest("req-attach-omitted");
+    const omitted = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        commands: [],
+        permissions: undefined,
+      }),
+      pairedNode: makePairedNode({
+        commands: [],
+        permissions: { attach: true },
+      }),
+      requestPairing,
+    });
+    expect(omitted.effectivePermissions).toBeUndefined();
+    expectNodePairingRequest(requestPairing, {
+      commands: [],
+      permissions: {},
+    });
+  });
 });

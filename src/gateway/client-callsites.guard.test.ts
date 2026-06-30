@@ -11,6 +11,8 @@ const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/google-meet/src/voice-call-gateway.ts",
   "src/acp/server.ts",
+  // `openclaw attach --via node` connects as the paired node to run the conduit (PR4 #96997).
+  "src/cli/node-cli/attach.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",

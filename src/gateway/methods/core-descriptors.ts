@@ -178,6 +178,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
   { name: "node.pluginSurface.refresh", scope: "node" },
+  { name: "node.attachRelay", scope: "node" },
+  { name: "node.attachGrant", scope: "node", controlPlaneWrite: true },
+  { name: "node.attachRevoke", scope: "node" },
+  { name: "node.attachHydrate", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
   { name: "node.invoke", scope: "operator.write" },
@@ -218,6 +222,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "poll", scope: "operator.write", advertise: false },
   { name: "sessions.steer", scope: "operator.write", advertise: false },
   { name: "push.test", scope: "operator.write", advertise: false },
+  // Appended at the end of the advertised methods to preserve the legacy advertised order
+  // (server-methods-list.test.ts locks the prefix/middle). grant mints process-global state so it
+  // is control-plane rate-limited; revoke is intentionally not (cheap, idempotent, frees memory).
+  { name: "attach.grant", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "attach.revoke", scope: "operator.admin" },
   { name: "push.web.vapidPublicKey", scope: "operator.write", advertise: false },
   { name: "push.web.subscribe", scope: "operator.write", advertise: false },
   { name: "push.web.unsubscribe", scope: "operator.write", advertise: false },

@@ -25,6 +25,8 @@ import {
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { resolveMainSessionKey } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPairedDevice,
@@ -57,6 +59,10 @@ import {
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
+import { dispatchAttachMcpMessage } from "../attach-relay.js";
+import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { mintAttachGrant, resolveAttachGrant, revokeAttachGrant } from "../mcp-grant-store.js";
+import type { JsonRpcRequest } from "../mcp-http.protocol.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -70,6 +76,8 @@ import type { NodeSession } from "../node-registry.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
+import { readRecentSessionMessagesAsync } from "../session-utils.fs.js";
+import { resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
@@ -881,7 +889,150 @@ export async function waitForNodeReconnect(params: {
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
+async function callerHasLiveAttachEntitlement(client: unknown): Promise<boolean> {
+  const connect =
+    client && typeof client === "object"
+      ? (
+          client as {
+            connect?: {
+              device?: { id?: unknown };
+              client?: { id?: unknown };
+              permissions?: unknown;
+            };
+          }
+        ).connect
+      : undefined;
+  const nodeId = normalizeOptionalString(connect?.device?.id ?? connect?.client?.id) ?? "";
+  const livePermissions =
+    connect?.permissions &&
+    typeof connect.permissions === "object" &&
+    !Array.isArray(connect.permissions)
+      ? (connect.permissions as Record<string, unknown>)
+      : undefined;
+  if (!nodeId || livePermissions?.attach !== true) {
+    return false;
+  }
+  const { paired } = await listNodePairing();
+  const approved = paired.find((node) => node.nodeId === nodeId);
+  return approved?.permissions?.attach === true;
+}
+
 export const nodeHandlers: GatewayRequestHandlers = {
+  // Conduit relay: a paired node forwards a harness's MCP JSON-RPC frame over its EXISTING gateway
+  // link; the gateway dispatches it to the SAME scoped loopback tools as the gateway-host case via
+  // the grant (no new gateway endpoint). Scope is bound to the grant's sessionKey, never the node.
+  "node.attachRelay": async ({ params, respond, client, context }) => {
+    const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
+    const message = params.mcpMessage;
+    const isJsonRpc =
+      typeof message === "object" &&
+      message !== null &&
+      typeof (message as { method?: unknown }).method === "string";
+    if (!grantToken || !isJsonRpc) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "grantToken and a JSON-RPC mcpMessage are required"),
+      );
+      return;
+    }
+    if (!(await callerHasLiveAttachEntitlement(client))) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node is not entitled to attach on this connection"),
+      );
+      return;
+    }
+    const mcpResponse = await dispatchAttachMcpMessage({
+      grantToken,
+      message: message as JsonRpcRequest,
+      cfg: context.getRuntimeConfig(),
+    });
+    respond(true, { mcpResponse });
+  },
+  // Self-service attach grant for a paired node — gated on an EXPLICIT `attach` entitlement the owner
+  // approved at pairing. Pairing a node for camera/canvas/system commands is NOT consent for it to
+  // reach the owner's MAIN session tools + full conversation, so role:node alone is insufficient; the
+  // node's owner-approved permissions and this live connection's effective permissions must carry
+  // `attach` (changing a node's approval surface re-triggers owner approval, and reconnects that
+  // omit/downgrade `attach` lose the effective permission). The grant binds to the main session,
+  // scoped/TTL'd/revocable (PR1), bound to the session not the node. Caller-chosen sessions + a
+  // cross-agent entitlement map are a follow-up. The node uses the returned token with node.attachRelay.
+  "node.attachGrant": async ({ params, respond, client, context }) => {
+    if (!(await callerHasLiveAttachEntitlement(client))) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node is not entitled to attach on this connection; reconnect declaring and re-pair granting the 'attach' permission",
+        ),
+      );
+      return;
+    }
+    const ttlRaw = params.ttlMs;
+    const ttlMs =
+      typeof ttlRaw === "number" && Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : undefined;
+    const grant = mintAttachGrant({
+      sessionKey: resolveMainSessionKey(context.getRuntimeConfig()),
+      ttlMs,
+    });
+    respond(true, {
+      sessionKey: grant.sessionKey,
+      token: grant.token,
+      expiresAtMs: grant.expiresAtMs,
+    });
+  },
+  // Revoke a node-minted grant on attach exit — the node-path symmetry to the gateway-host's
+  // attach.revoke (a node can't call that operator.admin method). The grant token IS the capability
+  // (only its holder has it), so revoke-by-token is safe; this bounds the grant to the session rather
+  // than its TTL. (Revoke-on-unpair/permission-downgrade remains a tracked follow-up.)
+  "node.attachRevoke": async ({ params, respond }) => {
+    const grantToken = normalizeOptionalString(params.grantToken) ?? "";
+    if (!grantToken) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "grantToken required"));
+      return;
+    }
+    respond(true, { revoked: revokeAttachGrant(grantToken) });
+  },
+  // Hydration source (PR7): return the gateway-OWNED conversation for the grant's session so the node
+  // can materialize a local Claude transcript and `claude --resume` it — pick-up-anywhere. Same
+  // assembly chat.history uses: the stored agent turns + the cli-session import, scoped to the grant.
+  "node.attachHydrate": async ({ params, respond, client, context }) => {
+    const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
+    const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
+    if (!grant) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired attach grant"),
+      );
+      return;
+    }
+    if (!(await callerHasLiveAttachEntitlement(client))) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node is not entitled to attach on this connection"),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const entry = loadSessionEntry({ sessionKey: grant.sessionKey });
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: grant.sessionKey });
+    const localMessages = entry?.sessionId
+      ? await readRecentSessionMessagesAsync(
+          entry.sessionId,
+          target.storePath,
+          undefined,
+          { maxMessages: 500 },
+          target.agentId,
+        )
+      : [];
+    const messages = augmentChatHistoryWithCliSessionImports({ entry, localMessages });
+    respond(true, { messages });
+  },
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {
       respondInvalidParams({

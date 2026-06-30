@@ -74,6 +74,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadAttachHandlers = lazyHandlerModule(
+  () => import("./server-methods/attach.js"),
+  (module) => module.attachHandlers,
+);
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
@@ -270,6 +274,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["connect"],
     loadHandlers: loadConnectHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["attach.grant", "attach.revoke"],
+    loadHandlers: loadAttachHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["logs.tail"],
@@ -528,6 +536,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.attachRelay",
+      "node.attachGrant",
+      "node.attachRevoke",
+      "node.attachHydrate",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
