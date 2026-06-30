@@ -254,9 +254,9 @@ describe("plugin text transforms", () => {
 
     // stream.result() tool-call blocks must also be transformed (#97761).
     const result = await stream.result();
-    const toolCallBlock = (result.content as Array<Record<string, unknown>> | undefined)?.find(
-      (b) => b?.type === "toolCall",
-    );
+    const toolCallBlock = (
+      result.content as unknown as Array<Record<string, unknown>> | undefined
+    )?.find((b) => b?.type === "toolCall");
     expect(toolCallBlock?.arguments).toEqual({ text: "John" });
   });
 });
