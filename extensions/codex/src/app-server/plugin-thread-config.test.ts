@@ -776,8 +776,8 @@ describe("Codex plugin thread config", () => {
     expect(appListParams).toEqual([
       {
         cursor: undefined,
-        limit: 100,
-        forceRefetch: true,
+        limit: 1_000,
+        forceRefetch: false,
       },
     ]);
   });
@@ -887,7 +887,7 @@ describe("Codex plugin thread config", () => {
     expect(appListParams).toEqual([
       {
         cursor: undefined,
-        limit: 100,
+        limit: 1_000,
         forceRefetch: true,
       },
     ]);
@@ -1076,7 +1076,7 @@ describe("Codex plugin thread config", () => {
     expect(appListParams).toEqual([
       {
         cursor: undefined,
-        limit: 100,
+        limit: 1_000,
         forceRefetch: true,
       },
     ]);
@@ -1182,12 +1182,12 @@ describe("Codex plugin thread config", () => {
     expect(appListParams).toEqual([
       {
         cursor: undefined,
-        limit: 100,
+        limit: 1_000,
         forceRefetch: true,
       },
       {
         cursor: undefined,
-        limit: 100,
+        limit: 1_000,
         forceRefetch: true,
       },
     ]);

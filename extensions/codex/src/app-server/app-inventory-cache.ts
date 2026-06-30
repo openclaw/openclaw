@@ -13,6 +13,7 @@ import type { JsonValue, v2 } from "./protocol.js";
 
 /** Default app inventory cache freshness window. */
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const CODEX_TARGETED_APP_INVENTORY_LIMIT = 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
 /** App-server request function used to list installed/available apps. */
@@ -293,23 +294,31 @@ async function listAllApps(
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
   const targetIds = new Set(targetAppIds.filter(Boolean));
-  const foundTargetIds = new Set<string>();
+  const remainingTargetIds = new Set(targetIds);
+  const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   do {
     const response = await request("app/list", {
       cursor,
-      limit: 100,
+      // Thread startup only needs to recover the configured plugin-owned apps.
+      // Large pages minimize startup latency while pagination still proves an
+      // absent target instead of publishing a known-incomplete lookup.
+      limit: targetIds.size > 0 ? CODEX_TARGETED_APP_INVENTORY_LIMIT : 100,
       forceRefetch,
     });
     apps.push(...response.data);
     for (const app of response.data) {
-      if (targetIds.has(app.id)) {
-        foundTargetIds.add(app.id);
-      }
+      remainingTargetIds.delete(app.id);
+    }
+    if (targetIds.size > 0 && remainingTargetIds.size === 0) {
+      break;
     }
     cursor = response.nextCursor;
-    if (targetIds.size > 0 && foundTargetIds.size === targetIds.size) {
-      break;
+    if (cursor && seenCursors.has(cursor)) {
+      throw new Error(`app/list returned repeated cursor ${cursor}`);
+    }
+    if (cursor) {
+      seenCursors.add(cursor);
     }
   } while (cursor);
   return apps;
