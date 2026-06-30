@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
-import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
+import {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  shouldComputeCommandAuthorized,
+} from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
@@ -1144,6 +1148,8 @@ describe("control command parsing", () => {
   it("detects inline command tokens", () => {
     expect(hasInlineCommandTokens("hello /status")).toBe(true);
     expect(hasInlineCommandTokens("hey /think high")).toBe(true);
+    expect(hasInlineCommandTokens("hey / pair qr")).toBe(true);
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(true);
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
