@@ -13,7 +13,7 @@ import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-pl
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
-import { listWebSearchProviders } from "../../../web-search/runtime.js";
+import { listWebSearchProviders } from "../../web-search/runtime.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
