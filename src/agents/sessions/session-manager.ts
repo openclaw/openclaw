@@ -46,6 +46,7 @@ import {
   uuidv7,
 } from "../runtime/index.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
+import { logWarn } from "../../logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -937,6 +938,7 @@ function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void
 function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
+  let skipped = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -946,8 +948,19 @@ function parseJsonlEntries(content: string): FileEntry[] {
       const entry = JSON.parse(line) as FileEntry;
       entries.push(normalizeLoadedFileEntry(entry));
     } catch {
-      // Skip malformed lines
+      skipped++;
     }
+  }
+
+  // PR #97356 hardened the write side to never emit non-JSON lines, but
+  // transcripts written by older code or repaired externally may still
+  // contain malformed entries. Warn once so the operator knows data was
+  // skipped instead of silently dropping entries.
+  if (skipped > 0) {
+    logWarn(
+      `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
+        `${entries.length} valid entries were loaded`,
+    );
   }
 
   return entries;
