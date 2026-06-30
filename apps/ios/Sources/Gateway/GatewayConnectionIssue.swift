@@ -4,6 +4,7 @@ import OpenClawKit
 enum GatewayConnectionIssue: Equatable {
     case none
     case tokenMissing
+    case passwordMissing
     case unauthorized
     case pairingRequired(requestId: String?)
     case network
@@ -18,7 +19,7 @@ enum GatewayConnectionIssue: Equatable {
 
     var needsAuthToken: Bool {
         switch self {
-        case .tokenMissing, .unauthorized:
+        case .tokenMissing, .passwordMissing, .unauthorized:
             true
         default:
             false
@@ -35,8 +36,17 @@ enum GatewayConnectionIssue: Equatable {
         if problem.needsPairingApproval {
             return .pairingRequired(requestId: problem.requestId)
         }
+        if problem.kind == .gatewayAuthTokenMissing {
+            return .tokenMissing
+        }
+        if problem.kind == .gatewayAuthPasswordMissing {
+            return .passwordMissing
+        }
+        if problem.message.lowercased().contains("gateway password missing") {
+            return .passwordMissing
+        }
         if problem.needsCredentialUpdate {
-            return problem.kind == .gatewayAuthTokenMissing ? .tokenMissing : .unauthorized
+            return .unauthorized
         }
         switch problem.kind {
         case .deviceIdentityRequired,
@@ -71,6 +81,9 @@ enum GatewayConnectionIssue: Equatable {
         }
         if lower.contains("gateway token missing") {
             return .tokenMissing
+        }
+        if lower.contains("gateway password missing") {
+            return .passwordMissing
         }
         if lower.contains("unauthorized") {
             return .unauthorized

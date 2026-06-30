@@ -177,7 +177,12 @@ enum GatewaySettingsStore {
     }
 
     enum LastGatewayConnection: Equatable {
-        case manual(host: String, port: Int, useTLS: Bool, stableID: String)
+        case manual(
+            host: String,
+            port: Int,
+            useTLS: Bool,
+            stableID: String,
+            allowTailscalePlaintext: Bool)
         case discovered(stableID: String, useTLS: Bool)
     }
 
@@ -193,6 +198,7 @@ enum GatewaySettingsStore {
         var useTLS: Bool
         var host: String?
         var port: Int?
+        var allowTailscalePlaintext: Bool?
     }
 
     static func loadTalkProviderApiKey(provider: String) -> String? {
@@ -206,9 +212,20 @@ enum GatewaySettingsStore {
         return nil
     }
 
-    static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {
+    static func saveLastGatewayConnectionManual(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        stableID: String,
+        allowTailscalePlaintext: Bool = false)
+    {
         let payload = LastGatewayConnectionData(
-            kind: .manual, stableID: stableID, useTLS: useTLS, host: host, port: port)
+            kind: .manual,
+            stableID: stableID,
+            useTLS: useTLS,
+            host: host,
+            port: port,
+            allowTailscalePlaintext: allowTailscalePlaintext)
         self.saveLastGatewayConnectionData(payload)
     }
 
@@ -238,7 +255,12 @@ enum GatewaySettingsStore {
         let host = (stored.host ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let port = stored.port ?? 0
         guard !host.isEmpty, port > 0, port <= 65535 else { return nil }
-        return .manual(host: host, port: port, useTLS: stored.useTLS, stableID: stableID)
+        return .manual(
+            host: host,
+            port: port,
+            useTLS: stored.useTLS,
+            stableID: stableID,
+            allowTailscalePlaintext: stored.allowTailscalePlaintext == true)
     }
 
     static func clearLastGatewayConnection(defaults: UserDefaults = .standard) {
@@ -290,7 +312,8 @@ enum GatewaySettingsStore {
             stableID: stableID,
             useTLS: useTLS,
             host: kind == .manual ? host : nil,
-            port: kind == .manual ? port : nil)
+            port: kind == .manual ? port : nil,
+            allowTailscalePlaintext: false)
         guard self.saveLastGatewayConnectionData(payload) else { return }
         self.removeLastGatewayDefaults(defaults)
     }
@@ -460,9 +483,10 @@ enum GatewayDiagnostics {
 
         func failed(_ stage: String, error: Error) {
             let nsError = error as NSError
+            let errorType = String(reflecting: type(of: error))
             self
                 .stage(
-                    "\(stage) failed errorType=\(String(reflecting: type(of: error))) domain=\(nsError.domain) code=\(nsError.code)")
+                    "\(stage) failed errorType=\(errorType) domain=\(nsError.domain) code=\(nsError.code)")
         }
     }
 

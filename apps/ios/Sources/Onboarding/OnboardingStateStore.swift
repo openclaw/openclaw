@@ -10,7 +10,7 @@ enum OnboardingConnectionMode: String, CaseIterable {
         case .homeNetwork:
             "Home Network"
         case .remoteDomain:
-            "Remote Domain"
+            "Tailscale / Remote"
         case .developerLocal:
             "Same Machine (Dev)"
         }

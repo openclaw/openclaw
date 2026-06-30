@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 import UIKit
-@testable import OpenClawKit
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @Suite(.serialized) struct GatewayConnectionControllerTests {
     @Test @MainActor func resolvedDisplayNameSetsDefaultWhenMissing() {
@@ -326,14 +326,14 @@ import UIKit
         #expect(lhs.hasSameConnectionInputs(as: rhs))
     }
 
-    @Test @MainActor func applyingDifferentGatewayConfigReconnectsActiveTasks() {
+    @Test @MainActor func applyingDifferentGatewayConfigReconnectsActiveTasks() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        let first = Self.makeGatewayConnectConfig(
-            url: URL(string: "wss://first.gateway.example.com")!,
+        let first = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://first.gateway.example.com")),
             stableID: "manual|first.gateway.example.com|443")
-        let second = Self.makeGatewayConnectConfig(
-            url: URL(string: "wss://second.gateway.example.com")!,
+        let second = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://second.gateway.example.com")),
             stableID: "manual|second.gateway.example.com|443")
 
         appModel.applyGatewayConnectConfig(first)
@@ -394,7 +394,8 @@ import UIKit
             host: "gateway.example.com",
             port: 443,
             useTLS: true,
-            stableID: "manual|gateway.example.com|443"))
+            stableID: "manual|gateway.example.com|443",
+            allowTailscalePlaintext: false))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {

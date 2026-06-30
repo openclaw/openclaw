@@ -146,7 +146,31 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 stableID: "manual|example.com|443")
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.com", port: 443, useTLS: true, stableID: "manual|example.com|443"))
+            #expect(loaded == .manual(
+                host: "example.com",
+                port: 443,
+                useTLS: true,
+                stableID: "manual|example.com|443",
+                allowTailscalePlaintext: false))
+        }
+    }
+
+    @Test func lastGateway_manualTailscalePlaintextRoundTrip() {
+        withLastGatewaySnapshot {
+            GatewaySettingsStore.saveLastGatewayConnectionManual(
+                host: "100.104.129.13",
+                port: 18789,
+                useTLS: false,
+                stableID: "manual|100.104.129.13|18789",
+                allowTailscalePlaintext: true)
+
+            let loaded = GatewaySettingsStore.loadLastGatewayConnection()
+            #expect(loaded == .manual(
+                host: "100.104.129.13",
+                port: 18789,
+                useTLS: false,
+                stableID: "manual|100.104.129.13|18789",
+                allowTailscalePlaintext: true))
         }
     }
 
@@ -177,7 +201,12 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             ])
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+            #expect(loaded == .manual(
+                host: "example.org",
+                port: 18789,
+                useTLS: false,
+                stableID: "manual|example.org|18789",
+                allowTailscalePlaintext: false))
 
             // Legacy keys should be cleaned up after migration.
             let defaults = UserDefaults.standard
