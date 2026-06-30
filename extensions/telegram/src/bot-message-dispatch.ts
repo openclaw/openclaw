@@ -1376,6 +1376,21 @@ export const dispatchTelegramMessage = async ({
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
+        // In progress mode the answer lane is owned by the live progress draft.
+        // updateDraftFromPartial() below already no-ops answer partials here (its
+        // streamMode==="progress" guard returns before rendering), so the only
+        // remaining effect of preparing the answer lane would be
+        // rotateAnswerLaneAfterToolProgress() -> suppressProgressDraftState(),
+        // which sets progressSuppressed and silently drops EVERY later tool
+        // start/result for the rest of the turn (the trace's repeated
+        // note.DROP ... suppressed=true). claude-cli streams inter-tool
+        // commentary ("now I'll run the next command") as partial answer text;
+        // that transient text must not freeze the tool preview. Skip the answer
+        // lane while streaming progress — tool/reasoning lines keep driving it,
+        // and final-answer delivery still clears the draft via its own path.
+        if (streamMode === "progress") {
+          continue;
+        }
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {
@@ -2487,6 +2502,20 @@ export const dispatchTelegramMessage = async ({
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
+                  onAgentRunStart: () => {
+                    // Arm the progress gate as soon as the agent run begins so the
+                    // delayed-start debounce elapses during claude-cli's initial
+                    // silent thinking window (it can think for a minute before its
+                    // first emit). The compositor still defers the first DELIVERED
+                    // frame until a real tool/reasoning line exists — it never sends
+                    // a bare label — so this only makes the first such line appear
+                    // immediately instead of waiting out the debounce.
+                    if (streamMode === "progress") {
+                      void enqueueDraftLaneEvent(async () => {
+                        await progressDraft.noteActivity();
+                      });
+                    }
+                  },
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(

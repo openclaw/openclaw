@@ -98,6 +98,15 @@ export function createChannelProgressDraftCompositor(params: {
     if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
+    // Tool-progress previews use the label only as a header above tool/reasoning
+    // lines, so a draft with no content lines is not a deliverable frame. The gate
+    // arms early (run-start activity) and its timer can fire during claude-cli's
+    // initial silent window before any line exists — without this guard the first
+    // delivered frame would be a bare label instead of the first tool line. Label-
+    // only previews (toolProgress disabled) keep delivering the standalone label.
+    if (previewToolProgressEnabled && lines.length === 0) {
+      return false;
+    }
     const text = formatDraftText();
     if (!text || text === lastRenderedText) {
       return false;

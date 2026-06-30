@@ -223,6 +223,13 @@ export function createTelegramDraftStream(params: {
   let messageSendAttempted = false;
   let suspendedUntilMs = 0;
   let consecutivePreviewFailures = 0;
+  // Flood-suspend holds (Date.now() < suspendedUntilMs) return false, and the
+  // throttle loop only re-attempts a held edit on the next update(). claude-cli
+  // emits nothing while a tool runs, so a tool-line edit held during that silent
+  // window would otherwise strand the preview on the previous frame for the rest
+  // of the turn. A single-slot timer re-flushes the held text once the suspend
+  // window elapses, with no fresh update() needed.
+  let heldRetryTimer: ReturnType<typeof setTimeout> | undefined;
   let streamMessageId: number | undefined;
   let streamVisibleSinceMs: number | undefined;
   let lastSentPreviewKey = "";
@@ -338,6 +345,7 @@ export function createTelegramDraftStream(params: {
     // so the first tick after retry_after delivers it. Final flushes still try
     // so the last text has a chance to land.
     if (!streamState.final && Date.now() < suspendedUntilMs) {
+      scheduleHeldRetry(suspendedUntilMs - Date.now());
       return false;
     }
     const trimmed = text.trimEnd();
@@ -425,6 +433,7 @@ export function createTelegramDraftStream(params: {
         lastDeliveredText = trimmed;
         consecutivePreviewFailures = 0;
         suspendedUntilMs = 0;
+        clearHeldRetry();
       }
       return sent;
     } catch (err) {
@@ -433,30 +442,43 @@ export function createTelegramDraftStream(params: {
         // Telegram already shows exactly this text; count the edit as delivered.
         consecutivePreviewFailures = 0;
         lastDeliveredText = trimmed;
+        clearHeldRetry();
         return true;
       }
       // Roll back the dedupe snapshot so the retried tick is not skipped as a no-op.
       lastSentPreviewKey = previousSentPreviewKey;
-      // Flood control is always retryable: Telegram rejected the call outright.
-      // Beyond that, edits retry on any transient network error (re-editing the
-      // same content is idempotent) while an unsent first preview retries only
-      // on provably pre-connect failures — anything ambiguous could duplicate
-      // the preview message.
-      const retryable =
-        isTelegramRateLimitError(err) ||
-        (isEdit ? isRecoverableTelegramNetworkError(err) : isSafeToRetrySendError(err));
+      // Flood control is backpressure, not a preview failure: Telegram is asking
+      // us to slow down, not signalling a broken stream. Suspend for retry_after
+      // and re-arm a self-flush so the held text still lands during a silent tool
+      // window, but NEVER count it toward the permanent-stop budget — a long turn
+      // of ~1s edits would otherwise trip the breaker and kill the preview for the
+      // rest of the run.
+      if (isTelegramRateLimitError(err)) {
+        const retryAfterMs = readTelegramRetryAfterMs(err) ?? throttleMs;
+        suspendedUntilMs = Date.now() + Math.min(retryAfterMs, MAX_PREVIEW_FLOOD_SUSPEND_MS);
+        scheduleHeldRetry(suspendedUntilMs - Date.now());
+        params.warn?.(
+          `telegram stream preview ${isEdit ? "edit" : "send"} flood-suspended (retrying): ${formatErrorMessage(err)}`,
+        );
+        return false;
+      }
+      // Non-flood transient errors retry on a bounded budget; a persistent outage
+      // stops the preview so a broken stream does not warn-spam for the whole run.
+      // Edits retry on any transient network error (re-editing the same content is
+      // idempotent) while an unsent first preview retries only on provably
+      // pre-connect failures — anything ambiguous could duplicate the preview.
+      const retryable = isEdit
+        ? isRecoverableTelegramNetworkError(err)
+        : isSafeToRetrySendError(err);
       consecutivePreviewFailures += 1;
       if (retryable && consecutivePreviewFailures <= MAX_CONSECUTIVE_PREVIEW_FAILURES) {
-        const retryAfterMs = readTelegramRetryAfterMs(err);
-        if (retryAfterMs !== undefined) {
-          suspendedUntilMs = Date.now() + Math.min(retryAfterMs, MAX_PREVIEW_FLOOD_SUSPEND_MS);
-        }
         params.warn?.(
           `telegram stream preview ${isEdit ? "edit" : "send"} failed (retrying): ${formatErrorMessage(err)}`,
         );
         return false;
       }
       streamState.stopped = true;
+      clearHeldRetry();
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
@@ -471,6 +493,31 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
+
+  // Single-slot self-retry: re-flush the held pending text once the flood-suspend
+  // window elapses, even when no further update() arrives (claude-cli is silent
+  // while a tool runs). flush() is single-flight and re-checks every hold gate, so
+  // this is idempotent against the loop's own throttle timer; a still-suspended
+  // tick simply re-arms it. Skipped once stopped/final so a stray late edit can
+  // never resurrect the preview underneath the final reply.
+  function scheduleHeldRetry(delayMs: number): void {
+    if (heldRetryTimer !== undefined || streamState.stopped || streamState.final) {
+      return;
+    }
+    heldRetryTimer = setTimeout(
+      () => {
+        heldRetryTimer = undefined;
+        void loop.flush();
+      },
+      Math.max(0, delayMs),
+    );
+  }
+  function clearHeldRetry(): void {
+    if (heldRetryTimer !== undefined) {
+      clearTimeout(heldRetryTimer);
+      heldRetryTimer = undefined;
+    }
+  }
 
   const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
@@ -495,6 +542,7 @@ export function createTelegramDraftStream(params: {
 
   const stop = async () => {
     streamState.final = true;
+    clearHeldRetry();
     await loop.flush();
     if (streamState.stopped) {
       return;
@@ -513,6 +561,7 @@ export function createTelegramDraftStream(params: {
   }) => void = (options) => {
     streamState.stopped = false;
     streamState.final = options?.keepFinal === true;
+    clearHeldRetry();
     generation += 1;
     messageSendAttempted = false;
     streamMessageId = undefined;
@@ -530,6 +579,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
+    clearHeldRetry();
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
       readMessageId: () => streamMessageId,
@@ -548,6 +598,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const discard = async () => {
+    clearHeldRetry();
     await stopForClear();
   };
 
