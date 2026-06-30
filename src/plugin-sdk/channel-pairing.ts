@@ -12,7 +12,6 @@ export {
 export { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 import { createScopedPairingAccess } from "./pairing-access.js";
 
 type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
@@ -46,7 +45,7 @@ export function createChannelPairingChallengeIssuer(params: {
   ) =>
     issuePairingChallenge({
       channel: params.channel,
-      accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
+      accountId: params.accountId,
       upsertPairingRequest: params.upsertPairingRequest,
       ...challenge,
     });

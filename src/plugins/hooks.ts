@@ -30,8 +30,7 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
-  PluginHookChannelPairingContext,
-  PluginHookChannelPairingRequestedEvent,
+  PluginHookHandlerMap,
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
@@ -1072,8 +1071,8 @@ export function createHookRunner(
    * Observation-only; slow/failing handlers must not block pairing flow.
    */
   async function runChannelPairingRequested(
-    event: PluginHookChannelPairingRequestedEvent,
-    ctx: PluginHookChannelPairingContext,
+    event: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[0],
+    ctx: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[1],
   ): Promise<void> {
     return runVoidHook("channel_pairing_requested", event, ctx);
   }
