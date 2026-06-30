@@ -33,7 +33,7 @@ export type KnownImagesProvider = "openrouter";
 export type ImagesProvider = string;
 
 /** Normalized reasoning-effort levels shared across provider-specific knobs. */
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 /** Model thinking setting including explicit disabled state. */
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 /** Provider-specific values for normalized thinking levels. */

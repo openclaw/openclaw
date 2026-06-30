@@ -9,7 +9,15 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
-export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 
 export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
 
@@ -144,7 +152,13 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if ((requested === "minimal" || requested === "low") && supported.includes("medium")) {
     return "medium";
   }
-  if (requested === "xhigh" && supported.includes("high")) {
+  if (requested === "ultra" && supported.includes("max")) {
+    return "max";
+  }
+  if ((requested === "ultra" || requested === "max") && supported.includes("xhigh")) {
+    return "xhigh";
+  }
+  if (["ultra", "max", "xhigh"].includes(requested) && supported.includes("high")) {
     return "high";
   }
   return supported.find((effort) => effort !== "none");

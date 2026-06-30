@@ -2644,7 +2644,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
 }): string {
   const { model, requestedLevel } = params;
   const normalized = requestedLevel.trim() as ModelThinkingLevel;
-  if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(normalized)) {
+  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
     return requestedLevel;
   }
   const profile = resolveProviderThinkingProfile({
@@ -2703,7 +2703,7 @@ function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean 
   if (!raw) {
     return params.smoke ? "low" : "high";
   }
-  return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(raw)
+  return ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(raw)
     ? raw
     : params.smoke
       ? "low"

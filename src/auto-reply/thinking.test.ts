@@ -78,6 +78,13 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("max")).toBe("max");
     expect(normalizeThinkLevel("MAX")).toBe("max");
   });
+
+  it("accepts ultra as its own explicit level without changing legacy ultrathink aliases", () => {
+    expect(normalizeThinkLevel("ultra")).toBe("ultra");
+    expect(normalizeThinkLevel("ULTRA")).toBe("ultra");
+    expect(normalizeThinkLevel("ultrathink")).toBe("high");
+    expect(normalizeThinkLevel("thinkhardest")).toBe("high");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -138,7 +145,12 @@ describe("listThinkingLevels", () => {
 
   it("preserves provider profile ids and labels", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
-      levels: [{ id: "off" }, { id: "adaptive", label: "auto" }, { id: "max", label: "maximum" }],
+      levels: [
+        { id: "off" },
+        { id: "adaptive", label: "auto" },
+        { id: "max", label: "maximum" },
+        { id: "ultra", label: "ultra" },
+      ],
       defaultLevel: "adaptive",
     });
 
@@ -146,6 +158,7 @@ describe("listThinkingLevels", () => {
       { id: "off", label: "off" },
       { id: "adaptive", label: "auto" },
       { id: "max", label: "maximum" },
+      { id: "ultra", label: "ultra" },
     ]);
   });
 
@@ -548,26 +561,35 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
-  it("uses catalog compat reasoning efforts to expose xhigh for configured custom models", () => {
+  it("uses catalog compat reasoning efforts to expose provider-declared levels", () => {
     const catalog = [
       {
         provider: "gmn",
-        id: "gpt-5.4",
-        name: "GPT 5.4 via GMN",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol via GMN",
         reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       },
     ];
 
-    expect(listThinkingLevels("gmn", "gpt-5.4", catalog)).toContain("xhigh");
-    expect(formatThinkingLevels("gmn", "gpt-5.4", ", ", catalog)).toBe(
-      "off, minimal, low, medium, high, xhigh",
+    expect(listThinkingLevels("gmn", "gpt-5.6-sol", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(formatThinkingLevels("gmn", "gpt-5.6-sol", ", ", catalog)).toBe(
+      "off, minimal, low, medium, high, xhigh, max, ultra",
     );
     expect(
       isThinkingLevelSupported({
         provider: "gmn",
-        model: "gpt-5.4",
-        level: "xhigh",
+        model: "gpt-5.6-sol",
+        level: "ultra",
         catalog,
       }),
     ).toBe(true);
@@ -860,7 +882,9 @@ describe("resolveEffectiveResponseUsage", () => {
     // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
     expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
     expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
-    expect(resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord")).toBe("off");
+    expect(
+      resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord"),
+    ).toBe("off");
   });
 
   it("session explicit on value overrides config default", () => {
@@ -874,6 +898,6 @@ describe("resolveEffectiveResponseUsage", () => {
     // - "off"     = explicit off  → stays off
     const cfg = "tokens" as const;
     expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
-    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
   });
 });
