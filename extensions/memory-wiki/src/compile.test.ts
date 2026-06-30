@@ -121,6 +121,57 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const brokenPath = path.join(rootDir, "syntheses", "broken.md");
+    const brokenPage = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.broken",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Broken",
+      "",
+      "Body that compile must not rewrite.",
+    ].join("\n");
+    await fs.writeFile(brokenPath, brokenPage, "utf8");
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.frontmatterErrors).toHaveLength(1);
+    expect(result.frontmatterErrors[0]).toMatchObject({
+      relativePath: "syntheses/broken.md",
+    });
+    expect(result.pageCounts.synthesis).toBe(1);
+    expect(result.pages.map((page) => page.relativePath)).not.toContain("syntheses/broken.md");
+    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.not.toContain(
+      "Broken",
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ).resolves.not.toContain("syntheses/broken.md");
+  });
+
   it("discovers pages in nested subdirectories during compile", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

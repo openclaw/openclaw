@@ -125,6 +125,43 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.sourceCounts.native).toBe(2);
   });
 
+  it("excludes malformed pages from status counts (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-invalid-frontmatter-",
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "broken.md"),
+      [
+        "---",
+        "pageType: source",
+        "id: source.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.healthy", title: "Healthy" },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.pageCounts.source).toBe(1);
+    expect(status.sourceCounts.native).toBe(1);
+  });
+
   it("counts source provenance from the vault", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-status-",

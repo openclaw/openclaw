@@ -533,5 +533,8 @@ describe("lintMemoryWikiVault", () => {
 
     expect(issueCodesForPath(result, "syntheses/broken.md")).toEqual(["invalid-frontmatter"]);
     expect(issueCodesForPath(result, "syntheses/healthy.md")).not.toContain("invalid-frontmatter");
+    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
+      "Frontmatter failed to parse: Unexpected scalar",
+    );
   });
 });

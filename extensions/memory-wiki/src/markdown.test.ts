@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  parseWikiMarkdown,
   renderWikiMarkdown,
+  scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
   WIKI_RAW_SOURCE_MARKER,
@@ -422,7 +424,7 @@ describe("toWikiPageSummary", () => {
     ]);
   });
 
-  it("degrades to empty frontmatter instead of throwing on unparsable YAML (#96125)", () => {
+  it("reports and excludes unparsable frontmatter from page scans (#96125)", () => {
     const raw = [
       "---",
       "pageType: synthesis",
@@ -436,22 +438,20 @@ describe("toWikiPageSummary", () => {
       "Body text that should be preserved.",
     ].join("\n");
 
-    const summary = toWikiPageSummary({
+    const params = {
       absolutePath: "/tmp/wiki/syntheses/test.md",
       relativePath: "syntheses/test.md",
       raw,
-    });
-    if (!summary) {
-      throw new Error("expected wiki summary");
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
     }
 
-    expect(summary.frontmatterError).toBeTruthy();
-    expect(summary.hasFrontmatter).toBe(true);
-    // Frontmatter-derived fields fall back to empty.
-    expect(summary.id).toBeUndefined();
-    expect(summary.sourceIds).toEqual([]);
-    // Body is preserved.
-    expect(summary.title).toBe("Test Title");
+    expect(result.error.relativePath).toBe("syntheses/test.md");
+    expect(result.error.message).toContain("Unexpected scalar");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Unexpected scalar");
   });
 
   it("preserves frontmatter and body for valid YAML (#96125 control)", () => {
@@ -477,8 +477,8 @@ describe("toWikiPageSummary", () => {
       throw new Error("expected wiki summary");
     }
 
-    expect(summary.frontmatterError).toBeUndefined();
     expect(summary.hasFrontmatter).toBe(true);
+    expect(summary.title).toBe("Healthy Page");
     expect(summary.id).toBe("synthesis.healthy");
     expect(summary.sourceIds).toEqual(["source.alpha"]);
     expect(summary.pageType).toBe("synthesis");

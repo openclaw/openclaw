@@ -101,20 +101,6 @@ function collectPageIssues(
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
-    if (page.frontmatterError) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "invalid-frontmatter",
-        path: page.relativePath,
-        message: `Frontmatter failed to parse: ${page.frontmatterError}`,
-      });
-      // Frontmatter-derived fields are empty as a result of the parse
-      // failure; skip checks that would otherwise pile on misleading
-      // "missing field" issues for the same root cause.
-      continue;
-    }
-
     const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
       page,
       managedImportedSourcePagePaths,
@@ -403,7 +389,18 @@ export async function lintMemoryWikiVault(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  const issues = collectPageIssues(compileResult.pages, managedImportedSourcePagePaths);
+  const issues = [
+    ...compileResult.frontmatterErrors.map(
+      (error): MemoryWikiLintIssue => ({
+        severity: "error",
+        category: "structure",
+        code: "invalid-frontmatter",
+        path: error.relativePath,
+        message: `Frontmatter failed to parse: ${error.message}`,
+      }),
+    ),
+    ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
+  ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
 
