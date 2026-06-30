@@ -304,6 +304,67 @@ describe("session cost usage", () => {
     });
   });
 
+  it("re-estimates spend when a known-priced model records cost.total: 0 with non-zero tokens", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-zero-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // DeepSeek V4 (and similar providers) return usage.cost.total: 0 in their
+    // completion payload even though token usage is real and catalog pricing
+    // is positive. Trusting the recorded $0 zeroes out the Spend panel and any
+    // budget/spike safeguard that aggregates totalCost.
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                // Positive per-token rates (CNY per token here, magnitude is all
+                // the fix needs; the re-estimate path is unit-agnostic).
+                cost: { input: 0.000014, output: 0.000028, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      // Recorded $0 must be replaced with a real estimate; with 10k input @ 0.000014
+      // and 5k output @ 0.000028 the expected total is 0.28.
+      expect(summary.totals.totalCost).toBeCloseTo(0.28, 6);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

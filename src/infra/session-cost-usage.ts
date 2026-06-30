@@ -1272,9 +1272,20 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        (entry.costTotal === 0 &&
+          isModelPricingKnown(cost) &&
+          computeUsageTokenTotals(entry.usage).totalTokens > 0)
+      ) {
+        // Fill in missing cost estimates, and re-estimate when the transport recorded
+        // a $0 total despite burning tokens. Some providers return usage.cost.total: 0
+        // even when their catalog pricing is positive (e.g. DeepSeek V4), so trusting
+        // the recorded $0 would silently zero out the Spend panel and any budget/spike
+        // safeguard that aggregates totalCost. The unknown-pricing zero-cost case is
+        // already handled above as missing.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
