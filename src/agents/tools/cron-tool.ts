@@ -81,6 +81,60 @@ function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
 }
 
+function normalizeFlatStringArrayArgument(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed ? [trimmed] : [];
+}
+
+function normalizeCronPayloadArrayHints(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  if (Object.hasOwn(value, "toolsAllow")) {
+    value.toolsAllow = normalizeFlatStringArrayArgument(value.toolsAllow);
+  }
+  if (Object.hasOwn(value, "fallbacks")) {
+    value.fallbacks = normalizeFlatStringArrayArgument(value.fallbacks);
+  }
+}
+
+function prepareCronToolArguments(args: unknown): Record<string, unknown> {
+  const next = isRecord(args) ? { ...args } : {};
+
+  if (Object.hasOwn(next, "toolsAllow")) {
+    next.toolsAllow = normalizeFlatStringArrayArgument(next.toolsAllow);
+  }
+  if (Object.hasOwn(next, "fallbacks")) {
+    next.fallbacks = normalizeFlatStringArrayArgument(next.fallbacks);
+  }
+
+  if (isRecord(next.job)) {
+    normalizeCronPayloadArrayHints(next.job.payload);
+  }
+  if (isRecord(next.patch)) {
+    normalizeCronPayloadArrayHints(next.patch.payload);
+  }
+
+  if (next.action === "add" && !isRecord(next.job)) {
+    const synthetic = recoverCronObjectFromFlatParams(next);
+    if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
+      next.job = synthetic.value;
+    }
+  }
+
+  if (next.action === "update" && !isRecord(next.patch)) {
+    const synthetic = recoverCronObjectFromFlatParams(next);
+    if (synthetic.found) {
+      next.patch = synthetic.value;
+    }
+  }
+
+  return next;
+}
+
 function nullableStringSchema(description: string) {
   return Type.Optional(Type.Union([Type.String(), Type.Null()], { description }));
 }
@@ -109,7 +163,11 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  fallbacks: TSchema;
+  toolsAllow: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
@@ -120,7 +178,7 @@ function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -160,6 +218,7 @@ function createCronPayloadSchema(): TSchema {
   return Type.Optional(
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
     }),
   );
@@ -287,6 +346,7 @@ function createCronPatchObjectSchema(): TSchema {
         payload: Type.Optional(
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
           }),
         ),
@@ -303,19 +363,101 @@ function createCronPatchObjectSchema(): TSchema {
   );
 }
 
+// Flat top-level mirror of the most common nested job fields, for models that
+// flatten args instead of nesting them under `job`. Every key here must be a
+// recognised flat key in cron-tool-canonicalize.ts (CRON_FLAT_PAYLOAD_KEYS /
+// CRON_FLAT_SCHEDULE_KEYS); otherwise the canonicalizer silently drops it.
+// cron-tool.schema.test.ts guards that invariant.
+export function createCronFlatJobSchemaProperties() {
+  return {
+    name: Type.Optional(
+      Type.String({
+        description: 'Flat job name for action="add" or action="update"',
+      }),
+    ),
+    enabled: Type.Optional(
+      Type.Boolean({
+        description: 'Flat enabled flag for action="add" or action="update"',
+      }),
+    ),
+    sessionTarget: Type.Optional(
+      Type.String({
+        description:
+          'Flat job target for action="add" or action="update": main | isolated | current | session:<id>',
+      }),
+    ),
+    at: Type.Optional(
+      Type.String({
+        description: 'Flat one-shot ISO-8601 time for action="add" or action="update"',
+      }),
+    ),
+    everyMs: optionalPositiveIntegerSchema({
+      description: 'Flat recurring interval ms for action="add" or action="update"',
+    }),
+    expr: Type.Optional(
+      Type.String({
+        description: 'Flat cron expression for action="add" or action="update"',
+      }),
+    ),
+    tz: Type.Optional(
+      Type.String({
+        description: "IANA timezone for a flat cron expression",
+      }),
+    ),
+    message: Type.Optional(
+      Type.String({
+        description:
+          'Flat agentTurn prompt for action="add" or action="update"; implies an agentTurn payload',
+      }),
+    ),
+    anchorMs: optionalNonNegativeIntegerSchema({
+      description: "Flat start anchor ms for a flat everyMs schedule",
+    }),
+    model: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Flat agentTurn model override; implies an agentTurn payload, or null to clear on update",
+      }),
+    ),
+    fallbacks: nullableStringArraySchema(
+      "Flat agentTurn fallback models; implies an agentTurn payload, or null to clear on update",
+    ),
+    toolsAllow: nullableStringArraySchema(
+      "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update",
+    ),
+    thinking: Type.Optional(
+      Type.String({
+        description: "Flat agentTurn thinking override; implies an agentTurn payload",
+      }),
+    ),
+    timeoutSeconds: optionalFiniteNumberSchema({
+      minimum: 0,
+      description: "Flat agentTurn timeout seconds; implies an agentTurn payload",
+    }),
+  };
+}
+
 // Flattened schema: runtime validates per-action requirements.
 export function createCronToolSchema(): TSchema {
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
+      ...createCronFlatJobSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
       job: createCronJobObjectSchema(),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       patch: createCronPatchObjectSchema(),
-      text: Type.Optional(Type.String()),
-      mode: optionalStringEnum(CRON_WAKE_MODES),
+      text: Type.Optional(
+        Type.String({
+          description:
+            'Wake event text; for action="add" or action="update", flat systemEvent text implies a systemEvent payload',
+        }),
+      ),
+      mode: optionalStringEnum(CRON_WAKE_MODES, {
+        description: 'Wake timing for action="wake" only; not cron job delivery mode',
+      }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
@@ -853,14 +995,26 @@ ACTIONS:
 - status: scheduler status
 - list: compact job summaries; includeDisabled true includes disabled; use get for full job details; agentId filter auto-filled from session
 - get: one job; needs jobId
-- add: create job; needs job object
-- update: patch job; needs jobId + patch
+- add: create job; use a nested job object or flat job fields
+- update: patch job; use jobId + patch or flat job fields
 - remove: delete job; needs jobId
 - run: run only if due by default; needs jobId; pass runMode="force" to trigger now
 - runs: run history; needs jobId
 - wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane owned by the calling agent.
 
-JOB SCHEMA (for add action):
+FLAT JOB FIELDS (preferred when nested object tool calls are unreliable):
+{
+  "action": "add",
+  "name": "string",
+  "at": "<ISO-8601>" | "everyMs": <ms> | "expr": "<cron-expression>",
+  "tz": "<optional-IANA-timezone>",
+  "message": "<agentTurn prompt>" | "text": "<systemEvent text>",
+  "sessionTarget": "main" | "isolated" | "current" | "session:<id>",
+  "enabled": true | false
+}
+Use exactly one schedule field: at, everyMs, or expr. message implies agentTurn; text implies systemEvent.
+
+NESTED JOB SCHEMA (also accepted for add action):
 {
   "name": "string",
   "schedule": { ... },      // required
@@ -923,6 +1077,7 @@ WAKE MODES (for wake action):
 
 Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.`,
     parameters: createCronToolSchema(),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });

@@ -83,6 +83,41 @@ describe("cron tool", () => {
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
   });
 
+  it("prepares flat add arguments before schema validation when toolsAllow is scalar and job is malformed", () => {
+    const tool = createTestCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      name: "flatfield-test-DELETEME",
+      enabled: false,
+      expr: "0 */6 * * *",
+      message: "Flat-field test job",
+      model: "openai/gpt-5.4",
+      toolsAllow: "exec",
+      job: "truncated",
+    }) as
+      | {
+          job?: {
+            name?: string;
+            enabled?: boolean;
+            schedule?: { kind?: string; expr?: string };
+            payload?: { kind?: string; message?: string; model?: string; toolsAllow?: string[] };
+          };
+        }
+      | undefined;
+
+    expect(prepared?.job).toEqual({
+      name: "flatfield-test-DELETEME",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "Flat-field test job",
+        model: "openai/gpt-5.4",
+        toolsAllow: ["exec"],
+      },
+    });
+  });
+
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
     schedule: { at: string };
@@ -2290,6 +2325,44 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: null,
+    });
+  });
+
+  it("preserves nullable flat update clears for model, fallbacks, and toolsAllow", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-clear-flat-payload", {
+      action: "update",
+      id: "job-clear-flat-payload",
+      model: null,
+      fallbacks: null,
+      toolsAllow: null,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string | null;
+              fallbacks?: string[] | null;
+              toolsAllow?: string[] | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params).toEqual({
+      id: "job-clear-flat-payload",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          model: null,
+          fallbacks: null,
+          toolsAllow: null,
+        },
+      },
     });
   });
 

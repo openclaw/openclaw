@@ -7,6 +7,9 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "../../utils.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+// Intentionally excludes "command" (which persisted-shape.ts allows): the agent
+// cron tool blocks command payloads via assertNoCronCommandPayload, so they are
+// CLI/Gateway-only and never inferred from flat tool args.
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -327,4 +330,13 @@ export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
     value.message !== undefined ||
     value.text !== undefined
   );
+}
+
+/**
+ * Whether a top-level key is recovered into the nested job/patch shape. The
+ * cron tool's flat schema must only advertise recoverable keys; the schema test
+ * uses this to guard that the schema and canonicalizer cannot drift apart.
+ */
+export function isCronRecoverableObjectKey(key: string): boolean {
+  return CRON_RECOVERABLE_OBJECT_KEYS.has(key);
 }
