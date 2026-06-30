@@ -289,6 +289,11 @@ describe("interactive payload helpers", () => {
             { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
             { label: "Docs", url: "https://example.com/docs" },
             { label: "Disabled", disabled: true },
+            {
+              label: "DisabledCmd",
+              disabled: true,
+              action: { type: "command" as const, command: "/test" },
+            },
           ],
         },
       ],
@@ -301,6 +306,7 @@ describe("interactive payload helpers", () => {
         "- Ignore",
         "- Docs: https://example.com/docs",
         "- Disabled",
+        "- DisabledCmd",
       ].join("\n"),
     );
   });

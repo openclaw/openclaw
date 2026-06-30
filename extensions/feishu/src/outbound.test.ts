@@ -892,6 +892,35 @@ describe("feishuOutbound.sendPayload native cards", () => {
     );
     expectFeishuResult(result, "reply_msg");
   });
+
+  it("omits command guidance for disabled command buttons", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Disabled Approve",
+                  disabled: true,
+                  action: { type: "command", command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(commentThreadParams()?.content).toBe("Review this\n\n- Disabled Approve");
+    expectFeishuResult(result, "reply_msg");
+  });
 });
 
 describe("feishuOutbound comment-thread routing", () => {
