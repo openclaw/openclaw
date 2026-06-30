@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectDeliveredMediaUrls } from "./delivery-evidence.js";
+import { collectDeliveredMediaUrls, hasVisibleAgentPayload } from "./delivery-evidence.js";
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {
   it("collects media URLs across nested attachments", () => {
@@ -42,5 +42,47 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
 
     const urls = collectDeliveredMediaUrls({ payloads: [a] });
     expect(urls.toSorted()).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
+  });
+});
+
+describe("hasVisibleAgentPayload nested text", () => {
+  it("detects visible text only at the top level by default", () => {
+    const result = { payloads: [{ content: "hello from a wrapped child reply" }] };
+    expect(hasVisibleAgentPayload(result)).toBe(false);
+    expect(hasVisibleAgentPayload(result, { includeNestedText: true })).toBe(true);
+  });
+
+  it("finds visible text nested under content/result/output when opted in", () => {
+    const result = {
+      payloads: [{ result: { output: [{ content: "deeply nested reply text" }] } }],
+    };
+    expect(hasVisibleAgentPayload(result, { includeNestedText: true })).toBe(true);
+  });
+
+  it("skips error, reasoning, and thinking branches", () => {
+    expect(
+      hasVisibleAgentPayload(
+        { payloads: [{ isError: true, content: "boom" }] },
+        { includeNestedText: true },
+      ),
+    ).toBe(false);
+    expect(
+      hasVisibleAgentPayload(
+        { payloads: [{ content: [{ type: "thinking", text: "internal monologue" }] }] },
+        { includeNestedText: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves existing top-level detection without the opt-in", () => {
+    expect(hasVisibleAgentPayload({ payloads: [{ text: "plain visible reply" }] })).toBe(true);
+  });
+
+  it("does not overflow the stack on a self-referential nested payload", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.content = cyclic;
+    expect(() =>
+      hasVisibleAgentPayload({ payloads: [cyclic] }, { includeNestedText: true }),
+    ).not.toThrow();
   });
 });

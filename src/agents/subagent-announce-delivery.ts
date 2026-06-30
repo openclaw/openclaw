@@ -663,7 +663,9 @@ async function maybeSteerSubagentAnnounce(params: {
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(
-    result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
+    result &&
+      (hasVisibleAgentPayload(result, { includeNestedText: true }) ||
+        hasMessagingToolDeliveryEvidence(result)),
   );
 }
 

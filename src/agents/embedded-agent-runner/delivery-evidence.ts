@@ -172,10 +172,51 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
   );
 }
 
+/**
+ * Keys whose values may carry nested user-visible text in wrapped agent payloads
+ * (e.g. tool results that embed the child reply under `content`/`result`/`output`).
+ */
+const NESTED_VISIBLE_TEXT_KEYS = ["text", "content", "message", "result", "output"] as const;
+
+/**
+ * Recursively scans a payload for non-empty visible text nested under common wrapper
+ * keys, skipping error, reasoning, and thinking branches that are never user-visible.
+ *
+ * Payloads arrive as in-process `unknown` objects, so a `seen` guard keeps a
+ * malformed self-referential chain from overflowing the stack.
+ */
+function hasNestedVisibleText(value: unknown, seen: WeakSet<object> = new WeakSet()): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasNestedVisibleText(entry, seen));
+  }
+  const record = value as Record<string, unknown>;
+  if (record.isError === true || record.isReasoning === true) {
+    return false;
+  }
+  if (typeof record.type === "string" && /^(?:thinking|reasoning)$/i.test(record.type)) {
+    return false;
+  }
+  return NESTED_VISIBLE_TEXT_KEYS.some((key) => hasNestedVisibleText(record[key], seen));
+}
+
 /** Returns whether payload metadata contains visible text, media, presentation, or channel data. */
 export function hasVisibleAgentPayload(
   result: Pick<AgentDeliveryEvidence, "payloads">,
-  options: { includeErrorPayloads?: boolean; includeReasoningPayloads?: boolean } = {},
+  options: {
+    includeErrorPayloads?: boolean;
+    includeReasoningPayloads?: boolean;
+    includeNestedText?: boolean;
+  } = {},
 ): boolean {
   const payloads = result.payloads;
   if (!Array.isArray(payloads)) {
@@ -199,7 +240,8 @@ export function hasVisibleAgentPayload(
       hasVisibleAttachmentReference(record.attachments) ||
       record.presentation ||
       record.interactive ||
-      record.channelData,
+      record.channelData ||
+      (options.includeNestedText === true && hasNestedVisibleText(record)),
     );
   });
 }
