@@ -15,6 +15,7 @@ __openclaw_vitest__/
 __pycache__/
 *.pyc
 *.tsbuildinfo
+comment-*.md
 .pnpm-store
 .worktrees/
 .DS_Store
