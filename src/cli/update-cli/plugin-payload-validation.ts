@@ -209,7 +209,7 @@ function isBundleInstallRecord(record: PluginInstallRecord): boolean {
 }
 
 function isKnownNativePackageInstallRecord(record: PluginInstallRecord): boolean {
-  return record.clawhubFamily === "code-plugin";
+  return record.source === "npm" || record.clawhubFamily === "code-plugin";
 }
 
 function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | null {

@@ -197,6 +197,28 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
+  it("does not reinterpret npm package records with explicit bundle manifests as bundle payloads", async () => {
+    const dir = path.join(tmpRoot, "npm-with-bundle-manifest");
+    await writeClaudeBundle(dir);
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        native: {
+          source: "npm",
+          installPath: dir,
+        },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "native",
+        installPath: dir,
+        reason: "missing-package-json",
+        detail: `package.json is missing under ${dir}`,
+      },
+    ]);
+  });
+
   it("reports a bundle payload failure when a persisted bundle-format record has no supported capability markers", async () => {
     const dir = path.join(tmpRoot, "empty-claude-bundle");
     await fs.mkdir(dir, { recursive: true });
