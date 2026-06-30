@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { COLLAPSE_DWELL_TURNS } from "./accordion-constants.js";
+import { ACTIVE_WINDOW_TURNS } from "./accordion-constants.js";
 import { applyAutoCollapse } from "./active-tag-set.js";
 import { appendTurns, listBoxes, upsertBox, upsertSpan, type NewTurn } from "./turns-store.js";
 
@@ -28,7 +28,8 @@ afterEach(() => {
 
 describe("applyAutoCollapse", () => {
   it("collapses the stale topic box after a topic switch, keeping the active one live", () => {
-    // 2 voice turns, then COLLAPSE_DWELL_TURNS+1 coding turns on distinct topics.
+    // 2 voice turns, then > ACTIVE_WINDOW_TURNS coding turns (all on box-code) so "voice" falls
+    // fully out of the active window → zero-intersection collapse; box-code stays in the window.
     const turns: NewTurn[] = [];
     let seq = 0;
     const push = (topic: string, boxId: string) => {
@@ -54,7 +55,7 @@ describe("applyAutoCollapse", () => {
     };
     push("voice", "box-voice");
     push("voice", "box-voice");
-    for (let i = 0; i < COLLAPSE_DWELL_TURNS + 1; i += 1) {
+    for (let i = 0; i < ACTIVE_WINDOW_TURNS + 1; i += 1) {
       push(`code-${i}`, "box-code");
     }
     appendTurns({ ...SCOPE, turns });

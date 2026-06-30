@@ -7,7 +7,6 @@ import {
   ACTIVE_SET_CARDINALITY_FLOOR,
   ACTIVE_WINDOW_TURNS,
   COLLAPSE_DWELL_TURNS,
-  JACCARD_LIVE_CUTOFF,
 } from "./accordion-constants.js";
 import {
   DEFAULT_PARAMS,
@@ -50,22 +49,34 @@ function topicSwitch(voiceTurns: number, codeTurns: number) {
   return { turns, spans, boxes: [box("box-voice"), box("box-code")] };
 }
 
-describe("active-tag-set auto-collapse", () => {
+// Phase 4 LOCKED gemini-1 (zero-intersection) as the default; the jaccard-distance variant is
+// still a supported CollapseParams shape, so these shared-mechanic tests pin it explicitly.
+// (Pre-Phase-4 this was the default shape, which is why the fixtures keep "voice" inside the
+// active window — partial overlap is the jaccard-distance trigger, not zero intersection.)
+const JACCARD_PARAMS: CollapseParams = {
+  mode: "jaccard-distance",
+  activeWindowTurns: ACTIVE_WINDOW_TURNS,
+  jaccardLiveCutoff: 0.3,
+  collapseDwellTurns: COLLAPSE_DWELL_TURNS,
+  activeSetCardinalityFloor: ACTIVE_SET_CARDINALITY_FLOOR,
+};
+
+describe("active-tag-set auto-collapse (jaccard-distance variant)", () => {
   it("collapses the stale box after a topic switch past the dwell", () => {
     const { turns, spans, boxes } = topicSwitch(2, COLLAPSE_DWELL_TURNS + 1);
-    const collapsed = decideAutoCollapse({ turns, spans, boxes });
+    const collapsed = decideAutoCollapse({ turns, spans, boxes }, JACCARD_PARAMS);
     expect(collapsed).toEqual(["box-voice"]); // voice fell out of the active set
   });
 
   it("does not collapse before the anti-thrash dwell elapses", () => {
     // Only a couple of coding turns: voice is stale but still within the dwell window.
     const { turns, spans, boxes } = topicSwitch(2, COLLAPSE_DWELL_TURNS - 1);
-    expect(decideAutoCollapse({ turns, spans, boxes })).toEqual([]);
+    expect(decideAutoCollapse({ turns, spans, boxes }, JACCARD_PARAMS)).toEqual([]);
   });
 
   it("keeps the active topic's box live (high Jaccard overlap)", () => {
     const { turns, spans, boxes } = topicSwitch(2, COLLAPSE_DWELL_TURNS + 1);
-    const collapsed = decideAutoCollapse({ turns, spans, boxes });
+    const collapsed = decideAutoCollapse({ turns, spans, boxes }, JACCARD_PARAMS);
     expect(collapsed).not.toContain("box-code");
   });
 
@@ -82,7 +93,9 @@ describe("active-tag-set auto-collapse", () => {
       turns.push(noisy);
       spans.push(span(seq, `noise-${i}`, "box-noise"));
     }
-    expect(decideAutoCollapse({ turns, spans, boxes: [box("box-voice")] })).toEqual([]);
+    expect(decideAutoCollapse({ turns, spans, boxes: [box("box-voice")] }, JACCARD_PARAMS)).toEqual(
+      [],
+    );
   });
 
   it("suppresses collapse when the active set is below the cardinality floor", () => {
@@ -97,11 +110,10 @@ describe("active-tag-set auto-collapse", () => {
       turns.push(turn(seq));
       spans.push(span(seq, "code", "box-code")); // one topic only
     }
-    const collapsed = decideAutoCollapse({
-      turns,
-      spans,
-      boxes: [box("box-voice"), box("box-code")],
-    });
+    const collapsed = decideAutoCollapse(
+      { turns, spans, boxes: [box("box-voice"), box("box-code")] },
+      JACCARD_PARAMS,
+    );
     expect(collapsed).toEqual([]);
   });
 
@@ -111,20 +123,20 @@ describe("active-tag-set auto-collapse", () => {
     // Operator just expanded box-voice → last_active_seq bumped to the head; the dwell
     // now measures from the head, so it stays live until the topic genuinely moves on.
     const pinned = [box("box-voice", { last_active_seq: head }), box("box-code")];
-    expect(decideAutoCollapse({ turns, spans, boxes: pinned })).toEqual([]);
+    expect(decideAutoCollapse({ turns, spans, boxes: pinned }, JACCARD_PARAMS)).toEqual([]);
   });
 
   it("ignores already-collapsed and topic-less boxes", () => {
     const { turns, spans } = topicSwitch(2, COLLAPSE_DWELL_TURNS + 1);
     const boxes = [box("box-voice", { state: "collapsed" }), box("box-empty")];
-    expect(decideAutoCollapse({ turns, spans, boxes })).toEqual([]);
+    expect(decideAutoCollapse({ turns, spans, boxes }, JACCARD_PARAMS)).toEqual([]);
   });
 });
 
-// Phase 4 (04-01): the rule shape + thresholds are injected so the tuning harness can
-// sweep candidates without mutating module state. DEFAULT_PARAMS must reproduce the
-// shipped jaccard-distance decisions; the two candidate shapes must diverge on a shared
-// fixture and be deterministic across repeated calls (no hidden global state).
+// Phase 4 (04-01/04-04): the rule shape + thresholds are injected so the tuning harness can
+// sweep candidates without mutating module state. DEFAULT_PARAMS is the locked gemini-1
+// (zero-intersection) shape; the two candidate shapes must diverge on a shared fixture and be
+// deterministic across repeated calls (no hidden global state).
 
 // box-A owns {t2@seq1, t1@seq2}; box-B owns t3..t13 (seqs 3..13). t1 sits inside the
 // last-12 active window so it joins the active set (partial overlap with box-A), but
@@ -155,24 +167,36 @@ const GEMINI_1: CollapseParams = {
   activeSetCardinalityFloor: 2,
 };
 
-describe("decideAutoCollapse params (04-01)", () => {
-  it("DEFAULT_PARAMS mirrors the shipped accordion constants (jaccard-distance shape)", () => {
+describe("decideAutoCollapse params (04-01/04-04)", () => {
+  it("DEFAULT_PARAMS is the Phase-4-locked gemini-1 (zero-intersection) shape", () => {
     expect(DEFAULT_PARAMS).toEqual({
-      mode: "jaccard-distance",
+      mode: "zero-intersection",
       activeWindowTurns: ACTIVE_WINDOW_TURNS,
-      jaccardLiveCutoff: JACCARD_LIVE_CUTOFF,
-      collapseDwellTurns: COLLAPSE_DWELL_TURNS,
+      zeroIntersectionDwellTurns: COLLAPSE_DWELL_TURNS,
       activeSetCardinalityFloor: ACTIVE_SET_CARDINALITY_FLOOR,
     });
   });
 
   it("default-arg parity: omitting params equals passing DEFAULT_PARAMS", () => {
-    for (const codeTurns of [COLLAPSE_DWELL_TURNS - 1, COLLAPSE_DWELL_TURNS + 1]) {
+    // Cover both a collapsing input (topic fully exits the window) and a still-live one.
+    for (const codeTurns of [3, ACTIVE_WINDOW_TURNS + 1]) {
       const { turns, spans, boxes } = topicSwitch(2, codeTurns);
       expect(decideAutoCollapse({ turns, spans, boxes })).toEqual(
         decideAutoCollapse({ turns, spans, boxes }, DEFAULT_PARAMS),
       );
     }
+  });
+
+  it("default (locked zero-intersection) collapses a box once its topic leaves the window", () => {
+    // > activeWindowTurns distinct code topics push "voice" out of the active window entirely
+    // → empty intersection → collapse (past the dwell + cardinality floor).
+    const { turns, spans, boxes } = topicSwitch(2, ACTIVE_WINDOW_TURNS + 1);
+    expect(decideAutoCollapse({ turns, spans, boxes })).toEqual(["box-voice"]);
+  });
+
+  it("default keeps a box live while its topic still overlaps the active window", () => {
+    const { turns, spans, boxes } = topicSwitch(2, 3); // voice still within the last-12 window
+    expect(decideAutoCollapse({ turns, spans, boxes })).toEqual([]);
   });
 
   it("switching params alone changes which boxes collapse for identical input", () => {

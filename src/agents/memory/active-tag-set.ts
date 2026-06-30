@@ -12,18 +12,17 @@
  * ever collapses; expansion is always manual or retrieval-driven.
  *
  * The thresholds AND the overlap-test SHAPE are injected via `CollapseParams` so the
- * Phase-4 tuning harness can sweep the two escalated-open candidates over identical
- * input without mutating module state (§16): grok-1 ("jaccard-distance") keeps a box
- * live while Jaccard overlap ≥ the cutoff; gemini-1 ("zero-intersection") keeps it live
- * while ANY topic overlaps and only collapses on an empty intersection past a longer
- * dwell. `DEFAULT_PARAMS` reproduces today's shipped jaccard-distance decisions from
- * accordion-constants.ts; production behavior is unchanged.
+ * Phase-4 tuning harness can sweep candidates over identical input without mutating module
+ * state (§16): grok-1 ("jaccard-distance") keeps a box live while Jaccard overlap ≥ the
+ * cutoff; gemini-1 ("zero-intersection") keeps it live while ANY topic overlaps and only
+ * collapses on an empty intersection past the dwell. Phase 4 (TUNE-01) LOCKED gemini-1 as the
+ * winner, so `DEFAULT_PARAMS` is the zero-intersection shape built from accordion-constants.ts;
+ * the jaccard-distance variant remains supported for callers that pass it explicitly.
  */
 import {
   ACTIVE_SET_CARDINALITY_FLOOR,
   ACTIVE_WINDOW_TURNS,
   COLLAPSE_DWELL_TURNS,
-  JACCARD_LIVE_CUTOFF,
 } from "./accordion-constants.js";
 import { isSuppressedMemoryNoise } from "./noise.js";
 import { listBoxes, listSpans, getTurns, setBoxState } from "./turns-store.js";
@@ -54,16 +53,14 @@ export type CollapseParams =
     };
 
 /**
- * Shipped defaults: the jaccard-distance shape built from accordion-constants.ts, so the
- * single production caller reproduces pre-parameterization decisions byte-for-byte. The
- * four tuning constants are read ONLY here — never inside the rule body — so a sweep that
- * passes other params can never pick up a stale module constant.
+ * Shipped default: the Phase-4-locked gemini-1 "zero-intersection" shape, built from
+ * accordion-constants.ts. The tuning constants are read ONLY here — never inside the rule
+ * body — so a sweep that passes other params can never pick up a stale module constant.
  */
 export const DEFAULT_PARAMS: CollapseParams = {
-  mode: "jaccard-distance",
+  mode: "zero-intersection",
   activeWindowTurns: ACTIVE_WINDOW_TURNS,
-  jaccardLiveCutoff: JACCARD_LIVE_CUTOFF,
-  collapseDwellTurns: COLLAPSE_DWELL_TURNS,
+  zeroIntersectionDwellTurns: COLLAPSE_DWELL_TURNS,
   activeSetCardinalityFloor: ACTIVE_SET_CARDINALITY_FLOOR,
 };
 
