@@ -545,6 +545,31 @@ describe("devices cli approve", () => {
     );
     expect(hasGatewayMethod("node.pair.list")).toBe(false);
   });
+
+  it("shell-quotes node request IDs containing metacharacters in the approval hint", async () => {
+    callGateway
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockRejectedValueOnce(new Error("unknown requestId"))
+      .mockResolvedValueOnce({
+        pending: [
+          {
+            requestId: "req 1; rm -rf /",
+            nodeId: "node-id-evil",
+            displayName: "Sneaky Node",
+            remoteIp: "192.168.0.202",
+            ts: 1,
+          },
+        ],
+        paired: [],
+      });
+
+    await runDevicesApprove(["192.168.0.202"]);
+
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("openclaw nodes approve 'req 1; rm -rf /'");
+    expect(errorOutput).not.toContain("approve req 1; rm -rf /");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("devices cli remove", () => {

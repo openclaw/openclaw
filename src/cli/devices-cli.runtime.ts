@@ -686,6 +686,10 @@ async function tryFetchPendingNodeRequests(opts: DevicesRpcOpts) {
   }
 }
 
+function formatNodeApproveCommand(requestId: string): string {
+  return formatCliCommand(["openclaw", "nodes", "approve", requestId].map(quoteCliArg).join(" "));
+}
+
 function buildNodeApprovalHint(
   arg: string,
   pending: ReturnType<typeof parsePairingList>["pending"],
@@ -711,7 +715,7 @@ function buildNodeApprovalHint(
     for (const req of pending) {
       const identity = req.displayName ?? req.nodeId;
       lines.push(
-        `  Run: openclaw nodes approve ${req.requestId}  — ${sanitizeForLog(identity)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
+        `  Run: ${formatNodeApproveCommand(req.requestId)}  — ${sanitizeForLog(identity)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
       );
     }
     return lines.join("\n");
@@ -720,7 +724,7 @@ function buildNodeApprovalHint(
   return [
     `No pending device pairing request matches "${sanitizeForLog(arg)}".`,
     `Node reapproval pending for "${sanitizeForLog(identity)}"${target.remoteIp ? ` (${sanitizeForLog(target.remoteIp)})` : ""}.`,
-    `Run: openclaw nodes approve ${target.requestId}`,
+    `Run: ${formatNodeApproveCommand(target.requestId)}`,
   ].join("\n");
 }
 
@@ -840,7 +844,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       defaultRuntime.log(
         `  Node: ${sanitizeForLog(identity)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
       );
-      defaultRuntime.log(`  Run:  ${formatCliCommand(`openclaw nodes approve ${req.requestId}`)}`);
+      defaultRuntime.log(`  Run:  ${formatNodeApproveCommand(req.requestId)}`);
     }
   }
 }
