@@ -14,7 +14,10 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  buildPairingQrReplyChannelData,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -33,6 +36,7 @@ const mockState = vi.hoisted(() => ({
     text?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
+    channelData?: Record<string, unknown>;
     spokenText?: string;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
@@ -48,6 +52,7 @@ const mockState = vi.hoisted(() => ({
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      channelData?: Record<string, unknown>;
       spokenText?: string;
       ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
@@ -2452,6 +2457,54 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         JSON.stringify(update.message).includes("[[reply_to_current]]"),
     );
     expect(transcriptUpdate).toBeTruthy();
+  });
+
+  it("broadcasts sensitive pairing QR display without persisting QR content", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-pair-qr-");
+    const setupCode = "openclaw-test-pairing-setup-code";
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "Scan this QR code with the OpenClaw iOS app:",
+          channelData: buildPairingQrReplyChannelData({
+            setupCode,
+            expiresAtMs: Date.now() + 10 * 60_000,
+          }),
+          sensitiveMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-pair-qr",
+      message: "/pair qr",
+    });
+
+    const content = getMessageContent(payload);
+    expect(content[0]).toEqual({
+      type: "text",
+      text: "Scan this QR code with the OpenClaw iOS app:",
+    });
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "openclaw_pairing_qr",
+        image_url: expect.stringMatching(/^data:image\/png;base64,/u),
+        terminalText: expect.stringContaining("█"),
+        sensitive: true,
+      }),
+    );
+    const transcriptMessages = await readActiveAssistantTranscriptMessages();
+    const serializedTranscript = JSON.stringify(transcriptMessages);
+    expect(serializedTranscript).toContain("Scan this QR code with the OpenClaw iOS app:");
+    expect(serializedTranscript).not.toContain("openclaw_pairing_qr");
+    expect(serializedTranscript).not.toContain("data:image/png");
+    expect(serializedTranscript).not.toContain("terminalText");
+    expect(serializedTranscript).not.toContain(setupCode);
   });
 
   it("keeps visible slash-command finals alongside earlier block text", async () => {

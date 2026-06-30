@@ -1674,6 +1674,27 @@ describe("grouped chat rendering", () => {
         ?.getAttribute("src"),
     ).toBe("data:image/png;base64,cG5n");
 
+    const pairingQrContainer = document.createElement("div");
+    renderAssistantMessage(
+      pairingQrContainer,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cXJwbmc=",
+            alt: "OpenClaw pairing QR code",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    const pairingQrImage =
+      pairingQrContainer.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(pairingQrImage?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
+    expect(pairingQrImage?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+
     container = renderUserMedia({
       id: "user-history-image-blocked",
       role: "user",

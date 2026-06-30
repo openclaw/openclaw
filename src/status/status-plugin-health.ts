@@ -65,6 +65,12 @@ export type StatusPluginHealthSnapshot = {
   // load). Absent on hand-built/compact snapshots, where detailed rendering falls
   // back to the merged status filter.
   runtimeLoadedPluginIds?: string[];
+  // Eager should-run plugin ids from the gateway startup plan (deferred channel
+  // plugins already excluded). Paired with runtimeLoadedPluginIds, it lets detailed
+  // status flag desired-vs-observed drift: a plugin the gateway planned to start that
+  // is not in the runtime-loaded set. Absent on compact/hand-built snapshots, where
+  // no drift line is rendered (back-compat).
+  shouldRunPluginIds?: string[];
 };
 
 /** Keeps the first record per key; later duplicates are dropped. */
@@ -254,10 +260,30 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
   const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
   const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
+  // Desired-vs-observed drift: ids the gateway's eager startup plan says should run
+  // but that are absent from the runtime-loaded set and not already explained by an
+  // error/disabled record (those surface in their own sections). Computed only when
+  // both the should-run set and runtime provenance are present, so compact/hand-built
+  // snapshots render exactly as before.
+  const explainedPluginIds = new Set(
+    snapshot.plugins
+      .filter((plugin) => plugin.status === "error" || plugin.status === "disabled")
+      .map((plugin) => plugin.id),
+  );
+  const shouldRunNotLoaded =
+    snapshot.shouldRunPluginIds && runtimeLoaded
+      ? snapshot.shouldRunPluginIds
+          .filter((id) => !runtimeLoaded.has(id) && !explainedPluginIds.has(id))
+          .toSorted(byLocale)
+      : [];
+  const shouldRunNotLoadedSet = new Set(shouldRunNotLoaded);
   const installedNotActive = runtimeLoaded
     ? statusLoaded
         .filter((plugin) => !runtimeLoaded.has(plugin.id))
         .map((plugin) => plugin.id)
+        // Drift ids are reported on their own line below; keep them out of the
+        // neutral "Installed (not active)" inventory so each id appears once.
+        .filter((id) => !shouldRunNotLoadedSet.has(id))
         .toSorted(byLocale)
     : [];
   const disabled = snapshot.plugins.filter((plugin) => plugin.status === "disabled").length;
@@ -293,6 +319,16 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     // plan requires, so configured-but-not-started is a normal steady state.
     lines.push(
       `Installed (not active): ${installedNotActive.length} (${formatPluginList(installedNotActive, 8)})`,
+    );
+  }
+
+  if (shouldRunNotLoaded.length > 0) {
+    // Planned for eager startup but missing from the live runtime-loaded set (e.g.,
+    // config changed since the gateway started, or a planned plugin did not come up).
+    // Observer-only signal, distinct from neutral inventory; not an error chip and
+    // not counted in the compact line.
+    lines.push(
+      `Configured to run but not loaded: ${shouldRunNotLoaded.length} (${formatPluginList(shouldRunNotLoaded, 8)})`,
     );
   }
 

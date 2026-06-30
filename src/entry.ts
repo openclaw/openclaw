@@ -159,7 +159,7 @@ export async function tryHandleRootHelpFastPath(
         "[openclaw] Failed to display help:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exitCode = 1;
+      process.exit(1);
     });
   try {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
