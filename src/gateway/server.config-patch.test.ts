@@ -449,6 +449,78 @@ describe("gateway config methods", () => {
     expect(after.payload?.hash).toBe(current.payload?.hash);
   });
 
+  it("accepts config.patch when bundled provider baseUrl was only defaulted", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19003 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = await fs.readFile(configPath, "utf-8");
+      expect(persisted).toContain('"port": 19003');
+      expect(persisted).not.toContain('"baseUrl"');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("preserves authored empty bundled provider models during config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19004 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        models?: { providers?: { openai?: { models?: unknown } } };
+      };
+      expect(persisted.models?.providers?.openai?.models).toEqual([]);
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
   it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "null",
