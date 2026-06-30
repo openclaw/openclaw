@@ -1513,7 +1513,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Denied by user");
   });
 
-  it("blocks routed plugin approval timeouts without setup guidance", async () => {
+  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
     registerTelegramPluginApprovalSetup();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -1522,7 +1522,11 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-3",
+      status: "accepted",
+      deliveryRoute: "turn-source",
+    });
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", decision: null });
 
     const result = await runBeforeToolCallHook({
@@ -1538,7 +1542,10 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(result).toHaveProperty(
+      "reason",
+      "Approval timed out\n\nConfigure Telegram native approval setup.",
+    );
   });
 
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
