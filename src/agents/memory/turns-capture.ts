@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import type { AgentMessage } from "../runtime/index.js";
 import type { AgentEndEvent, ExtensionAPI, ExtensionFactory } from "../sessions/index.js";
 import { messageAnchorId } from "./accordion-blocks.js";
+import { associateConversationEntities } from "./associate-entities.js";
 import { associateSegmentationTopics } from "./associate-topics.js";
 import { isSuppressedMemoryNoise } from "./noise.js";
 import { segmentConversationTurns } from "./segment-spans.js";
@@ -113,6 +114,14 @@ export function captureConversationTurns(opts: {
     // Fuel the associative store from the same segmentation output: durable topic tags
     // linked to their non-noise spans/boxes. Idempotent, so replaying a turn is safe.
     associateSegmentationTopics({
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      segmentation,
+      ...(opts.env ? { env: opts.env } : {}),
+    });
+    // Local entity recall keys from the same spans; recurring subjects link across
+    // non-contiguous ranges. Idempotent, so replaying a turn is safe.
+    associateConversationEntities({
       agentId: opts.agentId,
       sessionKey: opts.sessionKey,
       segmentation,
