@@ -293,7 +293,7 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
 
 type BareRootLaunchTarget =
   | { kind: "onboarding" }
-  | { kind: "tui"; local: boolean; gatewayUrl?: string }
+  | { kind: "tui"; local: boolean; gatewayUrl?: string; authSource?: "config" }
   | { kind: "crestodian" };
 
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
@@ -314,9 +314,13 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
 async function resolveConfiguredTuiLaunchTarget(
   config: OpenClawConfig,
 ): Promise<BareRootLaunchTarget> {
-  const gatewayUrl = await resolveReachableGatewayUrl(config);
-  if (gatewayUrl) {
-    return { kind: "tui", local: false, gatewayUrl };
+  const gateway = await resolveReachableGateway(config);
+  if (gateway) {
+    const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
+    if (gateway.authSource) {
+      target.authSource = gateway.authSource;
+    }
+    return target;
   }
   return { kind: "tui", local: true };
 }
@@ -327,40 +331,79 @@ type GatewayProbeTarget = {
   scope: "local-loopback" | "local-configured" | "remote";
 };
 
-async function resolveReachableGatewayUrl(config: OpenClawConfig): Promise<string | null> {
+type ReachableGateway = {
+  url: string;
+  authSource?: "config";
+};
+
+type GatewayProbeAuth = {
+  token?: string;
+  password?: string;
+  authSource?: "config";
+};
+
+async function resolveReachableGateway(config: OpenClawConfig): Promise<ReachableGateway | null> {
   const targets = await resolveGatewayProbeTargets(config);
   if (targets.length === 0) {
     return null;
   }
-  const gateway = config.gateway;
   const usesRemoteAuth = targets.some((target) => target.auth === "remote");
-  const [token, password] = await Promise.all([
-    resolveGatewayProbeSecret({
-      config,
-      value: usesRemoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
-      path: usesRemoteAuth ? "gateway.remote.token" : "gateway.auth.token",
-    }),
-    resolveGatewayProbeSecret({
-      config,
-      value: usesRemoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
-      path: usesRemoteAuth ? "gateway.remote.password" : "gateway.auth.password",
-    }),
-  ]);
+  const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
   const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
   for (const target of targets) {
     if (!isSafeGatewayProbeTarget(target)) {
       continue;
     }
-    const probe = await probeGatewayReachable({
-      url: target.url,
-      ...(token ? { token } : {}),
-      ...(password ? { password } : {}),
-    });
+    const probeOptions: { url: string; token?: string; password?: string } = { url: target.url };
+    if (auth.token) {
+      probeOptions.token = auth.token;
+    }
+    if (auth.password) {
+      probeOptions.password = auth.password;
+    }
+    const probe = await probeGatewayReachable(probeOptions);
     if (probe.ok) {
-      return target.url;
+      const reachable: ReachableGateway = { url: target.url };
+      if (auth.authSource) {
+        reachable.authSource = auth.authSource;
+      }
+      return reachable;
     }
   }
   return null;
+}
+
+async function resolveGatewayProbeAuth(
+  config: OpenClawConfig,
+  auth: "local" | "remote",
+): Promise<GatewayProbeAuth> {
+  const gateway = config.gateway;
+  const remoteAuth = auth === "remote";
+  const [configToken, configPassword] = await Promise.all([
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
+      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
+    }),
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
+      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
+    }),
+  ]);
+  const resolved: GatewayProbeAuth = {};
+  const token = configToken ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = configPassword ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
+  if (token) {
+    resolved.token = token;
+  }
+  if (password) {
+    resolved.password = password;
+  }
+  if (configToken || configPassword) {
+    resolved.authSource = "config";
+  }
+  return resolved;
 }
 
 async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<GatewayProbeTarget[]> {
@@ -1054,9 +1097,13 @@ export async function runCli(argv: string[] = process.argv) {
         const tuiOptions = bareRootLaunchTarget.local
           ? { deliver: false, local: true }
           : { deliver: false };
-        const tuiLaunchOptions = bareRootLaunchTarget.gatewayUrl
-          ? { gatewayUrl: bareRootLaunchTarget.gatewayUrl, authSource: "config" as const }
-          : {};
+        const tuiLaunchOptions: { gatewayUrl?: string; authSource?: "config" } = {};
+        if (bareRootLaunchTarget.gatewayUrl) {
+          tuiLaunchOptions.gatewayUrl = bareRootLaunchTarget.gatewayUrl;
+        }
+        if (bareRootLaunchTarget.authSource) {
+          tuiLaunchOptions.authSource = bareRootLaunchTarget.authSource;
+        }
         await launchTuiCli(tuiOptions, tuiLaunchOptions);
         return;
       }

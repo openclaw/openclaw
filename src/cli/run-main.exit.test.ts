@@ -2662,6 +2662,34 @@ describe("runCli exit behavior", () => {
     expect(runCrestodianMock).not.toHaveBeenCalled();
   });
 
+  it("uses gateway env credentials for bare root gateway preflight", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token" },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+      token: "env-token",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://127.0.0.1:18789" },
+    );
+  });
+
   it("probes local gateways over loopback even when the gateway advertises a LAN bind", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
