@@ -258,20 +258,31 @@ export function loadSettings(): UiSettings {
 
   try {
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
+    const scopedRaw = storage?.getItem(scopedKey);
+    const defaultRaw = storage?.getItem(SETTINGS_KEY_PREFIX + "default");
+    const legacyRaw = storage?.getItem(LEGACY_SETTINGS_KEY);
+    // Track which key the data came from.  Scoped and "default" keys are
+    // trusted because they were explicitly saved for the current gateway
+    // (or as an intentional default).  The unscoped legacy key can carry a
+    // gatewayUrl from a sibling reverse-proxy path on the same origin (#97636).
+    const sourceKey = scopedRaw !== null ? "scoped" : defaultRaw !== null ? "default" : "legacy";
+    const raw = scopedRaw ?? defaultRaw ?? legacyRaw;
     if (!raw) {
       return defaults;
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    // Block stale cross-base-path gatewayUrl values. The unscoped legacy
-    // key can carry a gatewayUrl from a sibling reverse-proxy path on the
-    // same origin. When the stored URL doesn't match the current page,
-    // use the current gateway's effective URL instead (#97636).
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : defaultUrl;
+    // When the stored URL matches the page-derived base path, use the effective
+    // URL (which may differ in port, etc.).  When it doesn't match and the data
+    // came from the scoped or default key, it's an intentional custom endpoint —
+    // preserve it.  Only block the legacy key from overriding with a stale
+    // cross-base-path URL.
+    const gatewayUrl =
+      parsedGatewayUrl === pageDerivedUrl
+        ? defaultUrl
+        : sourceKey === "legacy"
+          ? defaultUrl
+          : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
