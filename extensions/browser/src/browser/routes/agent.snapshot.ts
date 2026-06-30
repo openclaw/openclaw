@@ -78,7 +78,8 @@ async function collectChromeMcpSnapshotUrls(params: {
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
           .replace(/\\s+/g, " ")
           .trim()
-          .slice(0, 120) || href;
+          .slice(0, 120)
+          .replace(/[\uD800-\uDBFF]$/, "") || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) break;
