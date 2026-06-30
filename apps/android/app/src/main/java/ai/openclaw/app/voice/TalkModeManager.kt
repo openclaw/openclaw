@@ -243,13 +243,19 @@ class TalkModeManager internal constructor(
   }
 
   /** Starts a push-to-talk capture session for gateway node.invoke callers. */
-  suspend fun beginPushToTalk(): TalkPttStartPayload {
+  suspend fun beginPushToTalk(allowNewCapture: Boolean = true): TalkPttStartPayload {
+    if (!allowNewCapture && activePttCaptureId == null) {
+      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
       throw IllegalStateException("UNAVAILABLE: Gateway not connected")
     }
     // PTT begin is idempotent so gateway retries don't start multiple recognizers.
     activePttCaptureId?.let { return TalkPttStartPayload(captureId = it) }
+    if (!allowNewCapture) {
+      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
 
     stopSpeaking(resetInterrupt = false)
     pttTimeoutJob?.cancel()
