@@ -2923,6 +2923,15 @@ export class SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const mostRecent = findMostRecentSession(dir);
     if (mostRecent) {
+      // Verify the session's recorded cwd matches the requested cwd.
+      // This guards against cross-project resume when the encoding was
+      // non-injective (old behavior) or when sessions were manually moved.
+      const entries = loadEntriesFromFile(mostRecent);
+      const header = entries.find((e) => e.type === "session");
+      const sessionCwd = typeof header?.cwd === "string" ? header.cwd : "";
+      if (sessionCwd && sessionCwd !== cwd) {
+        return new SessionManager(cwd, dir, undefined, true);
+      }
       return new SessionManager(cwd, dir, mostRecent, true);
     }
     return new SessionManager(cwd, dir, undefined, true);
@@ -2996,8 +3005,13 @@ export class SessionManager {
   ): Promise<SessionInfo[]> {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
     const sessions = await listSessionsFromDir(dir, onProgress);
-    sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-    return sessions;
+    // Filter out sessions whose header cwd does not match the requested cwd.
+    // The default session directory encoding is not injective (e.g. client/app
+    // and client-app share the same directory), so cwd-aware filtering prevents
+    // cross-project session leakage.
+    const filtered = sessions.filter((s) => !s.cwd || s.cwd === cwd);
+    filtered.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+    return filtered;
   }
 
   /**

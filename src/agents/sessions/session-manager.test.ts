@@ -2516,3 +2516,80 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+
+describe("SessionManager.continueRecent cwd verification", () => {
+  it("skips session whose header cwd does not match requested cwd", async () => {
+    const agentDir = await makeTempDir();
+    const sessionDir = path.join(agentDir, "sessions", "test-cwd-verify");
+    await fs.mkdir(sessionDir, { recursive: true });
+
+    // Write a session with cwd = "/project-a" (newer mtime)
+    const headerA = buildSessionHeader("/project-a", "sess-a");
+    const fileA = path.join(sessionDir, "2026-06-24T10-00-00_A.jsonl");
+    writeFileSync(fileA, JSON.stringify(headerA) + "\n");
+
+    // Request continueRecent with a different cwd
+    const sm = SessionManager.continueRecent("/project-b", sessionDir);
+    // Should start fresh — session ID should NOT be "sess-a"
+    expect(sm.getSessionId()).not.toBe("sess-a");
+  });
+
+  it("loads session whose header cwd matches requested cwd", async () => {
+    const agentDir = await makeTempDir();
+    const sessionDir = path.join(agentDir, "sessions", "test-cwd-match");
+    await fs.mkdir(sessionDir, { recursive: true });
+
+    // Write a session with cwd = "/project-a"
+    const headerA = buildSessionHeader("/project-a", "sess-a");
+    const fileA = path.join(sessionDir, "2026-06-24T10-00-00_A.jsonl");
+    writeFileSync(fileA, JSON.stringify(headerA) + "\n");
+
+    // Request continueRecent with the same cwd
+    const sm = SessionManager.continueRecent("/project-a", sessionDir);
+    // Should load the existing session
+    expect(sm.getSessionId()).toBe("sess-a");
+  });
+});
+
+describe("SessionManager.list cwd filtering", () => {
+  it("filters out sessions whose header cwd does not match requested cwd", async () => {
+    const agentDir = await makeTempDir();
+    const sessionDir = path.join(agentDir, "sessions", "test-list-filter");
+    await fs.mkdir(sessionDir, { recursive: true });
+
+    // Write two sessions in the same directory with different cwds
+    const headerA = buildSessionHeader("/project-a", "sess-a");
+    const fileA = path.join(sessionDir, "2026-06-24T10-00-00_A.jsonl");
+    writeFileSync(fileA, JSON.stringify(headerA) + "\n");
+
+    const headerB = buildSessionHeader("/project-b", "sess-b");
+    const fileB = path.join(sessionDir, "2026-06-24T11-00-00_B.jsonl");
+    writeFileSync(fileB, JSON.stringify(headerB) + "\n");
+
+    // List with cwd = "/project-a" — should only see sess-a
+    const sessions = await SessionManager.list("/project-a", sessionDir);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe("sess-a");
+  });
+
+  it("includes sessions with empty cwd for backward compatibility", async () => {
+    const agentDir = await makeTempDir();
+    const sessionDir = path.join(agentDir, "sessions", "test-list-legacy");
+    await fs.mkdir(sessionDir, { recursive: true });
+
+    // Write a session without a cwd field (legacy session)
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "legacy-sess",
+      timestamp: "2026-06-24T10:00:00.000Z",
+    };
+    const file = path.join(sessionDir, "2026-06-24T10-00-00_L.jsonl");
+    writeFileSync(file, JSON.stringify(header) + "\n");
+
+    // List should include legacy sessions (empty cwd is accepted)
+    const sessions = await SessionManager.list("/any-cwd", sessionDir);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe("legacy-sess");
+  });
+});
