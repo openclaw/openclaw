@@ -35,7 +35,7 @@ function broadcastScheduledDailyReset(params: {
       stateVersion?: { presence?: number; health?: number };
     },
   ) => void;
-  nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   sessionKey: string;
   agentId?: string;
 }) {
@@ -86,7 +86,7 @@ function broadcastScheduledDailyReset(params: {
       : {}),
   };
   params.broadcast("sessions.changed", payload, { dropIfSlow: true });
-  params.nodeSendToAllSubscribed("sessions.changed", payload);
+  params.nodeSendToSession(params.sessionKey, "sessions.changed", payload);
 }
 
 export function startGatewayMaintenanceTimers(params: {
@@ -367,7 +367,7 @@ export function startGatewayMaintenanceTimers(params: {
           onSuccessfulReset: ({ sessionKey, agentId }) => {
             broadcastScheduledDailyReset({
               broadcast: params.broadcast,
-              nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
+              nodeSendToSession: params.nodeSendToSession,
               sessionKey,
               agentId,
             });

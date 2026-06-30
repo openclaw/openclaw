@@ -136,7 +136,7 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
-  it("broadcasts sessions.changed after successful scheduled daily resets", async () => {
+  it("fans scheduled reset sessions.changed only to that session's subscribed nodes", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     const startDailySessionResetSchedulerMock = vi.fn(
@@ -173,10 +173,12 @@ describe("startGatewayMaintenanceTimers", () => {
       const deps = createMaintenanceTimerDeps();
       const broadcast = vi.fn();
       const nodeSendToAllSubscribed = vi.fn();
+      const nodeSendToSession = vi.fn();
 
       const timers = startGatewayMaintenanceTimers({
         ...deps,
         broadcast,
+        nodeSendToSession,
         nodeSendToAllSubscribed,
         cfg: {
           session: {
@@ -205,7 +207,8 @@ describe("startGatewayMaintenanceTimers", () => {
         }),
         { dropIfSlow: true },
       );
-      expect(nodeSendToAllSubscribed).toHaveBeenCalledWith(
+      expect(nodeSendToSession).toHaveBeenCalledWith(
+        "agent:main:main",
         "sessions.changed",
         expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -213,6 +216,10 @@ describe("startGatewayMaintenanceTimers", () => {
           reason: "reset",
           sessionId: "sess-new",
         }),
+      );
+      expect(nodeSendToAllSubscribed).not.toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.anything(),
       );
 
       stopMaintenanceTimers(timers);
