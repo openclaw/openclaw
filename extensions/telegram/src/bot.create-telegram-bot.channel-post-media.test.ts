@@ -66,6 +66,9 @@ const {
 } = harness;
 const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
   await import("./bot-core.js");
+const { runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
+  await import("./bot-processing-outcome.js");
+const { MediaFetchError } = await import("./telegram-media.runtime.js");
 
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,
@@ -447,6 +450,84 @@ describe("createTelegramBot channel_post media", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  it("durably retries a spooled-replay document fetch failure without warning (#98076)", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    saveRemoteMedia.mockRejectedValue(new Error("connection reset by peer"));
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const update = { update_id: 98076 };
+    const ctx = {
+      update,
+      message: {
+        chat: { id: 1234, type: "private" },
+        message_id: 98076,
+        date: 1736380800,
+        document: { file_id: "doc-1", file_name: "report.pdf" },
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ file_path: "documents/doc-1" }),
+    };
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+      withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
+    );
+
+    // Spooled replay keeps the update (completed:false) so the document is
+    // re-downloaded after restart instead of acked and lost; the "try again"
+    // notice is suppressed because we are durably retrying.
+    expect(result).toEqual({ kind: "failed-retryable", error: expect.any(MediaFetchError) });
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("acks and warns a permanent media failure even on spooled replay (#98076)", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    saveRemoteMedia.mockRejectedValue(
+      new MediaFetchError("max_bytes", "Failed to fetch media: payload exceeds maxBytes 10"),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const update = { update_id: 98077 };
+    const ctx = {
+      update,
+      message: {
+        chat: { id: 1234, type: "private" },
+        message_id: 98077,
+        date: 1736380800,
+        document: { file_id: "doc-2", file_name: "huge.pdf" },
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ file_path: "documents/doc-2" }),
+    };
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+      withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
+    );
+
+    // A permanent failure never succeeds on replay, so it stays best-effort:
+    // the update is acked (no failed-retryable result) and the user is warned.
+    expect(result).toBeUndefined();
+    await waitForMockCalls(sendMessageSpy, 1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "⚠️ Failed to download media. Please try again.",
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 98077 }),
+      }),
+    );
   });
 
   it("skips unmentioned requireMention group media before downloading (#81181)", async () => {

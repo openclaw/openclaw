@@ -68,6 +68,7 @@ import {
   hasInboundMedia,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
+  isRetryableMediaFetchError,
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -80,6 +81,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
@@ -2271,18 +2273,31 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_parameters: {
-              message_id: msg.message_id,
-              allow_sending_without_reply: true,
-            },
-          }),
-      }).catch(() => {});
-      releaseDispatchDedupeKeys(dispatchDedupeKeys);
+      const retryable = isRetryableMediaFetchError(mediaErr);
+      if (retryable) {
+        // Keep the durable spool entry so a transient/shutdown media fetch
+        // failure is re-driven after restart instead of acked and lost (#98076).
+        // bot-core keeps spooled replays (completed:false) and best-effort acks
+        // live updates on this failed-retryable result.
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
+      }
+      // On spooled replay the update is durably re-driven, so suppress the
+      // user-facing retry notice that would otherwise repeat on each replay.
+      // Live updates and permanent failures still get the best-effort warning.
+      if (!(retryable && isTelegramSpooledReplayUpdate(ctx.update))) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_parameters: {
+                message_id: msg.message_id,
+                allow_sending_without_reply: true,
+              },
+            }),
+        }).catch(() => {});
+      }
+      releaseDispatchDedupeKeys(dispatchDedupeKeys, retryable ? mediaErr : undefined);
       return;
     }
 
