@@ -21,6 +21,94 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
   });
 
+  it("arms the gate on answer activity but defers the first frame until a content line (tool-progress mode)", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.noteActivity();
+      expect(update).not.toHaveBeenCalled();
+
+      // The delayed-start timer fires during the silent window: the gate starts,
+      // but a label-only draft is NOT delivered — in tool-progress mode the first
+      // frame must carry a real tool/reasoning line, never a bare label.
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+      expect(progress.hasStarted).toBe(true);
+      expect(update).not.toHaveBeenCalled();
+
+      // The first content line is the first delivered frame, and it carries the tool line.
+      const line = {
+        kind: "tool" as const,
+        text: "🛠️ Exec: git status",
+        label: "Exec",
+        icon: "🛠️",
+        detail: "git status",
+      };
+      await progress.pushToolProgress(line);
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec: git status", {
+        lines: [line],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not materialize delayed answer activity after final delivery starts or lands", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const markFinal of ["markFinalReplyStarted", "markFinalReplyDelivered"] as const) {
+        const update = vi.fn();
+        const progress = createChannelProgressDraftCompositor({
+          entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+          mode: "progress",
+          active: true,
+          seed: "test",
+          update,
+        });
+
+        await progress.noteActivity();
+        progress[markFinal]();
+        await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+        // The pre-final noteActivity armed the delayed-start gate, so its timer
+        // may still fire and flip hasStarted — that flag is decoupled from
+        // delivery. What must hold is that no draft is materialized once the
+        // final reply has started/landed: the render path is blocked by the
+        // final-reply guard, so update is never called.
+        expect(update).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not flash a bare label on repeated answer activity (tool-progress mode)", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.noteActivity();
+    await progress.noteActivity();
+
+    // Two work events start the gate immediately, but with no tool/reasoning line
+    // yet the compositor holds the frame instead of delivering a bare label.
+    expect(progress.hasStarted).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("gates window thinking on its own flag, independent of tool progress", async () => {
     // thinking: false hides thoughts even though toolProgress stays on…
     const hiddenUpdate = vi.fn();
