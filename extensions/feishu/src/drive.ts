@@ -349,6 +349,8 @@ async function listFolder(
   let lastHasMore = false;
   let pageCount = 0;
   const MAX_LIST_PAGES = 100;
+  const seenTokens = new Set<string>();
+  if (pageToken) seenTokens.add(pageToken);
   while (hasMore && pageCount < MAX_LIST_PAGES) {
     const params: Record<string, string | number> = {};
     if (validFolderToken) {
@@ -378,6 +380,10 @@ async function listFolder(
     lastHasMore = res.data?.has_more === true;
     hasMore = lastHasMore && opts?.all === true;
     pageToken = res.data?.next_page_token ?? undefined;
+    if (pageToken && seenTokens.has(pageToken)) {
+      break; // Repeated cursor: avoid duplicate pages
+    }
+    if (pageToken) seenTokens.add(pageToken);
   }
   return { files: allFiles, has_more: lastHasMore, next_page_token: pageToken };
 }
@@ -386,6 +392,7 @@ async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?:
   // Search across all pages to find the file
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
   let pageToken: string | undefined;
+  const seenTokens = new Set<string>();
   for (let page = 0; page < 100; page += 1) {
     const params: Record<string, string | number> = {};
     if (validFolderToken) {
@@ -414,6 +421,10 @@ async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?:
       break;
     }
     pageToken = res.data.next_page_token;
+    if (seenTokens.has(pageToken)) {
+      break; // Repeated cursor: avoid infinite loop on stale token
+    }
+    seenTokens.add(pageToken);
   }
   throw new Error(`File not found: ${fileToken}`);
 }
