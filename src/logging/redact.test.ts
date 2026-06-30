@@ -797,6 +797,9 @@ describe("redactSensitiveText", () => {
       "mem0_abcdefghijklmnopqrstuvwxyz",
       "brv_abcdefghijklmnopqrstuvwxyz",
       "xai-abcdefghijklmnopqrstuvwxyzABCDE",
+      `fw-${"C".repeat(40)}`,
+      `fw_${"A".repeat(40)}`,
+      `fpk_${"B".repeat(40)}`,
     ];
     // Redact each fixture alone so every vendor pattern proves it stays reachable through
     // DEFAULT_REDACT_PREFILTER_RE; a joined corpus would let one trigger unlock all others.
@@ -817,11 +820,20 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText("xai-abcdefghijklmnopqrstuvwxyzABCDE", { mode: "tools" })).toBe(
       "xai-ab…BCDE",
     );
+    expect(redactSensitiveText(`fw-${"C".repeat(40)}`, { mode: "tools" })).not.toContain(
+      `fw-${"C".repeat(40)}`,
+    );
+    expect(redactSensitiveText(`fw_${"A".repeat(40)}`, { mode: "tools" })).not.toContain(
+      `fw_${"A".repeat(40)}`,
+    );
+    expect(redactSensitiveText(`fpk_${"B".repeat(40)}`, { mode: "tools" })).not.toContain(
+      `fpk_${"B".repeat(40)}`,
+    );
   });
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
     const input =
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example";
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort";
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe(input);
   });

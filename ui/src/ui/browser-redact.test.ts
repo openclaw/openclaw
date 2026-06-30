@@ -10,6 +10,9 @@ describe("browser tool detail redaction", () => {
         "curl 'https://example.test?refresh_token=ya29.longOAuthRefreshTokenValue&ok=1'",
         "client_secret=clientSecretValueThatShouldNotRender",
         "AIzaSyDUMMYGoogleApiKeyValue1234567890",
+        `bare Fireworks key fw-${"C".repeat(40)}`,
+        `bare Fireworks legacy key fw_${"A".repeat(40)}`,
+        `bare Fireworks Fire Pass key fpk_${"B".repeat(40)}`,
         "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
         'cookie: "sessionid=verySensitiveCookieValue"',
       ].join("\n"),
@@ -27,6 +30,9 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain("longOAuthRefreshTokenValue");
     expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
     expect(redacted).not.toContain("DUMMYGoogleApiKeyValue1234567890");
+    expect(redacted).not.toContain(`fw-${"C".repeat(40)}`);
+    expect(redacted).not.toContain(`fw_${"A".repeat(40)}`);
+    expect(redacted).not.toContain(`fpk_${"B".repeat(40)}`);
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("verySensitiveCookieValue");
   });
