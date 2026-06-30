@@ -53,6 +53,12 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  /**
+   * When true, Allow Always is unavailable because the command itself cannot be
+   * persisted as a reusable pattern (e.g. it uses shell redirection). This is
+   * distinct from an `ask=always` policy that forbids saving any command.
+   */
+  nonPersistableCommand?: boolean;
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -376,9 +382,15 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    if (params.nonPersistableCommand) {
+      lines.push(
+        "Allow Always is unavailable because this command cannot be saved as a reusable pattern (it uses shell redirection or another non-persistable feature).",
+      );
+    } else {
+      lines.push(
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      );
+    }
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);
