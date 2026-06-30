@@ -101,6 +101,19 @@ export function registerControlUiAndPairingSuite(): void {
     "x-forwarded-for": "10.0.0.14",
   };
 
+  const ANDROID_NODE_CLIENT = {
+    id: "openclaw-android",
+    version: "2026.6.2",
+    platform: "Android 16",
+    mode: "node" as const,
+    deviceFamily: "Android",
+  };
+
+  const ANDROID_OPERATOR_CLIENT = {
+    ...ANDROID_NODE_CLIENT,
+    mode: "ui" as const,
+  };
+
   const connectSetupCodeBootstrapNode = async (params: {
     identityPrefix: string;
     client: {
@@ -1386,6 +1399,133 @@ export function registerControlUiAndPairingSuite(): void {
       ]);
     },
   );
+
+  test("qr setup code Android node exposes safe commands and handles node.invoke", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-android-node-invoke-",
+    );
+    const wsNode = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const wsOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+
+    try {
+      const issued = await issueDeviceBootstrapToken();
+      const initial = await connectReq(wsNode, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        caps: ["device", "contacts", "camera"],
+        commands: ["device.info", "contacts.search", "camera.snap"],
+        client: ANDROID_NODE_CLIENT,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(true);
+
+      const auth = (
+        initial.payload as
+          | {
+              auth?: {
+                deviceToken?: string;
+                deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+              };
+            }
+          | undefined
+      )?.auth;
+      expect(auth?.deviceToken).toBeTruthy();
+      const operatorHandoff = auth?.deviceTokens?.find((entry) => entry.role === "operator");
+      const operatorToken = operatorHandoff?.deviceToken;
+      const operatorScopes = operatorHandoff?.scopes ?? [];
+      expect(operatorToken).toBeTruthy();
+      expect(operatorScopes).toContain("operator.read");
+      expect(operatorScopes).toContain("operator.write");
+
+      const operatorConnect = await connectReq(wsOperator, {
+        skipDefaultAuth: true,
+        deviceToken: operatorToken,
+        role: "operator",
+        scopes: operatorScopes,
+        client: ANDROID_OPERATOR_CLIENT,
+        deviceIdentityPath: identityPath,
+      });
+      expect(operatorConnect.ok).toBe(true);
+
+      await expect
+        .poll(async () => {
+          const list = await rpcReq<{
+            nodes?: Array<{
+              nodeId?: string;
+              clientId?: string;
+              commands?: string[];
+              connected?: boolean;
+              paired?: boolean;
+            }>;
+          }>(wsOperator, "node.list", {});
+          const node = list.payload?.nodes?.find((entry) => entry.nodeId === identity.deviceId);
+          return {
+            clientId: node?.clientId,
+            commands: node?.commands?.toSorted() ?? [],
+            connected: node?.connected,
+            paired: node?.paired,
+          };
+        })
+        .toEqual({
+          clientId: "openclaw-android",
+          commands: ["contacts.search", "device.info"],
+          connected: true,
+          paired: true,
+        });
+
+      const invokeResponse = rpcReq<{ payload?: unknown }>(wsOperator, "node.invoke", {
+        nodeId: identity.deviceId,
+        command: "device.info",
+        params: {},
+        timeoutMs: 5_000,
+        idempotencyKey: "android-setup-code-device-info-proof",
+      });
+      const invokeRequest = await onceMessage<{
+        event?: string;
+        payload?: {
+          id?: string;
+          nodeId?: string;
+          command?: string;
+        };
+      }>(wsNode, (msg) => {
+        const event = msg as { event?: string; payload?: { command?: string } };
+        return event.event === "node.invoke.request" && event.payload?.command === "device.info";
+      });
+      expect(invokeRequest.payload?.nodeId).toBe(identity.deviceId);
+
+      const result = await rpcReq(wsNode, "node.invoke.result", {
+        id: invokeRequest.payload?.id ?? "",
+        nodeId: invokeRequest.payload?.nodeId ?? identity.deviceId,
+        ok: true,
+        payloadJSON: JSON.stringify({
+          systemName: "Android",
+          systemVersion: "16",
+          model: "proof-device",
+        }),
+      });
+      expect(result.ok).toBe(true);
+
+      await expect(invokeResponse).resolves.toMatchObject({
+        ok: true,
+        payload: {
+          payload: {
+            systemName: "Android",
+            systemVersion: "16",
+            model: "proof-device",
+          },
+        },
+      });
+    } finally {
+      wsNode.close();
+      wsOperator.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
 
   test.each([
     {

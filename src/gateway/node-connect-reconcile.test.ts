@@ -271,4 +271,159 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectivePermissions).toEqual({ camera: false });
     expect(result.pendingPairing?.request.requestId).toBe("req-downgrade");
   });
+
+  // Regression coverage for openclaw/openclaw#87058 and #97967: an Android
+  // node-connect declaration was being collapsed to an empty effective
+  // surface, leaving an already device-approved Android node permanently
+  // unable to invoke any command (including always-safe commands like
+  // device.info), with no user-facing way to approve the resulting upgrade
+  // request.
+  describe("android node-surface auto-adoption", () => {
+    function makeAndroidNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
+      return makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.ANDROID_APP,
+          version: "test",
+          platform: "android",
+          deviceFamily: "android",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        caps: ["device", "contacts"],
+        commands: ["device.info", "contacts.search"],
+        ...overrides,
+      });
+    }
+
+    it("auto-adopts the declared platform-safe surface on a first-time Android node connect", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-first");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams(),
+        pairedNode: null,
+        requestPairing,
+      });
+
+      expect(result.declaredCaps).toEqual(["device", "contacts"]);
+      expect(result.effectiveCaps).toEqual(["device", "contacts"]);
+      expect(result.declaredCommands).toEqual(["device.info", "contacts.search"]);
+      expect(result.effectiveCommands).toEqual(["device.info", "contacts.search"]);
+      // A pending pairing record is still created (for visibility/audit via
+      // `openclaw nodes status`), but it no longer gates the live surface.
+      expect(result.pendingPairing?.request.requestId).toBe("req-android-first");
+    });
+
+    it("auto-adopts versioned first-party Android metadata", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-versioned");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams({
+          client: {
+            id: GATEWAY_CLIENT_IDS.ANDROID_APP,
+            version: "test",
+            platform: "Android 16",
+            deviceFamily: "Android",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+        }),
+        pairedNode: null,
+        requestPairing,
+      });
+
+      expect(result.effectiveCaps).toEqual(["device", "contacts"]);
+      expect(result.effectiveCommands).toEqual(["device.info", "contacts.search"]);
+      expect(result.pendingPairing?.request.requestId).toBe("req-android-versioned");
+    });
+
+    it("does not auto-adopt Android-shaped metadata from a non-Android client id", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-spoof");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams({
+          client: {
+            id: GATEWAY_CLIENT_IDS.NODE_HOST,
+            version: "test",
+            platform: "Android 16",
+            deviceFamily: "Android",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+        }),
+        pairedNode: null,
+        requestPairing,
+      });
+
+      expect(result.declaredCommands).toEqual(["device.info", "contacts.search"]);
+      expect(result.effectiveCaps).toEqual([]);
+      expect(result.effectiveCommands).toEqual([]);
+      expect(result.pendingPairing?.request.requestId).toBe("req-android-spoof");
+    });
+
+    it("does not auto-adopt commands outside the Android platform allowlist", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-unsafe");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams({
+          commands: ["device.info", "system.run"],
+        }),
+        pairedNode: null,
+        requestPairing,
+      });
+
+      // system.run is not in the android platform allowlist, so it's dropped
+      // before reconciliation ever sees it -- auto-adoption can't widen the
+      // surface beyond what's already platform-safe.
+      expect(result.declaredCommands).toEqual(["device.info"]);
+      expect(result.effectiveCommands).toEqual(["device.info"]);
+    });
+
+    it("does not auto-adopt an existing empty approved Android node surface", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-empty-upgrade");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams(),
+        pairedNode: makePairedNode({
+          nodeId: "openclaw-android",
+          caps: [],
+          commands: [],
+        }),
+        requestPairing,
+      });
+
+      expect(requestPairing).toHaveBeenCalledOnce();
+      expect(result.effectiveCaps).toEqual([]);
+      expect(result.effectiveCommands).toEqual([]);
+      expect(result.shouldClearPendingPairings).toBeUndefined();
+      expect(result.pendingPairing?.request.requestId).toBe("req-android-empty-upgrade");
+    });
+
+    it("still requires explicit reapproval once an Android node has a non-empty approved surface", async () => {
+      const requestPairing = makePendingPairingRequest("req-android-upgrade");
+
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeAndroidNodeConnectParams({
+          caps: ["device", "contacts", "calendar"],
+          commands: ["device.info", "contacts.search", "calendar.events"],
+        }),
+        pairedNode: makePairedNode({
+          nodeId: "openclaw-android",
+          caps: ["device"],
+          commands: ["device.info"],
+        }),
+        requestPairing,
+      });
+
+      // Once a real node-surface approval exists, the legacy-migration
+      // shortcut no longer applies: new caps/commands beyond what's already
+      // approved still go through the normal upgrade-approval path.
+      expect(requestPairing).toHaveBeenCalledOnce();
+      expect(result.effectiveCaps).toEqual(["device"]);
+      expect(result.effectiveCommands).toEqual(["device.info"]);
+      expect(result.pendingPairing?.request.requestId).toBe("req-android-upgrade");
+    });
+  });
 });
