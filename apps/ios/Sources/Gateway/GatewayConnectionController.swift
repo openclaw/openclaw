@@ -375,7 +375,11 @@ final class GatewayConnectionController {
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
         case let .manual(host, port, useTLS, _):
-            await self.connectManual(host: host, port: port, useTLS: useTLS, forceReconnect: true)
+            await self.connectManual(
+                host: host,
+                port: port,
+                useTLS: useTLS,
+                forceReconnect: true)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
                 _ = await self.connectSavedManualEndpointFallback()
@@ -645,7 +649,7 @@ final class GatewayConnectionController {
                 useTLS: resolvedUseTLS && tlsParams != nil)
             else { return false }
 
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+            // Security: saved manual autoconnect only resumes TLS-pinned gateways.
             guard tlsParams != nil else { return false }
 
             self.didAutoConnect = true
@@ -833,7 +837,10 @@ extension GatewayConnectionController {
         return components.url
     }
 
-    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+    private func resolveManualUseTLS(
+        host: String,
+        useTLS: Bool) -> Bool
+    {
         useTLS || self.shouldRequireTLS(host: host)
     }
 
@@ -1100,8 +1107,13 @@ extension GatewayConnectionController {
         self.resolveDiscoveredTLSParams(gateway: gateway)
     }
 
-    func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
-        self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    func _test_resolveManualUseTLS(
+        host: String,
+        useTLS: Bool) -> Bool
+    {
+        self.resolveManualUseTLS(
+            host: host,
+            useTLS: useTLS)
     }
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {

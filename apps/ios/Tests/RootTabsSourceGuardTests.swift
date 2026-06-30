@@ -661,6 +661,17 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 
+    @Test func `onboarding tailscale path blocks raw ip plaintext`() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.gatewaySettingsStoreSourceURL(), encoding: .utf8)
+
+        #expect(onboardingSource.contains("raw-ip-requires-secure-serve"))
+        #expect(onboardingSource.contains("Raw 100.x IPs are not supported on iOS."))
+        #expect(!controllerSource.contains("allowTailscalePlaintext"))
+        #expect(!settingsSource.contains("allowTailscalePlaintext"))
+    }
+
     @Test func `gateway settings preview matrix covers primary states`() throws {
         let supportSource = try String(contentsOf: Self.settingsProTabSupportSourceURL(), encoding: .utf8)
 
@@ -898,6 +909,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Gateway/GatewayConnectionController.swift")
+    }
+
+    private static func gatewaySettingsStoreSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Gateway/GatewaySettingsStore.swift")
     }
 
     private static func channelsSourceURL() -> URL {

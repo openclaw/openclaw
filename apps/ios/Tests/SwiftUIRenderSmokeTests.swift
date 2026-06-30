@@ -1,3 +1,4 @@
+import Network
 import OpenClawKit
 import SwiftUI
 import Testing
@@ -97,6 +98,12 @@ import UIKit
         _ = Self.host(root)
     }
 
+    @Test @MainActor func onboardingConnectionPathBuildsPrimaryStates() {
+        for root in Self.onboardingConnectionPathViews() {
+            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+        }
+    }
+
     @Test @MainActor func routedSidebarScreensBuildOfflineStates() {
         let appModel = NodeAppModel()
         let screens: [AnyView] = [
@@ -162,6 +169,58 @@ import UIKit
         errorModel.gatewayStatusText = "Gateway error: connection refused"
 
         return [offlineModel, connectingModel, connectedModel, errorModel]
+    }
+
+    @MainActor private static func onboardingConnectionPathViews() -> [AnyView] {
+        [
+            AnyView(
+                OnboardingConnectionPathStep(
+                    setupCode: .constant(""),
+                    statusLine: "No saved pairing found. Scan a QR code or paste a setup code.",
+                    discoveryStatusText: "Browsing",
+                    gatewayStatusText: "Disconnected: network lost",
+                    setupCodeStatus: nil,
+                    bestGateway: nil,
+                    connectingGatewayID: nil,
+                    onScanQRCode: {},
+                    onApplySetupCode: {},
+                    onConnectDiscoveredGateway: { _ in },
+                    onChooseLocalNetwork: {},
+                    onChooseTailscaleOrRemote: {},
+                    onChooseManualSetup: {})),
+            AnyView(
+                OnboardingConnectionPathStep(
+                    setupCode: .constant("oc-setup-code"),
+                    statusLine: "Found a nearby gateway.",
+                    discoveryStatusText: "Ready",
+                    gatewayStatusText: "Connecting",
+                    setupCodeStatus: "Setup code ready.",
+                    bestGateway: self.discoveredGatewayFixture(),
+                    connectingGatewayID: nil,
+                    onScanQRCode: {},
+                    onApplySetupCode: {},
+                    onConnectDiscoveredGateway: { _ in },
+                    onChooseLocalNetwork: {},
+                    onChooseTailscaleOrRemote: {},
+                    onChooseManualSetup: {})),
+        ]
+    }
+
+    private static func discoveredGatewayFixture() -> GatewayDiscoveryModel.DiscoveredGateway {
+        GatewayDiscoveryModel.DiscoveredGateway(
+            name: "Forge Gateway",
+            endpoint: .hostPort(
+                host: .ipv4(IPv4Address("192.168.1.10")!),
+                port: NWEndpoint.Port(integerLiteral: 18789)),
+            stableID: "fixture-gateway",
+            debugID: "Forge Gateway._openclaw._tcp.local",
+            lanHost: "192.168.1.10",
+            tailnetDns: "forge.tailnet.ts.net",
+            gatewayPort: 18789,
+            canvasPort: nil,
+            tlsEnabled: true,
+            tlsFingerprintSha256: nil,
+            cliPath: nil)
     }
 
     private static func rootTabsShellScenarios() -> [RootTabsShellScenario] {

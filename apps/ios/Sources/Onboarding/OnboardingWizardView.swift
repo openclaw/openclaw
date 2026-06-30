@@ -70,7 +70,11 @@ struct OnboardingWizardView: View {
     @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
+    @State private var tailscaleGatewayInput: String = ""
+    @State private var tailscaleGatewayStatus: String?
+    @State private var showTailscaleAdvancedSettings: Bool = false
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
+    private static let tailscaleAppStoreURL = URL(string: "https://apps.apple.com/app/tailscale/id1470499037")!
 
     let allowSkip: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
@@ -300,15 +304,41 @@ struct OnboardingWizardView: View {
     }
 
     private var welcomeStep: some View {
-        OnboardingWelcomeStep(
+        OnboardingConnectionPathStep(
+            setupCode: self.$setupCode,
             statusLine: self.statusLine,
+            discoveryStatusText: self.gatewayController.discoveryStatusText,
+            gatewayStatusText: self.appModel.gatewayDisplayStatusText,
+            setupCodeStatus: self.setupCodeStatus,
+            bestGateway: self.bestDiscoveredGateway,
+            connectingGatewayID: self.connectingGatewayID,
             onScanQRCode: {
                 self.statusLine = "Opening QR scanner…"
                 self.showQRScanner = true
             },
-            onManualSetup: {
+            onApplySetupCode: {
+                Task { await self.applySetupCodeAndConnect() }
+            },
+            onConnectDiscoveredGateway: { gateway in
+                Task { await self.connectDiscoveredGateway(gateway) }
+            },
+            onChooseLocalNetwork: {
+                self.selectMode(.homeNetwork)
+                self.step = .connect
+            },
+            onChooseTailscaleOrRemote: {
+                self.prefillTailscaleGatewayInputFromDiscoveryIfNeeded()
+                self.selectMode(.remoteDomain)
+                self.step = .connect
+            },
+            onChooseManualSetup: {
                 self.step = .mode
             })
+    }
+
+    private var bestDiscoveredGateway: GatewayDiscoveryModel.DiscoveredGateway? {
+        self.gatewayController.gateways.first(where: self.gatewayHasResolvableHost)
+            ?? self.gatewayController.gateways.first
     }
 
     @ViewBuilder
@@ -478,7 +508,78 @@ struct OnboardingWizardView: View {
     }
 
     private var remoteDomainConnectSection: some View {
-        self.manualConnectionFieldsSection(title: "Domain Settings")
+        Group {
+            Section {
+                TextField("openclaw-gateway.tailnet.ts.net", text: self.$tailscaleGatewayInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .onSubmit {
+                        Task { await self.connectTailscaleGateway() }
+                    }
+
+                Button {
+                    Task { await self.connectTailscaleGateway() }
+                } label: {
+                    if self.connectingGatewayID == "tailscale" {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                            Text("Checking…")
+                        }
+                    } else {
+                        Text("Connect via Tailscale")
+                    }
+                }
+                .disabled(!self.canConnectTailscaleGateway || self.connectingGatewayID != nil)
+
+                if let tailscaleGatewayStatus, !tailscaleGatewayStatus.isEmpty {
+                    Text(tailscaleGatewayStatus)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Tailscale Gateway")
+            } footer: {
+                Text(
+                    """
+                    Enter the Gateway's MagicDNS name or Tailscale Serve URL. Secure Tailscale connections use HTTPS.
+                    """)
+            }
+
+            Section {
+                Link(destination: Self.tailscaleAppStoreURL) {
+                    Label("Install Tailscale", systemImage: "arrow.up.forward.app")
+                }
+                Button("Retry After Turning On Tailscale") {
+                    Task { await self.connectTailscaleGateway() }
+                }
+                .disabled(!self.canConnectTailscaleGateway || self.connectingGatewayID != nil)
+            } header: {
+                Text("If It Doesn't Connect")
+            } footer: {
+                Text("Install or open the Tailscale app, make sure this iPhone shows Connected, then retry here.")
+            }
+
+            Section {
+                DisclosureGroup("Advanced settings", isExpanded: self.$showTailscaleAdvancedSettings) {
+                    TextField("Host", text: self.$manualHost)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Port", text: self.$manualPortText)
+                        .keyboardType(.numberPad)
+                    self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+                    TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Gateway Password", text: self.$gatewayPassword)
+                    self.manualConnectButton
+                }
+            }
+        }
     }
 
     private var developerConnectSection: some View {
@@ -515,8 +616,8 @@ struct OnboardingWizardView: View {
                         onShowDetails: {
                             self.showGatewayProblemDetails = true
                         })
-                } else if self.issue.needsAuthToken {
-                    Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
+                } else if self.issue.needsAuthCredentials {
+                    Text(self.authRecoveryMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
@@ -826,7 +927,7 @@ extension OnboardingWizardView {
             self.issue = .pairingRequired(requestId: mergedRequestId)
         } else if self.issue.needsPairing, !fallback.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
@@ -837,7 +938,7 @@ extension OnboardingWizardView {
             self.pairingRequestId = requestId
         }
 
-        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+        if self.issue.needsAuthCredentials || self.issue.needsPairing || problem?.pauseReconnect == true {
             self.step = .auth
         }
 
@@ -851,6 +952,17 @@ extension OnboardingWizardView {
         if !trimmedStatus.isEmpty {
             self.connectMessage = trimmedStatus
             self.statusLine = trimmedStatus
+        }
+    }
+
+    private var authRecoveryMessage: String {
+        switch self.issue {
+        case .passwordMissing:
+            "Gateway reached. Enter the Gateway password, or scan a fresh QR/setup code that includes auth."
+        case .tokenMissing:
+            "Gateway reached. Scan a fresh QR/setup code or enter a gateway auth token."
+        default:
+            "Gateway rejected credentials. Scan a fresh QR code or update token/password."
         }
     }
 
@@ -895,6 +1007,10 @@ extension OnboardingWizardView {
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return !host.isEmpty && self.manualPort > 0 && self.manualPort <= 65535
+    }
+
+    private var canConnectTailscaleGateway: Bool {
+        !self.tailscaleGatewayInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func initializeState() {
@@ -991,11 +1107,35 @@ extension OnboardingWizardView {
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
             self.manualTLS = true
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
+            self.prefillTailscaleGatewayInputIfNeeded()
         case .developerLocal:
             if hostIsDefaultLike { self.manualHost = "localhost" }
             self.manualTLS = false
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
+    }
+
+    private func prefillTailscaleGatewayInputIfNeeded() {
+        let existing = self.tailscaleGatewayInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard existing.isEmpty else { return }
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return }
+        if self.manualPort == 18789 {
+            self.tailscaleGatewayInput = host
+        } else {
+            self.tailscaleGatewayInput = "\(host):\(self.manualPort)"
+        }
+    }
+
+    private func prefillTailscaleGatewayInputFromDiscoveryIfNeeded() {
+        let existing = self.tailscaleGatewayInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard existing.isEmpty else { return }
+        guard let host = self.bestDiscoveredGateway?.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return
+        }
+        self.tailscaleGatewayInput = host
     }
 
     private func gatewayHasResolvableHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
@@ -1005,13 +1145,19 @@ extension OnboardingWizardView {
         return !tailnetDns.isEmpty
     }
 
-    private func connectManual() async {
-        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
-        self.connectingGatewayID = "manual"
+    private func connectManual(
+        connectionID: String = "manual",
+        routeLabel: String? = nil,
+        link: GatewayConnectDeepLink? = nil) async
+    {
+        let host = (link?.host ?? self.manualHost).trimmingCharacters(in: .whitespacesAndNewlines)
+        let port = link?.port ?? self.manualPort
+        let useTLS = link?.tls ?? self.manualTLS
+        guard !host.isEmpty, port > 0, port <= 65535 else { return }
+        self.connectingGatewayID = connectionID
         self.issue = .none
-        self.connectMessage = "Connecting to \(host)…"
-        self.statusLine = "Connecting to \(host):\(self.manualPort)…"
+        self.connectMessage = "Connecting to \(routeLabel ?? host)…"
+        self.statusLine = "Connecting to \(host):\(port)…"
         defer { self.connectingGatewayID = nil }
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: self.gatewayToken,
@@ -1020,9 +1166,111 @@ extension OnboardingWizardView {
         self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
-            port: self.manualPort,
-            useTLS: self.manualTLS,
+            port: port,
+            useTLS: useTLS,
             authOverride: authOverride)
+    }
+
+    private func connectTailscaleGateway() async {
+        self.tailscaleGatewayStatus = nil
+        let rawInput = self.tailscaleGatewayInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        GatewayDiagnostics.log("onboarding tailscale connect tapped input=\(Self.redactedGatewayInput(rawInput))")
+        guard !rawInput.isEmpty else {
+            GatewayDiagnostics.log("onboarding tailscale connect blocked reason=empty-input")
+            self.tailscaleGatewayStatus = "Enter a Tailscale Serve URL or MagicDNS name."
+            return
+        }
+        guard let link = self.tailscaleGatewayLink(from: rawInput) else {
+            GatewayDiagnostics.log("onboarding tailscale connect blocked reason=parse-failed")
+            self.tailscaleGatewayStatus = "Use a secure Tailscale Serve URL or MagicDNS host."
+            return
+        }
+        if Self.isTailscaleIPAddress(link.host) {
+            GatewayDiagnostics.log("onboarding tailscale connect blocked reason=raw-ip-requires-secure-serve")
+            self.tailscaleGatewayStatus =
+                "Use this gateway's MagicDNS or Tailscale Serve URL. Raw 100.x IPs are not supported on iOS."
+            self.connectMessage = "Tailscale Serve URL required."
+            self.statusLine = "Use a secure Tailscale URL for first-time setup."
+            return
+        }
+
+        self.applyGatewayLink(link)
+        self.connectingGatewayID = "tailscale"
+        self.connectMessage = "Checking Tailscale route…"
+        self.statusLine = "Checking \(link.host):\(link.port)…"
+        GatewayDiagnostics.log("onboarding tailscale probe start host=\(link.host) port=\(link.port)")
+        let reachable = await TCPProbe.probe(
+            host: link.host,
+            port: link.port,
+            timeoutSeconds: 2.5,
+            queueLabel: "ai.openclaw.onboarding.tailscale-probe")
+        self.connectingGatewayID = nil
+
+        guard reachable else {
+            GatewayDiagnostics.log("onboarding tailscale probe failed host=\(link.host) port=\(link.port)")
+            self.tailscaleGatewayStatus =
+                "Can't reach \(link.host):\(link.port). Turn on Tailscale on this iPhone, then retry."
+            self.connectMessage = "Tailscale route not reachable."
+            self.statusLine = "Waiting for Tailscale to reach \(link.host)."
+            return
+        }
+
+        GatewayDiagnostics.log("onboarding tailscale probe reachable host=\(link.host) port=\(link.port)")
+        self.tailscaleGatewayStatus = "Tailscale route reached. Connecting to OpenClaw..."
+        self.connectMessage = "Tailscale route reached."
+        await self.connectManual(
+            connectionID: "tailscale",
+            routeLabel: "Tailscale",
+            link: link)
+    }
+
+    private func tailscaleGatewayLink(from input: String) -> GatewayConnectDeepLink? {
+        if let link = GatewayConnectDeepLink.fromSetupInput(input) {
+            return link
+        }
+        guard !input.contains("://") else { return nil }
+        let candidate = "wss://\(input)"
+        guard let components = URLComponents(string: candidate),
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        return GatewayConnectDeepLink(
+            host: host,
+            port: components.port ?? Self.defaultTailscalePort(for: host),
+            tls: true,
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+    }
+
+    private static func defaultTailscalePort(for host: String) -> Int {
+        self.isTailscaleServeHost(host) ? 443 : 18789
+    }
+
+    private static func isTailscaleServeHost(_ host: String) -> Bool {
+        host.lowercased().hasSuffix(".ts.net")
+    }
+
+    private static func isTailscaleIPAddress(_ host: String) -> Bool {
+        let parts = host.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        let octets = parts.compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 100 && (64...127).contains(octets[1])
+    }
+
+    private static func redactedGatewayInput(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "empty" }
+        if let link = GatewayConnectDeepLink.fromSetupInput(trimmed) {
+            return "\(link.host):\(link.port)"
+        }
+        guard trimmed.count <= 64, !trimmed.contains("="), !trimmed.contains("{") else {
+            return "unparsed-redacted"
+        }
+        return trimmed
     }
 
     private func retryLastAttempt(silent: Bool = false) async {

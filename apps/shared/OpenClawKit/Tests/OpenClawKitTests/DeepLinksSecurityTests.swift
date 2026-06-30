@@ -11,26 +11,26 @@ private func setupCode(from payload: String) -> String {
 }
 
 @Suite struct DeepLinksSecurityTests {
-    @Test func dashboardDeepLinkParses() {
-        let url = URL(string: "openclaw://dashboard")!
+    @Test func dashboardDeepLinkParses() throws {
+        let url = try #require(URL(string: "openclaw://dashboard"))
         #expect(DeepLinkParser.parse(url) == .dashboard)
     }
 
-    @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() {
-        let url = URL(
-            string: "openclaw://gateway?host=attacker.example&port=18789&tls=0&token=abc")!
+    @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=attacker.example&port=18789&tls=0&token=abc"))
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
-    @Test func gatewayDeepLinkRejectsInsecurePrefixBypassHost() {
-        let url = URL(
-            string: "openclaw://gateway?host=127.attacker.example&port=18789&tls=0&token=abc")!
+    @Test func gatewayDeepLinkRejectsInsecurePrefixBypassHost() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=127.attacker.example&port=18789&tls=0&token=abc"))
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
-    @Test func gatewayDeepLinkAllowsLoopbackWs() {
-        let url = URL(
-            string: "openclaw://gateway?host=127.0.0.1&port=18789&tls=0&token=abc")!
+    @Test func gatewayDeepLinkAllowsLoopbackWs() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=127.0.0.1&port=18789&tls=0&token=abc"))
         #expect(
             DeepLinkParser.parse(url) == .gateway(
                 .init(

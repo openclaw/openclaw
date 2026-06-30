@@ -1,3 +1,4 @@
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -5,13 +6,33 @@ import Testing
     @Test func detectsTokenMissing() {
         let issue = GatewayConnectionIssue.detect(from: "unauthorized: gateway token missing")
         #expect(issue == .tokenMissing)
-        #expect(issue.needsAuthToken)
+        #expect(issue.needsAuthCredentials)
+    }
+
+    @Test func detectsPasswordMissing() {
+        let issue = GatewayConnectionIssue.detect(
+            from: "unauthorized: gateway password missing (provide gateway auth password)")
+        #expect(issue == .passwordMissing)
+        #expect(issue.needsAuthCredentials)
+    }
+
+    @Test func detectsStructuredPasswordMissing() {
+        let problem = GatewayConnectionProblem(
+            kind: .gatewayAuthPasswordMissing,
+            owner: .gateway,
+            title: "Gateway password required",
+            message: "This gateway requires a password.",
+            retryable: true,
+            pauseReconnect: false)
+        let issue = GatewayConnectionIssue.detect(problem: problem)
+        #expect(issue == .passwordMissing)
+        #expect(issue.needsAuthCredentials)
     }
 
     @Test func detectsUnauthorized() {
         let issue = GatewayConnectionIssue.detect(from: "Gateway error: unauthorized role")
         #expect(issue == .unauthorized)
-        #expect(issue.needsAuthToken)
+        #expect(issue.needsAuthCredentials)
     }
 
     @Test func detectsPairingWithRequestId() {

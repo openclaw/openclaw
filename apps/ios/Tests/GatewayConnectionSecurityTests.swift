@@ -36,7 +36,7 @@ import Testing
         GatewayTLSStore.clearFingerprint(stableID: stableID)
     }
 
-    @Test @MainActor func discoveredTLSParams_prefersStoredPinOverAdvertisedTXT() async {
+    @Test @MainActor func discoveredTLSParams_prefersStoredPinOverAdvertisedTXT() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -56,7 +56,7 @@ import Testing
         #expect(params?.allowTOFU == false)
     }
 
-    @Test @MainActor func discoveredTLSParams_doesNotTrustAdvertisedFingerprint() async {
+    @Test @MainActor func discoveredTLSParams_doesNotTrustAdvertisedFingerprint() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -74,7 +74,7 @@ import Testing
         #expect(params?.allowTOFU == false)
     }
 
-    @Test @MainActor func autoconnectRequiresStoredPinForDiscoveredGateways() async {
+    @Test @MainActor func autoconnectRequiresStoredPinForDiscoveredGateways() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -103,13 +103,16 @@ import Testing
         #expect(controller._test_didAutoConnect() == false)
     }
 
-    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "100.64.0.9", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.104.129.13", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.127.255.255", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.128.0.9", useTLS: false) == true)
 
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
@@ -119,7 +122,7 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
     }
 
-    @Test @MainActor func manualConnectionsAllowPrivateLanPlaintext() async {
+    @Test @MainActor func manualConnectionsAllowPrivateLanPlaintext() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
@@ -130,7 +133,18 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "fd00::1", useTLS: false) == false)
     }
 
-    @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {
+    @Test @MainActor func manualConnectionsKeepTailscaleCgnatSecure() {
+        let controller = self.makeController()
+
+        #expect(controller._test_resolveManualUseTLS(host: "100.64.0.9", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.104.129.13", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.127.255.255", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.128.0.9", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.104.129.13", useTLS: true) == true)
+    }
+
+    @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualPort(host: "gateway.example.com", port: 0, useTLS: true) == 18789)
@@ -139,7 +153,7 @@ import Testing
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
     }
 
-    @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
+    @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() {
         let stableID1 = "test|\(UUID().uuidString)"
         let stableID2 = "test|\(UUID().uuidString)"
         defer { GatewayTLSStore.clearAllFingerprints() }
