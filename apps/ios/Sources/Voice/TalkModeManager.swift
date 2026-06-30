@@ -1698,7 +1698,10 @@ final class TalkModeManager: NSObject {
 
     private static func shouldUseGatewayTalkSpeak(provider: String) -> Bool {
         let normalized = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !normalized.isEmpty && normalized != Self.defaultTalkProvider && normalized != "system" && normalized != "openai"
+        return !normalized.isEmpty
+            && normalized != Self.defaultTalkProvider
+            && normalized != "system"
+            && normalized != "openai"
     }
 
     private func resolvedElevenLabsAPIKey() -> String? {
