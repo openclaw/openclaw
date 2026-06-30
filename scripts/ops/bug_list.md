@@ -49,12 +49,14 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-29 06:00:11 UTC · hosts:eu us_
+_Last automated scan: 2026-06-30 06:00:11 UTC · hosts:eu us_
 
-| Pri | Host | Agent | Issue               | Detail                                                                 |
-| --- | ---- | ----- | ------------------- | ---------------------------------------------------------------------- |
-| P1  | eu   | -     | Heavy swap usage    | 2243MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
-| P1  | eu   | -     | Low memory headroom | Only 301MiB available (warn<500MiB); OOM risk under load.              |
-| P1  | us   | -     | Heavy swap usage    | 2065MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| Pri | Host | Agent | Issue                            | Detail                                                                             |
+| --- | ---- | ----- | -------------------------------- | ---------------------------------------------------------------------------------- |
+| P1  | eu   | -     | Heavy swap usage                 | 2313MiB swap in use; host is memory-pressured. Consider a RAM rescale.             |
+| P1  | eu   | -     | Low memory headroom              | Only 207MiB available (warn<500MiB); OOM risk under load.                          |
+| P1  | us   | -     | Heavy swap usage                 | 2505MiB swap in use; host is memory-pressured. Consider a RAM rescale.             |
+| P1  | us   | life  | Model not responding             | typing-TTL / no-reply / timeout in logs — primary model may be hanging or invalid. |
+| P2  | us   | life  | Model-provider discovery timeout | A provider (e.g. venice) discovery is timing out; fallback may be impaired.        |
 
 <!-- AUTOSCAN:END -->
