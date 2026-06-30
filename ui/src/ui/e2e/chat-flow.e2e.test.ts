@@ -1119,7 +1119,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       );
 
       await page
-        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .locator('[data-session-key="agent:main:session-b"] .sidebar-recent-session__switch')
         .click();
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
@@ -1128,7 +1128,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await page
-        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .locator('[data-session-key="agent:main:session-a"] .sidebar-recent-session__switch')
         .click();
       await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
         timeout: 10_000,

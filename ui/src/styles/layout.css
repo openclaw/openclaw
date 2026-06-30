@@ -782,11 +782,11 @@
 
 .sidebar-recent-session {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-height: 40px;
-  padding: 7px 9px;
+  padding: 3px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
@@ -801,13 +801,50 @@
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-recent-session--active {
   background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
   border-color: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text-strong);
+}
+
+.sidebar-recent-session__switch {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: calc(var(--radius-md) - 3px);
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-recent-session__switch:hover,
+.sidebar-recent-session__switch:focus-visible {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-recent-session .sidebar-recent-session__rename.btn--icon {
+  flex: 0 0 30px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  opacity: 0.82;
+}
+
+.sidebar-recent-session .sidebar-recent-session__rename.btn--icon:hover,
+.sidebar-recent-session .sidebar-recent-session__rename.btn--icon:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-recent-session .sidebar-recent-session__rename.btn--icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .sidebar-recent-session__dot {

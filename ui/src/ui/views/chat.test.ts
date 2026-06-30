@@ -39,10 +39,12 @@ const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   }),
 );
 const loadSessionsMock = vi.hoisted(() =>
-  vi.fn(async (state: AppViewState) => {
+  vi.fn(async (state: AppViewState, overrides: Record<string, unknown> = {}) => {
     const res = await state.client?.request("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
+      ...overrides,
     });
     if (res) {
       state.sessionsResult = res as AppViewState["sessionsResult"];
@@ -185,6 +187,17 @@ vi.mock("../controllers/agents.ts", () => ({
 
 vi.mock("../controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
+  patchSession: vi.fn(
+    async (
+      state: AppViewState,
+      key: string,
+      patch: Record<string, unknown>,
+      refreshOverrides?: Record<string, unknown>,
+    ) => {
+      await state.client?.request("sessions.patch", { key, ...patch });
+      await loadSessionsMock(state, refreshOverrides);
+    },
+  ),
   syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),
 }));
 
@@ -2930,6 +2943,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       search: "telegram",
     });
@@ -2995,6 +3009,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       search: "tele",
     });
@@ -3143,6 +3158,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
     });
   });
@@ -3187,6 +3203,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       search: "tele",
     });
@@ -3199,6 +3216,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       search: "telegram",
     });
@@ -3286,6 +3304,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 50,
       search: "telegram",
@@ -3375,6 +3394,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 2,
     });
@@ -3383,6 +3403,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 4,
     });
@@ -3454,6 +3475,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 11,
     });
@@ -3462,6 +3484,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 12,
     });
@@ -3550,6 +3573,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
     });
     expect(request).toHaveBeenCalledWith("sessions.list", {
@@ -3557,6 +3581,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
       offset: 2,
     });
@@ -3606,6 +3631,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
     });
     expect(request.mock.calls.some(([, params]) => Object.hasOwn(params ?? {}, "agentId"))).toBe(
@@ -3686,6 +3712,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
     });
     expect(request).toHaveBeenCalledWith("sessions.list", {
@@ -3693,6 +3720,7 @@ describe("chat session controls", () => {
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
       limit: 50,
     });
   });
@@ -3789,6 +3817,89 @@ describe("chat session controls", () => {
 
     expect(container.textContent).toContain("Main chat");
     expect(container.textContent).not.toContain("Invalid Date");
+  });
+
+  it("announces session picker titles with list/listitem/button semantics", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        derivedTitle: "Mixing session notes",
+        updatedAt: 1_764_000_000_000,
+      },
+    ]);
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+
+    const list = container.querySelector<HTMLElement>(".chat-session-picker__list");
+    const row = container.querySelector<HTMLElement>(".chat-session-picker__option-row");
+    const option = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-picker-option="true"]',
+    );
+    const rename = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-rename="true"]',
+    );
+    const meta = container.querySelector<HTMLElement>(".chat-session-picker__option-meta");
+
+    expect(container.textContent).toContain("Mixing session notes");
+    expect(list?.getAttribute("role")).toBe("list");
+    expect(row?.getAttribute("role")).toBe("listitem");
+    expect(row?.getAttribute("aria-label")).toContain("Mixing session notes");
+    expect(option?.getAttribute("role")).toBeNull();
+    expect(option?.getAttribute("aria-selected")).toBeNull();
+    expect(option?.getAttribute("aria-current")).toBe("page");
+    expect(option?.getAttribute("aria-label")).toContain("Switch to session");
+    expect(option?.getAttribute("aria-label")).toContain("Mixing session notes");
+    expect(option?.getAttribute("aria-label")).toContain(t("common.active"));
+    expect(meta?.textContent?.trim()).not.toBe("");
+    expect(option?.getAttribute("aria-label")).toContain(meta?.textContent?.trim());
+    expect(rename?.getAttribute("aria-label")).toContain("Rename session");
+    expect(rename?.getAttribute("aria-label")).toContain("Mixing session notes");
+  });
+
+  it("renames sessions from the chat picker", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        label: "Main chat",
+        updatedAt: 6,
+      },
+    ]);
+    const prompt = vi.spyOn(globalThis, "prompt").mockReturnValue("Renamed chat");
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: "agent:main:main",
+        label: "Renamed chat",
+      }),
+    );
+
+    expect(prompt).toHaveBeenCalledWith("Rename session", "Main chat");
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      activeMinutes: 0,
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      limit: 50,
+      showArchived: false,
+    });
   });
 
   it("does not add the active session to searched picker rows", () => {

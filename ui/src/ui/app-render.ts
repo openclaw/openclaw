@@ -37,6 +37,7 @@ import {
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
 import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
+import { promptAndRenameChatSession } from "./chat/session-rename.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -548,6 +549,30 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
     .slice(0, 5);
 }
 
+function formatSidebarRecentSessionAccessibleLabel(params: {
+  label: string;
+  meta: string;
+  active: boolean;
+  hasActiveRun?: boolean;
+}): string {
+  return [
+    params.label,
+    params.meta,
+    params.active ? t("common.active") : "",
+    params.hasActiveRun ? t("sessions.sessionDetails.activeRun") : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+async function renameSidebarRecentSession(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  label: string,
+) {
+  await promptAndRenameChatSession(state, row, label);
+}
+
 function renderSidebarSessions(state: AppViewState) {
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
@@ -615,7 +640,7 @@ function renderSidebarSessions(state: AppViewState) {
                 >
                 <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
               </button>
-              <div class="sidebar-recent-sessions__list">
+              <div class="sidebar-recent-sessions__list" role="list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
             </div>
@@ -629,42 +654,66 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const accessibleLabel = formatSidebarRecentSessionAccessibleLabel({
+    label,
+    meta,
+    active,
+    hasActiveRun: row.hasActiveRun,
+  });
   return html`
-    <a
-      href=${href}
+    <div
       class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
       data-session-key=${row.key}
-      title=${`${label} · ${row.key}`}
-      @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (row.key !== state.sessionKey) {
-          switchChatSession(state, row.key);
-        }
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
+      role="listitem"
+      aria-label=${accessibleLabel}
     >
-      <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
-      <span class="sidebar-recent-session__body">
-        <span class="sidebar-recent-session__name">${label}</span>
-        <span class="sidebar-recent-session__meta">${meta}</span>
-      </span>
-      ${row.hasActiveRun
-        ? html`<span
-            class="sidebar-recent-session__live"
-            aria-label=${t("sessions.sessionDetails.activeRun")}
-          ></span>`
-        : nothing}
-    </a>
+      <a
+        href=${href}
+        class="sidebar-recent-session__switch"
+        title=${accessibleLabel}
+        aria-label=${`${t("chat.selectors.switchSession")}: ${accessibleLabel}`}
+        aria-current=${active ? "page" : "false"}
+        @click=${(event: MouseEvent) => {
+          if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          ) {
+            return;
+          }
+          event.preventDefault();
+          if (row.key !== state.sessionKey) {
+            switchChatSession(state, row.key);
+          }
+          state.setTab("chat" as import("./navigation.ts").Tab);
+        }}
+      >
+        <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
+        <span class="sidebar-recent-session__body">
+          <span class="sidebar-recent-session__name">${label}</span>
+          <span class="sidebar-recent-session__meta">${meta}</span>
+        </span>
+        ${row.hasActiveRun
+          ? html`<span
+              class="sidebar-recent-session__live"
+              aria-label=${t("sessions.sessionDetails.activeRun")}
+            ></span>`
+          : nothing}
+      </a>
+      <button
+        class="btn btn--ghost btn--icon sidebar-recent-session__rename"
+        type="button"
+        title=${`${t("chat.selectors.renameSession")}: ${label}`}
+        aria-label=${`${t("chat.selectors.renameSession")}: ${accessibleLabel}`}
+        ?disabled=${!state.connected || !state.client}
+        @click=${() => void renameSidebarRecentSession(state, row, label)}
+      >
+        ${icons.edit}
+      </button>
+    </div>
   `;
 }
 

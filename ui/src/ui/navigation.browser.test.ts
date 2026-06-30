@@ -507,8 +507,10 @@ describe("control UI routing", () => {
     ]) as typeof app.sessionsResult;
     await app.updateComplete;
 
-    const recent = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
-    expect(recent.map((entry) => entry.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+    const recentSwitches = Array.from(
+      app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session__switch"),
+    );
+    expect(recentSwitches.map((entry) => entry.textContent?.replace(/\s+/g, " ").trim())).toEqual([
       "Second workspace just now",
       "First workspace 5m ago",
     ]);
@@ -535,7 +537,7 @@ describe("control UI routing", () => {
     expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
     expect([...recentSection.classList]).not.toContain("sidebar-recent-sessions--collapsed");
 
-    recent[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    recentSwitches[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
     expect(app.tab).toBe("chat");

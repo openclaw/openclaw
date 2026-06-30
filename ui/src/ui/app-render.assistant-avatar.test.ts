@@ -15,6 +15,7 @@ const chatProps = vi.hoisted(() => ({
 }));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const renderChatControlsMock = vi.hoisted(() => vi.fn(() => "chat-controls"));
+const patchSessionMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -51,6 +52,14 @@ vi.mock("./app-render.helpers.ts", async (importOriginal) => {
 vi.mock("./icons.ts", () => ({
   icons: {},
 }));
+
+vi.mock("./controllers/sessions.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/sessions.ts")>();
+  return {
+    ...actual,
+    patchSession: patchSessionMock,
+  };
+});
 
 import { renderApp } from "./app-render.ts";
 import { saveLocalAssistantIdentity } from "./storage.ts";
@@ -236,6 +245,7 @@ beforeEach(async () => {
   quickSettingsProps.current = null;
   chatProps.current = null;
   renderChatControlsMock.mockClear();
+  patchSessionMock.mockClear();
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -337,6 +347,108 @@ describe("renderApp assistant avatar routing", () => {
 
     const shell = container.querySelector<HTMLElement>(".shell");
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
+  });
+
+  it("renders sidebar recent sessions with readable accessible controls", () => {
+    const container = document.createElement("div");
+    const state = createState({
+      tab: "chat",
+      sessionKey: "agent:main:mixing",
+      settings: {
+        ...createState().settings,
+        sessionKey: "agent:main:mixing",
+        navCollapsed: false,
+        recentSessionsCollapsed: false,
+      } as AppViewState["settings"],
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:mixing",
+            kind: "direct",
+            derivedTitle: "Mixing session notes",
+            updatedAt: 1_764_000_000_000,
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+
+    render(renderApp(state), container);
+
+    const newSession = container.querySelector<HTMLButtonElement>(".sidebar-new-session");
+    const switchLink = container.querySelector<HTMLAnchorElement>(
+      ".sidebar-recent-session__switch",
+    );
+    const rename = container.querySelector<HTMLButtonElement>(".sidebar-recent-session__rename");
+    const meta = container.querySelector<HTMLElement>(".sidebar-recent-session__meta");
+
+    expect(newSession?.getAttribute("aria-label")).toBe("New session");
+    expect(container.textContent).toContain("Mixing session notes");
+    expect(switchLink?.getAttribute("aria-current")).toBe("page");
+    expect(switchLink?.getAttribute("aria-label")).toContain("Switch to session");
+    expect(switchLink?.getAttribute("aria-label")).toContain("Mixing session notes");
+    expect(switchLink?.getAttribute("aria-label")).toContain("Active");
+    expect(meta?.textContent?.trim()).not.toBe("");
+    expect(switchLink?.getAttribute("aria-label")).toContain(meta?.textContent?.trim());
+    expect(rename?.getAttribute("aria-label")).toContain("Rename session");
+    expect(rename?.getAttribute("aria-label")).toContain("Mixing session notes");
+  });
+
+  it("renames sidebar recent sessions with chat-scoped refresh options", async () => {
+    const container = document.createElement("div");
+    const state = createState({
+      tab: "chat",
+      sessionKey: "agent:main:mixing",
+      connected: true,
+      sessionsShowArchived: false,
+      client: { request: vi.fn() } as unknown as AppViewState["client"],
+      settings: {
+        ...createState().settings,
+        sessionKey: "agent:main:mixing",
+        navCollapsed: false,
+        recentSessionsCollapsed: false,
+      } as AppViewState["settings"],
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:mixing",
+            kind: "direct",
+            label: "Mixing session notes",
+            updatedAt: 1_764_000_000_000,
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+    const prompt = vi.spyOn(globalThis, "prompt").mockReturnValue("Renamed sidebar session");
+
+    render(renderApp(state), container);
+    container.querySelector<HTMLButtonElement>(".sidebar-recent-session__rename")?.click();
+
+    await vi.waitFor(() =>
+      expect(patchSessionMock).toHaveBeenCalledWith(
+        state,
+        "agent:main:mixing",
+        { label: "Renamed sidebar session" },
+        {
+          activeMinutes: 0,
+          agentId: "main",
+          configuredAgentsOnly: true,
+          includeGlobal: true,
+          includeUnknown: true,
+          includeDerivedTitles: true,
+          limit: 50,
+          showArchived: false,
+        },
+      ),
+    );
+    expect(prompt).toHaveBeenCalledWith("Rename session", "Mixing session notes");
   });
 
   it("marks the logs route so the page can hand scroll ownership to the log stream", () => {

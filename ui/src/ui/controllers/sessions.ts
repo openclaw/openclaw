@@ -72,6 +72,7 @@ export type LoadSessionsOverrides = {
   search?: string;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
+  includeDerivedTitles?: boolean;
   showArchived?: boolean;
   configuredAgentsOnly?: boolean;
   append?: boolean;
@@ -1128,6 +1129,9 @@ async function loadSessionsOnce(
       includeUnknown,
       configuredAgentsOnly,
     };
+    if (overrides?.includeDerivedTitles === true) {
+      params.includeDerivedTitles = true;
+    }
     const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
@@ -1208,6 +1212,7 @@ export async function patchSession(
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
+  refreshOverrides?: LoadSessionsOverrides,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -1231,7 +1236,8 @@ export async function patchSession(
     await state.client.request("sessions.patch", params);
     await loadSessions(
       state,
-      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+      refreshOverrides ??
+        (isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined),
     );
   } catch (err) {
     state.sessionsError = String(err);

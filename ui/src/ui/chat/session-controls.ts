@@ -43,6 +43,7 @@ import {
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
 import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import { promptAndRenameChatSession } from "./session-rename.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -291,6 +292,7 @@ function createChatSessionPickerRequestParams(
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
+    includeDerivedTitles: overrides.includeDerivedTitles,
     limit: overrides.limit,
   };
   const activeAgentSession = parseAgentSessionKey(state.sessionKey);
@@ -556,6 +558,37 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
   return parts.join(" · ");
 }
 
+function formatChatSessionPickerAccessibleLabel(params: {
+  label: string;
+  meta: string;
+  selected: boolean;
+}): string {
+  const parts = [params.label, params.meta, params.selected ? t("common.active") : ""].filter(
+    Boolean,
+  );
+  return parts.join(" · ");
+}
+
+async function renameChatSessionFromPicker(
+  state: AppViewState,
+  row: SessionsListResult["sessions"][number],
+  label: string,
+) {
+  const renamed = await promptAndRenameChatSession(state, row, label);
+  if (!renamed) {
+    return;
+  }
+  if (!state.chatSessionPickerAppliedQuery) {
+    state.chatSessionPickerResult = state.sessionsResult;
+    requestHostUpdate(state);
+    return;
+  }
+  if (state.chatSessionPickerOpen) {
+    state.chatSessionPickerResult = null;
+    void loadChatSessionPickerPage(state, { query: state.chatSessionPickerAppliedQuery });
+  }
+}
+
 function renderChatSessionPicker(params: {
   state: AppViewState;
   onSwitchSession: ChatSessionSwitchHandler;
@@ -694,7 +727,7 @@ function renderChatSessionPickerPopover(
             ${state.chatSessionPickerError}
           </div>`
         : ""}
-      <div class="chat-session-picker__list" role="listbox">
+      <div class="chat-session-picker__list" role="list">
         ${state.chatSessionPickerLoading && pickerRows.length === 0
           ? html`<div class="chat-session-picker__status">${t("common.loading")}</div>`
           : ""}
@@ -708,34 +741,64 @@ function renderChatSessionPickerPopover(
             const { row, label } = entry;
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
+            const accessibleLabel = formatChatSessionPickerAccessibleLabel({
+              label,
+              meta,
+              selected,
+            });
             return html`
-              <button
-                class="chat-session-picker__option ${selected
-                  ? "chat-session-picker__option--selected"
+              <div
+                class="chat-session-picker__option-row ${selected
+                  ? "chat-session-picker__option-row--selected"
                   : ""}"
-                data-chat-session-picker-option="true"
-                data-session-key=${row.key}
-                role="option"
-                aria-selected=${selected ? "true" : "false"}
-                title=${label}
-                type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
-                  }
-                }}
+                role="listitem"
+                aria-label=${accessibleLabel}
               >
-                <span class="chat-session-picker__option-main">
-                  <span class="chat-session-picker__option-label">${label}</span>
-                  ${meta ? html`<span class="chat-session-picker__option-meta">${meta}</span>` : ""}
-                </span>
-                ${selected
-                  ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
-                      ${icons.check}
-                    </span>`
-                  : ""}
-              </button>
+                <button
+                  class="chat-session-picker__option ${selected
+                    ? "chat-session-picker__option--selected"
+                    : ""}"
+                  data-chat-session-picker-option="true"
+                  data-session-key=${row.key}
+                  aria-current=${selected ? "page" : "false"}
+                  title=${accessibleLabel}
+                  aria-label=${`${t("chat.selectors.switchSession")}: ${accessibleLabel}`}
+                  type="button"
+                  @click=${() => {
+                    closeChatSessionPicker(state);
+                    if (row.key !== state.sessionKey) {
+                      onSwitchSession(state, row.key);
+                    }
+                  }}
+                >
+                  <span class="chat-session-picker__option-main">
+                    <span class="chat-session-picker__option-label">${label}</span>
+                    ${meta
+                      ? html`<span class="chat-session-picker__option-meta">${meta}</span>`
+                      : ""}
+                  </span>
+                  ${selected
+                    ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
+                        ${icons.check}
+                      </span>`
+                    : ""}
+                </button>
+                <button
+                  class="btn btn--ghost btn--icon chat-session-picker__rename"
+                  data-chat-session-rename="true"
+                  data-session-key=${row.key}
+                  type="button"
+                  title=${`${t("chat.selectors.renameSession")}: ${label}`}
+                  aria-label=${`${t("chat.selectors.renameSession")}: ${accessibleLabel}`}
+                  ?disabled=${controlsDisabled}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    void renameChatSessionFromPicker(state, row, label);
+                  }}
+                >
+                  ${icons.edit}
+                </button>
+              </div>
             `;
           },
         )}
@@ -1777,7 +1840,12 @@ function resolveSessionScopedOptionLabel(
 
   const label = normalizeOptionalString(row.label) ?? "";
   const displayName = normalizeOptionalString(row.displayName) ?? "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
+  const derivedTitle = normalizeOptionalString(row.derivedTitle) ?? "";
+  if (
+    (label && label !== key) ||
+    (displayName && displayName !== key) ||
+    (derivedTitle && derivedTitle !== key)
+  ) {
     return resolveSessionDisplayName(key, row);
   }
 

@@ -213,6 +213,7 @@ export function createChatSessionsLoadOverrides(
     limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
+    includeDerivedTitles: true,
     configuredAgentsOnly: true,
   };
   if (typeof state.sessionsShowArchived === "boolean") {

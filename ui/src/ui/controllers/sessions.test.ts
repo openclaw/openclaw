@@ -555,6 +555,37 @@ describe("patchSession", () => {
       agentId: "work",
     });
   });
+
+  it("uses explicit refresh overrides after patching a session", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const state = createState(request);
+
+    await patchSession(
+      state,
+      "agent:main:work",
+      { label: "Work" },
+      {
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: true,
+        includeDerivedTitles: true,
+        limit: 50,
+      },
+    );
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
+      key: "agent:main:work",
+      label: "Work",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      agentId: "main",
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      configuredAgentsOnly: true,
+      limit: 50,
+    });
+  });
 });
 
 describe("loadSessions", () => {
@@ -959,6 +990,35 @@ describe("loadSessions", () => {
       search: "telegram",
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("forwards derived-title previews to sessions.list when requested", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
       configuredAgentsOnly: true,
     });
   });
