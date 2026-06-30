@@ -177,19 +177,29 @@ Use `channels.mattermost.replyToMode` to control whether channel and group repli
 - `off` (default): only reply in a thread when the inbound post is already in one.
 - `first`: for top-level channel/group posts, start a thread under that post and route the conversation to a thread-scoped session.
 - `all` and `batched`: same behavior as `first` for Mattermost today, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
-- Direct messages ignore this setting and stay non-threaded.
+- Direct messages are governed separately by `dmReplyToMode` (see below).
+
+Use `channels.mattermost.dmReplyToMode` (same enum as `replyToMode`) to opt direct messages into threading.
+
+- `off` (default): direct messages stay non-threaded — one rolling DM session (historical behavior, unchanged).
+- `first` / `all`: a DM @mention starts its own thread and an independent, thread-scoped session, so each DM topic is isolated (token isolation) instead of accreting into one ever-growing session. New DM threads start as fresh sessions.
 
 ```json5
 {
   channels: {
     mattermost: {
       replyToMode: "all",
+      dmReplyToMode: "first", // opt-in: DM @mentions start their own threaded session
     },
   },
 }
 ```
 
-Thread-scoped sessions use the triggering post id as the thread root.
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- `dmReplyToMode` defaults to `off`, so existing deployments keep flat, non-threaded DMs unless they opt in.
 
 ## Access control (DMs)
 
