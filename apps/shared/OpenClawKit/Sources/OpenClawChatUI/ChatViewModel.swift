@@ -47,6 +47,7 @@ public final class OpenClawChatViewModel {
     }
 
     private var pendingLocalUserEchoMessageIDsByRunID: [String: UUID] = [:]
+    private var provisionalFinalMessageIDs = Set<UUID>()
     private var sessionGeneration: UInt64 = 0
     private var bootstrapGeneration: UInt64 = 0
     // A newer same-session history request only invalidates older responses after it applies.
@@ -359,6 +360,7 @@ public final class OpenClawChatViewModel {
             Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         }
         self.prunePendingLocalUserEchoMessageIDs()
+        self.pruneProvisionalFinalMessageIDs()
         self.sessionId = payload.sessionId
         // Incomplete refreshes can arrive before durable assistant history.
         // The latest visible user turn must survive answered before it can reject older replies.
@@ -526,6 +528,14 @@ public final class OpenClawChatViewModel {
         }.joined(separator: "\\u{001E}")
     }
 
+    private static func finalMessageContentFingerprint(for message: OpenClawChatMessage) -> String {
+        message.content.map { item in
+            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text].joined(separator: "\\u{001F}")
+        }.joined(separator: "\\u{001E}")
+    }
+
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !role.isEmpty else { return nil }
@@ -557,12 +567,43 @@ public final class OpenClawChatViewModel {
         return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
     }
 
+    private static func finalMessageReconciliationKey(for message: OpenClawChatMessage) -> String? {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard role == "assistant" else { return nil }
+
+        let contentFingerprint = Self.finalMessageContentFingerprint(for: message)
+        let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
+            return nil
+        }
+        return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
+    }
+
+    private func hasCanonicalFinalMessageMatching(_ message: OpenClawChatMessage) -> Bool {
+        guard let key = Self.finalMessageReconciliationKey(for: message) else { return false }
+        let searchStart = self.messages.lastIndex(where: { existing in
+            existing.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        }).map { self.messages.index(after: $0) } ?? self.messages.startIndex
+
+        return self.messages[searchStart...].contains { existing in
+            !self.provisionalFinalMessageIDs.contains(existing.id) &&
+                Self.finalMessageReconciliationKey(for: existing) == key
+        }
+    }
+
     private func prunePendingLocalUserEchoMessageIDs() {
         guard !self.pendingLocalUserEchoMessageIDsByRunID.isEmpty else { return }
         let visibleMessageIDs = Set(messages.map(\.id))
         self.pendingLocalUserEchoMessageIDsByRunID = self.pendingLocalUserEchoMessageIDsByRunID.filter {
             self.pendingRuns.contains($0.key) && visibleMessageIDs.contains($0.value)
         }
+    }
+
+    private func pruneProvisionalFinalMessageIDs() {
+        guard !self.provisionalFinalMessageIDs.isEmpty else { return }
+        let visibleMessageIDs = Set(messages.map(\.id))
+        self.provisionalFinalMessageIDs = self.provisionalFinalMessageIDs.intersection(visibleMessageIDs)
     }
 
     private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
@@ -591,6 +632,37 @@ public final class OpenClawChatViewModel {
             errorMessage: incoming.errorMessage)
         self.messages = Self.dedupeMessages(updated)
         self.prunePendingLocalUserEchoMessageIDs()
+        return true
+    }
+
+    private func adoptProvisionalFinalMessage(incoming: OpenClawChatMessage) -> Bool {
+        guard let incomingKey = Self.finalMessageReconciliationKey(for: incoming) else { return false }
+        let searchStart = self.messages.lastIndex(where: { existing in
+            existing.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        }).map { self.messages.index(after: $0) } ?? self.messages.startIndex
+
+        guard let matchIndex = messages[searchStart...].lastIndex(where: { existing in
+            self.provisionalFinalMessageIDs.contains(existing.id) &&
+                Self.finalMessageReconciliationKey(for: existing) == incomingKey
+        }) else {
+            return false
+        }
+
+        let existing = self.messages[matchIndex]
+        var updated = self.messages
+        updated[matchIndex] = OpenClawChatMessage(
+            id: existing.id,
+            role: incoming.role,
+            content: incoming.content,
+            timestamp: incoming.timestamp ?? existing.timestamp,
+            toolCallId: incoming.toolCallId,
+            toolName: incoming.toolName,
+            usage: incoming.usage,
+            stopReason: incoming.stopReason,
+            errorMessage: incoming.errorMessage)
+        self.provisionalFinalMessageIDs.remove(existing.id)
+        self.messages = Self.dedupeMessages(updated)
+        self.pruneProvisionalFinalMessageIDs()
         return true
     }
 
@@ -955,6 +1027,7 @@ public final class OpenClawChatViewModel {
         self.modelSelectionID = Self.defaultModelSelectionID
         self.messages = []
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
+        self.provisionalFinalMessageIDs.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
@@ -989,6 +1062,7 @@ public final class OpenClawChatViewModel {
         self.modelSelectionID = Self.defaultModelSelectionID
         self.messages = []
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
+        self.provisionalFinalMessageIDs.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
@@ -1519,9 +1593,13 @@ public final class OpenClawChatViewModel {
         if self.adoptPendingLocalUserEcho(incoming: sanitized) {
             return
         }
+        if self.adoptProvisionalFinalMessage(incoming: sanitized) {
+            return
+        }
 
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
         self.messages = Self.dedupeMessages(reconciled)
+        self.pruneProvisionalFinalMessageIDs()
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
@@ -1608,8 +1686,16 @@ public final class OpenClawChatViewModel {
                 stopReason: "stop")
         }
 
+        if self.hasCanonicalFinalMessageMatching(message) {
+            return
+        }
+
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])
         self.messages = Self.dedupeMessages(reconciled)
+        if self.messages.contains(where: { $0.id == message.id }) {
+            self.provisionalFinalMessageIDs.insert(message.id)
+        }
+        self.pruneProvisionalFinalMessageIDs()
     }
 
     private static func isAssistantMessage(_ message: OpenClawChatMessage) -> Bool {
