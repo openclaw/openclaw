@@ -1410,6 +1410,7 @@ export const zh_CN: TranslationMap = {
     uk: "乌克兰语（Ukrainian）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    sv: "瑞典语 (Svenska)",
     th: "ไทย (泰语)",
     vi: "Tiếng Việt（越南语）",
     nl: "Nederlands（荷兰语）",

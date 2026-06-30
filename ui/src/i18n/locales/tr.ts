@@ -1454,6 +1454,7 @@ export const tr: TranslationMap = {
     uk: "Українська (Ukraynaca)",
     id: "Bahasa Indonesia (Endonezce)",
     pl: "Polski (Lehçe)",
+    sv: "İsveççe (Svenska)",
     th: "ไทย (Tayca)",
     vi: "Tiếng Việt (Vietnamca)",
     nl: "Nederlands (Felemenkçe)",
