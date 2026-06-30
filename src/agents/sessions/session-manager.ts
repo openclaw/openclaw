@@ -952,10 +952,9 @@ function parseJsonlEntries(content: string): FileEntry[] {
     }
   }
 
-  // PR #97356 hardened the write side to never emit non-JSON lines, but
-  // transcripts written by older code or repaired externally may still
-  // contain malformed entries. Warn once so the operator knows data was
-  // skipped instead of silently dropping entries.
+  // Transcripts written by older code or repaired externally may contain
+  // malformed entries that JSON.parse cannot deserialize. Warn once so the
+  // operator knows data was skipped instead of silently dropping entries.
   if (skipped > 0) {
     logWarn(
       `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
@@ -1295,6 +1294,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
     const content = await readFile(filePath, "utf8");
     const entries: FileEntry[] = [];
     const lines = content.trim().split("\n");
+    let skipped = 0;
 
     for (const line of lines) {
       if (!line.trim()) {
@@ -1303,8 +1303,15 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
       try {
         entries.push(JSON.parse(line) as FileEntry);
       } catch {
-        // Skip malformed lines
+        skipped++;
       }
+    }
+
+    if (skipped > 0) {
+      logWarn(
+        `buildSessionInfo: skipped ${skipped} malformed JSONL line(s) in ${filePath} — ` +
+          `${entries.length} valid entries were loaded`,
+      );
     }
 
     if (entries.length === 0) {
