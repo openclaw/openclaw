@@ -1,6 +1,6 @@
 ---
 name: qqbot-media
-description: QQBot rich media send and receive support. Use <qqmedia> tags to send image, voice, video, or file attachments, with the media type inferred from the file extension.
+description: QQBot rich media send and receive support. Use <qqmedia> tags only for explicit media send/view requests, treating inbound attachment paths as private current-conversation context.
 metadata: { "openclaw": { "emoji": "📸", "requires": { "config": ["channels.qqbot"] } } }
 ---
 
@@ -22,8 +22,10 @@ metadata: { "openclaw": { "emoji": "📸", "requires": { "config": ["channels.qq
 
 ## 接收媒体
 
-- 用户发来的**图片**自动下载到本地，路径在上下文【附件】中，可直接用 `<qqmedia>路径</qqmedia>` 回发
-- 用户发来的**语音**路径在上下文中；若有 STT 能力则优先转写
+- 用户发来的**图片**会由 QQBot 运行时下载到 OpenClaw 管理的 QQBot media 目录，路径只作为当前会话的附件上下文使用。
+- 用户发来的**语音**路径在上下文中；若有 STT 能力则优先转写。
+- 附件路径和远程 URL 可能包含用户私有内容。不要无关输出本地绝对路径，不要把附件转发到其他会话；只有用户明确要求回发、分析或转存该媒体时才使用。
+- 不承诺长期保留附件。若用户需要长期保存，说明应由用户自行保存或重新发送。
 
 ## 规则
 
@@ -35,3 +37,4 @@ metadata: { "openclaw": { "emoji": "📸", "requires": { "config": ["channels.qq
 6. 发送语音时不要重复语音中已朗读的文字
 7. 多个媒体用多个标签
 8. 以会话上下文中的能力说明为准（如未启用语音则不要发语音）
+9. 不要扫描或发送上下文之外的本地文件；只使用用户提供、工具生成，或明确位于受信 media 目录中的路径

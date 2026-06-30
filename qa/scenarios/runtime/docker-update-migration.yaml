@@ -24,7 +24,7 @@ scenario:
     - src/cli/update-cli/post-core-plugin-convergence.ts
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing update-migration Docker E2E lane and records QA Lab evidence for plugin convergence coverage.
     args:
       - --lane

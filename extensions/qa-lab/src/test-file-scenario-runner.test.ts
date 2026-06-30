@@ -457,6 +457,43 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it("uses script scenario timeout overrides when running producer commands", async () => {
+    const repoRoot = await makeTempRepo("qa-script-scenario-timeout-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-timeout");
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
+    }
+    scenario.execution.timeoutMs = 3 * 60 * 60_000;
+
+    const commands: QaScenarioCommandExecution[] = [];
+    await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      commandTimeoutMs: 30 * 60_000,
+      runCommand: async (command) => {
+        commands.push(command);
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "pass",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script pass\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
+  });
+
   it("times out script scenarios and kills descendant process groups", async () => {
     if (process.platform === "win32") {
       return;

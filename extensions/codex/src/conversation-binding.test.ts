@@ -73,9 +73,15 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import {
   handleCodexConversationBindingResolved,
-  handleCodexConversationInboundClaim,
+  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
   startCodexConversationThread,
 } from "./conversation-binding.js";
+
+function handleCodexConversationInboundClaim(
+  ...[event, ...rest]: Parameters<typeof handleCodexConversationInboundClaimImpl>
+) {
+  return handleCodexConversationInboundClaimImpl({ senderIsOwner: true, ...event }, ...rest);
+}
 
 let tempDir: string;
 
@@ -574,6 +580,7 @@ describe("codex conversation binding", () => {
         content: "run this",
         channel: "discord",
         isGroup: true,
+        senderIsOwner: false,
       },
       {
         channelId: "discord",
@@ -596,6 +603,42 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true });
+  });
+
+  it("blocks inbound bound turns without current owner or admin authority", async () => {
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "run this",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        senderIsOwner: false,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile: path.join(tempDir, "session.jsonl"),
+            workspaceDir: tempDir,
+          },
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: { text: "Only an owner or operator.admin can control Codex native execution." },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("routes bound Codex CLI node sessions through node resume", async () => {

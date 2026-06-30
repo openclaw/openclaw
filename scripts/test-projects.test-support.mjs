@@ -1924,7 +1924,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
   ["scripts/dev/test-device-pair-telegram.ts", ["test/scripts/test-device-pair-telegram.test.ts"]],
-  ["scripts/test-live-media.ts", ["test/scripts/test-live-media.test.ts"]],
+  [
+    "test/e2e/qa-lab/media/hosted-media-provider-live.ts",
+    ["test/e2e/qa-lab/media/hosted-media-provider-live.test.ts"],
+  ],
   ["scripts/profile-extension-memory.mjs", ["test/scripts/profile-extension-memory.test.ts"]],
   [
     "scripts/openclaw-performance-source-summary.mjs",
