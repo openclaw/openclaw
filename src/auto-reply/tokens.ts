@@ -43,13 +43,14 @@ function getSilentTrailingRegex(token: string): RegExp {
 }
 
 /**
- * Strip leading and trailing non-letter, non-number characters.
- * Unicode-aware: uses \p{L} for letters, \p{N} for numbers.
+ * Strip leading and trailing punctuation characters.
+ * Unicode-aware: uses \p{P} for all punctuation categories.
  * This prevents stray punctuation (e.g. ".NO_REPLY", "*NO_REPLY*") from
- * causing token-only silent-reply detection to fail.
+ * causing token-only silent-reply detection to fail, while preserving
+ * substantive content like emoji or symbols before the token.
  */
-function stripEdgeNonAlnum(text: string): string {
-  return text.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+function stripEdgePunct(text: string): string {
+  return text.replace(/^\p{P}+|\p{P}+$/gu, "");
 }
 
 /** Returns true only for token-only silent replies. */
@@ -63,7 +64,7 @@ export function isSilentReplyText(
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
   // Strip stray edge punctuation first so ".NO_REPLY" and "*NO_REPLY*" are caught (#98166).
-  return getSilentExactRegex(token).test(stripEdgeNonAlnum(text));
+  return getSilentExactRegex(token).test(stripEdgePunct(text));
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
