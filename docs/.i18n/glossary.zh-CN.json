@@ -17,11 +17,11 @@
   },
   {
     "source": "Coming from BlueBubbles",
-    "target": "Coming from BlueBubbles"
+    "target": "从 BlueBubbles 迁移"
   },
   {
     "source": "BlueBubbles removal and the imsg iMessage path",
-    "target": "BlueBubbles removal and the imsg iMessage path"
+    "target": "从 BlueBubbles 迁移到 imsg iMessage"
   },
   {
     "source": "BlueBubbles",
@@ -29,7 +29,7 @@
   },
   {
     "source": "Configuration reference - iMessage",
-    "target": "Configuration reference - iMessage"
+    "target": "iMessage 配置参考"
   },
   {
     "source": "Pairing",
@@ -49,7 +49,7 @@
   },
   {
     "source": "OpenAI provider",
-    "target": "OpenAI provider"
+    "target": "OpenAI Provider"
   },
   {
     "source": "Mantis",
@@ -93,7 +93,7 @@
   },
   {
     "source": "Azure Speech provider",
-    "target": "Azure Speech provider"
+    "target": "Azure Speech Provider"
   },
   {
     "source": "Web tools",
@@ -129,11 +129,11 @@
   },
   {
     "source": "Agent runtimes",
-    "target": "Agent Runtimes"
+    "target": "Agent 运行时"
   },
   {
     "source": "Agent Runtimes",
-    "target": "Agent Runtimes"
+    "target": "Agent 运行时"
   },
   {
     "source": "Code mode",
@@ -141,19 +141,19 @@
   },
   {
     "source": "Codex harness",
-    "target": "Codex harness"
+    "target": "Codex Harness"
   },
   {
     "source": "Codex harness reference",
-    "target": "Codex harness reference"
+    "target": "Codex Harness 参考"
   },
   {
     "source": "Codex harness runtime",
-    "target": "Codex harness runtime"
+    "target": "Codex Harness 运行时"
   },
   {
     "source": "Native Codex plugins",
-    "target": "Native Codex plugins"
+    "target": "Codex 原生插件"
   },
   {
     "source": "Codex Computer Use",
@@ -165,47 +165,47 @@
   },
   {
     "source": "Agent harness plugins",
-    "target": "Agent harness plugins"
+    "target": "Agent Harness 插件"
   },
   {
     "source": "Agent harness plugins (SDK reference)",
-    "target": "Agent harness plugins (SDK reference)"
+    "target": "Agent Harness 插件（SDK 参考）"
   },
   {
     "source": "Copilot SDK harness",
-    "target": "Copilot SDK harness"
+    "target": "Copilot SDK Harness"
   },
   {
     "source": "Copilot plugin",
-    "target": "Copilot plugin"
+    "target": "Copilot 插件"
   },
   {
     "source": "GitHub Copilot agent runtime",
-    "target": "GitHub Copilot agent runtime"
+    "target": "GitHub Copilot Agent 运行时"
   },
   {
     "source": "copilot",
-    "target": "copilot"
+    "target": "Copilot"
   },
   {
     "source": "Agent loop",
-    "target": "Agent loop"
+    "target": "Agent 循环"
   },
   {
     "source": "Steering queue",
-    "target": "Steering queue"
+    "target": "引导队列"
   },
   {
     "source": "Steer",
-    "target": "Steer"
+    "target": "引导"
   },
   {
     "source": "Models",
-    "target": "Models"
+    "target": "模型"
   },
   {
     "source": "Skills",
-    "target": "Skills"
+    "target": "技能"
   },
   {
     "source": "Skills config",
@@ -217,7 +217,7 @@
   },
   {
     "source": "local loopback",
-    "target": "local loopback"
+    "target": "本地回环地址"
   },
   {
     "source": "Tailscale",
@@ -253,7 +253,7 @@
   },
   {
     "source": "Feishu",
-    "target": "Feishu"
+    "target": "飞书（Feishu/Lark）"
   },
   {
     "source": "ClickClack",
@@ -361,7 +361,7 @@
   },
   {
     "source": "NVIDIA API key",
-    "target": "NVIDIA API key"
+    "target": "NVIDIA API Key"
   },
   {
     "source": "Provider directory",
@@ -373,11 +373,11 @@
   },
   {
     "source": "Diffs",
-    "target": "Diffs"
+    "target": "差异对比"
   },
   {
     "source": "Dreaming",
-    "target": "Dreaming"
+    "target": "梦境"
   },
   {
     "source": "Capability Cookbook",
@@ -565,7 +565,7 @@
   },
   {
     "source": "Memory Wiki",
-    "target": "Memory Wiki"
+    "target": "记忆 Wiki"
   },
   {
     "source": "Memory overview",
@@ -589,7 +589,7 @@
   },
   {
     "source": "Heartbeat",
-    "target": "Heartbeat"
+    "target": "心跳"
   },
   {
     "source": "Scheduled tasks",
@@ -601,7 +601,7 @@
   },
   {
     "source": "wiki",
-    "target": "wiki"
+    "target": "Wiki"
   },
   {
     "source": "Polls",
@@ -937,7 +937,7 @@
   },
   {
     "source": "Async Exec Duplicate Completion Investigation",
-    "target": "Async Exec Duplicate Completion Investigation"
+    "target": "Async Exec 重复完成问题调查"
   },
   {
     "source": "QA Refactor",
@@ -961,11 +961,11 @@
   },
   {
     "source": "QA overview",
-    "target": "QA overview"
+    "target": "测试概览"
   },
   {
     "source": "QA channel",
-    "target": "QA channel"
+    "target": "测试频道"
   },
   {
     "source": "Rich Output Protocol",
@@ -981,7 +981,7 @@
   },
   {
     "source": "Codex Harness Context Engine Port",
-    "target": "Codex Harness Context Engine Port"
+    "target": "Codex Harness 上下文引擎移植"
   },
   {
     "source": "Plugin refactor plan",
@@ -1069,7 +1069,7 @@
   },
   {
     "source": "fs-safe Cleanup Plan",
-    "target": "fs-safe Cleanup Plan"
+    "target": "fs-safe 清理计划"
   },
   {
     "source": "Tool Search",
@@ -1101,7 +1101,7 @@
   },
   {
     "source": "Doctor lint mode",
-    "target": "Doctor lint mode"
+    "target": "Doctor lint 模式"
   },
   {
     "source": "ds4 (local DeepSeek V4)",
@@ -1137,7 +1137,7 @@
   },
   {
     "source": "Meeting Notes CLI",
-    "target": "Meeting Notes CLI"
+    "target": "会议纪要 CLI"
   },
   {
     "source": "Discord voice",
@@ -1153,15 +1153,15 @@
   },
   {
     "source": "Agent runtime architecture",
-    "target": "Agent runtime architecture"
+    "target": "Agent 运行时架构"
   },
   {
     "source": "OpenClaw agent runtime workflow",
-    "target": "OpenClaw agent runtime workflow"
+    "target": "OpenClaw Agent 运行时流程"
   },
   {
     "source": "OpenClaw agent runtime architecture",
-    "target": "OpenClaw agent runtime architecture"
+    "target": "OpenClaw Agent 运行时架构"
   },
   {
     "source": "Install and Configure Plugins",
@@ -1169,11 +1169,11 @@
   },
   {
     "source": "Building Plugins",
-    "target": "Building Plugins"
+    "target": "插件开发"
   },
   {
     "source": "Plugin Manifest",
-    "target": "Plugin Manifest"
+    "target": "插件清单"
   },
   {
     "source": "Workboard plugin",
@@ -1181,11 +1181,11 @@
   },
   {
     "source": "workboard",
-    "target": "workboard"
+    "target": "工作看板"
   },
   {
     "source": "Control UI",
-    "target": "Control UI"
+    "target": "控制界面"
   },
   {
     "source": "Models CLI",
@@ -1193,7 +1193,7 @@
   },
   {
     "source": "Z.AI (GLM)",
-    "target": "Z.AI (GLM)"
+    "target": "Z.AI（GLM）"
   },
   {
     "source": "Cohere",
@@ -1205,7 +1205,7 @@
   },
   {
     "source": "cohere",
-    "target": "cohere"
+    "target": "Cohere"
   },
   {
     "source": "Zalo ClawBot",
