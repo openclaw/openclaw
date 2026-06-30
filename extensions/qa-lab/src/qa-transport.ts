@@ -3,16 +3,16 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { QaProviderMode } from "./model-selection.js";
-import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusOutboundMessageInput,
-  QaBusSearchMessagesInput,
   QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
-} from "./runtime-api.js";
+} from "./protocol.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 
 export type QaTransportGatewayClient = {
   call: (
