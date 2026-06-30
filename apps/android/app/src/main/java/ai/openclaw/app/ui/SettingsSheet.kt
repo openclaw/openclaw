@@ -5,8 +5,10 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.normalizeLocalHourMinute
+import ai.openclaw.app.photoReadPermissionsForRequest
 import android.Manifest
 import android.app.role.RoleManager
 import android.content.Context
@@ -213,12 +215,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   val callLogPermissionAvailable = remember { SensitiveFeatureConfig.callLogEnabled }
   val photosPermissionAvailable = remember { SensitiveFeatureConfig.photosEnabled }
-  val photosPermission =
-    if (Build.VERSION.SDK_INT >= 33) {
-      Manifest.permission.READ_MEDIA_IMAGES
-    } else {
-      Manifest.permission.READ_EXTERNAL_STORAGE
-    }
+  val photosPermissions = photoReadPermissionsForRequest()
   val motionPermissionRequired = true
   val motionAvailable = remember(context) { hasMotionCapabilities(context) }
 
@@ -250,15 +247,15 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       mutableStateOf(
         if (photosPermissionAvailable) {
-          ContextCompat.checkSelfPermission(context, photosPermission) == PackageManager.PERMISSION_GRANTED
+          hasPhotoReadPermission(context)
         } else {
           false
         },
       )
     }
   val photosPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      photosPermissionGranted = granted
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+      photosPermissionGranted = hasPhotoReadPermission(context) || photosPermissions.any { permissions[it] == true }
     }
 
   var contactsPermissionGranted by
@@ -357,7 +354,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
           installedNotificationApps = queryInstalledApps(context, notificationForwardingPackages)
           photosPermissionGranted =
             if (photosPermissionAvailable) {
-              ContextCompat.checkSelfPermission(context, photosPermission) == PackageManager.PERMISSION_GRANTED
+              hasPhotoReadPermission(context)
             } else {
               false
             }
@@ -1004,7 +1001,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
                     if (photosPermissionGranted) {
                       openAppSettings(context)
                     } else {
-                      photosPermissionLauncher.launch(photosPermission)
+                      photosPermissionLauncher.launch(
+                        photosPermissions
+                          .filterNot { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+                          .toTypedArray(),
+                      )
                     }
                   },
                   colors = settingsPrimaryButtonColors(),
