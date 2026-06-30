@@ -42,9 +42,6 @@ export type MaterializeVisibleStreamOptions = {
   includeCurrent?: boolean;
   requirePersistedTool?: boolean;
   replacementMessages?: unknown[];
-  // When false, keyed commentary/preamble parts are not materialized into the
-  // persistent message list, so they clear with the final answer (transient mode).
-  // Defaults to true (persist commentary).
   persistCommentary?: boolean;
   isHiddenAssistantMessage: AssistantMessageVisibility;
   isHiddenStreamText: StreamVisibility;
@@ -454,10 +451,8 @@ export function materializeVisibleStreamState(
   opts: MaterializeVisibleStreamOptions,
 ): unknown[] {
   let nextMessages = messages;
-  const persistCommentary = opts.persistCommentary !== false;
+  const persistCommentary = opts.persistCommentary === true;
   for (const part of visibleAssistantStreamParts(state, opts)) {
-    // Transient mode: keyed commentary stays live during streaming but is never
-    // materialized, so it disappears once the final message lands.
     if (!persistCommentary && part.itemId) {
       continue;
     }

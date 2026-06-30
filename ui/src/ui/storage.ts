@@ -88,8 +88,6 @@ export type UiSettings = {
   themeMode: ThemeMode;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
-  // Keep streamed commentary/preamble blocks visible after the final answer (default true).
-  // When false, commentary clears as the final message arrives (transient progress).
   chatPersistCommentary?: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
@@ -249,7 +247,7 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: true,
+    chatPersistCommentary: false,
     chatAutoScroll: "near-bottom",
     splitRatio: 0.6,
     navCollapsed: false,
@@ -498,7 +496,7 @@ function persistSettings(next: UiSettings) {
     themeMode: next.themeMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
-    chatPersistCommentary: next.chatPersistCommentary ?? true,
+    chatPersistCommentary: next.chatPersistCommentary ?? false,
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,

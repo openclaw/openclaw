@@ -211,8 +211,7 @@ function materializeVisibleAssistantStreamMessages(
 }
 
 function chatPersistCommentaryEnabled(state: ChatState): boolean {
-  // Per-viewer display preference; defaults to persist when unset (e.g. tests/headless).
-  return state.settings?.chatPersistCommentary !== false;
+  return state.settings?.chatPersistCommentary === true;
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
@@ -411,7 +410,6 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
-  // Narrow view of UiSettings; the runtime host is the full app component.
   settings?: { chatPersistCommentary?: boolean };
 };
 

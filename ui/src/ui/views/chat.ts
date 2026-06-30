@@ -2388,7 +2388,6 @@ export function renderChat(props: ChatProps) {
                     item.text,
                     item.startedAt,
                     item.isStreaming,
-                    item.source,
                     props.onOpenSidebar,
                     assistantIdentity,
                     props.basePath,

@@ -831,7 +831,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
-          source: "commentary",
         });
       }
     }
@@ -854,7 +853,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       text,
       startedAt: segment.ts,
       isStreaming: false,
-      source: "commentary",
     };
     // Merge keyed commentary into the timestamp ordering path instead of
     // appending it after every tool card. Insert before the first already-built
@@ -886,7 +884,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt,
           isStreaming: true,
-          source: "final",
         });
       }
     } else if (props.stream.trim().length === 0) {
