@@ -32,7 +32,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -168,6 +168,25 @@ function resolveTelegramCodexLoginProvider(rawProvider: string | undefined): str
   return TELEGRAM_CODEX_LOGIN_PROVIDER_ALIASES.has(normalized)
     ? TELEGRAM_CODEX_LOGIN_PROVIDER
     : null;
+}
+
+function hasConfiguredTelegramLoginOwner(cfg: OpenClawConfig): boolean {
+  const owners = cfg.commands?.ownerAllowFrom;
+  return Array.isArray(owners) && owners.some((owner) => normalizeOptionalString(String(owner)));
+}
+
+function resolveProviderScopedProfileId(
+  authProfileOverride: string | undefined,
+  provider: string,
+): string | undefined {
+  const profileId = normalizeOptionalString(authProfileOverride);
+  if (!profileId) {
+    return undefined;
+  }
+  const providerPrefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+  return normalizeLowercaseStringOrEmpty(profileId).startsWith(providerPrefix)
+    ? profileId
+    : undefined;
 }
 
 function resolveTelegramCodexLoginProviderInput(commandArgs: CommandArgs | undefined): string {
@@ -1317,8 +1336,16 @@ export const registerTelegramNativeCommands = ({
               fn: () => bot.api.sendMessage(chatId, text, threadParams),
             });
           };
-          if (!senderIsOwner) {
-            await sendLoginMessage("Only the OpenClaw owner can start Codex login from Telegram.");
+          if (!senderIsOwner || !hasConfiguredTelegramLoginOwner(runtimeCfg)) {
+            await sendLoginMessage(
+              "Only a configured OpenClaw owner can start Codex login from Telegram.",
+            );
+            return;
+          }
+          if (isGroup) {
+            await sendLoginMessage(
+              "For safety, Codex login codes are only sent in a private chat with this bot. DM this bot `/login codex` to pair Codex.",
+            );
             return;
           }
           const loginProvider = resolveTelegramCodexLoginProvider(
@@ -1355,10 +1382,30 @@ export const registerTelegramNativeCommands = ({
             if (!loginFlow) {
               throw new Error("Codex login flow is unavailable.");
             }
+            const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
+            const targetSessionKey = resolveCommandTargetSessionKey({
+              runtimeCfg,
+              route,
+              chatId,
+              isGroup,
+              senderId,
+              threadSpec,
+              botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+              resolveThreadSessionKeys: nativeCommandRuntime.resolveThreadSessionKeys,
+            });
+            const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
+              agentId: route.agentId,
+              sessionKey: targetSessionKey,
+            });
+            const profileId = resolveProviderScopedProfileId(
+              targetSessionEntry?.authProfileOverride,
+              loginProvider,
+            );
             await loginFlow({
               provider: loginProvider,
               method: TELEGRAM_CODEX_LOGIN_METHOD,
               agent: route.agentId,
+              ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
               prompter: createTelegramLoginPrompter({

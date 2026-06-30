@@ -29,6 +29,7 @@ type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -57,6 +58,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     nativeName: command.nativeName,
     nativeAliases: command.nativeAliases
       ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
+    nativeProviders: command.nativeProviders
+      ? normalizeStringEntries(command.nativeProviders)
       : undefined,
     description: command.description,
     acceptsArgs,
@@ -269,7 +273,8 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      description: "Pair Codex login in this chat.",
+      nativeProviders: ["telegram"],
+      description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",
       tier: "standard",

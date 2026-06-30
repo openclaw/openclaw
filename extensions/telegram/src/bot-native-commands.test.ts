@@ -2,6 +2,7 @@
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -510,7 +511,7 @@ describe("registerTelegramNativeCommands", () => {
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toContainEqual({
       command: "login",
-      description: "Pair Codex login in this chat.",
+      description: "Pair Codex login.",
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
@@ -520,6 +521,42 @@ describe("registerTelegramNativeCommands", () => {
     expect(texts[0]).toContain("Code: ABCD-EFGH");
     expect(texts[0]).toContain("Never share it.");
     expect(texts.at(-1)).toContain("Codex login complete. Try your request again now.");
+  });
+
+  it("rejects group /login codex without sending the device code publicly", async () => {
+    const loginFlow = vi.fn(
+      async (params: {
+        prompter: { note: (message: string, title?: string) => Promise<void> };
+      }) => {
+        await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      },
+    );
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+      allowFrom: ["200"],
+    });
+
+    await handler(createTelegramGroupCommandContext({ match: "codex", userId: 200 }));
+
+    expect(loginFlow).not.toHaveBeenCalled();
+    const texts = sendMessage.mock.calls.map((call) => String(call[1]));
+    expect(texts).toContain(
+      "For safety, Codex login codes are only sent in a private chat with this bot. DM this bot `/login codex` to pair Codex.",
+    );
+    expect(texts.join("\n")).not.toContain("SECRET");
+    expect(texts.join("\n")).not.toContain("https://auth.openai.com/codex/device");
   });
 
   it("rejects /login for authorized senders who are not owners", async () => {
@@ -543,7 +580,7 @@ describe("registerTelegramNativeCommands", () => {
 
     expect(loginFlow).not.toHaveBeenCalled();
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-      "Only the OpenClaw owner can start Codex login from Telegram.",
+      "Only a configured OpenClaw owner can start Codex login from Telegram.",
     );
   });
 
