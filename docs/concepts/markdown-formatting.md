@@ -32,7 +32,7 @@ stay consistent across channels.
 3. **Render per channel**
    - **Slack:** mrkdwn tokens (bold/italic/strike/code), links as `<url|label>`.
    - **Telegram:** HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`).
-   - **Signal:** plain text + `text-style` ranges; links become `label (url)` when label differs.
+   - **Signal:** plain text + `text-style` ranges; links become `label (https://example.com)` when label differs.
 
 ## IR example
 
@@ -96,10 +96,10 @@ If you need more on chunking behavior across channels, see
 
 ## Link policy
 
-- **Slack:** `[label](url)` -> `<url|label>`; bare URLs remain bare. Autolink
+- **Slack:** `[label](https://example.com)` -> `<url|label>`; bare URLs remain bare. Autolink
   is disabled during parse to avoid double-linking.
-- **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
-- **Signal:** `[label](url)` -> `label (url)` unless label matches the URL.
+- **Telegram:** `[label](https://example.com)` -> `<a href="https://example.com">label</a>` (HTML parse mode).
+- **Signal:** `[label](https://example.com)` -> `label (https://example.com)` unless label matches the URL.
 
 ## Spoilers
 

@@ -11,7 +11,7 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Delivery notes
 
-- Telegram replies that contain markdown image syntax, such as `![alt](url)`,
+- Telegram replies that contain markdown image syntax, such as `![alt](https://example.com/image.png)`,
   are converted into media replies on the final outbound path when possible.
 - Slack multi-person DMs route as group chats, so group policy, mention
   behavior, and group-session rules apply to MPIM conversations.
