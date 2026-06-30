@@ -46,9 +46,15 @@ type PairingQrExpiryNotice = {
   title: string;
   reason: string;
 };
+type PairingQrExpiryRefreshTimer = {
+  expiresAtMs: number;
+  onRequestUpdate: () => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 const PAIRING_QR_EXPIRED_NOTICE: PairingQrExpiryNotice = {
@@ -114,6 +120,10 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
     clearTimeout(timer);
   }
   assistantAttachmentRefreshTimers.clear();
+  for (const { timer } of pairingQrExpiryRefreshTimers.values()) {
+    clearTimeout(timer);
+  }
+  pairingQrExpiryRefreshTimers.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
     URL.revokeObjectURL(blobUrl);
   }
@@ -381,6 +391,71 @@ function extractPairingQrExpiryNotices(
     }
   }
   return notices;
+}
+
+function resolveNearestFuturePairingQrExpiresAtMs(
+  message: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  let nearestExpiresAtMs: number | undefined;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (b.type !== "openclaw_pairing_qr") {
+      continue;
+    }
+    const expiresAtMs = readPairingQrExpiresAtMs(b);
+    if (expiresAtMs === undefined || expiresAtMs <= nowMs) {
+      continue;
+    }
+    nearestExpiresAtMs =
+      nearestExpiresAtMs === undefined ? expiresAtMs : Math.min(nearestExpiresAtMs, expiresAtMs);
+  }
+  return nearestExpiresAtMs;
+}
+
+function clearPairingQrExpiryRefreshTimer(messageKey: string) {
+  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
+  if (!existing) {
+    return;
+  }
+  clearTimeout(existing.timer);
+  pairingQrExpiryRefreshTimers.delete(messageKey);
+}
+
+function schedulePairingQrExpiryRefresh(
+  messageKey: string,
+  message: unknown,
+  onRequestUpdate: (() => void) | undefined,
+) {
+  const nowMs = Date.now();
+  const expiresAtMs = resolveNearestFuturePairingQrExpiresAtMs(message, nowMs);
+  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
+  if (!expiresAtMs || !onRequestUpdate) {
+    if (existing) {
+      clearPairingQrExpiryRefreshTimer(messageKey);
+    }
+    return;
+  }
+  if (existing?.expiresAtMs === expiresAtMs && existing.onRequestUpdate === onRequestUpdate) {
+    return;
+  }
+  clearPairingQrExpiryRefreshTimer(messageKey);
+  const timer = setTimeout(
+    () => {
+      pairingQrExpiryRefreshTimers.delete(messageKey);
+      onRequestUpdate();
+    },
+    Math.max(0, expiresAtMs - nowMs),
+  );
+  pairingQrExpiryRefreshTimers.set(messageKey, { expiresAtMs, onRequestUpdate, timer });
 }
 
 function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
@@ -1735,6 +1810,7 @@ function renderGroupedMessage(
     authToken: opts.assistantAttachmentAuthToken,
     onRequestUpdate: opts.onRequestUpdate,
   };
+  schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
   const hasImages = images.length > 0;
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);

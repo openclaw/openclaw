@@ -1719,6 +1719,40 @@ describe("grouped chat rendering", () => {
       "Run /pair qr again to generate a fresh setup code.",
     );
 
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
+      const refreshPairingQr = vi.fn();
+      const expiringPairingQrContainer = document.createElement("div");
+      renderAssistantMessage(
+        expiringPairingQrContainer,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "openclaw_pairing_qr",
+              image_url: "data:image/png;base64,cXJwbmc=",
+              alt: "OpenClaw pairing QR code",
+              expiresAtMs: Date.now() + 1_000,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: refreshPairingQr },
+      );
+      expect(expiringPairingQrContainer.querySelector(".chat-message-image")).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshPairingQr).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshPairingQr).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      resetAssistantAttachmentAvailabilityCacheForTest();
+    }
+
     container = renderUserMedia({
       id: "user-history-image-blocked",
       role: "user",
