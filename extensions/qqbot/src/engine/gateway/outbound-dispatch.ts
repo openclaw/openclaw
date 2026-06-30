@@ -435,26 +435,23 @@ export async function dispatchOutbound(
         storePath,
         ctxPayload,
         recordInboundSession: runtime.channel.session.recordInboundSession,
-        record: (() => {
-          log?.info(`[route-persistence] inbound event.type=${inbound.event.type} isGroupChat=${inbound.isGroupChat} -> ${inbound.isGroupChat ? 'applying updateLastRoute' : 'omitting updateLastRoute'}`);
-          return {
-            onRecordError: (err: unknown) => {
-              log?.error(
-                `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            },
-            ...(inbound.isGroupChat
-              ? {
-                  updateLastRoute: {
-                    sessionKey: inbound.route.sessionKey,
-                    channel: "qqbot",
-                    to: qualifiedTarget,
-                    accountId: inbound.route.accountId,
-                  },
-                }
-              : {}),
-          };
-        })(),
+        record: {
+          onRecordError: (err: unknown) => {
+            log?.error(
+              `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot",
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
+        },
         runDispatch: () =>
           runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
