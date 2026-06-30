@@ -3846,6 +3846,7 @@ describe("subagent registry seam flow", () => {
         },
         suspendedAt: now - 2 * 60 * 60_000 - 1,
         suspendedReason: "retry-limit",
+        escalated: true,
       },
     });
 
@@ -3872,6 +3873,7 @@ describe("subagent registry seam flow", () => {
       endedAt: now - 3 * 60 * 60_000,
       status: "ok",
       lastError: "gateway request timeout for agent",
+      escalated: true,
     });
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({

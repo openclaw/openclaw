@@ -60,6 +60,7 @@ import {
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { isNonDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -630,9 +631,15 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }): boolean => {
-    const result =
-      args.entry.completion?.resultText ?? args.entry.completion?.fallbackResultText;
-    if (args.entry.expectsCompletionMessage !== true || result == null) {
+    const result = args.entry.completion?.resultText ?? args.entry.completion?.fallbackResultText;
+    const deliverableResult = result?.trim();
+    if (
+      args.entry.expectsCompletionMessage !== true ||
+      args.entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE ||
+      args.entry.outcome?.status !== "ok" ||
+      !deliverableResult ||
+      isNonDeliverableSessionsReply(deliverableResult)
+    ) {
       return false;
     }
     suspendPendingFinalDelivery({
@@ -941,9 +948,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       // Never silently drop an expected completion that already produced a
       // result. Surface it to the user (escalation) instead of clearing.
-      if (
-        escalateExpectedCompletionOnGiveUp({ runId, entry, reason: deferredDecision.reason })
-      ) {
+      if (escalateExpectedCompletionOnGiveUp({ runId, entry, reason: deferredDecision.reason })) {
         return;
       }
       const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;

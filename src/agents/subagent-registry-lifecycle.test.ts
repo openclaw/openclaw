@@ -974,6 +974,62 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.cleanupCompletedAt).toBeUndefined();
   });
 
+  it("does not escalate an expected completion result from a non-successful run", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "partial failure details" },
+      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
+      outcome: { status: "error", error: "child failed" },
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.delivery?.escalated).toBeUndefined();
+  });
+
+  it("does not escalate non-deliverable completion sentinel results", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "ANNOUNCE_SKIP" },
+      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
+      outcome: { status: "ok" },
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.delivery?.escalated).toBeUndefined();
+  });
+
   it("still clears delivery on give-up when no completion message was expected", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

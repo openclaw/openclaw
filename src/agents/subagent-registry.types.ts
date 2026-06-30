@@ -81,6 +81,7 @@ export type SubagentCompletionDeliveryState = {
     endedAt?: number;
     status?: string;
     lastError?: string | null;
+    escalated?: boolean;
   };
   lastDropReason?:
     | "queue_cap"
