@@ -1094,7 +1094,11 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
     expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
-    expect(serialized).toContain("main-test-case-name");
+    // `main-test-case-name` is an all-word 4-4-4-4 token in the `text` field.  The same `text`
+    // value also contains a JWT secret (eyJ…), so the secret-context sweep fires fail-closed and
+    // masks it.  This is intentionally stricter than Tier 2 precision: a value known to contain
+    // a secret is high-risk context.
+    expect(serialized).not.toContain("main-test-case-name");
   });
 
   it("preserves benign bare access and refresh fields", () => {
@@ -1120,6 +1124,203 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("1//0fake-refresh-token");
     expect(serialized).not.toContain("opaque-access-token-value");
     expect(serialized).not.toContain("opaque-refresh-token-value");
+  });
+
+  it("does not corrupt kebab-case identifiers in generic text/error fields", () => {
+    // Regression: APP_SPECIFIC_PASSWORD_RE matches any 4×4-char lowercase kebab token.
+    // Generic field names must NOT unconditionally trigger the sweep; a nearby apple/icloud
+    // context anchor is required.
+    const output = redactSecrets({
+      type: "text",
+      text: "open the help-desk-team-page link and rerun kube-node-pool-spec",
+    });
+    expect((output as { text: string }).text).toBe(
+      "open the help-desk-team-page link and rerun kube-node-pool-spec",
+    );
+  });
+
+  it("does not corrupt kebab-case identifiers in standalone error field values", () => {
+    expect(redactSensitiveFieldValue("error", "module load-some-bare-init crashed")).toBe(
+      "module load-some-bare-init crashed",
+    );
+  });
+
+  it("still masks a real Apple app-specific password in an apple-specific field", () => {
+    // Field key 'apple' is in STRUCTURED_APP_PASSWORD_FIELD_RE — mask unconditionally.
+    expect(redactSensitiveFieldValue("apple", "abcd-efgh-ijkl-mnop")).not.toBe(
+      "abcd-efgh-ijkl-mnop",
+    );
+    expect(redactSensitiveFieldValue("icloud", "abcd-efgh-ijkl-mnop")).not.toBe(
+      "abcd-efgh-ijkl-mnop",
+    );
+  });
+
+  it("still masks an Apple app password when iCloud context appears in the value", () => {
+    // Even in a generic field, if the surrounding text mentions iCloud/apple the sweep fires.
+    expect(redactSensitiveFieldValue("error", "iCloud rejected abcd-efgh-ijkl-mnop")).not.toContain(
+      "abcd-efgh-ijkl-mnop",
+    );
+    expect(
+      redactSensitiveFieldValue("message", "app password qrst-uvwx-yzab-cdef is invalid"),
+    ).not.toContain("qrst-uvwx-yzab-cdef");
+  });
+
+  it("does not over-mask kebab identifiers in large values when apple/icloud is far away (>32 KiB chunk bug)", () => {
+    // Regression for the chunk-offset mismatch: replacePatternBounded splits inputs >32 KiB
+    // into 16 KiB chunks and calls `.replace` per chunk, so the `offset` passed to the
+    // replacer callback is chunk-relative (0..16383), not whole-text-relative. The old code
+    // used the closed-over whole-`text` for the context window slice with that chunk-relative
+    // offset, causing the window to land near position 0 of the whole string. If an
+    // apple/icloud keyword happened to sit near position 0, every 4×4-char kebab in subsequent
+    // chunks was falsely masked.
+    const CHUNK_SIZE = 16_384;
+    const CHUNK_THRESHOLD = 32_768;
+
+    // Build a value with "apple" at position 0 and "help-desk-team-page" placed exactly at the
+    // start of chunk 2 (whole-text offset CHUNK_THRESHOLD). The buggy code computes a window
+    // starting at `max(0, 0 - 50) = 0` in the whole text, which includes "apple" → false
+    // positive. The fixed code windows within the chunk text where there is no apple context.
+    const value =
+      "apple sign-in: " +
+      "x".repeat(CHUNK_THRESHOLD - 15) +
+      "help-desk-team-page" +
+      "z".repeat(100);
+    expect(value.length).toBeGreaterThan(CHUNK_THRESHOLD);
+    // apple/icloud is >32 KiB away from the kebab — must NOT be masked.
+    expect(redactSensitiveFieldValue("message", value)).toContain("help-desk-team-page");
+
+    // A >32 KiB value where the real app-password has iCloud context right beside it in the
+    // same chunk IS still masked — the fixed window is anchored to the chunk, so the nearby
+    // keyword is visible.
+    const prefix = "x".repeat(CHUNK_SIZE * 2 + 100);
+    const valueWithRealPw = prefix + " iCloud app password: abcd-efgh-ijkl-mnop " + "z".repeat(100);
+    expect(valueWithRealPw.length).toBeGreaterThan(CHUNK_THRESHOLD);
+    expect(redactSensitiveFieldValue("message", valueWithRealPw)).not.toContain(
+      "abcd-efgh-ijkl-mnop",
+    );
+  });
+
+  // Hybrid-design regressions (fail-closed explicit fields + wordlist precision generic fields)
+  it("masks an all-word 4x4 token in an explicit Apple credential field (fail-closed)", () => {
+    // Even though `main-test-case-name` consists entirely of dictionary words it MUST be masked
+    // when the field key is `appSpecificPassword` — explicit credential fields are fail-closed and
+    // never consult the wordlist.
+    expect(redactSensitiveFieldValue("appSpecificPassword", "main-test-case-name")).not.toBe(
+      "main-test-case-name",
+    );
+    // Random credential shapes also masked in explicit fields.
+    expect(redactSensitiveFieldValue("apple", "kxbv-qwfn-zptl-mrqd")).not.toBe(
+      "kxbv-qwfn-zptl-mrqd",
+    );
+    expect(redactSensitiveFieldValue("icloud", "kxbv-qwfn-zptl-mrqd")).not.toBe(
+      "kxbv-qwfn-zptl-mrqd",
+    );
+  });
+
+  it("does not mask kebab identifiers in errorMessage (wordlist precision)", () => {
+    // `errorMessage` is a generic field — wordlist precision applies.  All-word tokens survive.
+    expect(redactSensitiveFieldValue("errorMessage", "spec-prod-team-role")).toBe(
+      "spec-prod-team-role",
+    );
+    expect(
+      redactSensitiveFieldValue("errorMessage", "request failed on help-desk-team-page route"),
+    ).toContain("help-desk-team-page");
+  });
+
+  it("masks random credential tokens in errorMessage (wordlist precision)", () => {
+    // Random tokens whose segments are not dictionary words must still be masked.
+    expect(
+      redactSensitiveFieldValue("errorMessage", "auth failed: kxbv-qwfn-zptl-mrqd"),
+    ).not.toContain("kxbv-qwfn-zptl-mrqd");
+    // Sequential-alphabet token — not words → masked (covers the io.audit.test.ts path).
+    expect(
+      redactSensitiveFieldValue("errorMessage", "payload contained abcd-efgh-ijkl-mnop"),
+    ).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
+  it("does not mask kebab identifiers across all generic field types (wordlist precision)", () => {
+    const kebabCases: Array<[string, string]> = [
+      ["text", "help-desk-team-page"],
+      ["content", "kube-node-pool-spec"],
+      ["message", "load-some-bare-init"],
+      ["error", "spec-prod-team-role"],
+      ["detail", "help-desk-team-page"],
+      ["details", "kube-node-pool-spec"],
+      ["reason", "load-some-bare-init"],
+    ];
+    for (const [field, token] of kebabCases) {
+      expect(redactSensitiveFieldValue(field, `identifier is ${token}`)).toContain(token);
+    }
+  });
+
+  it("masks random credential tokens across all generic field types (wordlist precision)", () => {
+    const genericFields = [
+      "text",
+      "content",
+      "message",
+      "error",
+      "errorMessage",
+      "detail",
+      "details",
+      "reason",
+    ];
+    for (const field of genericFields) {
+      expect(redactSensitiveFieldValue(field, `token kxbv-qwfn-zptl-mrqd found`)).not.toContain(
+        "kxbv-qwfn-zptl-mrqd",
+      );
+    }
+  });
+
+  // Secret-context sweep regressions (upstream line 1326-1327: restore `redacted !== value` leg)
+  it("masks an all-word app-password token when the value already contains another secret (secret-context sweep)", () => {
+    // `main-test-case-name` is all dictionary words — Tier 2 wordlist precision would normally
+    // let it through in a generic field.  But when the value ALSO contains a known secret
+    // (sk-... pattern here), the secret-context sweep fires fail-closed: every 4-4-4-4 token
+    // is masked regardless of wordlist or field tier.
+    const valueWithSecret =
+      "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and also main-test-case-name here";
+    expect(redactSensitiveFieldValue("message", valueWithSecret)).not.toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("does NOT mask an all-word app-password token when no other secret is present (Tier 2 precision preserved)", () => {
+    // Same field key, same all-word token — but no other secret in the value.
+    // Tier 2 wordlist precision must still apply: main-test-case-name stays unmasked.
+    expect(redactSensitiveFieldValue("message", "identifier is main-test-case-name")).toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("masks all 4-4-4-4 tokens in a value containing an AIza secret (secret-context sweep, generic field)", () => {
+    // AIza... Google API key triggers normal secret redaction → secret-context sweep fires
+    // fail-closed, catching help-desk-team-page (all dictionary words) as well.
+    const valueWithGoogleKey =
+      "config AIzaSyD-very-real-looking-google-api-key-123 route help-desk-team-page";
+    const result = redactSensitiveFieldValue("detail", valueWithGoogleKey);
+    expect(result).not.toContain("AIzaSyD-very-real-looking");
+    expect(result).not.toContain("help-desk-team-page");
+  });
+
+  it("does NOT mask kebab identifier in generic field when no secret is present (Tier 2 precision unchanged)", () => {
+    // Baseline: without another secret, Tier 2 wordlist precision is in effect.
+    expect(redactSensitiveFieldValue("detail", "route help-desk-team-page")).toContain(
+      "help-desk-team-page",
+    );
+  });
+
+  it("explicit fail-closed field still masks all-word token regardless of secret-context (Tier 1 unchanged)", () => {
+    // Tier 1 was already fail-closed before this change; verify it still is.
+    expect(redactSensitiveFieldValue("appSpecificPassword", "main-test-case-name")).not.toContain(
+      "main-test-case-name",
+    );
+  });
+
+  it("io.audit abcd-efgh-ijkl-mnop token still masked in errorMessage (Tier 2 unchanged)", () => {
+    // Non-dictionary segments → wordlist precision masks it even without secret-context.
+    expect(
+      redactSensitiveFieldValue("errorMessage", "payload contained abcd-efgh-ijkl-mnop"),
+    ).not.toContain("abcd-efgh-ijkl-mnop");
   });
 });
 
