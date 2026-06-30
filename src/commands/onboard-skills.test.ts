@@ -44,6 +44,7 @@ function createBundledSkill(params: {
   env?: string[];
   os?: string[];
   installLabel: string;
+  installKind?: string;
 }): {
   name: string;
   description: string;
@@ -94,7 +95,14 @@ function createBundledSkill(params: {
       os: params.os ?? [],
     },
     configChecks: [],
-    install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+    install: [
+      {
+        id: params.installKind ?? "brew",
+        kind: params.installKind ?? "brew",
+        label: params.installLabel,
+        bins: params.bins,
+      },
+    ],
   };
 }
 
@@ -265,6 +273,36 @@ describe("setupSkills", () => {
     const installNote = notes.find((n) => n.message.includes("video-frames"));
     expect(installNote?.message).toContain("video-frames");
     expect(installNote?.message).not.toContain("repo-helper");
+  });
+
+  it("uses the requested node manager for node-backed auto installs", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({});
+    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      nodeManager: "pnpm",
+    });
+
+    expect(next.skills?.install?.nodeManager).toBe("pnpm");
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillName: "node-helper",
+        installId: "node",
+        config: expect.objectContaining({
+          skills: expect.objectContaining({
+            install: expect.objectContaining({ nodeManager: "pnpm" }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("recommends Homebrew when brew-backed deps are auto-installed and brew is missing", async () => {

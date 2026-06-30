@@ -14,6 +14,7 @@ import { installSkill } from "../skills/lifecycle/install.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
+import type { NodeManagerChoice } from "./onboard-types.js";
 
 const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
 
@@ -61,7 +62,23 @@ function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string
   return skill.bundled === true && skill.source === "openclaw-bundled";
 }
 
-function resolveDefaultNodeManager(config: OpenClawConfig): "npm" | "pnpm" | "bun" {
+function isNodeManagerChoice(value: unknown): value is NodeManagerChoice {
+  return value === "npm" || value === "pnpm" || value === "bun";
+}
+
+function resolveDefaultNodeManager(
+  config: OpenClawConfig,
+  requested: NodeManagerChoice | undefined,
+  runtime: RuntimeEnv,
+): NodeManagerChoice {
+  if (requested !== undefined) {
+    if (!isNodeManagerChoice(requested)) {
+      runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
+      runtime.exit(1);
+      return "npm";
+    }
+    return requested;
+  }
   const existing = config.skills?.install?.nodeManager;
   return existing === "npm" || existing === "pnpm" || existing === "bun" ? existing : "npm";
 }
@@ -72,6 +89,7 @@ export async function setupSkills(
   workspaceDir: string,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
+  options: { nodeManager?: NodeManagerChoice } = {},
 ): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
@@ -163,7 +181,7 @@ export async function setupSkills(
     if (needsNodeManagerPrompt) {
       // Persist the package manager before invoking installers so node recipes
       // and later skill lifecycle commands agree on the selected tool.
-      const nodeManager = resolveDefaultNodeManager(next);
+      const nodeManager = resolveDefaultNodeManager(next, options.nodeManager, runtime);
       next = {
         ...next,
         skills: {

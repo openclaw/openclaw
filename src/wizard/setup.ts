@@ -901,7 +901,9 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipSkills"), t("wizard.setup.skillsTitle"));
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter, {
+      nodeManager: opts.nodeManager,
+    });
   }
 
   // Plugin configuration (sandbox backends, tool plugins, etc.)
