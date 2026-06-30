@@ -31,16 +31,21 @@ import {
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   readCachedPluginToolDescriptors,
+  resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-export {
-  resetPluginToolDescriptorCache,
-  resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
-} from "./tool-descriptor-cache.js";
+let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
+
+export function resetPluginToolDescriptorCache(): void {
+  resetCachedPluginToolDescriptors();
+  cachedDescriptorRuntimeRegistries = new WeakMap();
+}
+
+export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -692,12 +697,27 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
+        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+        onRetainRegistry: (retainedRegistry) => {
+          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
+        },
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
       if (!candidates || candidates.length === 0) {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
       const requestedToolName = normalizeToolName(toolName);
+      const matchingNamedCandidates: PluginToolRegistration[] = [];
+      const unnamedCandidates: PluginToolRegistration[] = [];
+      for (const candidate of candidates) {
+        if (candidate.names.length === 0) {
+          unnamedCandidates.push(candidate);
+          continue;
+        }
+        if (candidate.names.some((name) => normalizeToolName(name) === requestedToolName)) {
+          matchingNamedCandidates.push(candidate);
+        }
+      }
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
@@ -715,12 +735,6 @@ function createCachedDescriptorPluginTool(params: {
         }
         return undefined;
       };
-      const matchingNamedCandidates = candidates.filter(
-        (candidate) =>
-          candidate.names.length > 0 &&
-          candidate.names.some((name) => normalizeToolName(name) === requestedToolName),
-      );
-      const unnamedCandidates = candidates.filter((candidate) => candidate.names.length === 0);
       for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
         let matchedTool: AnyAgentTool | undefined;
         try {
@@ -899,6 +913,8 @@ function resolveCachedPluginTools(params: {
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
+  retainedRegistry?: PluginRegistry;
+  onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
   const lookup = {
     env: params.loadOptions.env,
@@ -924,7 +940,16 @@ function resolvePluginToolRegistry(params: {
     return activeRegistry;
   }
 
+  if (registryHasScopedPluginTools(params.retainedRegistry, params.onlyPluginIds)) {
+    return params.retainedRegistry;
+  }
+
   const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry);
+  const shouldRetainColdLoadedToolRegistry =
+    forceStandaloneLoad &&
+    params.loadOptions.activate === false &&
+    params.loadOptions.toolDiscovery === true &&
+    params.onRetainRegistry !== undefined;
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
@@ -933,6 +958,9 @@ function resolvePluginToolRegistry(params: {
     loadOptions: params.loadOptions,
   });
   if (registryHasScopedPluginTools(standaloneRegistry, params.onlyPluginIds)) {
+    if (shouldRetainColdLoadedToolRegistry) {
+      params.onRetainRegistry?.(standaloneRegistry);
+    }
     return standaloneRegistry;
   }
   return standaloneRegistry ?? channelRegistry ?? activeRegistry;

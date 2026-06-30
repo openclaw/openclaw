@@ -825,6 +825,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.prompt).toContain("Message delivery destination metadata");
   });
 
+  it("drops the auto-applied default toolsAllow cap for CLI-backed runs instead of failing", async () => {
+    // A CLI backend cannot enforce a runtime toolsAllow, so the auto-applied
+    // creator-surface cap (#91499, flagged toolsAllowIsDefault) is dropped at
+    // run time rather than handed to the CLI runner — which would otherwise
+    // reject the run. An explicit user restriction (no flag) is still
+    // propagated; see the "restricted toolsAllow" case above.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        {
+          kind: "agentTurn",
+          message: "send a message",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      ),
+    });
+
+    const cliRun = expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {},
+      "CLI run params",
+    );
+    expect(cliRun.toolsAllow).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());

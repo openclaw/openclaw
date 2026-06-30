@@ -430,7 +430,9 @@ async function runScenarioCommandSteps(params: {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const timeoutMs =
-        params.scenario.execution.kind === "script" ? params.commandTimeoutMs : undefined;
+        params.scenario.execution.kind === "script"
+          ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
+          : undefined;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
@@ -555,6 +557,7 @@ function buildTestFileEvidence(params: {
   kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
+  repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
@@ -581,6 +584,7 @@ function buildTestFileEvidence(params: {
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
             providerMode: params.providerMode,
+            repoRoot: params.repoRoot,
             targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
             results: fallbackResults.map((result) => ({
               id: result.scenario.id,
@@ -616,6 +620,7 @@ function buildTestFileEvidence(params: {
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     targets: params.results.map((result) => buildScenarioEvidenceTarget(result.scenario)),
     results: params.results.map((result) => ({
       id: result.scenario.id,
@@ -802,6 +807,7 @@ export async function runQaTestFileScenarios(
     kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     results,
   });
   const paths = await writeTestFileEvidenceFile({

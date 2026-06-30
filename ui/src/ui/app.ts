@@ -78,15 +78,15 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -293,6 +293,7 @@ export class OpenClawApp extends LitElement {
   @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
   @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatVerboseLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
@@ -319,6 +320,11 @@ export class OpenClawApp extends LitElement {
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatMessagesBySession: ChatMessageCache = new Map();
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatReplyTarget: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+  } | null = null;
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
@@ -645,7 +651,12 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
-  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubInstallMessage: {
+    kind: "success" | "error";
+    text: string;
+    acknowledgeSlug?: string;
+    acknowledgeVersion?: string;
+  } | null = null;
   @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
   @state() clawhubVerdictsLoading = false;
   @state() clawhubVerdictsError: string | null = null;
@@ -977,6 +988,10 @@ export class OpenClawApp extends LitElement {
       Boolean(opts?.smooth),
       { source: "manual" },
     );
+  }
+
+  scheduleChatScroll() {
+    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0]);
   }
 
   async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {

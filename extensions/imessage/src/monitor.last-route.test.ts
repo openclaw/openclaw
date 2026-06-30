@@ -256,6 +256,183 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("keeps direct progress options when imsg lacks native typing support", async () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "send", "read"],
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(params.replyOptions?.onToolStart).toBeUndefined();
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+    });
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "typing") {
+          throw new Error("typing should not start without native typing support");
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 13,
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "run a long script without native typing",
+              is_group: false,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+    expect(client.request).not.toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ typing: true }),
+      expect.anything(),
+    );
+  });
+
+  it("starts direct typing before dispatching the inbound turn", async () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "send", "typing"],
+    });
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const earlyTypingClient = {
+      request: vi.fn(async (method: string) => {
+        if (method === "typing") {
+          return { ok: true };
+        }
+        throw new Error(`unexpected imsg typing-client method ${method}`);
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const watchClient = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "typing") {
+          return { ok: true };
+        }
+        throw new Error(`unexpected imsg watch-client method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 12,
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "respond after a slow context build",
+              is_group: false,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+        await vi.waitFor(() => {
+          expect(earlyTypingClient.request).toHaveBeenCalledWith(
+            "typing",
+            expect.objectContaining({ typing: true, to: "+15550001111" }),
+            expect.any(Object),
+          );
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (params?.onNotification) {
+        onNotification = params.onNotification;
+        return watchClient as never;
+      }
+      return earlyTypingClient as never;
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      expect(earlyTypingClient.request).toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: true, to: "+15550001111" }),
+        expect.any(Object),
+      );
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(watchClient.request).not.toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ typing: true }),
+      expect.anything(),
+    );
+    await vi.waitFor(() => {
+      expect(earlyTypingClient.request).toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: false, to: "+15550001111" }),
+        expect.any(Object),
+      );
+    });
+  });
+
   it.each(["never", "message", "thinking"] as const)(
     "does not start direct tool typing when typingMode is %s",
     async (typingMode) => {
@@ -418,6 +595,87 @@ describe("iMessage monitor last-route updates", () => {
       expect.objectContaining({ typing: true }),
       expect.anything(),
     );
+  });
+
+  it("does not wait for read receipts before dispatching the inbound turn", async () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "read"],
+    });
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const readClient = {
+      request: vi.fn((method: string) => {
+        if (method === "read") {
+          return new Promise(() => {});
+        }
+        return Promise.reject(new Error(`unexpected imsg read-client method ${method}`));
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const watchClient = {
+      request: vi.fn((method: string) => {
+        if (method === "watch.subscribe") {
+          return Promise.resolve({ subscription: 1 });
+        }
+        return Promise.reject(new Error(`unexpected imsg watch-client method ${method}`));
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 11,
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "respond without waiting for read receipt",
+              is_group: false,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (params?.onNotification) {
+        onNotification = params.onNotification;
+        return watchClient as never;
+      }
+      return readClient as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(readClient.request).toHaveBeenCalledWith(
+      "read",
+      expect.objectContaining({ to: "+15550001111" }),
+      expect.any(Object),
+    );
+    expect(watchClient.request).not.toHaveBeenCalledWith(
+      "read",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([

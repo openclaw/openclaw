@@ -1014,6 +1014,27 @@ describe("qa mock openai server", () => {
     expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
   });
 
+  it("uses unique ids for repeated identical tool calls", async () => {
+    const server = await startMockServer();
+    const body = {
+      stream: false,
+      model: "gpt-5.5",
+      input: [makeUserInput("Read QA_KICKOFF_TASK.md, then answer with exactly QA-READ-OK.")],
+    };
+
+    const first = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(server, body);
+    const second = await expectResponsesJson<{ output?: Array<{ call_id?: string }> }>(
+      server,
+      body,
+    );
+
+    const firstCallId = first.output?.[0]?.call_id;
+    const secondCallId = second.output?.[0]?.call_id;
+    expect(firstCallId).toMatch(/^call_mock_read_/);
+    expect(secondCallId).toMatch(/^call_mock_read_/);
+    expect(firstCallId).not.toBe(secondCallId);
+  });
+
   it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1824,6 +1845,52 @@ describe("qa mock openai server", () => {
     });
     expect(memorySearch.status).toBe(200);
     expect(await memorySearch.text()).toContain('"name":"memory_search"');
+
+    const memoryGetFromPathOnlySearchResult = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "MEMORY.md",
+                  snippet: "Hidden QA fact: the project codename is ORBIT-9.",
+                },
+              ],
+            }),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(memoryGetFromPathOnlySearchResult.status).toBe(200);
+    const memoryGetText = await memoryGetFromPathOnlySearchResult.text();
+    expect(memoryGetText).toContain('"name":"memory_get"');
+    expect(memoryGetText).toContain('\\"path\\":\\"MEMORY.md\\"');
+    expect(memoryGetText).toContain('\\"from\\":1');
 
     const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
       method: "POST",
@@ -3310,6 +3377,45 @@ describe("qa mock openai server", () => {
                     text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"code"}`,
                   },
                 ],
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
+  });
+
+  it("keeps QA tool-search result summaries ahead of generic worked/failed/blocked summaries", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Answer in worked/failed/blocked format with source and docs notes.",
+            },
+          ],
+        },
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_tool_search_code_1",
+          output: JSON.stringify({
+            ok: true,
+            value: {
+              tool: { name: targetTool },
+              result: {
+                content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool}` }],
               },
             },
           }),

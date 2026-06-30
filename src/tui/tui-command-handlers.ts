@@ -11,6 +11,7 @@ import {
 } from "../auto-reply/reply/commands-goal.js";
 import {
   formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -604,19 +605,37 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+        const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
+        const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized && !isReset) {
+          chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
           break;
         }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
+        if (isReset) {
+          try {
+            const result = await client.patchSession({
+              ...currentSessionPatchTarget(),
+              responseUsage: null,
+            });
+            chatLog.addSystem("usage footer: reset to default");
+            applySessionInfoFromPatch(result);
+            delete state.sessionInfo.responseUsage;
+            delete state.sessionInfo.effectiveResponseUsage;
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`usage failed: ${String(err)}`);
+          }
+          break;
+        }
+        const current =
+          state.sessionInfo.effectiveResponseUsage ??
+          resolveResponseUsageMode(state.sessionInfo.responseUsage);
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            responseUsage: next === "off" ? null : next,
+            responseUsage: next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
           applySessionInfoFromPatch(result);

@@ -733,6 +733,90 @@ describe("openshell fs bridges", () => {
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
+  it("rejects cross-root mirror renames before the remote backend commit", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const agentWorkspaceDir = await makeTempDir("openclaw-openshell-agent-fs-");
+    const sourcePath = path.join(workspaceDir, "source.txt");
+    await fs.writeFile(sourcePath, "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.rename({ from: "source.txt", to: "/agent/source.txt" })).rejects.toThrow(
+      "OpenShell cross-root mirror renames require pinned fs-safe support",
+    );
+    expect(backend["renameRemotePath"]).not.toHaveBeenCalled();
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
+    await expectPathMissing(path.join(agentWorkspaceDir, "source.txt"));
+    await expect(fs.readdir(agentWorkspaceDir)).resolves.toStrictEqual([]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local mirror symlink rename sources before the remote backend commit",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
+      await fs.symlink("target.txt", path.join(workspaceDir, "link.txt"));
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(bridge.rename({ from: "link.txt", to: "moved-link.txt" })).rejects.toThrow(
+        "Sandbox symlink rename sources are not supported",
+      );
+      expect(backend["renameRemotePath"]).not.toHaveBeenCalled();
+      await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("target.txt");
+      await expectPathMissing(path.join(workspaceDir, "moved-link.txt"));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local mirror hardlinked rename sources before the remote backend commit",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const sourcePath = path.join(workspaceDir, "source.txt");
+      await fs.writeFile(sourcePath, "payload", "utf8");
+      await fs.link(sourcePath, path.join(workspaceDir, "other-link.txt"));
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(bridge.rename({ from: "source.txt", to: "moved.txt" })).rejects.toThrow(
+        "Sandbox hardlinked rename sources are not supported",
+      );
+      expect(backend["renameRemotePath"]).not.toHaveBeenCalled();
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
+      await expectPathMissing(path.join(workspaceDir, "moved.txt"));
+    },
+  );
+
   it("removes remote mirror paths through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
@@ -758,6 +842,187 @@ describe("openshell fs bridges", () => {
     });
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
+
+  it("removes recursive local mirror directories without raw path deletion", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.mkdir(path.join(workspaceDir, "nested", "child"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "nested", "child", "target.txt"), "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    await bridge.remove({ filePath: "nested", recursive: true, force: true });
+
+    await expectPathMissing(path.join(workspaceDir, "nested"));
+    expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/nested", {
+      recursive: true,
+      signal: undefined,
+      ignoreMissing: true,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "removes recursive local mirror directories containing symlink leaves without following them",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+      await fs.writeFile(outsideTarget, "outside", "utf8");
+      await fs.symlink(outsideTarget, path.join(workspaceDir, "nested", "link.txt"));
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      await bridge.remove({ filePath: "nested", recursive: true, force: true });
+
+      await expectPathMissing(path.join(workspaceDir, "nested"));
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes local mirror symlink leaves when force is false",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.writeFile(outsideTarget, "outside", "utf8");
+      await fs.symlink(outsideTarget, path.join(workspaceDir, "link.txt"));
+      const backend = createMirrorBackendMock();
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+      await bridge.remove({ filePath: "link.txt", force: false });
+
+      await expectPathMissing(path.join(workspaceDir, "link.txt"));
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+      expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/link.txt", {
+        recursive: false,
+        signal: undefined,
+        ignoreMissing: false,
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local mirror mkdir when a validated parent is swapped to an outside symlink",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+      const slotPath = path.join(workspaceDir, "slot");
+      await fs.mkdir(slotPath, { recursive: true });
+      const backend = createMirrorBackendMock();
+      backend["mkdirpRemotePath"] = vi.fn().mockImplementation(async () => {
+        await fs.rm(slotPath, { recursive: true, force: true });
+        await fs.symlink(outsideDir, slotPath);
+      });
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(bridge.mkdirp({ filePath: "slot/escaped" })).rejects.toThrow();
+      await expectPathMissing(path.join(outsideDir, "escaped"));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local mirror remove when a validated parent is swapped to an outside symlink",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+      const slotPath = path.join(workspaceDir, "slot");
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.mkdir(slotPath, { recursive: true });
+      await fs.writeFile(path.join(slotPath, "target.txt"), "inside", "utf8");
+      await fs.writeFile(outsideTarget, "outside", "utf8");
+      const backend = createMirrorBackendMock();
+      backend["removeRemotePath"] = vi.fn().mockImplementation(async () => {
+        await fs.rm(slotPath, { recursive: true, force: true });
+        await fs.symlink(outsideDir, slotPath);
+      });
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(bridge.remove({ filePath: "slot/target.txt", force: true })).rejects.toThrow();
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local mirror rename when a validated destination parent is swapped to an outside symlink",
+    async () => {
+      const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+      const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+      const slotPath = path.join(workspaceDir, "slot");
+      const sourcePath = path.join(workspaceDir, "source.txt");
+      await fs.mkdir(slotPath, { recursive: true });
+      await fs.writeFile(sourcePath, "payload", "utf8");
+      const backend = createMirrorBackendMock();
+      backend["renameRemotePath"] = vi.fn().mockImplementation(async () => {
+        await fs.rm(slotPath, { recursive: true, force: true });
+        await fs.symlink(outsideDir, slotPath);
+      });
+      const sandbox = createSandboxTestContext({
+        overrides: {
+          backendId: "openshell",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+      const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+      await expect(
+        bridge.rename({ from: "source.txt", to: "slot/parent/moved.txt" }),
+      ).rejects.toThrow();
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
+      await expectPathMissing(path.join(outsideDir, "parent", "moved.txt"));
+    },
+  );
 
   it("keeps local mirror state unchanged when remote pinned mkdir is rejected", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");

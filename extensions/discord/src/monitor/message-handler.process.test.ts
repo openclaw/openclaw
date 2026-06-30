@@ -175,6 +175,7 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    typingKeepalive?: boolean;
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
@@ -944,6 +945,7 @@ describe("processDiscordMessage ack reactions", () => {
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onIdle).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onCleanup).toHaveBeenCalledTimes(1);
+    expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
     expect(typingMocks.sendTyping).not.toHaveBeenCalled();
   });
 
@@ -981,6 +983,33 @@ describe("processDiscordMessage ack reactions", () => {
       ).toBe(true);
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it("keeps one typing refresh loop for default message-tool replies", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+      const ctx = await createBaseContext({
+        shouldRequireMention: false,
+        effectiveWasMentioned: false,
+        cfg: {
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+        route: BASE_CHANNEL_ROUTE,
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
+      expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -1532,6 +1561,7 @@ describe("processDiscordMessage session routing", () => {
 
     expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
+      typingKeepalive: false,
       disableBlockStreaming: true,
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();

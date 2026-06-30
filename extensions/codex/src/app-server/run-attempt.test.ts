@@ -4416,6 +4416,131 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests.map((entry) => entry.method)).not.toContain("app/list");
   });
 
+  it("sends a thread/start app enable override when app/list cached the app as disabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
+        runtimeIdentity: getMockRuntimeIdentity(),
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: false,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      if (method === "app/list") {
+        throw new Error("app/list should use the cached inventory entry");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = requests.find((entry) => entry.method === "thread/start");
+    const threadStartParams = threadStart?.params as
+      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+      | undefined;
+    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
+    expect(requests.map((entry) => entry.method)).not.toContain("app/list");
+  });
+
   it("keys plugin app inventory by inherited API key fallback credentials", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -5352,6 +5477,32 @@ describe("runCodexAppServerAttempt", () => {
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalPolicy).toBe("on-request");
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
+  });
+
+  it("enables Guardian on the first turn after a fresh thread confirms the OpenAI provider", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = requests.find((request) => request.method === "thread/start");
+    const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startRequestParams?.approvalsReviewer).toBe("user");
+
+    const turnRequest = requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalsReviewer).toBe("auto_review");
   });
 
   it("uses human approval instead of Guardian for custom OpenAI-compatible endpoints", async () => {

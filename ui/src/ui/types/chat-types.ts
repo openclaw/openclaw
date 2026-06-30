@@ -25,6 +25,11 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
+  // Tool groups only: true when the turn still produced a successful assistant
+  // reply, so a failed internal tool (Codex marks any non-zero exit as failed)
+  // renders collapsed instead of as a primary red error banner. Undefined for
+  // non-tool groups and for terminal/in-progress tool failures.
+  turnSucceeded?: boolean;
 };
 
 /** Content item types in a normalized message */

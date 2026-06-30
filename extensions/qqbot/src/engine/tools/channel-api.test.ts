@@ -1,5 +1,6 @@
 // Qqbot tests cover channel-api tool behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../../../test-support/streaming-error-response.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -107,6 +108,144 @@ describe("executeChannelApi", () => {
     expect(bodyPreview).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds successful response bodies without using response.text()", async () => {
+    const release = vi.fn(async () => {});
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: streamed.response,
+      release,
+    });
+
+    const result = await executeChannelApi(
+      { method: "GET", path: "/guilds/123/channels" },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toMatchObject({
+      error: "QQ channel API response: text response exceeds 16777216 bytes",
+      path: "/guilds/123/channels",
+    });
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires confirmation before DELETE requests", async () => {
+    const result = await executeChannelApi(
+      { method: "DELETE", path: "/channels/123" },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      error:
+        "DELETE requests require confirmed=true after the user confirms the exact QQ resource.",
+      path: "/channels/123",
+    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("allows confirmed DELETE requests", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, { status: 204, statusText: "No Content" }),
+      release,
+    });
+
+    const result = await executeChannelApi(
+      { method: "DELETE", path: "/channels/123", confirmed: true },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      success: true,
+      status: 204,
+      path: "/channels/123",
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.sgroup.qq.com/channels/123",
+        init: expect.objectContaining({ method: "DELETE" }),
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires separate confirmation before bulk announcement deletes", async () => {
+    const result = await executeChannelApi(
+      { method: "DELETE", path: "/guilds/123/announces/all", confirmed: true },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      error:
+        "Deleting all announcements requires bulkConfirmed=true after a separate bulk-delete confirmation.",
+      path: "/guilds/123/announces/all",
+    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("requires bulk confirmation for encoded all announcement sentinel", async () => {
+    const result = await executeChannelApi(
+      { method: "DELETE", path: "/guilds/123/announces/%61%6c%6c", confirmed: true },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      error:
+        "Deleting all announcements requires bulkConfirmed=true after a separate bulk-delete confirmation.",
+      path: "/guilds/123/announces/%61%6c%6c",
+    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects encoded path separators before fetch", async () => {
+    const result = await executeChannelApi(
+      { method: "GET", path: "/guilds/123%2fannounces" },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({ error: "path contains encoded path separators" });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("allows bulk announcement deletes after both confirmations", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, { status: 204, statusText: "No Content" }),
+      release,
+    });
+
+    const result = await executeChannelApi(
+      {
+        method: "DELETE",
+        path: "/guilds/123/announces/all",
+        confirmed: true,
+        bulkConfirmed: true,
+      },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      success: true,
+      status: 204,
+      path: "/guilds/123/announces/all",
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.sgroup.qq.com/guilds/123/announces/all",
+        init: expect.objectContaining({ method: "DELETE" }),
+      }),
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

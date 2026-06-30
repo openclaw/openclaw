@@ -16,14 +16,7 @@ export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
-  runCommand?: (params: {
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    env?: NodeJS.ProcessEnv;
-  }) => Promise<CommandResult>;
   resolveFn?: (id: string) => string;
-  nodeExecutable?: string;
   log?: (message: string) => void;
 };
 
@@ -266,8 +259,7 @@ function removeIncompleteMatrixCryptoNativeBinding(params: {
 export async function ensureMatrixCryptoRuntime(
   params: MatrixCryptoRuntimeDeps = {},
 ): Promise<void> {
-  const usesDefaultRuntime =
-    !params.requireFn && !params.runCommand && !params.resolveFn && !params.nodeExecutable;
+  const usesDefaultRuntime = !params.requireFn && !params.resolveFn;
   if (usesDefaultRuntime && defaultMatrixCryptoRuntimeEnsurePromise) {
     await defaultMatrixCryptoRuntimeEnsurePromise;
     return;
@@ -300,10 +292,8 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
 
   const scriptPath = resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
   params.log?.("matrix: bootstrapping native crypto runtime");
-  const runCommand = params.runCommand ?? runFixedCommandWithTimeout;
-  const nodeExecutable = params.nodeExecutable ?? process.execPath;
-  const result = await runCommand({
-    argv: [nodeExecutable, scriptPath],
+  const result = await runFixedCommandWithTimeout({
+    argv: [process.execPath, scriptPath],
     cwd: path.dirname(scriptPath),
     timeoutMs: 300_000,
     env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },

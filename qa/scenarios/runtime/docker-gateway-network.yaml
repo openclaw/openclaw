@@ -1,0 +1,28 @@
+title: Docker gateway network access
+
+scenario:
+  id: docker-gateway-network
+  surface: docker-podman-hosting
+  category: docker-podman-hosting.container-operations
+  coverage:
+    primary:
+      - docker.compose-network-access
+  objective: Verify a Docker-networked client container can connect to the Gateway container over the compose-style service network and receive a health summary.
+  successCriteria:
+    - The gateway container starts on an isolated Docker network with token auth.
+    - A separate client container connects over `ws://<gateway-container>:<port>`.
+    - The client completes the Gateway protocol connect request with the current protocol version.
+    - The health RPC returns a structured Gateway health summary.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/e2e/gateway-network-docker.sh
+    - scripts/e2e/lib/gateway-network/client.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing gateway-network Docker E2E lane for compose-style container network access coverage.
+    args:
+      - --lane
+      - gateway-network

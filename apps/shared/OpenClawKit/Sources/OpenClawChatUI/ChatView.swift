@@ -649,7 +649,7 @@ private struct ChatAssistantIntroCard: View {
 
     var body: some View {
         Text(self.text)
-            .font(.system(size: 15))
+            .font(.body)
             .lineSpacing(4)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .multilineTextAlignment(.leading)
