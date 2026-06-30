@@ -485,6 +485,66 @@ describe("devices cli approve", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(hasGatewayMethod("device.pair.approve")).toBe(false);
   });
+
+  it("hints toward openclaw nodes approve when device approve throws unknown requestId and node IP matches", async () => {
+    callGateway
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockRejectedValueOnce(new Error("unknown requestId"))
+      .mockResolvedValueOnce({
+        pending: [
+          {
+            requestId: "node-req-1",
+            nodeId: "node-id-1",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            ts: 1,
+          },
+        ],
+        paired: [],
+      });
+
+    await runDevicesApprove(["192.168.0.202"]);
+
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("openclaw nodes approve node-req-1");
+    expect(errorOutput).toContain("192.168.0.202");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(hasGatewayMethod("node.pair.list")).toBe(true);
+  });
+
+  it("hints toward openclaw nodes approve when device approve returns null and a node IP matches", async () => {
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "node-req-2",
+          nodeId: "node-id-2",
+          displayName: "My Android",
+          remoteIp: "192.168.0.202",
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+
+    await runDevicesApprove(["192.168.0.202"]);
+
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("openclaw nodes approve node-req-2");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not show node approval hint in JSON mode when device approve throws unknown requestId", async () => {
+    callGateway
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockRejectedValueOnce(new Error("unknown requestId"));
+
+    await expect(runDevicesApprove(["192.168.0.202", "--json"])).rejects.toThrow(
+      "unknown requestId",
+    );
+    expect(hasGatewayMethod("node.pair.list")).toBe(false);
+  });
 });
 
 describe("devices cli remove", () => {
@@ -1380,6 +1440,49 @@ describe("devices cli list", () => {
     expect(output).toContain("BadName");
     expect(output).toContain("spoof");
     expect(output).toContain("Paired");
+  });
+
+  it("shows pending node approvals section when node.pair.list returns pending requests", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] }).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "node-req-abc",
+          nodeId: "node-id-abc",
+          displayName: "Colin's S25",
+          remoteIp: "192.168.0.202",
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = readRuntimeOutput();
+    expect(output).toContain("Pending node approvals");
+    expect(output).toContain("openclaw nodes approve node-req-abc");
+    expect(output).toContain("Colin's S25");
+    expect(output).toContain("192.168.0.202");
+  });
+
+  it("does not show node approvals section when node.pair.list returns no pending requests", async () => {
+    callGateway
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await runDevicesCommand(["list"]);
+
+    expect(readRuntimeOutput()).not.toContain("Pending node approvals");
+  });
+
+  it("does not show node approvals section when node.pair.list call fails", async () => {
+    callGateway
+      .mockResolvedValueOnce({ pending: [], paired: [] })
+      .mockRejectedValueOnce(new Error("gateway error"));
+
+    await runDevicesCommand(["list"]);
+
+    expect(readRuntimeOutput()).not.toContain("Pending node approvals");
   });
 
   it("emits JSON when the gateway transport fails in JSON mode", async () => {

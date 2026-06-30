@@ -38,6 +38,7 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
+import { parsePairingList } from "../shared/node-list-parse.js";
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
@@ -666,6 +667,69 @@ function formatAuthFlagReminder(opts: DevicesRpcOpts): string {
   return `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`;
 }
 
+async function tryFetchPendingNodeRequests(opts: DevicesRpcOpts) {
+  try {
+    const result = await callGateway({
+      url: opts.url,
+      token: opts.token,
+      password: opts.password,
+      method: "node.pair.list",
+      params: {},
+      timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: [PAIRING_SCOPE] as OperatorScope[],
+    });
+    return parsePairingList(result).pending;
+  } catch {
+    return [];
+  }
+}
+
+function buildNodeApprovalHint(
+  arg: string,
+  pending: ReturnType<typeof parsePairingList>["pending"],
+): string | null {
+  if (pending.length === 0) {
+    return null;
+  }
+  const lowerArg = normalizeLowercaseStringOrEmpty(arg);
+  const matched = pending.find(
+    (req) =>
+      req.remoteIp === arg ||
+      req.nodeId === arg ||
+      req.requestId === arg ||
+      (req.displayName !== undefined &&
+        normalizeLowercaseStringOrEmpty(req.displayName) === lowerArg),
+  );
+  const target = matched ?? (pending.length === 1 ? pending[0]! : null);
+  if (!target) {
+    const lines = [
+      `No pending device pairing request matches "${sanitizeForLog(arg)}".`,
+      `${pending.length} pending node approval${pending.length === 1 ? "" : "s"} exist at the node layer:`,
+    ];
+    for (const req of pending) {
+      const identity = req.displayName ?? req.nodeId;
+      lines.push(
+        `  Run: openclaw nodes approve ${req.requestId}  — ${sanitizeForLog(identity)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
+      );
+    }
+    return lines.join("\n");
+  }
+  const identity = target.displayName ?? target.nodeId;
+  return [
+    `No pending device pairing request matches "${sanitizeForLog(arg)}".`,
+    `Node reapproval pending for "${sanitizeForLog(identity)}"${target.remoteIp ? ` (${sanitizeForLog(target.remoteIp)})` : ""}.`,
+    `Run: openclaw nodes approve ${target.requestId}`,
+  ].join("\n");
+}
+
+function isUnknownDeviceApprovalRequestIdError(error: unknown): boolean {
+  return normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error)).includes(
+    "unknown requestid",
+  );
+}
+
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
@@ -765,6 +829,19 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   }
   if (!list.pending?.length && !list.paired?.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
+  }
+  const pendingNodes = await tryFetchPendingNodeRequests(opts);
+  if (pendingNodes.length > 0) {
+    defaultRuntime.log(
+      `${theme.heading("Pending node approvals")} ${theme.muted(`(${pendingNodes.length})`)}`,
+    );
+    for (const req of pendingNodes) {
+      const identity = req.displayName ?? req.nodeId;
+      defaultRuntime.log(
+        `  Node: ${sanitizeForLog(identity)}${req.remoteIp ? ` · ${sanitizeForLog(req.remoteIp)}` : ""}`,
+      );
+      defaultRuntime.log(`  Run:  ${formatCliCommand(`openclaw nodes approve ${req.requestId}`)}`);
+    }
   }
 }
 
@@ -917,8 +994,31 @@ export async function runDevicesApproveCommand(
     defaultRuntime.exit(1);
     return;
   }
-  const result = await approvePairingWithFallback(opts, resolvedRequestId);
+  let result: Awaited<ReturnType<typeof approvePairingWithFallback>>;
+  try {
+    result = await approvePairingWithFallback(opts, resolvedRequestId);
+  } catch (error) {
+    if (opts.json !== true && isUnknownDeviceApprovalRequestIdError(error)) {
+      const pending = await tryFetchPendingNodeRequests(opts);
+      const hint = buildNodeApprovalHint(resolvedRequestId, pending);
+      if (hint) {
+        defaultRuntime.error(hint);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
+    throw error;
+  }
   if (!result) {
+    if (opts.json !== true) {
+      const pending = await tryFetchPendingNodeRequests(opts);
+      const hint = buildNodeApprovalHint(resolvedRequestId, pending);
+      if (hint) {
+        defaultRuntime.error(hint);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     defaultRuntime.error("unknown requestId");
     defaultRuntime.exit(1);
     return;
