@@ -27,6 +27,7 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
@@ -154,7 +155,7 @@ function limitPartialUserTranscript(text: string): string {
   if (text.length <= MAX_PARTIAL_USER_TRANSCRIPT_CHARS) {
     return text;
   }
-  const tail = text.slice(-MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
+  const tail = sliceUtf16Safe(text, -MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
   return tail.replace(/^\S+\s+/, "").trimStart() || tail.trimStart();
 }
 
