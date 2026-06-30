@@ -329,11 +329,11 @@ export OPENCLAW_HOME_VOLUME="openclaw_home"
 ./scripts/docker/setup.sh
 
 # Install Claude Code as the node user inside the persisted home.
-docker compose run --rm openclaw-cli sh -lc \
+docker compose run --rm --entrypoint sh openclaw-cli -lc \
   'curl -fsSL https://claude.ai/install.sh | bash'
 
 # Log in and verify credentials in the same persisted container home.
-docker compose run --rm openclaw-cli sh -lc \
+docker compose run --rm --entrypoint sh openclaw-cli -lc \
   '$HOME/.local/bin/claude auth login && $HOME/.local/bin/claude auth status --text'
 ```
 
@@ -366,7 +366,7 @@ binary:
 Verify the backend from the running Docker environment:
 
 ```bash
-docker compose run --rm openclaw-cli sh -lc \
+docker compose run --rm --entrypoint sh openclaw-cli -lc \
   '$HOME/.local/bin/claude --version && $HOME/.local/bin/claude auth status --text'
 docker compose run --rm openclaw-cli models list --provider anthropic
 ```
