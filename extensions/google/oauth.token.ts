@@ -3,6 +3,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
@@ -27,15 +28,27 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    let errorText: string;
+    try {
+      const buf = await readResponseWithLimit(response, 16 * 1024, {
+        onOverflow: () => new Error("Token exchange error response exceeds 16 KB"),
+      });
+      errorText = new TextDecoder().decode(buf);
+    } catch {
+      errorText = `HTTP ${response.status}`;
+    }
     throw new Error(`Token exchange failed: ${errorText}`);
   }
 
-  return (await response.json()) as {
+  const buf = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+    onOverflow: () => new Error("Token grant response exceeds 16 MB"),
+  });
+  const json = JSON.parse(new TextDecoder().decode(buf)) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: unknown;
   };
+  return json;
 }
 
 function resolveExpiredTokenTimestampMs(nowMs: number): number {
