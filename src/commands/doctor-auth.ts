@@ -26,8 +26,10 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/path-resolve.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -37,6 +39,7 @@ const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+const AUTH_PROFILES_CHECK_ID = "core/doctor/auth-profiles";
 const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
@@ -50,7 +53,7 @@ function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
 }
 
 function hasStoredCodexOAuthProfile(): boolean {
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false, readOnly: true });
   return Object.values(store.profiles).some(
     (profile) =>
       (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
@@ -112,6 +115,22 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
     "- Custom proxies and header-only overrides can stay; this warning only targets old OpenAI transport settings.",
   );
   return lines.join("\n");
+}
+
+export function legacyCodexProviderOverrideToHealthFinding(
+  providerOverride: unknown,
+): HealthFinding {
+  const message =
+    "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.";
+  const details = buildCodexProviderOverrideWarning(providerOverride);
+  return {
+    checkId: AUTH_PROFILES_CHECK_ID,
+    severity: "warning",
+    message,
+    path: `models.providers.${LEGACY_CODEX_PROVIDER_ID}`,
+    target: LEGACY_CODEX_PROVIDER_ID,
+    fixHint: details,
+  };
 }
 
 /** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
@@ -261,6 +280,169 @@ async function formatAuthIssueLine(
   const hint = await resolveAuthIssueHint(issue, cfg, store);
   const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
+}
+
+function resolveAuthProfileStorePath(target: AuthProfileHealthTarget): string {
+  return resolveAuthStorePathForDisplay(target.agentDir);
+}
+
+function authProfileIssueToHealthFinding(params: {
+  issue: AuthIssue;
+  target: AuthProfileHealthTarget;
+  labelAgents: boolean;
+  hint: string | null;
+}): HealthFinding {
+  const remaining =
+    params.issue.remainingMs !== undefined
+      ? ` (${formatRemainingShort(params.issue.remainingMs)})`
+      : "";
+  const reason = params.issue.reasonCode ? ` [${params.issue.reasonCode}]` : "";
+  const owner = params.labelAgents ? `Agent ${params.target.agentId} auth profile` : "Auth profile";
+  return {
+    checkId: AUTH_PROFILES_CHECK_ID,
+    severity: "warning",
+    message: `${owner} ${params.issue.profileId} is ${params.issue.status}${reason}${remaining}.`,
+    path: resolveAuthProfileStorePath(params.target),
+    target: params.issue.profileId,
+    ...(params.issue.reasonCode ? { requirement: params.issue.reasonCode } : {}),
+    fixHint:
+      params.hint ??
+      (params.issue.status === "expiring"
+        ? "Run `openclaw doctor --fix` to refresh expiring OAuth profiles, or re-authenticate static tokens."
+        : "Run `openclaw doctor --fix` to refresh OAuth profiles, or re-authenticate this provider."),
+  };
+}
+
+function authProfileCooldownToHealthFinding(params: {
+  profileId: string;
+  target: AuthProfileHealthTarget;
+  labelAgents: boolean;
+  kind: string;
+  remaining: string;
+  hint: string;
+}): HealthFinding {
+  return {
+    checkId: AUTH_PROFILES_CHECK_ID,
+    severity: "warning",
+    message: params.labelAgents
+      ? `Agent ${params.target.agentId} auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`
+      : `Auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`,
+    path: resolveAuthProfileStorePath(params.target),
+    target: params.profileId,
+    fixHint: params.hint,
+  };
+}
+
+async function collectAuthProfileHealthFindingsForTarget(params: {
+  cfg: OpenClawConfig;
+  allowKeychainPrompt: boolean;
+  target: AuthProfileHealthTarget;
+  labelAgents: boolean;
+}): Promise<readonly HealthFinding[]> {
+  const store = ensureAuthProfileStore(params.target.agentDir, {
+    allowKeychainPrompt: params.allowKeychainPrompt,
+    readOnly: true,
+  });
+  const findings: HealthFinding[] = [];
+  const now = Date.now();
+  for (const profileId of Object.keys(store.usageStats ?? {})) {
+    const until = resolveProfileUnusableUntilForDisplay(store, profileId);
+    if (!until || now >= until) {
+      continue;
+    }
+    const stats = store.usageStats?.[profileId];
+    const remaining = formatRemainingShort(until - now);
+    const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+    const kind = disabledActive
+      ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+      : "cooldown";
+    const hint = resolveUnusableProfileHint({
+      kind: disabledActive ? "disabled" : "cooldown",
+      reason: stats?.disabledReason,
+    });
+    findings.push(
+      authProfileCooldownToHealthFinding({
+        profileId,
+        target: params.target,
+        labelAgents: params.labelAgents,
+        kind,
+        remaining,
+        hint,
+      }),
+    );
+  }
+
+  const summary = buildAuthHealthSummary({
+    store,
+    cfg: params.cfg,
+    warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    allowKeychainPrompt: params.allowKeychainPrompt,
+  });
+  const issues = summary.profiles.filter((profile) => {
+    if (profile.type === "api_key") {
+      return profile.status === "missing";
+    }
+    return (
+      (profile.type === "oauth" || profile.type === "token") &&
+      (profile.status === "expired" ||
+        profile.status === "expiring" ||
+        profile.status === "missing")
+    );
+  });
+  for (const issue of issues) {
+    const authIssue: AuthIssue = {
+      profileId: issue.profileId,
+      provider: issue.provider,
+      status: issue.status,
+      reasonCode: issue.reasonCode,
+      remainingMs: issue.remainingMs,
+    };
+    findings.push(
+      authProfileIssueToHealthFinding({
+        issue: authIssue,
+        target: params.target,
+        labelAgents: params.labelAgents,
+        hint: await resolveAuthIssueHint(authIssue, params.cfg, store),
+      }),
+    );
+  }
+  return findings;
+}
+
+/** Collects read-only structured findings for auth profile health. */
+export async function collectAuthProfileHealthFindings(params: {
+  cfg: OpenClawConfig;
+  allowKeychainPrompt?: boolean;
+}): Promise<readonly HealthFinding[]> {
+  const configuredProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
+  const targets = listAuthProfileHealthTargets(params.cfg);
+  const activeTargets = targets.filter((target) =>
+    target.isDefault
+      ? hasAnyAuthProfileStoreSource(target.agentDir) || configuredProfiles
+      : hasLocalAuthProfileStoreSource(target.agentDir),
+  );
+  const findings: HealthFinding[] = [];
+  const labelAgents = activeTargets.length > 1;
+  for (const target of activeTargets) {
+    findings.push(
+      ...(await collectAuthProfileHealthFindingsForTarget({
+        cfg: params.cfg,
+        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        target,
+        labelAgents,
+      })),
+    );
+  }
+
+  const providerOverride = params.cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
+  if (
+    providerOverride &&
+    hasLegacyCodexTransportOverride(providerOverride) &&
+    (hasConfiguredCodexOAuthProfile(params.cfg) || hasStoredCodexOAuthProfile())
+  ) {
+    findings.push(legacyCodexProviderOverrideToHealthFinding(providerOverride));
+  }
+  return findings;
 }
 
 async function noteAuthProfileHealthForTarget(params: {

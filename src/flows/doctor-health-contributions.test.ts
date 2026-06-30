@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+  collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
@@ -145,6 +146,7 @@ vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
 }));
 
 vi.mock("../commands/doctor-auth.js", () => ({
+  collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
 }));
@@ -327,6 +329,8 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairLegacyOAuthProfileIds.mockImplementation(async (cfg: unknown) => cfg);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear();
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
+    mocks.collectAuthProfileHealthFindings.mockClear();
+    mocks.collectAuthProfileHealthFindings.mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
@@ -1004,6 +1008,32 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairCanonicalApiKeyFieldAlias).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
+    });
+  });
+
+  it("registers auth profile health as an opt-in structured check", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const [check] = contribution.healthChecks;
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/auth-profiles"]);
+    expect(check).toMatchObject({
+      id: "core/doctor/auth-profiles",
+      kind: "core",
+      defaultEnabled: false,
+    });
+    if (!check || !("detect" in check)) {
+      throw new Error("expected split auth profile health check");
+    }
+
+    await check.detect({
+      mode: "lint",
+      cfg: { auth: { profiles: {} } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.collectAuthProfileHealthFindings).toHaveBeenCalledWith({
+      cfg: { auth: { profiles: {} } },
+      allowKeychainPrompt: false,
     });
   });
 

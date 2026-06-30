@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  collectAuthProfileHealthFindings,
   formatOAuthRefreshFailureDoctorLine,
+  legacyCodexProviderOverrideToHealthFinding,
   noteLegacyCodexProviderOverride,
   resolveUnusableProfileHint,
 } from "./doctor-auth.js";
@@ -125,6 +127,52 @@ describe("resolveUnusableProfileHint", () => {
       expect.stringContaining("models.providers.openai-codex"),
       "Codex OAuth",
     );
+  });
+
+  it("maps legacy Codex overrides to structured auth profile findings", () => {
+    expect(
+      legacyCodexProviderOverrideToHealthFinding({
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    ).toMatchObject({
+      checkId: "core/doctor/auth-profiles",
+      severity: "warning",
+      message:
+        "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
+      path: "models.providers.openai-codex",
+      target: "openai-codex",
+    });
+  });
+
+  it("collects legacy Codex override structured findings", async () => {
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: doctorFixtureConfig({
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "openai-codex": {
+              api: "openai-responses",
+            },
+          },
+        },
+      }),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/auth-profiles",
+        path: "models.providers.openai-codex",
+        target: "openai-codex",
+      }),
+    ]);
   });
 
   it("warns when a legacy Codex override shadows stored legacy OAuth state", () => {
