@@ -580,6 +580,8 @@ describe("codex conversation binding", () => {
         content: "run this",
         channel: "discord",
         isGroup: true,
+        senderIsOwner: false,
+        gatewayClientScopes: ["operator.write"],
       },
       {
         channelId: "discord",

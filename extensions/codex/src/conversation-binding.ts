@@ -238,15 +238,15 @@ export async function handleCodexConversationInboundClaim(
   if (!data) {
     return undefined;
   }
-  if (!canMutateCodexHost(event)) {
-    return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
-  }
   if (event.commandAuthorized !== true) {
     return { handled: true };
   }
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
+  }
+  if (!canMutateCodexHost(event)) {
+    return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
