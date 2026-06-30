@@ -137,6 +137,7 @@ import UIKit
     @Test func chatReturnLabelsNameTheControlDetailSource() {
         #expect(RootTabs.chatReturnTitle(for: .sessions) == "Back to Sessions")
         #expect(RootTabs.chatReturnTitle(for: .overview) == "Back to Overview")
+        #expect(RootTabs.chatReturnTitle(for: .activity) == "Back to Activity")
         #expect(RootTabs.chatReturnTitle(for: .workboard) == "Back to Workboard")
     }
 
