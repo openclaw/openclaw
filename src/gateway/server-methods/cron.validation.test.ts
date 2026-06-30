@@ -193,8 +193,8 @@ async function invokeCronRemove(
   return await invokeCron("cron.remove", params, { context, client: options?.client });
 }
 
-async function invokeWake(params: Record<string, unknown>) {
-  return await invokeCron("wake", params);
+async function invokeWake(params: Record<string, unknown>, client?: GatewayClient) {
+  return await invokeCron("wake", params, { client });
 }
 
 function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
@@ -1574,6 +1574,44 @@ describe("cron method validation", () => {
         sessionKey: "agent:agent-456:discord:thread-xyz",
         agentId: "agent-456",
       });
+    });
+
+    it.each([
+      {
+        name: "agentId",
+        params: { agentId: "agent-456" },
+        message: "wake agentId outside caller scope",
+      },
+      {
+        name: "sessionKey",
+        params: { sessionKey: "agent:agent-456:discord:thread-xyz" },
+        message: "wake sessionKey outside caller scope",
+      },
+    ])("rejects a cross-agent $name for agent-runtime callers", async ({ params, message }) => {
+      const { context, respond } = await invokeWake(
+        { mode: "now", text: "ping", ...params },
+        callerClient("agent-123"),
+      );
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: message });
+    });
+
+    it("binds agent-runtime wake calls to the calling agent", async () => {
+      const { context, respond } = await invokeWake(
+        {
+          mode: "now",
+          text: "ping",
+          sessionKey: "agent:agent-123:discord:thread-xyz",
+        },
+        callerClient("agent-123"),
+      );
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-123:discord:thread-xyz",
+        agentId: "agent-123",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
     it("treats whitespace-only sessionKey as omitted at the handler boundary", async () => {
