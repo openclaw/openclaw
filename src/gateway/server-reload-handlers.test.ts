@@ -1890,7 +1890,9 @@ describe("deferred channel reload abort generation", () => {
         beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
         isAborted?: () => boolean;
       }): Promise<GatewayPluginReloadResult> => {
-        if (params.isAborted) receivedIsAborted = true;
+        if (params.isAborted) {
+          receivedIsAborted = true;
+        }
         await params.beforeReplace(new Set(["whatsapp"]));
         if (params.isAborted?.()) {
           reloadWasCancelled = true;
