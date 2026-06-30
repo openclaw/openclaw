@@ -485,6 +485,58 @@ describe("devices cli approve", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(hasGatewayMethod("device.pair.approve")).toBe(false);
   });
+
+  it("suggests pending node approval when a device IP is approved at the wrong layer", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            roles: ["node"],
+          }),
+        ],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      )
+      .mockResolvedValueOnce({
+        nodes: [
+          {
+            nodeId: "android-node",
+            displayName: "Colin's S25",
+            approvalState: "pending-reapproval",
+            pendingRequestId: "node-req-1",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            roles: ["node"],
+          }),
+        ],
+      });
+
+    await runDevicesApprove(["192.168.0.202"]);
+
+    expectGatewayCall(2, { method: "node.list" });
+    expectGatewayCall(3, { method: "device.pair.list" });
+    const errorOutput = readRuntimeErrorOutput();
+    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).toContain("Node reapproval pending for Colin's S25");
+    expect(errorOutput).toContain("openclaw nodes approve node-req-1");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("devices cli remove", () => {
@@ -1335,6 +1387,40 @@ describe("devices cli list", () => {
     const output = readRuntimeOutput();
     expect(output).toContain("scope upgrade");
     expect(output).toContain("operator.read");
+  });
+
+  it("shows pending node approval commands for paired node devices", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          pairedDevice({
+            deviceId: "android-node",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            role: "node",
+            roles: [],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({
+        nodes: [
+          {
+            nodeId: "android-node",
+            displayName: "Colin's S25",
+            remoteIp: "192.168.0.202",
+            approvalState: "pending-reapproval",
+            pendingRequestId: "node-req-1",
+          },
+        ],
+      });
+
+    await runDevicesCommand(["list"]);
+
+    expectGatewayCall(1, { method: "node.list" });
+    const output = readRuntimeOutput();
+    expect(output).toContain("Node reapproval pending for Colin's S25");
+    expect(output).toContain("openclaw nodes approve node-req-1");
   });
 
   it("does not show upgrade context for key-mismatched pending requests", async () => {
