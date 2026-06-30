@@ -2,10 +2,17 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
+
+// Bounded error-body read for the Urbit SSE subscribe path. A hostile or
+// buggy ship could otherwise stream an unbounded body into memory. 8 KiB is
+// enough for Urbit's typical short error strings ("not authenticated",
+// "no subscription", etc.) while capping worst-case.
+const MAX_TLON_SUBSCRIBE_ERROR_BODY_BYTES = 8 * 1024;
 
 type UrbitSseLogger = {
   log?: (message: string) => void;
@@ -153,7 +160,9 @@ export class UrbitSSEClient {
 
     try {
       if (!response.ok && response.status !== 204) {
-        const errorText = await response.text().catch(() => "");
+        const errorText = await readResponseWithLimit(response, MAX_TLON_SUBSCRIBE_ERROR_BODY_BYTES)
+          .then((b) => b.toString("utf8"))
+          .catch(() => "");
         throw new Error(
           `Subscribe failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
         );
