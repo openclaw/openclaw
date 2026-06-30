@@ -1555,9 +1555,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           agentId: route.agentId,
         });
         const currentAgentSessionId =
-          normalizeOptionalString(
-            getSessionEntry({ storePath, sessionKey: route.sessionKey })?.sessionId,
-          ) ?? route.sessionKey;
+          normalizeOptionalString(getSessionEntry({ storePath, sessionKey })?.sessionId) ??
+          sessionKey;
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =

@@ -479,6 +479,7 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     const routeSessionKey = "mattermost:default:channel:chan-1";
+    const threadSessionKey = `${routeSessionKey}:thread:root-1`;
     let storedSessionId = "session-before-restart";
     mockState.abortController = undefined;
     mockState.runtimeCore = createRuntimeCore(testConfig, {
@@ -486,7 +487,7 @@ describe("mattermost inbound user posts", () => {
       sessionKey: routeSessionKey,
     });
     mockState.getSessionEntry.mockImplementation((params: { sessionKey?: string }) => {
-      if (params.sessionKey !== routeSessionKey) {
+      if (params.sessionKey !== threadSessionKey) {
         return undefined;
       }
       return { sessionId: storedSessionId };
@@ -571,7 +572,7 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(1);
     expect(mockState.getSessionEntry).toHaveBeenCalledWith({
       storePath: "/tmp/openclaw-test-sessions.json",
-      sessionKey: routeSessionKey,
+      sessionKey: threadSessionKey,
     });
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenLastCalledWith(
       expect.anything(),
