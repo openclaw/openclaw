@@ -45,12 +45,12 @@ function skipOneInboundMetaBlock(lines: string[], start: number): number {
     while (index < lines.length && (lines[index] ?? "").trim() !== "```") {
       index += 1;
     }
-    return index < lines.length ? index + 1 : start;
+    return index < lines.length ? index + 1 : lines.length;
   }
 
   if ((lines[index] ?? "").trim().startsWith("{")) {
     const end = findRawJsonObjectEnd(lines, index);
-    return end > index ? end : start;
+    return end > index ? end : lines.length;
   }
 
   return start;

@@ -24,6 +24,7 @@ import {
   type MessageResponse,
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
+import { sanitizeQQBotVisibleText } from "../utils/visible-text.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
 import {
@@ -521,7 +522,7 @@ export class StreamingController {
       this.boundaryPrefix = this.lastRawFull + "\n\n";
       const merged = this.boundaryPrefix + text;
       this.lastRawFull = merged;
-      this.lastNormalizedFull = normalizeMediaTags(merged);
+      this.lastNormalizedFull = normalizeMediaTags(sanitizeQQBotVisibleText(merged));
 
       await this.processMediaTags(this.lastNormalizedFull);
       return;
@@ -529,7 +530,7 @@ export class StreamingController {
 
     // 正常增长：更新原始文本和 normalize 后的文本
     this.lastRawFull = fullText;
-    this.lastNormalizedFull = normalizeMediaTags(fullText);
+    this.lastNormalizedFull = normalizeMediaTags(sanitizeQQBotVisibleText(fullText));
 
     // ★ 核心：从 sentIndex 开始，处理增量文本（串行队列保证不会并发进入）
     await this.processMediaTags(this.lastNormalizedFull);
@@ -606,7 +607,7 @@ export class StreamingController {
 
     // ★ onIdle 文本校验：如果传了文本，检查是否包含之前的全量文本
     if (payload?.text) {
-      const idleNormalized = normalizeMediaTags(payload.text);
+      const idleNormalized = normalizeMediaTags(sanitizeQQBotVisibleText(payload.text));
       if (idleNormalized.includes(this.lastNormalizedFull)) {
         // onIdle 文本包含之前的全量 → 一致，使用 onIdle 的文本作为最终全量
         this.logDebug(
