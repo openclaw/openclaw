@@ -1143,6 +1143,8 @@ type ValidateConfigWithPluginsParams = {
     config: OpenClawConfig,
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   sourceRaw?: unknown;
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+  validateBundledChannels?: boolean;
   preservedLegacyRootKeys?: readonly string[];
 };
 
@@ -1182,6 +1184,8 @@ function validateConfigObjectWithPluginsBase(
 ): ValidateConfigWithPluginsResult {
   const base = validateConfigObjectRaw(raw, {
     sourceRaw: opts.sourceRaw,
+    touchedPaths: opts.touchedPaths,
+    validateBundledChannels: opts.validateBundledChannels,
     preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
   });
   if (!base.ok) {
