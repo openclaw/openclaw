@@ -2698,6 +2698,54 @@ describe("runCli exit behavior", () => {
     );
   });
 
+  it("falls back to the configured local tailnet gateway URL when loopback is unavailable", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          bind: "tailnet",
+          auth: {
+            mode: "token",
+            token: "local-token",
+          },
+        },
+      },
+    });
+    resolveControlUiLinksMock.mockImplementation(({ bind }: { bind?: string } = {}) =>
+      bind === "tailnet"
+        ? {
+            httpUrl: "http://100.64.0.10:18789/",
+            wsUrl: "ws://100.64.0.10:18789",
+          }
+        : {
+            httpUrl: "http://127.0.0.1:18789/",
+            wsUrl: "ws://127.0.0.1:18789",
+          },
+    );
+    probeGatewayReachableMock
+      .mockResolvedValueOnce({ ok: false, detail: "loopback offline" })
+      .mockResolvedValueOnce({ ok: true });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(probeGatewayReachableMock).toHaveBeenNthCalledWith(1, {
+      url: "ws://127.0.0.1:18789",
+      token: "local-token",
+    });
+    expect(probeGatewayReachableMock).toHaveBeenNthCalledWith(2, {
+      url: "ws://100.64.0.10:18789",
+      token: "local-token",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://100.64.0.10:18789", authSource: "config" },
+    );
+  });
+
   it("starts the local TUI for bare root invocations when the gateway is unavailable", async () => {
     probeGatewayReachableMock.mockResolvedValueOnce({ ok: false, detail: "offline" });
 

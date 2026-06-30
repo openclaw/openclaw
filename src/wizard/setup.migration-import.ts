@@ -279,11 +279,16 @@ function resolveManifestSetupMigrationProviders(
     contract: "migrationProviders",
     config: baseConfig,
   }).flatMap((plugin) =>
-    (plugin.contracts?.migrationProviders ?? []).map((providerId) => ({
-      providerId,
-      label: resolveManifestMigrationProviderLabel({ providerId, pluginName: plugin.name }),
-      ...(plugin.description ? { description: plugin.description } : {}),
-    })),
+    (plugin.contracts?.migrationProviders ?? []).map((providerId) => {
+      const provider: ManifestSetupMigrationProvider = {
+        providerId,
+        label: resolveManifestMigrationProviderLabel({ providerId, pluginName: plugin.name }),
+      };
+      if (plugin.description) {
+        provider.description = plugin.description;
+      }
+      return provider;
+    }),
   );
 }
 

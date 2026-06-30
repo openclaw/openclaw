@@ -59,7 +59,7 @@ function isBrewOnlyInstallableSkill(skill: {
 function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string }): boolean {
   // Onboarding can auto-run bundled recipes without another prompt. Workspace
   // skill metadata is mutable project input, so those installs stay explicit.
-  return skill.bundled === true && skill.source === "openclaw-bundled";
+  return skill.bundled && skill.source === "openclaw-bundled";
 }
 
 function isNodeManagerChoice(value: unknown): value is NodeManagerChoice {

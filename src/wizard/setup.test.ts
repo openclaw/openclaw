@@ -97,10 +97,10 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
     hooks: {
       ...(cfg as { hooks?: Record<string, unknown> }).hooks,
       internal: {
-        ...((cfg as { hooks?: { internal?: Record<string, unknown> } }).hooks?.internal ?? {}),
+        ...(cfg as { hooks?: { internal?: Record<string, unknown> } }).hooks?.internal,
         entries: {
-          ...((cfg as { hooks?: { internal?: { entries?: Record<string, unknown> } } }).hooks
-            ?.internal?.entries ?? {}),
+          ...(cfg as { hooks?: { internal?: { entries?: Record<string, unknown> } } }).hooks
+            ?.internal?.entries,
           "session-memory": { enabled: true },
         },
       },

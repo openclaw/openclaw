@@ -41,17 +41,17 @@ function stableKey(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return String(value);
+    return Object.prototype.toString.call(value);
   }
 }
 
-function optionSignature<T>(options: Array<{ value: T; label: string }>): string {
+function optionSignature(options: Array<{ value: unknown; label: string }>): string {
   return stableKey(options.map((option) => [stableKey(option.value), option.label]));
 }
 
-function buildPromptSignature<T>(
+function buildPromptSignature(
   kind: PromptKind,
-  params: { message: string; options?: Array<{ value: T; label: string }>; layout?: string },
+  params: { message: string; options?: Array<{ value: unknown; label: string }>; layout?: string },
 ): string {
   return stableKey({
     kind,

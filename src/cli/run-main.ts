@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -320,43 +321,102 @@ async function resolveConfiguredTuiLaunchTarget(
   return { kind: "tui", local: true };
 }
 
+type GatewayProbeTarget = {
+  url: string;
+  auth: "local" | "remote";
+  scope: "local-loopback" | "local-configured" | "remote";
+};
+
 async function resolveReachableGatewayUrl(config: OpenClawConfig): Promise<string | null> {
-  const target = await resolveGatewayProbeTarget(config);
-  if (!target) {
+  const targets = await resolveGatewayProbeTargets(config);
+  if (targets.length === 0) {
     return null;
   }
   const gateway = config.gateway;
-  const remoteAuth = target.auth === "remote";
+  const usesRemoteAuth = targets.some((target) => target.auth === "remote");
   const [token, password] = await Promise.all([
     resolveGatewayProbeSecret({
       config,
-      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
-      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
+      value: usesRemoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
+      path: usesRemoteAuth ? "gateway.remote.token" : "gateway.auth.token",
     }),
     resolveGatewayProbeSecret({
       config,
-      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
-      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
+      value: usesRemoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
+      path: usesRemoteAuth ? "gateway.remote.password" : "gateway.auth.password",
     }),
   ]);
   const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
-  const probe = await probeGatewayReachable({
-    url: target.url,
-    ...(token ? { token } : {}),
-    ...(password ? { password } : {}),
-  });
-  return probe.ok ? target.url : null;
+  for (const target of targets) {
+    if (!isSafeGatewayProbeTarget(target)) {
+      continue;
+    }
+    const probe = await probeGatewayReachable({
+      url: target.url,
+      ...(token ? { token } : {}),
+      ...(password ? { password } : {}),
+    });
+    if (probe.ok) {
+      return target.url;
+    }
+  }
+  return null;
 }
 
-async function resolveGatewayProbeTarget(
-  config: OpenClawConfig,
-): Promise<{ url: string; auth: "local" | "remote" } | null> {
+async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<GatewayProbeTarget[]> {
   const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
   if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
     const url = await resolveValidatedRemoteGatewayUrl(config);
-    return url ? { url, auth: "remote" } : null;
+    return url ? [{ url, auth: "remote", scope: "remote" }] : [];
   }
-  return { url: await resolveLocalGatewayWebSocketUrl(config), auth: "local" };
+  return (await resolveLocalGatewayWebSocketUrls(config)).map((url, index) => ({
+    url,
+    auth: "local",
+    scope: index === 0 ? "local-loopback" : "local-configured",
+  }));
+}
+
+function isSafeGatewayProbeTarget(target: GatewayProbeTarget): boolean {
+  if (target.scope === "remote") {
+    return isSafeRemoteGatewayProbeUrl(target.url);
+  }
+  return isSecureWebSocketUrl(target.url, {
+    allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+  });
+}
+
+function isSafeRemoteGatewayProbeUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isLoopbackGatewayHost(parsed.hostname)) {
+    return true;
+  }
+  return (
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1" &&
+    isSecureWebSocketUrl(url, { allowPrivateWs: true })
+  );
+}
+
+function isLoopbackGatewayHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.+$/, "");
+  if (normalized === "localhost") {
+    return true;
+  }
+  const hostForIpCheck =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return isLoopbackAddress(hostForIpCheck);
 }
 
 async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise<string | null> {
@@ -385,19 +445,33 @@ async function resolveGatewayProbeSecret(params: {
   }
 }
 
-async function resolveLocalGatewayWebSocketUrl(config: OpenClawConfig): Promise<string> {
+async function resolveLocalGatewayWebSocketUrls(config: OpenClawConfig): Promise<string[]> {
   const [{ resolveGatewayPort }, { resolveControlUiLinks }] = await Promise.all([
     import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
   ]);
   const gateway = config.gateway;
-  const links = resolveControlUiLinks({
+  const baseParams = {
     port: resolveGatewayPort(config),
-    bind: "loopback",
     basePath: gateway?.controlUi?.basePath,
     tlsEnabled: gateway?.tls?.enabled === true,
+  };
+  const loopbackLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind: "loopback",
   });
-  return links.wsUrl;
+  const bind = gateway?.bind;
+  if (bind !== "tailnet" && bind !== "custom") {
+    return [loopbackLinks.wsUrl];
+  }
+  const configuredLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind,
+    customBindHost: gateway?.customBindHost,
+  });
+  return configuredLinks.wsUrl === loopbackLinks.wsUrl
+    ? [loopbackLinks.wsUrl]
+    : [loopbackLinks.wsUrl, configuredLinks.wsUrl];
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -977,17 +1051,13 @@ export async function runCli(argv: string[] = process.argv) {
           return;
         }
         const { launchTuiCli } = await import("../tui/tui-launch.js");
-        await launchTuiCli(
-          {
-            deliver: false,
-            ...(bareRootLaunchTarget.local ? { local: true } : {}),
-          },
-          {
-            ...(bareRootLaunchTarget.gatewayUrl
-              ? { gatewayUrl: bareRootLaunchTarget.gatewayUrl, authSource: "config" as const }
-              : {}),
-          },
-        );
+        const tuiOptions = bareRootLaunchTarget.local
+          ? { deliver: false, local: true }
+          : { deliver: false };
+        const tuiLaunchOptions = bareRootLaunchTarget.gatewayUrl
+          ? { gatewayUrl: bareRootLaunchTarget.gatewayUrl, authSource: "config" as const }
+          : {};
+        await launchTuiCli(tuiOptions, tuiLaunchOptions);
         return;
       }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {

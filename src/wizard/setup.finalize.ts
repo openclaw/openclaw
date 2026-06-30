@@ -127,7 +127,7 @@ async function closeSessionGatewayForOnboarding(params: {
   runtime: RuntimeEnv;
   reason: string;
 }): Promise<void> {
-  await params.sessionGateway.close({ reason: params.reason }).catch((error) => {
+  await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
 }

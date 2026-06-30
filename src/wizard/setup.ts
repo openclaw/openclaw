@@ -364,11 +364,16 @@ async function runSetupWizardOnce(
     baseConfig,
     detections: migrationDetections,
   });
-  const importOptions = migrationOptions.map((option) => ({
-    value: `import:${option.providerId}` as const,
-    label: t("wizard.migration.importFrom", { source: option.label }),
-    ...(option.hint ? { hint: option.hint } : {}),
-  }));
+  const importOptions = migrationOptions.map((option) => {
+    const choice: { value: `import:${string}`; label: string; hint?: string } = {
+      value: `import:${option.providerId}`,
+      label: t("wizard.migration.importFrom", { source: option.label }),
+    };
+    if (option.hint) {
+      choice.hint = option.hint;
+    }
+    return choice;
+  });
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (

@@ -98,7 +98,7 @@ export function formatNavigationFooter(navigation: WizardPromptNavigation | unde
 }
 
 function navigationFooterLines(
-  hasGuide: boolean,
+  guideVisible: boolean,
   barStyle: "cyan" | "yellow",
   navigation: WizardPromptNavigation | undefined,
   extraHints: string[] = [],
@@ -108,7 +108,7 @@ function navigationFooterLines(
     return [];
   }
   const hintLine = [footer, ...extraHints].join("  ");
-  const prefix = hasGuide ? `${styleText(barStyle, S_BAR)}  ` : "";
+  const prefix = guideVisible ? `${styleText(barStyle, S_BAR)}  ` : "";
   return [`${prefix}${hintLine}`];
 }
 
@@ -223,7 +223,7 @@ export function autocompleteWithNavigationFooter<Value>(
     render() {
       const showGuide = hasGuide(opts);
       const headings = showGuide
-        ? [`${styleText("gray", S_BAR)}`, `${clackSymbol(this.state)}  ${opts.message}`]
+        ? [styleText("gray", S_BAR), `${clackSymbol(this.state)}  ${opts.message}`]
         : [`${clackSymbol(this.state)}  ${opts.message}`];
       const userInput = this.userInput;
       const options = this.options;
@@ -248,6 +248,7 @@ export function autocompleteWithNavigationFooter<Value>(
               label,
             )}`;
         }
+        return "";
       };
 
       switch (this.state) {

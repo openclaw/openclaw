@@ -9,22 +9,19 @@ function selectOptions(values: string[]) {
   return values.map((value) => ({ value, label: value }));
 }
 
-function selectParamsAt(
-  select: ReturnType<typeof vi.fn>,
-  index: number,
-): WizardSelectParams<string> {
+function selectParamsAt(select: ReturnType<typeof vi.fn>, index: number): WizardSelectParams {
   const params = select.mock.calls[index]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error(`missing select call ${index}`);
   }
-  return params as WizardSelectParams<string>;
+  return params as WizardSelectParams;
 }
 
 describe("runWizardWithPromptNavigation", () => {
   it("restarts at the previous prompt when back is requested", async () => {
     let firstPromptCalls = 0;
     let secondPromptCalls = 0;
-    const select = vi.fn(async (params: WizardSelectParams<string>) => {
+    const select = vi.fn(async (params: WizardSelectParams) => {
       if (params.message === "First") {
         firstPromptCalls++;
         return firstPromptCalls === 1 ? "alpha" : "beta";
@@ -68,7 +65,7 @@ describe("runWizardWithPromptNavigation", () => {
   it("uses right navigation to accept a remembered prompt answer", async () => {
     let thirdPromptCalls = 0;
     const note = vi.fn(async () => {});
-    const select = vi.fn(async (params: WizardSelectParams<string>) => {
+    const select = vi.fn(async (params: WizardSelectParams) => {
       if (params.message === "First") {
         return "alpha";
       }
@@ -159,7 +156,7 @@ describe("runWizardWithPromptNavigation", () => {
   });
 
   it("disables back replay for prompts after an irreversible boundary", async () => {
-    const select = vi.fn(async (params: WizardSelectParams<string>) => {
+    const select = vi.fn(async (params: WizardSelectParams) => {
       if (params.message === "First") {
         return "alpha";
       }
