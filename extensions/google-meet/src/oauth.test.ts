@@ -227,4 +227,31 @@ describe("Google Meet OAuth", () => {
     ).rejects.toThrow(/timeout/i);
     expect(promptInput).not.toHaveBeenCalled();
   });
+
+  it("rejects oversized OAuth token responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        const ONE_MIB = 1024 * 1024;
+        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(
+      refreshGoogleMeetAccessToken({ clientId: "id", clientSecret: "secret", refreshToken: "rt" }),
+    ).rejects.toThrow("Google Meet OAuth token exchange: JSON response exceeds");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
