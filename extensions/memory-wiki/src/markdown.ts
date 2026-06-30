@@ -116,6 +116,10 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
+/** Matches fenced code blocks (```...```) including the language tag. */
+const FENCED_CODE_BLOCK_PATTERN = /```[\s\S]*?```/g;
+/** Matches inline code spans (`...`). */
+const INLINE_CODE_PATTERN = /`[^`]+`/g;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -387,7 +391,14 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 }
 
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  // Strip fenced code blocks and inline code spans before searching for
+  // wikilinks, so [[...]] patterns inside code (e.g. Scala generics like
+  // Future[Option[User]], bash [[ "$x" == "y" ]]) are not falsely
+  // reported as broken wikilink targets. (#97945)
+  const searchable = markdown
+    .replace(RELATED_BLOCK_PATTERN, "")
+    .replace(FENCED_CODE_BLOCK_PATTERN, "")
+    .replace(INLINE_CODE_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
