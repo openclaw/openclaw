@@ -18,6 +18,12 @@ import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import { resolveGatewayAuth } from "../../gateway/auth.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackHost,
+  resolveGatewayBindHost,
+} from "../../gateway/net.js";
 import {
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
@@ -37,6 +43,46 @@ import {
   parsePort,
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+type InstallBindMode = NonNullable<NonNullable<OpenClawConfig["gateway"]>["bind"]>;
+
+function resolveGatewayInstallBindMode(cfg: OpenClawConfig): InstallBindMode {
+  return (cfg.gateway?.bind ??
+    defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off")) as InstallBindMode;
+}
+
+function formatNoAuthNonLoopbackInstallBlock(params: {
+  bind: InstallBindMode;
+  bindHost: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const auth = resolveGatewayAuth({
+    authConfig: params.config.gateway?.auth,
+    env: params.env,
+    tailscaleMode: params.config.gateway?.tailscale?.mode ?? "off",
+  });
+  if (auth.mode !== "none" || isLoopbackHost(params.bindHost)) {
+    return undefined;
+  }
+  const hints: string[] = [
+    `gateway.bind=${params.bind} resolves to ${params.bindHost}, but gateway.auth.mode=none disables Gateway auth.`,
+  ];
+  if (normalizeOptionalString(auth.token)) {
+    hints.push(
+      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else if (normalizeOptionalString(auth.password)) {
+    hints.push(
+      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else {
+    hints.push(
+      `Configure token/password auth, use trusted-proxy auth, or set ${formatCliCommand("openclaw config set gateway.bind loopback")} before installing the managed service.`,
+    );
+  }
+  return hints.join(" ");
+}
 
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
@@ -204,6 +250,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       fail(`Invalid ${OPENCLAW_WRAPPER_ENV_KEY}: ${String(err)}`);
       return;
     }
+  }
+  const installBind = resolveGatewayInstallBindMode(cfg);
+  const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
+  const noAuthNonLoopbackBlock = formatNoAuthNonLoopbackInstallBlock({
+    bind: installBind,
+    bindHost: installBindHost,
+    config: cfg,
+    env: installEnv,
+  });
+  if (noAuthNonLoopbackBlock) {
+    fail(`Gateway install blocked: ${noAuthNonLoopbackBlock}`);
+    return;
   }
   if (loaded) {
     if (!opts.force) {
