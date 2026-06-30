@@ -201,7 +201,7 @@ public struct ResponseFrame: Codable, Sendable {
         ok: Bool,
         payload: AnyCodable?,
         error: ErrorShape?,
-        meta: [String: AnyCodable]?)
+        meta: [String: AnyCodable]? = nil)
     {
         self.type = type
         self.id = id
