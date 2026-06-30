@@ -72,6 +72,8 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     if (contentLengthBytes === null || contentLengthBytes > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
       return new Response(null, init);
     }
+    // Bodyless foreign responses only expose text(); trust Content-Length to avoid
+    // no-size reads, then verify the returned UTF-8 size before preserving it.
     const text = await response.text();
     if (Buffer.byteLength(text, "utf8") > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
       return new Response(null, init);
