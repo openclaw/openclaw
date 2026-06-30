@@ -637,7 +637,7 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
     const { port } = server.address() as { port: number };
 
     try {
-      const result = await performMatrixRequest({
+      const result = (await performMatrixRequest({
         homeserver: `http://127.0.0.1:${port}`,
         accessToken: "token",
         method: "GET",
@@ -646,8 +646,12 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
         raw: true,
         maxBytes: 16 * 1024 * 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
-      });
-      expect(result.buffer).toEqual(payload);
+      })).buffer;
+      expect(result).toEqual(payload);
+      console.log(
+        "[matrix-bound-proof] under-cap: raw buffer returned correctly, size=" +
+          result.length,
+      );
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
