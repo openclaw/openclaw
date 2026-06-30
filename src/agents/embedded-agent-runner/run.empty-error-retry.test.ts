@@ -141,11 +141,39 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-opus-4-8",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_timeout", type: "reasoning" }),
+          },
+        ],
+        "LLM request timed out.",
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-timeout",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries on classified server_error with clean per-attempt state (#97877)", async () => {
+    // server_error from OpenRouter-style HTTP 500 must reach the empty-error
+    // retry path, not be terminated by failover.  The per-attempt guard still
+    // blocks retry when the current attempt itself had side effects.
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -158,18 +186,25 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "Internal server error",
       ),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("anthropic", "claude-opus-4-8"),
+    );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-server-error",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[empty-error-retry]"),
+    );
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
