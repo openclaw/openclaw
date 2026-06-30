@@ -274,12 +274,13 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it("does not retry when the failed attempt recorded side effects", async () => {
-    // Resubmission would duplicate side effects when replay metadata cannot
-    // prove the failed turn is safe to replay.
+  it("does not retry when the failed attempt recorded current-turn side effects", async () => {
+    // Resubmission would duplicate side effects when the failed attempt itself
+    // ran a replay-unsafe tool before the provider error surfaced.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
         lastAssistant: {
           role: "assistant",
           stopReason: "error",
@@ -288,10 +289,6 @@ describe("runEmbeddedAgent silent-error retry", () => {
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        replayMetadata: {
-          hadPotentialSideEffects: true,
-          replaySafe: false,
-        },
       }),
     );
 
