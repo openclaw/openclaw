@@ -149,7 +149,7 @@ export async function minimaxUnderstandImage(params: {
   } catch (err) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg}${trace ? `.${trace}` : ""}`);
+    throw new Error(`${msg}${trace ? `.${trace}` : ""}`, { cause: err });
   }
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
