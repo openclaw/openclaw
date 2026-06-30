@@ -51,7 +51,7 @@ describe("oauth refresh failure hints", () => {
       reason: "revoked",
     });
     expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
-      "openclaw models auth login --provider anthropic --method cli",
+      "claude auth login && openclaw models auth login --provider anthropic --method cli",
     );
   });
 
@@ -147,7 +147,7 @@ describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
           (caught: unknown) => (caught instanceof Error ? caught : new Error(String(caught))),
         );
         expect(error?.message).toContain(
-          "Re-auth with `openclaw models auth login --provider anthropic --method cli`",
+          "Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli`",
         );
         console.log(
           `[claude-cli-oauth-proof] server=401 → re-auth hint surfaced: ${error?.message}`,
