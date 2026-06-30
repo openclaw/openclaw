@@ -141,9 +141,12 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
   if (!isXaiOAuthResponsesModel(row, fallback)) {
     return undefined;
   }
+  // Prefer catalog value for known models (fixes grok-4.3 reporting ~200k instead of 1M)
+  // See https://github.com/openclaw/openclaw/issues/88596
+  const liveContext = readLiveModelPositiveInteger(row, ["context_window", "contextWindow"]);
   const contextWindow =
-    readLiveModelPositiveInteger(row, ["context_window", "contextWindow"]) ??
     fallback?.contextWindow ??
+    liveContext ??
     XAI_DEFAULT_CONTEXT_WINDOW;
   const maxTokens =
     readLiveModelPositiveInteger(row, ["max_completion_tokens", "maxCompletionTokens"]) ??
