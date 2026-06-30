@@ -556,6 +556,26 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
   return parts.join(" · ");
 }
 
+function formatChatSessionPickerOptionAriaLabel(params: {
+  label: string;
+  meta: string;
+  position: number;
+  selected: boolean;
+  total: number;
+}): string {
+  return [
+    params.label,
+    params.selected ? t("chat.selectors.currentSession") : null,
+    t("chat.selectors.sessionLoadedListPosition", {
+      position: String(params.position),
+      total: String(params.total),
+    }),
+    params.meta || null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 function renderChatSessionPicker(params: {
   state: AppViewState;
   onSwitchSession: ChatSessionSwitchHandler;
@@ -704,19 +724,29 @@ function renderChatSessionPickerPopover(
         ${repeat(
           pickerRows,
           (entry) => entry.row.key,
-          (entry) => {
+          (entry, index) => {
             const { row, label } = entry;
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
+            const position = index + 1;
+            const optionAriaLabel = formatChatSessionPickerOptionAriaLabel({
+              label,
+              meta,
+              position,
+              selected,
+              total: shownCount,
+            });
             return html`
               <button
                 class="chat-session-picker__option ${selected
                   ? "chat-session-picker__option--selected"
                   : ""}"
                 data-chat-session-picker-option="true"
+                data-chat-session-picker-position=${String(position)}
                 data-session-key=${row.key}
                 role="option"
                 aria-selected=${selected ? "true" : "false"}
+                aria-label=${optionAriaLabel}
                 title=${label}
                 type="button"
                 @click=${() => {
@@ -726,6 +756,9 @@ function renderChatSessionPickerPopover(
                   }
                 }}
               >
+                <span class="chat-session-picker__option-index" aria-hidden="true">
+                  ${position}
+                </span>
                 <span class="chat-session-picker__option-main">
                   <span class="chat-session-picker__option-label">${label}</span>
                   ${meta ? html`<span class="chat-session-picker__option-meta">${meta}</span>` : ""}
