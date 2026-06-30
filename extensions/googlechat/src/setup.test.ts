@@ -490,6 +490,66 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.serviceAccountRef).toBeUndefined();
   });
 
+  it("does not inherit top-level serviceAccountRef into accounts.default inline credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "stale-default-service-account.json",
+            },
+            accounts: {
+              default: {
+                serviceAccount: {
+                  client_email: "default@example.com",
+                  private_key: "default-key",
+                  type: "service_account",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("inline");
+    expect(resolved.credentials).toEqual({
+      client_email: "default@example.com",
+      private_key: "default-key",
+      type: "service_account",
+    });
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
+  it("does not inherit top-level serviceAccountRef into accounts.default file credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "stale-default-service-account.json",
+            },
+            accounts: {
+              default: {
+                serviceAccountFile: "/tmp/default-service-account.json",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/default-service-account.json");
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {

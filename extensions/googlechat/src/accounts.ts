@@ -66,16 +66,19 @@ function mergeGoogleChatAccountConfig(
     nestedObjectKeys: ["botLoopProtection"],
   });
   const defaultAccountConfig = resolveAccountEntry(raw.accounts, DEFAULT_ACCOUNT_ID) ?? {};
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return base;
-  }
-  const accountConfig = resolveAccountEntry(raw.accounts, accountId) ?? {};
+  const accountConfig =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? defaultAccountConfig
+      : (resolveAccountEntry(raw.accounts, accountId) ?? {});
   if (credentialKeys.some((key) => hasOwnCredentialKey(accountConfig, key))) {
     for (const key of credentialKeys) {
       if (!hasOwnCredentialKey(accountConfig, key)) {
         delete base[key];
       }
     }
+  }
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return base;
   }
   const {
     enabled: _ignoredEnabled,
