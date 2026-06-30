@@ -810,6 +810,106 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(callArg).not.toHaveProperty("mentions");
   });
 
+  it("splits a long block into chunked messages when textChunkLimit is small", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+
+    // Override chunkTextWithMode to actually split text into small chunks,
+    // simulating a low textChunkLimit.
+    const chunkedTexts = ["AAAA", "BBBB", "CCCC"];
+    let chunkCallIndex = 0;
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4),
+          resolveChunkMode: vi.fn(() => "fixed"),
+          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkTextWithMode: vi.fn(() => {
+            chunkCallIndex += 1;
+            // Only split the block; keep other calls returning single chunk
+            if (chunkCallIndex === 1) {
+              return chunkedTexts;
+            }
+            return [chunkCallIndex as unknown as string];
+          }),
+          chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+    });
+
+    try {
+      const { options } = createDispatcherHarness({
+        runtime: createRuntimeLogger(),
+        mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+      });
+
+      await options.deliver({ text: "AAAABBBBCCCC" }, { kind: "block" });
+      await options.onIdle?.();
+
+      // Block should be split into 3 chunks, each sent as independent message
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+      expectMockArgFields(sendMessageFeishuMock, "first chunk with mentions", {
+        text: "AAAA",
+        mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+      });
+      expectMockArgFields(
+        sendMessageFeishuMock,
+        "second chunk without mentions",
+        {
+          text: "BBBB",
+        },
+        1,
+      );
+      expectMockArgFields(
+        sendMessageFeishuMock,
+        "third chunk without mentions",
+        {
+          text: "CCCC",
+        },
+        2,
+      );
+      // Confirm no mentions on second and third chunks
+      const chunk2Arg = sendMessageFeishuMock.mock.calls[1][0] as Record<string, unknown>;
+      expect(chunk2Arg).not.toHaveProperty("mentions");
+      const chunk3Arg = sendMessageFeishuMock.mock.calls[2][0] as Record<string, unknown>;
+      expect(chunk3Arg).not.toHaveProperty("mentions");
+      expect(streamingInstances).toHaveLength(0);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      // Restore the default chunkTextWithMode for subsequent tests
+      getFeishuRuntimeMock.mockReturnValue({
+        channel: {
+          text: {
+            resolveTextChunkLimit: vi.fn(() => 4000),
+            resolveChunkMode: vi.fn(() => "line"),
+            resolveMarkdownTableMode: vi.fn(() => "preserve"),
+            convertMarkdownTables: vi.fn((text: string) => text),
+            chunkTextWithMode: vi.fn((text: string) => [text]),
+            chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
+          },
+          reply: {
+            createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+            resolveHumanDelayConfig: vi.fn(() => undefined),
+          },
+        },
+      });
+    }
+  });
+
   it("does not prepend automatic mentions to streaming card closes", async () => {
     const overrides = {
       runtime: createRuntimeLogger(),

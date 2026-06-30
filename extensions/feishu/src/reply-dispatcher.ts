@@ -692,23 +692,35 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // messages for true progressive delivery.
             if (!useStreamingCard) {
               if (coreBlockStreamingEnabled) {
-                // Send block text as an independent Feishu message for
+                // Send block text as independent Feishu messages for
                 // true progressive delivery without card-side playback.
-                // Preserve mention targets on the first block so @mentioned
-                // users receive a notification.
+                // Route through chunked delivery so textChunkLimit is
+                // honored, matching the established final/static path.
+                // Preserve mention targets only on the first emitted
+                // block chunk so @mentioned users receive a notification.
                 const isFirstBlock = sentBlockText === "";
-                await sendMessageFeishu({
-                  cfg,
-                  to: chatId,
+                await sendChunkedTextReply({
                   text,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  ...(isFirstBlock && mentionTargets?.length ? { mentions: mentionTargets } : {}),
+                  useCard: false,
+                  infoKind: "block",
+                  sendChunk: async ({ chunk, isFirst }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: chatId,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      allowTopLevelReplyFallback,
+                      accountId,
+                      ...(isFirstBlock && isFirst && mentionTargets?.length
+                        ? { mentions: mentionTargets }
+                        : {}),
+                    });
+                  },
                 });
+                // Track original block text for duplicate-final suppression,
+                // not the chunked output which may differ.
                 sentBlockText += text;
-                markVisibleReplySent();
               }
               return;
             }
