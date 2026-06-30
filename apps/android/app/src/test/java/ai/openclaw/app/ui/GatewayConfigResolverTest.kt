@@ -323,6 +323,28 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun validationMessageExplainsInvalidSetupCode() {
+    assertEquals(
+      "Setup code has invalid gateway URL.",
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INVALID_URL,
+        GatewayEndpointInputSource.SETUP_CODE,
+      ),
+    )
+  }
+
+  @Test
+  fun validationMessageExplainsManualEndpoint() {
+    assertEquals(
+      "Enter a valid manual endpoint to connect.",
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INVALID_URL,
+        GatewayEndpointInputSource.MANUAL,
+      ),
+    )
+  }
+
+  @Test
   fun decodeGatewaySetupCodeParsesBootstrapToken() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")

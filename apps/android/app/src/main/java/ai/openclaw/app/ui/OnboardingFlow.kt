@@ -208,6 +208,36 @@ fun OnboardingFlow(
       recoveryNowMs = SystemClock.elapsedRealtime()
     }
 
+    fun pairGatewayFromCurrentInputs(resetSetupAuth: Boolean): Boolean {
+      val config =
+        resolveOnboardingGatewayConfig(
+          setupCode = setupCode,
+          manualHost = manualHost,
+          manualPort = manualPort,
+          manualTls = manualTls,
+          token = token,
+          password = password,
+        )
+      if (config == null) {
+        setupError = gatewayOnboardingValidationMessage(setupCode)
+        return false
+      }
+
+      setupError = null
+      attemptedConnect = true
+      connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+      viewModel.saveGatewayConfigAndConnect(
+        host = config.host,
+        port = config.port,
+        tls = config.tls,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+        resetSetupAuth = resetSetupAuth,
+      )
+      return true
+    }
+
     pendingTrust?.let { prompt ->
       AlertDialog(
         onDismissRequest = viewModel::declineGatewayTrustPrompt,
@@ -270,6 +300,10 @@ fun OnboardingFlow(
                   return@addOnSuccessListener
                 }
                 setupCode = scanned.setupCode
+                attemptedGatewayName = null
+                if (pairGatewayFromCurrentInputs(resetSetupAuth = true)) {
+                  step = OnboardingStep.Recovery
+                }
               }.addOnFailureListener { setupError = "Could not open the scanner." }
           },
           onSetupCodeChange = {
@@ -289,41 +323,16 @@ fun OnboardingFlow(
           onPasswordChange = { password = it },
           onUseNearby = {
             val endpoint = gateways.firstOrNull() ?: return@GatewaySetupScreen
-            attemptedGatewayName = endpoint.name
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.connectInBackground(endpoint)
-            step = OnboardingStep.Recovery
+            manualHost = endpoint.host
+            manualPort = endpoint.port.toString()
+            manualTls = endpoint.tlsEnabled
+            setupError = "Nearby found ${endpoint.name}. Scan or paste a setup code to pair this gateway; discovery alone does not authenticate this phone."
           },
           onPair = {
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              )
-            if (config == null) {
-              setupError = "Enter a setup code or a valid gateway URL."
-              return@GatewaySetupScreen
-            }
-
-            setupError = null
             attemptedGatewayName = null
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = true,
-            )
-            step = OnboardingStep.Recovery
+            if (pairGatewayFromCurrentInputs(resetSetupAuth = true)) {
+              step = OnboardingStep.Recovery
+            }
           },
         )
       OnboardingStep.Recovery ->
@@ -339,26 +348,7 @@ fun OnboardingFlow(
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
           onRetry = {
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              ) ?: return@GatewayRecoveryScreen
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = false,
-            )
+            pairGatewayFromCurrentInputs(resetSetupAuth = false)
           },
           onEdit = { step = OnboardingStep.Gateway },
           onContinue = { step = OnboardingStep.Permissions },
@@ -540,24 +530,27 @@ private fun GatewaySetupScreen(
           GatewayOption(
             icon = Icons.Default.QrCode2,
             title = "Scan setup code",
-            subtitle = "Use your Gateway QR or setup code",
+            subtitle = "Recommended. Scanning pairs this phone automatically.",
             onClick = onScan,
           )
         }
         item {
+          SetupCodePairingPanel(setupCode = setupCode, onSetupCodeChange = onSetupCodeChange)
+        }
+        item {
           GatewayOption(
             icon = Icons.Default.WifiTethering,
-            title = "Nearby gateway",
+            title = "Use detected endpoint",
             subtitle = nearbyGateway.subtitle,
             status = nearbyGateway.status,
-            onClick = onUseNearby.takeIf { nearbyGateway.canConnect },
+            onClick = onUseNearby.takeIf { nearbyGateway.canUseEndpoint },
           )
         }
         item {
           GatewayOption(
             icon = Icons.Default.Link,
-            title = "Enter gateway URL",
-            subtitle = "Connect using a manual URL",
+            title = "Manual endpoint",
+            subtitle = "Advanced recovery for host, port, token, or password.",
             onClick = { advancedOpen = true },
           )
         }
@@ -590,7 +583,6 @@ private fun GatewaySetupScreen(
               }
             }
             if (advancedOpen) {
-              ClawTextField(value = setupCode, onValueChange = onSetupCodeChange, placeholder = "Setup code")
               Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = "Host", modifier = Modifier.weight(1f))
                 ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = "Port", modifier = Modifier.width(104.dp))
@@ -606,6 +598,31 @@ private fun GatewaySetupScreen(
         }
       }
       ClawPrimaryButton(text = "Pair with Gateway", icon = Icons.Default.Security, onClick = onPair, modifier = Modifier.fillMaxWidth())
+    }
+  }
+}
+
+@Composable
+private fun SetupCodePairingPanel(
+  setupCode: String,
+  onSetupCodeChange: (String) -> Unit,
+) {
+  val state = setupCodePairingUiState(setupCode)
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Text(text = "Setup code", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawStatusPill(
+          text = state.status,
+          status = if (state.canPair) ClawStatus.Success else ClawStatus.Neutral,
+        )
+      }
+      Text(text = state.subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      ClawTextField(value = setupCode, onValueChange = onSetupCodeChange, placeholder = "Paste setup code")
     }
   }
 }
@@ -645,6 +662,8 @@ private fun GatewayRecoveryScreen(
           imageVector =
             when (recoveryState) {
               GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
+              GatewayRecoveryUiState.SetupCodeRequired -> Icons.Default.QrCode2
+              GatewayRecoveryUiState.SetupCodeExpired -> Icons.Default.QrCode2
               GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
@@ -656,6 +675,8 @@ private fun GatewayRecoveryScreen(
           tint =
             when (recoveryState) {
               GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
+              GatewayRecoveryUiState.SetupCodeRequired -> ClawTheme.colors.warning
+              GatewayRecoveryUiState.SetupCodeExpired -> ClawTheme.colors.warning
               GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
               GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
               GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
@@ -695,6 +716,8 @@ private fun GatewayRecoveryScreen(
             text =
               when (recoveryState) {
                 GatewayRecoveryUiState.Connected -> "Healthy"
+                GatewayRecoveryUiState.SetupCodeRequired -> "Setup code"
+                GatewayRecoveryUiState.SetupCodeExpired -> "Fresh setup code"
                 GatewayRecoveryUiState.NodeCapabilityApprovalPending -> "Node approval"
                 GatewayRecoveryUiState.ApprovalRequired -> "Needs approval"
                 GatewayRecoveryUiState.Pairing -> "Pairing"
@@ -704,6 +727,8 @@ private fun GatewayRecoveryScreen(
             status =
               when (recoveryState) {
                 GatewayRecoveryUiState.Connected -> ClawStatus.Success
+                GatewayRecoveryUiState.SetupCodeRequired -> ClawStatus.Warning
+                GatewayRecoveryUiState.SetupCodeExpired -> ClawStatus.Warning
                 GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawStatus.Warning
                 GatewayRecoveryUiState.ApprovalRequired -> ClawStatus.Warning
                 GatewayRecoveryUiState.Pairing -> ClawStatus.Neutral
@@ -715,10 +740,11 @@ private fun GatewayRecoveryScreen(
       }
 
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val primaryAction = gatewayRecoveryPrimaryAction(recoveryState)
         ClawPrimaryButton(
-          text = if (ready) "Continue" else "Retry connection",
-          icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh,
-          onClick = if (ready) onContinue else onRetry,
+          text = primaryAction.text,
+          icon = primaryAction.icon,
+          onClick = if (primaryAction.opensGatewaySetup) onEdit else if (ready) onContinue else onRetry,
           modifier = Modifier.fillMaxWidth(),
         )
         OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
@@ -1049,6 +1075,14 @@ internal enum class GatewayRecoveryUiState(
     title = "Connected",
     message = "Your Gateway is ready.",
   ),
+  SetupCodeRequired(
+    title = "Setup Code Needed",
+    message = "This connection has no valid pairing auth.\nScan or paste a setup code to pair this phone.",
+  ),
+  SetupCodeExpired(
+    title = "Fresh Setup Code Needed",
+    message = "That setup code is no longer valid.\nGenerate a fresh QR or setup code, then pair again.",
+  ),
   ApprovalRequired(
     title = "Pairing Gateway",
     message = "Approve this phone on the gateway.\nThen retry the connection.",
@@ -1071,10 +1105,33 @@ internal enum class GatewayRecoveryUiState(
   ),
 }
 
+private data class GatewayRecoveryPrimaryAction(
+  val text: String,
+  val icon: ImageVector,
+  val opensGatewaySetup: Boolean,
+)
+
+private fun gatewayRecoveryPrimaryAction(recoveryState: GatewayRecoveryUiState): GatewayRecoveryPrimaryAction =
+  when (recoveryState) {
+    GatewayRecoveryUiState.Connected ->
+      GatewayRecoveryPrimaryAction(text = "Continue", icon = Icons.Default.CheckCircle, opensGatewaySetup = false)
+    GatewayRecoveryUiState.SetupCodeRequired,
+    GatewayRecoveryUiState.SetupCodeExpired ->
+      GatewayRecoveryPrimaryAction(text = "Scan setup code", icon = Icons.Default.QrCode2, opensGatewaySetup = true)
+    else ->
+      GatewayRecoveryPrimaryAction(text = "Retry connection", icon = Icons.Default.Refresh, opensGatewaySetup = false)
+  }
+
 internal data class NearbyGatewayUiState(
   val subtitle: String,
   val status: String?,
-  val canConnect: Boolean,
+  val canUseEndpoint: Boolean,
+)
+
+internal data class SetupCodePairingUiState(
+  val subtitle: String,
+  val status: String,
+  val canPair: Boolean,
 )
 
 /** Maps best-effort discovery into row copy and clickability for onboarding. */
@@ -1086,10 +1143,14 @@ internal fun nearbyGatewayUiState(
 ): NearbyGatewayUiState {
   val name = nearbyGatewayName?.trim().takeUnless { it.isNullOrEmpty() }
   if (name != null) {
-    return NearbyGatewayUiState(subtitle = name, status = "Found", canConnect = true)
+    return NearbyGatewayUiState(
+      subtitle = "$name found. Use it to fill host and port, then scan or paste a setup code.",
+      status = "Endpoint",
+      canUseEndpoint = true,
+    )
   }
   if (!discoveryStarted) {
-    return NearbyGatewayUiState(subtitle = "Starting discovery...", status = "Starting", canConnect = false)
+    return NearbyGatewayUiState(subtitle = "Starting discovery...", status = "Starting", canUseEndpoint = false)
   }
 
   val status = discoveryStatusText.trim()
@@ -1100,12 +1161,41 @@ internal fun nearbyGatewayUiState(
       status.endsWith("?", ignoreCase = true)
   return if (searching) {
     if (searchTimedOut) {
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false)
+      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canUseEndpoint = false)
     } else {
-      NearbyGatewayUiState(subtitle = "Searching for gateways...", status = "Searching", canConnect = false)
+      NearbyGatewayUiState(subtitle = "Searching for gateways...", status = "Searching", canUseEndpoint = false)
     }
   } else {
-    NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false)
+    NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canUseEndpoint = false)
+  }
+}
+
+/** Summarizes setup-code readiness for first-run pairing. */
+internal fun setupCodePairingUiState(setupCode: String): SetupCodePairingUiState {
+  val trimmed = setupCode.trim()
+  if (trimmed.isEmpty()) {
+    return SetupCodePairingUiState(
+      subtitle = "Scan the QR from openclaw qr, or paste the setup code shown by the CLI.",
+      status = "Recommended",
+      canPair = false,
+    )
+  }
+  val resolved = resolveScannedSetupCodeResult(trimmed)
+  return if (resolved.setupCode != null) {
+    SetupCodePairingUiState(
+      subtitle = "Setup code ready. Pair with Gateway will use this code for the authenticated bootstrap handoff.",
+      status = "Ready",
+      canPair = true,
+    )
+  } else {
+    SetupCodePairingUiState(
+      subtitle = gatewayEndpointValidationMessage(
+        resolved.error ?: GatewayEndpointValidationError.INVALID_URL,
+        GatewayEndpointInputSource.SETUP_CODE,
+      ),
+      status = "Check code",
+      canPair = false,
+    )
   }
 }
 
@@ -1119,6 +1209,8 @@ internal fun gatewayRecoveryUiState(
 ): GatewayRecoveryUiState =
   when {
     ready -> GatewayRecoveryUiState.Connected
+    gatewayConnectionProblem.isFreshSetupCodeRequired() -> GatewayRecoveryUiState.SetupCodeExpired
+    gatewayConnectionProblem.isMissingGatewayAuth() -> GatewayRecoveryUiState.SetupCodeRequired
     nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved -> GatewayRecoveryUiState.NodeCapabilityApprovalPending
@@ -1132,6 +1224,21 @@ internal fun gatewayRecoveryUiState(
     gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
     else -> GatewayRecoveryUiState.Failed
   }
+
+private fun GatewayConnectionProblem?.isMissingGatewayAuth(): Boolean =
+  this?.code in setOf(
+    "AUTH_TOKEN_MISSING",
+    "AUTH_PASSWORD_MISSING",
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+  )
+
+private fun GatewayConnectionProblem?.isFreshSetupCodeRequired(): Boolean =
+  this?.code in setOf(
+    "AUTH_BOOTSTRAP_TOKEN_INVALID",
+    "AUTH_TOKEN_MISMATCH",
+    "AUTH_PASSWORD_MISMATCH",
+  )
 
 /** Detects gateway-approved states where the Android node is still coming online. */
 internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
@@ -1151,62 +1258,49 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-private data class GatewayConfig(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val bootstrapToken: String,
-  val token: String,
-  val password: String,
-)
-
 /** Resolves setup-code or manual fields into the gateway config used for first connect. */
-private fun resolveGatewayConfig(
+internal fun resolveOnboardingGatewayConfig(
   setupCode: String,
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-): GatewayConfig? {
-  val setup = setupCode.takeIf { it.isNotBlank() }?.let(::decodeGatewaySetupCode)
-  if (setup != null) {
-    val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
-    val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
-    // Bootstrap setup codes own first-pairing auth; fall back to typed token or
-    // password only for non-bootstrap setup payloads.
-    return GatewayConfig(
-      host = endpoint.host,
-      port = endpoint.port,
-      tls = endpoint.tls,
-      bootstrapToken = bootstrapToken,
-      token =
-        setup.token
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) token.trim() else "" },
-      password =
-        setup.password
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) password.trim() else "" },
-    )
-  }
-
-  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls) ?: return null
-  val endpoint = parseGatewayEndpointResult(manualUrl).config ?: return null
-  return GatewayConfig(
-    host = endpoint.host,
-    port = endpoint.port,
-    tls = endpoint.tls,
-    bootstrapToken = "",
-    token = token.trim(),
-    password = password.trim(),
+): GatewayConnectConfig? {
+  if (setupCode.isBlank() && token.isBlank() && password.isBlank()) return null
+  val normalizedSetupCode =
+    setupCode
+      .takeIf { it.isNotBlank() }
+      ?.let { resolveScannedSetupCodeResult(it).setupCode ?: return null }
+      .orEmpty()
+  return resolveGatewayConnectConfig(
+    useSetupCode = normalizedSetupCode.isNotBlank(),
+    setupCode = normalizedSetupCode,
+    savedManualHost = "",
+    savedManualPort = "",
+    savedManualTls = manualTls,
+    manualHostInput = manualHost,
+    manualPortInput = manualPort,
+    manualTlsInput = manualTls,
+    fallbackBootstrapToken = "",
+    fallbackToken = token,
+    fallbackPassword = password,
   )
 }
 
+internal fun gatewayOnboardingValidationMessage(setupCode: String): String =
+  if (setupCode.isNotBlank()) {
+    val scanned = resolveScannedSetupCodeResult(setupCode)
+    gatewayEndpointValidationMessage(
+      scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
+      GatewayEndpointInputSource.SETUP_CODE,
+    )
+  } else {
+    "Scan or paste a setup code. Manual endpoint is for recovery and still needs a token or password when no setup code is available."
+  }
+
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-private fun recoveryGatewayDetail(
+internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
@@ -1223,8 +1317,12 @@ private fun recoveryGatewayDetail(
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
     ) {
       "Gateway paired. Waiting for node capability approval."
+    } else if (gatewayConnectionProblem.isFreshSetupCodeRequired()) {
+      "Setup auth was rejected or expired. Generate a fresh setup code, scan or paste it here, then pair again."
+    } else if (gatewayConnectionProblem.isMissingGatewayAuth()) {
+      "This endpoint was reached without valid setup auth. Scan or paste a setup code before pairing."
     } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-      "Gateway paired. Checking node capability approval."
+      "Checking gateway and node approval. If this does not finish, scan a fresh setup code and retry."
     } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
