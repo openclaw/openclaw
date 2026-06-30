@@ -319,7 +319,8 @@ describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     launchTuiCli.mockClear();
     restoreTerminalState.mockClear();
-    probeGatewayReachable.mockClear();
+    probeGatewayReachable.mockReset();
+    probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
     setupWizardShellCompletion.mockClear();
@@ -427,12 +428,15 @@ describe("finalizeSetupWizard", () => {
     };
     expect(probeParams.url).toBe("ws://127.0.0.1:18789");
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
-      timeoutMs: 300_000,
-    });
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: undefined,
+        timeoutMs: 300_000,
+      },
+      {},
+    );
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {
@@ -472,12 +476,15 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: "Wake up, my friend!",
-      timeoutMs: 300_000,
-    });
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: "Wake up, my friend!",
+        timeoutMs: 300_000,
+      },
+      {},
+    );
   });
 
   it("does not resend the bootstrap hatch message on setup reruns", async () => {
@@ -511,12 +518,15 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
-      timeoutMs: 300_000,
-    });
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: undefined,
+        timeoutMs: 300_000,
+      },
+      {},
+    );
   });
 
   it("localizes the bootstrap hatch TUI seed message", async () => {
@@ -559,12 +569,15 @@ describe("finalizeSetupWizard", () => {
         runtime: createRuntime(),
       });
 
-      expect(launchTuiCli).toHaveBeenCalledWith({
-        local: true,
-        deliver: false,
-        message: "醒醒，我的朋友！",
-        timeoutMs: 300_000,
-      });
+      expect(launchTuiCli).toHaveBeenCalledWith(
+        {
+          local: true,
+          deliver: false,
+          message: "醒醒，我的朋友！",
+          timeoutMs: 300_000,
+        },
+        {},
+      );
     } finally {
       if (previousLocale === undefined) {
         delete process.env.OPENCLAW_LOCALE;

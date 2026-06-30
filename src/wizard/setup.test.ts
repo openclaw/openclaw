@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -111,7 +111,11 @@ const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 
-const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const setupChannels = vi.hoisted(() =>
+  vi.fn(
+    async (cfg: unknown, _runtime?: unknown, _prompter?: WizardPrompter, _options?: unknown) => cfg,
+  ),
+);
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 function providerPluginStub(
@@ -389,6 +393,61 @@ describe("runSetupWizard", () => {
     await fs.mkdir(dir, { recursive: true });
     return dir;
   }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped.mockResolvedValue("skip");
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockImplementation(async (args) => ({ config: args.config }));
+    setupChannels.mockReset();
+    setupChannels.mockImplementation(async (cfg) => cfg);
+    setupSkills.mockReset();
+    setupSkills.mockImplementation(async (cfg) => cfg);
+    configureGatewayForSetup.mockReset();
+    configureGatewayForSetup.mockImplementation(async (args) => ({
+      nextConfig: args.nextConfig,
+      settings: {
+        port: args.localPort ?? 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+    }));
+    readConfigFileSnapshot.mockReset();
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    probeGatewayReachable.mockReset();
+    probeGatewayReachable.mockResolvedValue({ ok: false });
+    resolvePreferredProviderForAuthChoice.mockReset();
+    resolvePreferredProviderForAuthChoice.mockResolvedValue("demo-provider");
+    resolvePluginProvidersRuntime.mockReset();
+    resolvePluginProvidersRuntime.mockReturnValue([]);
+    resolveManifestProviderAuthChoice.mockReset();
+    resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    resolvePluginSetupProvider.mockReset();
+    resolvePluginSetupProvider.mockReturnValue(undefined);
+    resolveProviderPluginChoice.mockReset();
+    resolveProviderPluginChoice.mockReturnValue(null);
+    promptDefaultModel.mockReset();
+    promptDefaultModel.mockResolvedValue({});
+    warnIfModelConfigLooksOff.mockReset();
+    warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+    buildPluginCompatibilitySnapshotNotices.mockReset();
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
+  });
 
   it("exits successfully after the auto-launched TUI returns", async () => {
     const caseDir = await makeCaseDir("tui-success-exit-");
@@ -970,22 +1029,24 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        workspace: workspaceDir,
-        authChoice: "skip",
-        skipProviders: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          mode: "local",
+          workspace: workspaceDir,
+          authChoice: "skip",
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          installDaemon: false,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:0");
 
     expectRecordFields(
       getMockCallArg(runTui, 0, 0, "tui launch"),
@@ -1085,9 +1146,18 @@ describe("runSetupWizard", () => {
   });
 
   it("disables back navigation before side-effecting channel setup", async () => {
-    setupChannels.mockClear();
-    const disableBackNavigation = vi.fn();
-    const prompter = buildWizardPrompter({ disableBackNavigation });
+    setupChannels.mockImplementationOnce(async (cfg, _runtime, channelPrompter) => {
+      if (!channelPrompter) {
+        throw new Error("expected channel setup prompter");
+      }
+      await channelPrompter.select({
+        message: "Channel side effect",
+        options: [{ value: "continue", label: "Continue" }],
+      });
+      return cfg;
+    });
+    const select = vi.fn(async () => "continue") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime();
 
     await runSetupWizard(
@@ -1106,10 +1176,12 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(disableBackNavigation).toHaveBeenCalled();
     expect(setupChannels).toHaveBeenCalledOnce();
-    expect(disableBackNavigation.mock.invocationCallOrder[0]).toBeLessThan(
-      setupChannels.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Channel side effect",
+        navigation: { canGoBack: false, canGoForward: false },
+      }),
     );
   });
 
