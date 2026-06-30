@@ -142,7 +142,7 @@ import { listPersistedBundledPluginLocationBridges } from "../plugins-location-b
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import {
   hasNativePackageInstallPayload,
-  isBundleInstallRecord,
+  resolveBundleInstallRecordPayload,
   validateBundleInstallRecordPayload,
 } from "./plugin-payload-validation.js";
 import {
@@ -579,11 +579,17 @@ export async function collectMissingPluginInstallPayloads(params: {
       missing.push({ pluginId, installPath, reason: "missing-package-dir" });
       continue;
     }
-    if (isBundleInstallRecord(record)) {
+    const bundlePayload = resolveBundleInstallRecordPayload({ record, installPath });
+    if (bundlePayload.isBundlePayload) {
       if (await hasNativePackageInstallPayload(installPath)) {
         continue;
       }
-      const bundleFailure = validateBundleInstallRecordPayload({ pluginId, installPath, record });
+      const bundleFailure = validateBundleInstallRecordPayload({
+        pluginId,
+        installPath,
+        record,
+        bundleFormat: bundlePayload.bundleFormat,
+      });
       if (bundleFailure) {
         missing.push({ pluginId, installPath, reason: "missing-package-json" });
       }

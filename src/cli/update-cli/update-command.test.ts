@@ -324,6 +324,35 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
+  it("accepts persisted marketplace bundle records without transient format metadata", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "marketplace", "cursor-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+        JSON.stringify({ name: "cursor-bundle" }),
+        "utf8",
+      );
+      await expect(
+        collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "cursor-bundle": {
+              source: "marketplace",
+              installPath: bundleDir,
+              marketplaceName: "Local",
+              marketplaceSource: "local/repo",
+              marketplacePlugin: "cursor-bundle",
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps dual-format bundle records on the native package payload path", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const bundleDir = path.join(tmpDir, "state", "clawhub", "dual-format-bundle");

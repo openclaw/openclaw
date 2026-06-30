@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
@@ -82,11 +83,11 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    const isBundleRecord = isBundleInstallRecord(record);
+    const bundlePayload = resolveBundleInstallRecordPayload({ record, installPath });
     const packagePayload = await readPackagePayloadManifest(installPath);
     if (packagePayload.status === "present") {
       const usePackagePayload =
-        !isBundleRecord || hasNativePackageMetadata(packagePayload.manifest);
+        !bundlePayload.isBundlePayload || hasNativePackageMetadata(packagePayload.manifest);
       if (usePackagePayload) {
         failures.push(
           ...(await validatePackagePayload({
@@ -97,12 +98,17 @@ export async function runPluginPayloadSmokeCheck(params: {
         );
         continue;
       }
-    } else if (!isBundleRecord) {
+    } else if (!bundlePayload.isBundlePayload) {
       failures.push(formatPackagePayloadReadFailure({ pluginId, installPath, packagePayload }));
       continue;
     }
 
-    const bundleFailure = validateBundleInstallRecordPayload({ pluginId, installPath, record });
+    const bundleFailure = validateBundleInstallRecordPayload({
+      pluginId,
+      installPath,
+      record,
+      bundleFormat: bundlePayload.bundleFormat,
+    });
     if (bundleFailure) {
       failures.push(bundleFailure);
     }
@@ -163,9 +169,7 @@ function hasNativePackageMetadata(manifest: PackageManifest): boolean {
 
 export async function hasNativePackageInstallPayload(installPath: string): Promise<boolean> {
   const packagePayload = await readPackagePayloadManifest(installPath);
-  return (
-    packagePayload.status === "present" && hasNativePackageMetadata(packagePayload.manifest)
-  );
+  return packagePayload.status === "present" && hasNativePackageMetadata(packagePayload.manifest);
 }
 
 async function validatePackagePayload(params: {
@@ -246,15 +250,35 @@ export function isBundleInstallRecord(record: PluginInstallRecord): boolean {
   );
 }
 
+export function resolveBundleInstallRecordPayload(params: {
+  record: PluginInstallRecord;
+  installPath: string;
+}): { isBundlePayload: boolean; bundleFormat: PluginBundleFormat | null } {
+  const hasBundleRecordMetadata = isBundleInstallRecord(params.record);
+  if (!hasBundleRecordMetadata && params.record.source !== "marketplace") {
+    return { isBundlePayload: false, bundleFormat: null };
+  }
+  const bundleFormat = detectBundleManifestFormat(params.installPath);
+  return {
+    isBundlePayload: hasBundleRecordMetadata || bundleFormat !== null,
+    bundleFormat,
+  };
+}
+
 export function validateBundleInstallRecordPayload(params: {
   pluginId: string;
   installPath: string;
   record: PluginInstallRecord;
+  bundleFormat?: PluginBundleFormat | null;
 }): PluginPayloadSmokeFailure | null {
-  if (!isBundleInstallRecord(params.record)) {
+  const hasBundleRecordMetadata = isBundleInstallRecord(params.record);
+  const bundleFormat =
+    params.bundleFormat === undefined
+      ? detectBundleManifestFormat(params.installPath)
+      : params.bundleFormat;
+  if (!hasBundleRecordMetadata && !bundleFormat) {
     return null;
   }
-  const bundleFormat = detectBundleManifestFormat(params.installPath);
   if (!bundleFormat) {
     return {
       pluginId: params.pluginId,

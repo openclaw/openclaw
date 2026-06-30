@@ -183,6 +183,25 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
+  it("accepts a persisted marketplace bundle record without transient format metadata", async () => {
+    const dir = path.join(tmpRoot, "marketplace-bundle");
+    await writeBundle({ dir, format: "cursor" });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "marketplace-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          marketplaceName: "Local",
+          marketplaceSource: "local/repo",
+          marketplacePlugin: "marketplace-bundle",
+        },
+      },
+      env: {},
+    });
+    expect(result.checked).toEqual(["marketplace-bundle"]);
+    expect(result.failures).toEqual([]);
+  });
+
   it("reports a bundle manifest failure instead of requiring package.json for bundle records", async () => {
     const dir = path.join(tmpRoot, "broken-bundle");
     await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
