@@ -1221,8 +1221,6 @@ internal fun recoveryGatewayDetail(
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
     ) {
       "Gateway paired. Waiting for node capability approval."
-    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-      "Gateway paired. Checking node capability approval."
     } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
@@ -1231,6 +1229,8 @@ internal fun recoveryGatewayDetail(
       "Gateway approval is in progress. OpenClaw will retry automatically."
     } else if (gatewayConnectionProblem != null) {
       recoveryGatewayAuthDetail(gatewayConnectionProblem)
+    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+      "Gateway paired. Checking node capability approval."
     } else if (statusText.contains("operator offline", ignoreCase = true)) {
       "Gateway paired. Waiting for operator access."
     } else if (gatewayStatusLooksLikePairing(statusText)) {
