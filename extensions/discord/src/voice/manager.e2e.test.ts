@@ -251,6 +251,17 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/session-store-runtime")
+  >("openclaw/plugin-sdk/session-store-runtime");
+  return {
+    ...actual,
+    getSessionEntry: vi.fn(() => undefined),
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions"),
+  };
+});
+
 vi.mock("./audio.js", async () => {
   const actual = await vi.importActual<typeof import("./audio.js")>("./audio.js");
   const { PassThrough } = await import("node:stream");

@@ -3,6 +3,7 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
@@ -132,11 +133,19 @@ export async function runDiscordVoiceAgentTurn(params: {
     return null;
   }
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
+  const sessionKey = params.entry.route.sessionKey;
+  const agentId = params.entry.route.agentId;
+  const storedSessionId = getSessionEntry({
+    agentId,
+    sessionKey,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+  })?.sessionId;
   const result = await agentCommandFromIngress(
     {
       message: params.message,
-      sessionKey: params.entry.route.sessionKey,
-      agentId: params.entry.route.agentId,
+      sessionKey,
+      agentId,
+      sessionId: storedSessionId,
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
       extraSystemPrompt: context.extraSystemPrompt,
