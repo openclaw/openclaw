@@ -185,6 +185,7 @@ import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import {
   BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION,
   buildBudgetExhaustedResult,
+  shouldReturnBudgetExhausted,
 } from "./run/budget-exhaustion.js";
 import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
@@ -1605,6 +1606,7 @@ async function runEmbeddedAgentInternal(
       let budgetExhaustedSummaryPending = false;
       let budgetExhaustedSummaryInstruction: string | null = null;
       let budgetSummaryAttempt = false;
+      let budgetExhausted = false;
       // --- End Iteration Budget ---
       let overloadProfileRotations = 0;
       let consecutiveSameModelRateLimitRetries = 0;
@@ -2213,7 +2215,13 @@ async function runEmbeddedAgentInternal(
             fastMode: attemptFastMode,
             fastModeAuto: params.fastMode === "auto",
             onBeforeToolCallingRound: iterationBudget
-              ? (_round: number) => iterationBudget.consume()
+              ? (_round: number) => {
+                  const allowed = iterationBudget.consume();
+                  if (!allowed) {
+                    budgetExhausted = true;
+                  }
+                  return allowed;
+                }
               : undefined,
             ...(params.fastMode === "auto"
               ? {
@@ -3805,6 +3813,52 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
+          // --- Budget Exhaustion Detection ---
+          // Promote pending → active before normal terminal retry checks. A
+          // budget summary is a one-shot final model call, even if the model
+          // returns empty or reasoning-only output.
+          if (budgetExhaustedSummaryPending) {
+            budgetExhaustedSummaryPending = false;
+            budgetSummaryAttempt = true;
+          }
+          // Handle budget summary attempt completion.
+          if (budgetSummaryAttempt) {
+            budgetSummaryAttempt = false;
+            budgetExhaustedSummaryInstruction = null;
+            const summaryText = (attempt.assistantTexts ?? []).join("").trim() || undefined;
+            log.info(
+              `budget summary attempt completed: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `hasSummary=${summaryText ? "yes" : "no"}`,
+            );
+            setTerminalLifecycleMeta({
+              replayInvalid: true,
+              livenessState: "blocked",
+            });
+            return buildBudgetExhaustedResult({
+              message: "The agent exceeded its iteration budget.",
+              durationMs: Date.now() - started,
+              agentMeta,
+              aborted,
+              budgetUsed: iterationBudget?.used ?? 0,
+              budgetMax: iterationBudget?.maxTotal ?? 0,
+              summaryText,
+              systemPromptReport: attempt.systemPromptReport,
+              finalPromptText: attempt.finalPromptText,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            });
+          }
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3897,49 +3951,18 @@ async function runEmbeddedAgentInternal(
           const terminalToolPresentation = incompleteTurnFallbackSafe
             ? readAttemptTerminalToolPresentation()
             : undefined;
-          // --- Budget Exhaustion Detection ---
-          // Promote pending → active before the detection/completion checks
-          // so the summary handler fires on the same iteration the summary
-          // attempt completes (not one iteration later, which would let the
-          // result fall through to the normal terminal path).
-          if (budgetExhaustedSummaryPending) {
-            budgetExhaustedSummaryPending = false;
-            budgetSummaryAttempt = true;
-          }
-          // Handle budget summary attempt completion.
-          if (budgetSummaryAttempt) {
-            budgetSummaryAttempt = false;
-            budgetExhaustedSummaryInstruction = null;
-            const summaryText = (attempt.assistantTexts ?? []).join("").trim() || undefined;
-            log.info(
-              `budget summary attempt completed: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `hasSummary=${summaryText ? "yes" : "no"}`,
-            );
-            return buildBudgetExhaustedResult({
-              message: "The agent exceeded its iteration budget.",
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              budgetUsed: iterationBudget?.used ?? 0,
-              budgetMax: iterationBudget?.maxTotal ?? 0,
-              summaryText,
-              systemPromptReport: attempt.systemPromptReport,
-              finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
-            });
-          }
           if (
             iterationBudget &&
-            iterationBudget.remaining <= 0 &&
-            !emptyAssistantReplyIsSilent &&
-            payloadCount === 0 &&
-            !attempt.clientToolCalls &&
-            !budgetSummaryAttempt &&
-            !aborted &&
-            !promptError &&
-            !timedOut &&
-            !attempt.yieldDetected
+            shouldReturnBudgetExhausted({
+              budgetExhausted,
+              emptyAssistantReplyIsSilent,
+              hasClientToolCalls: Boolean(attempt.clientToolCalls),
+              budgetSummaryAttempt,
+              aborted,
+              hasPromptError: Boolean(promptError),
+              timedOut,
+              yieldDetected: Boolean(attempt.yieldDetected),
+            })
           ) {
             if (resolvedBudgetConfig?.forceSummaryOnExhaustion) {
               // Do NOT refund the budget here. The summary attempt should be
@@ -3967,6 +3990,10 @@ async function runEmbeddedAgentInternal(
               `iteration budget exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `used=${iterationBudget.used} max=${iterationBudget.maxTotal}`,
             );
+            setTerminalLifecycleMeta({
+              replayInvalid: true,
+              livenessState: "blocked",
+            });
             return buildBudgetExhaustedResult({
               message: "The agent exceeded its iteration budget.",
               durationMs: Date.now() - started,
@@ -3978,6 +4005,17 @@ async function runEmbeddedAgentInternal(
               finalPromptText: attempt.finalPromptText,
               finalAssistantVisibleText,
               finalAssistantRawText,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             });
           }
           // --- End Budget Exhaustion Detection ---

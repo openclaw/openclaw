@@ -4,7 +4,6 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   AgentContextLimitsConfig,
-  IterationBudgetConfig,
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -40,7 +39,7 @@ export type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   runRetries?: AgentEntry["runRetries"];
-  iterationBudget?: IterationBudgetConfig;
+  iterationBudget?: AgentDefaultsConfig["iterationBudget"];
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];

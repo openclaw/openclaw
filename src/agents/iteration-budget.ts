@@ -10,7 +10,9 @@
  * {@link IterationBudget.refund} so they don't eat into the budget.
  */
 
-import type { IterationBudgetConfig } from "../config/types.agent-defaults.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+
+type IterationBudgetConfig = NonNullable<AgentDefaultsConfig["iterationBudget"]>;
 
 /** Resolved iteration budget configuration with all defaults applied. */
 export interface ResolvedIterationBudgetConfig {

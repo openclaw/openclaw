@@ -90,6 +90,7 @@ import {
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
   isRawFunctionToolOutputCompletionNotification,
+  isRawToolOutputCompletionNotification,
   isTerminalTurnStatus,
   readCodexNotificationItem,
   readRawResponseToolCallId,
@@ -277,6 +278,16 @@ import { resolveCodexWebSearchPlan } from "./web-search.js";
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
 const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
+const CODEX_TOOL_CALLING_ROUND_ITEM_TYPES = new Set([
+  "collabAgentToolCall",
+  "commandExecution",
+  "dynamicToolCall",
+  "fileChange",
+  "imageGeneration",
+  "imageView",
+  "mcpToolCall",
+  "webSearch",
+]);
 const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function withCodexAppServerFastModeServiceTier(
@@ -362,6 +373,15 @@ function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<
   delete result.contentItems;
   delete result.success;
   return result;
+}
+
+function buildCodexDynamicToolBudgetExhaustedResponse(): CodexDynamicToolCallResponse {
+  return {
+    contentItems: [{ type: "inputText", text: "Iteration budget exhausted." }],
+    diagnosticTerminalType: "blocked",
+    success: false,
+    terminate: true,
+  };
 }
 
 function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
@@ -584,6 +604,62 @@ export async function runCodexAppServerAttempt(
   } else {
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
+  let codexToolCallingRound = 0;
+  let currentCodexToolCallingRound: number | undefined;
+  const codexToolCallRounds = new Map<string, number>();
+  const codexToolCallingRoundDecisions = new Map<number, Promise<boolean>>();
+  let codexToolCallingBudgetExhausted = false;
+  const noteCodexToolCallingRoundToolCall = (toolCallId: string | undefined): void => {
+    const normalizedToolCallId = toolCallId?.trim();
+    if (!normalizedToolCallId || codexToolCallRounds.has(normalizedToolCallId)) {
+      return;
+    }
+    currentCodexToolCallingRound ??= ++codexToolCallingRound;
+    codexToolCallRounds.set(normalizedToolCallId, currentCodexToolCallingRound);
+  };
+  const resetCurrentCodexToolCallingRound = (): void => {
+    currentCodexToolCallingRound = undefined;
+  };
+  const checkCodexToolCallingRoundBudget = async (
+    toolCallId: string | undefined,
+  ): Promise<boolean> => {
+    if (!params.onBeforeToolCallingRound) {
+      return true;
+    }
+    if (codexToolCallingBudgetExhausted) {
+      return false;
+    }
+    noteCodexToolCallingRoundToolCall(toolCallId);
+    const normalizedToolCallId = toolCallId?.trim();
+    const round =
+      (normalizedToolCallId ? codexToolCallRounds.get(normalizedToolCallId) : undefined) ??
+      ++codexToolCallingRound;
+    if (normalizedToolCallId) {
+      codexToolCallRounds.set(normalizedToolCallId, round);
+    }
+    const existingDecision = codexToolCallingRoundDecisions.get(round);
+    if (existingDecision) {
+      return existingDecision;
+    }
+    const decisionPromise = Promise.resolve().then(
+      () => params.onBeforeToolCallingRound?.(round) ?? true,
+    );
+    codexToolCallingRoundDecisions.set(round, decisionPromise);
+    void decisionPromise.then(
+      (shouldContinue) => {
+        codexToolCallingBudgetExhausted = !shouldContinue;
+        if (!shouldContinue && codexToolCallingRoundDecisions.get(round) === decisionPromise) {
+          codexToolCallingRoundDecisions.delete(round);
+        }
+      },
+      () => {
+        if (codexToolCallingRoundDecisions.get(round) === decisionPromise) {
+          codexToolCallingRoundDecisions.delete(round);
+        }
+      },
+    );
+    return decisionPromise;
+  };
 
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
@@ -1449,6 +1525,12 @@ export async function runCodexAppServerAttempt(
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
+      ...(params.onBeforeToolCallingRound
+        ? {
+            onBeforeToolCallingRound: (_turnId?: string, toolUseId?: string) =>
+              checkCodexToolCallingRoundBudget(toolUseId),
+          }
+        : {}),
       signal: runAbortController.signal,
     });
     return {
@@ -1912,6 +1994,16 @@ export async function runCodexAppServerAttempt(
       onReportExecutionNotification: reportExecutionNotification,
     });
     turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
+    if (notificationState.isCurrentTurnNotification) {
+      const item = readCodexNotificationItem(notification.params);
+      if (item && CODEX_TOOL_CALLING_ROUND_ITEM_TYPES.has(item.type)) {
+        noteCodexToolCallingRoundToolCall(item.id);
+      }
+      noteCodexToolCallingRoundToolCall(readRawResponseToolCallId(notification));
+      if (isRawToolOutputCompletionNotification(notification)) {
+        resetCurrentCodexToolCallingRound();
+      }
+    }
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
@@ -2237,28 +2329,30 @@ export async function runCodexAppServerAttempt(
         }
       });
       try {
-        const response = await handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs: dynamicToolTimeoutMs,
-          toolCallOrdinal,
-          onAgentToolResult: params.onAgentToolResult,
-          onFallbackSelected: () => {
-            if (toolCallOrdinal !== undefined) {
-              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-            }
-          },
-          onTimeout: () => {
-            trajectoryRecorder?.recordEvent("tool.timeout", {
-              threadId: call.threadId,
-              turnId: call.turnId,
-              toolCallId: call.callId,
-              name: call.tool,
+        const response = (await checkCodexToolCallingRoundBudget(call.callId))
+          ? await handleDynamicToolCallWithTimeout({
+              call,
+              toolBridge,
+              signal: runAbortController.signal,
               timeoutMs: dynamicToolTimeoutMs,
-            });
-          },
-        });
+              toolCallOrdinal,
+              onAgentToolResult: params.onAgentToolResult,
+              onFallbackSelected: () => {
+                if (toolCallOrdinal !== undefined) {
+                  suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+                }
+              },
+              onTimeout: () => {
+                trajectoryRecorder?.recordEvent("tool.timeout", {
+                  threadId: call.threadId,
+                  turnId: call.turnId,
+                  toolCallId: call.callId,
+                  name: call.tool,
+                  timeoutMs: dynamicToolTimeoutMs,
+                });
+              },
+            })
+          : buildCodexDynamicToolBudgetExhaustedResponse();
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           // The underlying tool may ignore cancellation and finish after the

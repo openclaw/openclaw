@@ -14,6 +14,7 @@ export function createOpenClawAgentHarness(): AgentHarness {
     id: "openclaw",
     label: "OpenClaw embedded agent",
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+    supportsIterationBudget: true,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: runEmbeddedAttempt,
   };

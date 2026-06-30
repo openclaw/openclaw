@@ -19,6 +19,31 @@ export const BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION =
   "any remaining work that was not completed, and any important findings. " +
   "Do NOT make any tool calls in this response.";
 
+export function shouldReturnBudgetExhausted(params: {
+  budgetExhausted: boolean;
+  emptyAssistantReplyIsSilent: boolean;
+  hasClientToolCalls: boolean;
+  budgetSummaryAttempt: boolean;
+  aborted: boolean;
+  hasPromptError: boolean;
+  timedOut: boolean;
+  yieldDetected: boolean;
+}): boolean {
+  if (
+    params.emptyAssistantReplyIsSilent ||
+    params.hasClientToolCalls ||
+    params.budgetSummaryAttempt ||
+    params.aborted ||
+    params.hasPromptError ||
+    params.timedOut ||
+    params.yieldDetected
+  ) {
+    return false;
+  }
+
+  return params.budgetExhausted;
+}
+
 /**
  * Build an EmbeddedAgentRunResult for a budget-exhausted run.
  */
@@ -34,6 +59,16 @@ export function buildBudgetExhaustedResult(params: {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  didSendViaMessagingTool?: EmbeddedAgentRunResult["didSendViaMessagingTool"];
+  didDeliverSourceReplyViaMessageTool?: EmbeddedAgentRunResult["didDeliverSourceReplyViaMessageTool"];
+  didSendDeterministicApprovalPrompt?: EmbeddedAgentRunResult["didSendDeterministicApprovalPrompt"];
+  messagingToolSentTexts?: EmbeddedAgentRunResult["messagingToolSentTexts"];
+  messagingToolSentMediaUrls?: EmbeddedAgentRunResult["messagingToolSentMediaUrls"];
+  messagingToolSentTargets?: EmbeddedAgentRunResult["messagingToolSentTargets"];
+  messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
+  heartbeatToolResponse?: EmbeddedAgentRunResult["heartbeatToolResponse"];
+  successfulCronAdds?: EmbeddedAgentRunResult["successfulCronAdds"];
+  acceptedSessionSpawns?: EmbeddedAgentRunResult["acceptedSessionSpawns"];
 }): EmbeddedAgentRunResult {
   const displayText =
     params.summaryText ??
@@ -62,5 +97,15 @@ export function buildBudgetExhaustedResult(params: {
         fallbackSafe: false,
       },
     },
+    didSendViaMessagingTool: params.didSendViaMessagingTool,
+    didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
+    didSendDeterministicApprovalPrompt: params.didSendDeterministicApprovalPrompt,
+    messagingToolSentTexts: params.messagingToolSentTexts,
+    messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
+    messagingToolSentTargets: params.messagingToolSentTargets,
+    messagingToolSourceReplyPayloads: params.messagingToolSourceReplyPayloads,
+    heartbeatToolResponse: params.heartbeatToolResponse,
+    successfulCronAdds: params.successfulCronAdds,
+    acceptedSessionSpawns: params.acceptedSessionSpawns,
   };
 }

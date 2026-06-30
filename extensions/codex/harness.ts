@@ -56,6 +56,7 @@ export function createCodexAppServerAgentHarness(options?: {
     deliveryDefaults: {
       sourceVisibleReplies: "message_tool",
     },
+    supportsIterationBudget: true,
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {

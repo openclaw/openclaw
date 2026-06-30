@@ -738,11 +738,12 @@ Hard per-agent iteration budget that caps the total number of LLM tool-calling r
 
 **Scope and precedence:** Per-agent values in `agents.list[]` override `agents.defaults`. Fields not set in the per-agent entry fall back to defaults, then to hardcoded values.
 
+**Runtime support:** Iteration budgets require a harness that enforces the tool-round budget hook. The built-in OpenClaw runtime and Codex app-server harness support this; unsupported selected plugin harnesses fail before the model call instead of silently ignoring the budget.
+
 **Exhaustion behavior:** When the budget runs out:
 
 1. If `forceSummaryOnExhaustion` is `true`: the model receives a summary instruction and responds with text only. Any tool calls the model attempts are blocked (fail-closed).
 2. If `forceSummaryOnExhaustion` is `false`: the run returns immediately with a `budget_exhausted` error.
-3. The result includes `budgetUsed` and `budgetMax` metadata for observability.
 
 **What counts as an iteration:** Only LLM tool-calling rounds count toward the budget. Non-productive retries (compaction, auth failures, timeouts) have their own independent limits and do not consume the budget.
 

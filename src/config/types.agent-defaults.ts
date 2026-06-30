@@ -125,7 +125,7 @@ export type AgentRunRetriesConfig = {
   max?: number;
 };
 
-export type IterationBudgetConfig = {
+type IterationBudgetConfig = {
   /** Enable per-agent iteration budgeting (default: false). */
   enabled?: boolean;
   /** Max LLM iterations for a parent agent run (default: 90). */

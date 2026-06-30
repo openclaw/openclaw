@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION,
   buildBudgetExhaustedResult,
+  shouldReturnBudgetExhausted,
 } from "./budget-exhaustion.js";
 
 describe("BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION", () => {
@@ -16,6 +17,40 @@ describe("BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION", () => {
 
   it("asks for a summary", () => {
     expect(BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION.toLowerCase()).toContain("summary");
+  });
+});
+
+describe("shouldReturnBudgetExhausted", () => {
+  const baseParams = {
+    budgetExhausted: false,
+    emptyAssistantReplyIsSilent: false,
+    hasClientToolCalls: false,
+    budgetSummaryAttempt: false,
+    aborted: false,
+    hasPromptError: false,
+    timedOut: false,
+    yieldDetected: false,
+  };
+
+  it("returns true when the budget gate blocked a tool call after visible assistant text", () => {
+    expect(
+      shouldReturnBudgetExhausted({
+        ...baseParams,
+        budgetExhausted: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat a visible final answer as exhaustion without an explicit budget block", () => {
+    expect(
+      shouldReturnBudgetExhausted({
+        ...baseParams,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat exact budget depletion as exhaustion without an explicit budget block", () => {
+    expect(shouldReturnBudgetExhausted(baseParams)).toBe(false);
   });
 });
 
@@ -109,5 +144,43 @@ describe("buildBudgetExhaustedResult", () => {
     });
 
     expect(result.meta.finalAssistantVisibleText).toBe("Last visible text");
+  });
+
+  it("passes through delivery evidence", () => {
+    const result = buildBudgetExhaustedResult({
+      message: "Budget exceeded.",
+      durationMs: 5000,
+      budgetUsed: 10,
+      budgetMax: 10,
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      didSendDeterministicApprovalPrompt: true,
+      messagingToolSentTexts: ["already sent"],
+      messagingToolSentMediaUrls: ["https://example.test/image.png"],
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "room" }],
+      messagingToolSourceReplyPayloads: [{ text: "source reply" }],
+      heartbeatToolResponse: { outcome: "progress", notify: false, summary: "still working" },
+      successfulCronAdds: 2,
+      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:child" }],
+    });
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["already sent"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["https://example.test/image.png"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      { tool: "message", provider: "telegram", to: "room" },
+    ]);
+    expect(result.messagingToolSourceReplyPayloads).toEqual([{ text: "source reply" }]);
+    expect(result.heartbeatToolResponse).toEqual({
+      outcome: "progress",
+      notify: false,
+      summary: "still working",
+    });
+    expect(result.successfulCronAdds).toBe(2);
+    expect(result.acceptedSessionSpawns).toEqual([
+      { runId: "run-child", childSessionKey: "agent:child" },
+    ]);
   });
 });
