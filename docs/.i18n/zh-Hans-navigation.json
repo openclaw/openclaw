@@ -178,7 +178,7 @@
           ]
         },
         {
-          "group": "多Agent",
+          "group": "多 Agent",
           "pages": [
             "zh-CN/concepts/multi-agent",
             "zh-CN/concepts/presence"
@@ -230,7 +230,7 @@
           ]
         },
         {
-          "group": "Agent协作",
+          "group": "Agent 协作",
           "pages": [
             "zh-CN/tools/agent-send",
             "zh-CN/tools/subagents",
