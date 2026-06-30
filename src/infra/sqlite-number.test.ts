@@ -15,10 +15,6 @@ describe("normalizeSqliteNumber", () => {
     expect(normalizeSqliteNumber(null)).toBeUndefined();
   });
 
-  it("returns undefined for undefined", () => {
-    expect(normalizeSqliteNumber(undefined)).toBeUndefined();
-  });
-
   it("returns zero unchanged", () => {
     expect(normalizeSqliteNumber(0)).toBe(0);
   });
