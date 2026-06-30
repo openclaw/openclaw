@@ -103,17 +103,7 @@ const ChannelStreamingProgressSchema = z
     commentary: z.boolean().optional(),
   })
   .strict();
-// `thinking` opts non-stream reasoning modes into the progress draft. Explicit
-// reasoning stream mode already renders through the shared reasoning stream
-// contract. The key is Discord-scoped until sibling channels enforce it.
-const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  thinking: z
-    .boolean()
-    .optional()
-    .describe(
-      "Render non-stream assistant reasoning (🧠 thinking) in the Discord progress draft, interleaved with tool calls. Explicit reasoning stream mode still renders without this key. Default: false.",
-    ),
-}).strict();
+const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();

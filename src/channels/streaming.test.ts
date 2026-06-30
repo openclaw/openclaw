@@ -1,48 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildChannelProgressDraftLine,
-  resolveChannelStreamingProgressThinking,
-} from "./streaming.js";
-
-describe("resolveChannelStreamingProgressThinking", () => {
-  // This resolver is the single source of truth for the Discord window-thinking
-  // gate: it drives BOTH the compositor render gate and the subscriber opt-in
-  // (streamReasoningInNonStreamModes). It must default OFF so no reasoning
-  // side effects (status reaction, counters, render) leak when unconfigured.
-  it("defaults to false when progress.thinking is unset", () => {
-    expect(resolveChannelStreamingProgressThinking({ streaming: { mode: "progress" } })).toBe(
-      false,
-    );
-  });
-
-  it("is false when explicitly disabled", () => {
-    expect(
-      resolveChannelStreamingProgressThinking({
-        streaming: { mode: "progress", progress: { thinking: false } },
-      }),
-    ).toBe(false);
-  });
-
-  it("is true only when explicitly enabled in progress mode", () => {
-    expect(
-      resolveChannelStreamingProgressThinking({
-        streaming: { mode: "progress", progress: { thinking: true } },
-      }),
-    ).toBe(true);
-  });
-
-  it("stays false outside progress stream mode even when enabled", () => {
-    expect(
-      resolveChannelStreamingProgressThinking({
-        streaming: { mode: "partial", progress: { thinking: true } },
-      }),
-    ).toBe(false);
-  });
-
-  it("defaults to false for a missing entry", () => {
-    expect(resolveChannelStreamingProgressThinking(undefined)).toBe(false);
-  });
-});
+import { buildChannelProgressDraftLine } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
   it("omits generic completed status from successful command output with title", () => {

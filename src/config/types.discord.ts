@@ -23,18 +23,8 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-/**
- * Discord progress config. `thinking` opts non-stream reasoning modes into the
- * progress draft. Explicit reasoning stream mode already renders through the
- * shared reasoning stream contract. The key is currently enforced only on
- * Discord, so it is scoped here rather than in the shared base.
- */
-export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Include non-stream assistant reasoning/thinking text in the progress draft. */
-  thinking?: boolean;
-};
 export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: DiscordStreamingProgressConfig;
+  progress?: ChannelStreamingProgressConfig;
 };
 
 export type DiscordPluralKitConfig = {
