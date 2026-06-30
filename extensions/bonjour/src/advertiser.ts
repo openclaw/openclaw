@@ -159,7 +159,7 @@ function isContainerEnvironment() {
 
   try {
     const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
-    return /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/u.test(
+    return /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b|\/cloudchamber/u.test(
       cgroup,
     );
   } catch {
