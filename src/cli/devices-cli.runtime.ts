@@ -702,7 +702,7 @@ function buildNodeApprovalHint(
       (req.displayName !== undefined &&
         normalizeLowercaseStringOrEmpty(req.displayName) === lowerArg),
   );
-  const target = matched ?? (pending.length === 1 ? pending[0]! : null);
+  const target = matched ?? (pending.length === 1 ? pending[0] : null);
   if (!target) {
     const lines = [
       `No pending device pairing request matches "${sanitizeForLog(arg)}".`,
