@@ -816,7 +816,6 @@ describe("createChatSession", () => {
         agentId: "ops",
         parentSessionKey: "agent:ops:main",
         emitCommandHooks: true,
-        adoptDashboard: true,
       },
       {
         activeMinutes: 120,
@@ -861,7 +860,6 @@ describe("createChatSession", () => {
         agentId: "ops",
         parentSessionKey: "agent:ops:main",
         emitCommandHooks: true,
-        adoptDashboard: true,
       },
       {
         activeMinutes: 120,
@@ -900,7 +898,6 @@ describe("createChatSession", () => {
         agentId: "work",
         parentSessionKey: "global",
         emitCommandHooks: true,
-        adoptDashboard: true,
       },
       {
         activeMinutes: 120,
@@ -939,7 +936,6 @@ describe("createChatSession", () => {
         agentId: "main",
         parentSessionKey: undefined,
         emitCommandHooks: undefined,
-        adoptDashboard: true,
       },
       {
         activeMinutes: 120,
