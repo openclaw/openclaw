@@ -377,6 +377,29 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("allows complete updates whose preserved heading contains update proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "update-proposal-reviewer");
+    await writeSkill({
+      dir: skillDir,
+      name: "update-proposal-reviewer",
+      description: "Reviews update proposals",
+      body: "# Update Proposal Reviewer\n\nOriginal review workflow.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "update-proposal-reviewer",
+      content: "# Update Proposal Reviewer\n\nUpdated complete review workflow.\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).resolves.toMatchObject({ record: { id: proposal.record.id } });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Updated complete review workflow.",
+    );
+  });
+
   it("rejects update-proposal H1 drafts for existing valid skills without H1 headings", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "h1-less-skill");

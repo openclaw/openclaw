@@ -684,16 +684,16 @@ function assertCompleteSkillUpdateDraft(params: {
     "add the following subsection",
     "add this subsection",
   ];
-  const strongProposalLikeMarkers = [
-    /^#\s+.*\bupdate proposal\b/im,
-    /^#{2,}\s+proposed changes\s+to\s+`?skill\.md`?\b/im,
-  ];
+  const preservesSkillHeading =
+    previousH1 !== undefined &&
+    proposedH1 !== undefined &&
+    normalizeHeadingForComparison(previousH1) === normalizeHeadingForComparison(proposedH1);
   const proposalMarkerHits = proposalLikeMarkers.filter((marker) =>
     proposedBodyLower.includes(marker),
   ).length;
-  const hasStrongProposalMarker = strongProposalLikeMarkers.some((marker) =>
-    marker.test(proposedBody),
-  );
+  const hasStrongProposalMarker =
+    (!preservesSkillHeading && /^#\s+.*\bupdate proposal\b/im.test(proposedBody)) ||
+    /^#{2,}\s+proposed changes\s+to\s+`?skill\.md`?\b/im.test(proposedBody);
   if (hasStrongProposalMarker || proposalMarkerHits >= 2) {
     throw new Error(
       "Skill update proposal content appears to be a delta/proposal note, " +
@@ -708,11 +708,7 @@ function assertCompleteSkillUpdateDraft(params: {
         "updated skill body before applying.",
     );
   }
-  if (
-    previousH1 &&
-    proposedH1 &&
-    normalizeHeadingForComparison(previousH1) !== normalizeHeadingForComparison(proposedH1)
-  ) {
+  if (previousH1 && proposedH1 && !preservesSkillHeading) {
     throw new Error(
       "Skill update proposal content appears to replace the existing skill identity " +
         `(${previousH1}) with ${proposedH1}. Revise the proposal with a complete ` +
