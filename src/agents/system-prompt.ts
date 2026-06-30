@@ -1109,11 +1109,6 @@ export function buildAgentSystemPrompt(params: {
           "Routine low-risk calls: no narration.",
           "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
           "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
-          buildExecApprovalPromptGuidance({
-            runtimeChannel: params.runtimeInfo?.channel,
-            inlineButtonsEnabled,
-            runtimeCapabilities,
-          }),
           "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
           "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
           "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
@@ -1234,7 +1229,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),
@@ -1291,6 +1285,15 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
+    // Exec-approval guidance varies by channel (CLI /approve vs native approval UI)
+    // and Authorized Senders varies by owner/identity (and is dropped when minimal),
+    // so both must sit below the boundary to keep the static prefix byte-identical.
+    buildExecApprovalPromptGuidance({
+      runtimeChannel: params.runtimeInfo?.channel,
+      inlineButtonsEnabled,
+      runtimeCapabilities,
+    }),
+    ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,

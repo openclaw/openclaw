@@ -1385,10 +1385,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
 
-  it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
+  it("keeps stable project context before all channel/identity-varying guidance for prefix-cache reuse", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
+      ownerNumbers: ["+123"],
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
@@ -1410,6 +1411,11 @@ describe("buildAgentSystemPrompt", () => {
     const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
+    // Exec-approval guidance (channel-varying) and Authorized Senders (owner/identity-varying,
+    // dropped when minimal) previously leaked ABOVE the boundary, forking the cacheable prefix
+    // at ~token 1,460; they must sit below it like the other channel-varying sections.
+    const approvalPos = prompt.lastIndexOf("use native approval card");
+    const authorizedSendersPos = prompt.lastIndexOf("## Authorized Senders");
 
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(boundaryPos).toBeGreaterThan(projectContextPos);
@@ -1417,6 +1423,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(groupChatPos).toBeGreaterThan(boundaryPos);
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
+    expect(approvalPos).toBeGreaterThan(boundaryPos);
+    expect(authorizedSendersPos).toBeGreaterThan(boundaryPos);
   });
 });
 
