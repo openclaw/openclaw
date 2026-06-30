@@ -1860,6 +1860,7 @@
               {
                 "group": "Release and CI",
                 "pages": [
+                  "releases/index",
                   "maturity/scorecard",
                   "maturity/taxonomy",
                   "reference/RELEASING",
