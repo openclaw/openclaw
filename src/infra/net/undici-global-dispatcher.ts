@@ -193,10 +193,20 @@ function createNoProxyAwareEnvDispatcher(
           if (originalCallback) {
             let expectedSettled = 0;
             let settledCount = 0;
+            let firstErr: unknown = undefined;
             const onSettled = (...cbArgs: unknown[]) => {
+              // Preserve the first error across both dispatchers so the
+              // caller sees the root cause even if one succeeds later.
+              if (firstErr === undefined && cbArgs[0] !== undefined) {
+                firstErr = cbArgs[0];
+              }
               settledCount++;
               if (settledCount >= expectedSettled) {
-                Reflect.apply(originalCallback, undefined, cbArgs);
+                Reflect.apply(
+                  originalCallback,
+                  undefined,
+                  firstErr !== undefined ? [firstErr] : [],
+                );
               }
             };
             const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
@@ -204,22 +214,29 @@ function createNoProxyAwareEnvDispatcher(
               expectedSettled++;
               Reflect.apply(bypassValue, bypassAgent, [...args.slice(0, cbIdx), onSettled]);
             }
-            // Proxy dispatcher always gets a callback — its close/destroy
-            // may not be a function if the dispatcher is a mock, but the
-            // Proxy wrapper ensures the lifecycle method is always callable.
-            expectedSettled++;
-            return Reflect.apply(value, target, [...args.slice(0, cbIdx), onSettled]);
+            if (typeof value === "function") {
+              expectedSettled++;
+              return Reflect.apply(value, target, [...args.slice(0, cbIdx), onSettled]);
+            }
+            // Neither dispatcher implements this lifecycle method.
+            if (expectedSettled === 0) {
+              onSettled();
+            }
+            return undefined;
           }
 
-          // Promise-style: invoke all available lifecycle methods, return
-          // a single promise that settles when all are done.
+          // Promise-style: invoke all available lifecycle methods.
           const lifecycleArgs = originalCallback ? [] : args;
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
             settled.push(Promise.resolve(Reflect.apply(bypassValue, bypassAgent, lifecycleArgs)));
           }
-          settled.push(Promise.resolve(Reflect.apply(value, target, lifecycleArgs)));
-          return Promise.all(settled).then(() => undefined);
+          if (typeof value === "function") {
+            settled.push(Promise.resolve(Reflect.apply(value, target, lifecycleArgs)));
+          }
+          return settled.length > 0
+            ? Promise.all(settled).then(() => undefined)
+            : Promise.resolve(undefined);
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
