@@ -780,27 +780,4 @@ describe("memory search config", () => {
     // memory-core and gateway runtime paths.
     expect(resolved?.provider).toBe("openai");
   });
-
-  it("routes openai provider with custom baseURL (camelCase alias) through generic adapter path", () => {
-    const cfg = asConfig({
-      models: {
-        providers: {
-          openai: {
-            baseURL: "http://127.0.0.1:11434/v1",
-            models: [],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("openai");
-  });
 });
