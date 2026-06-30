@@ -17,6 +17,7 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
@@ -111,6 +112,38 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   if (!nodeId) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
+  }
+  const nodeSession = params.context.nodeRegistry.get(nodeId);
+  if (nodeSession) {
+    const cfg = params.context.getRuntimeConfig();
+    const allowlist = resolveNodeCommandAllowlist(cfg, {
+      ...nodeSession,
+      approvedCommands: nodeSession.commands,
+    });
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: nodeSession.commands,
+      allowlist,
+    });
+    if (!allowed.ok) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Node ${nodeId} does not support ${params.command}. ` +
+            `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`,
+          {
+            details: {
+              supportedCommands: nodeSession.commands,
+              requestedCommand: params.command,
+              reason: allowed.reason,
+            },
+          },
+        ),
+      );
+      return;
+    }
   }
   await respondUnavailableOnThrow(params.respond, async () => {
     const res = await params.context.nodeRegistry.invoke({
