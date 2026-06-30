@@ -179,7 +179,7 @@ Use one of the supported `imsg` process contexts instead:
 `imsg` ships in two operational modes:
 
 - **Basic mode** (default, no SIP changes needed): outbound text and media via `send`, inbound watch/history, chat list. This is what you get out of the box from a fresh `brew install steipete/tap/imsg` plus the standard macOS permissions above.
-- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
+- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `poll` (native Messages polls), plus typing indicators and read receipts.
 
 To reach the advanced action surface that this channel page documents, you need Private API mode. The `imsg` README is explicit about the requirement:
 
@@ -550,6 +550,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
         addParticipant: true,
         removeParticipant: true,
         leaveGroup: true,
+        polls: true,
       },
     },
   },
@@ -565,6 +566,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`).
     - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
     - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation.
+    - **poll**: Create a native Apple Messages poll (`pollQuestion`, `pollOption` repeated 2 to 12 times, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Recipients on iOS/iPadOS/macOS 26+ see and vote on it natively; older OS versions get a "Sent a poll" text fallback. Requires an `imsg` build whose bridge exposes the `pollPayloadMessage` selector.
 
   </Accordion>
 

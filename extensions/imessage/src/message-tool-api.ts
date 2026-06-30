@@ -21,6 +21,7 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "leaveGroup",
   "sendAttachment",
+  "poll",
 ]);
 
 function isGroupTarget(raw?: string | null): boolean {
@@ -60,6 +61,13 @@ export function describeIMessageMessageTool({
       continue;
     }
     if (action === "unsend" && privateApiStatus?.selectors?.retractMessagePart !== true) {
+      continue;
+    }
+    // Native polls need an imsg bridge build whose injected helper exposes the
+    // poll-payload IMMessage initializer. Older bridges report the action gate
+    // open but cannot construct the balloon, so hide poll unless the selector
+    // probe confirms it (mirrors the edit/unsend selector gates above).
+    if (action === "poll" && privateApiStatus?.selectors?.pollPayloadMessage !== true) {
       continue;
     }
     actions.add(action);

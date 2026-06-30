@@ -6,6 +6,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readReactionParams,
+  readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -13,6 +14,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -415,6 +417,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
     },
+    poll: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
     "upload-file": {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
@@ -730,6 +736,29 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         buffer: decodeBase64Buffer(params, action),
         filename,
         asVoice: asVoice ?? undefined,
+        options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
+      });
+      return jsonResult({ ok: true, messageId: result.messageId });
+    }
+
+    if (action === "poll") {
+      await assertPrivateApiEnabled();
+      // Shared `message`-tool poll params (see src/poll-params.ts): pollQuestion
+      // + pollOption[]. normalizePollInput trims, enforces >=2 choices, and caps
+      // at Apple's 12-option Messages limit so the bridge send cannot exceed it.
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const rawChoices = readStringArrayParam(params, "pollOption", { required: true });
+      const poll = normalizePollInput({ question, options: rawChoices }, { maxOptions: 12 });
+      const resolvedChatGuid = await chatGuid();
+      const result = await runtime.sendPoll({
+        chatGuid: resolvedChatGuid,
+        question: poll.question,
+        choices: poll.options,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
       rememberOutboundBridgeMessage({

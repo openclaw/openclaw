@@ -18,6 +18,7 @@ const runtimeMock = vi.hoisted(() => ({
   addParticipant: vi.fn(),
   removeParticipant: vi.fn(),
   leaveGroup: vi.fn(),
+  sendPoll: vi.fn(),
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
@@ -100,6 +101,7 @@ describe("imessage message actions", () => {
     runtimeMock.addParticipant.mockReset();
     runtimeMock.removeParticipant.mockReset();
     runtimeMock.leaveGroup.mockReset();
+    runtimeMock.sendPoll.mockReset();
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
@@ -171,6 +173,98 @@ describe("imessage message actions", () => {
       "leaveGroup",
       "upload-file",
     ]);
+  });
+
+  it("advertises poll only when the pollPayloadMessage selector is present", () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { editMessage: true, retractMessagePart: true },
+    });
+    expect(
+      imessageMessageActions.describeMessageTool({
+        cfg: cfg(),
+        currentChannelId: "chat_guid:iMessage;+;chat0000",
+      } as never)?.actions,
+    ).not.toContain("poll");
+
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { editMessage: true, retractMessagePart: true, pollPayloadMessage: true },
+    });
+    expect(
+      imessageMessageActions.describeMessageTool({
+        cfg: cfg(),
+        currentChannelId: "chat_guid:iMessage;+;chat0000",
+      } as never)?.actions,
+    ).toContain("poll");
+  });
+
+  it("hides poll when the polls gate is disabled in config", () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+    });
+    expect(
+      imessageMessageActions.describeMessageTool({
+        cfg: cfg({ polls: false }),
+        currentChannelId: "chat_guid:iMessage;+;chat0000",
+      } as never)?.actions,
+    ).not.toContain("poll");
+  });
+
+  it("dispatches a poll send through the bridge runtime", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+    });
+    runtimeMock.sendPoll.mockResolvedValue({ messageId: "poll-guid" });
+
+    const result = await imessageMessageActions.handleAction?.({
+      action: "poll",
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        pollQuestion: "  Lunch?  ",
+        pollOption: [" Pizza ", "Sushi", ""],
+      },
+    } as never);
+
+    expect(runtimeMock.sendPoll.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;chat0000",
+          question: "Lunch?",
+          choices: ["Pizza", "Sushi"],
+          options: imsgOptions("iMessage;+;chat0000"),
+        },
+      ],
+    ]);
+    expect(result).toMatchObject({ details: { ok: true, messageId: "poll-guid" } });
+  });
+
+  it("rejects a poll with fewer than two options before hitting the bridge", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "poll",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza"],
+        },
+      } as never),
+    ).rejects.toThrow("at least 2 options");
+    expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
   });
 
   it("respects configured action gates", () => {

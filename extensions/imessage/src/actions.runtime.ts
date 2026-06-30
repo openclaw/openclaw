@@ -524,6 +524,31 @@ export const imessageActionsRuntime = {
     await runIMessageCliJson(["chat-leave", "--chat", params.chatGuid], params.options);
   },
 
+  async sendPoll(params: {
+    chatGuid: string;
+    question: string;
+    // Pre-validated, trimmed choices (>=2). Named `choices` so it does not
+    // shadow `options` (the CLI run options) on this params bag.
+    choices: readonly string[];
+    replyToMessageId?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult> {
+    const result = await runIMessageCliJson(
+      [
+        "poll",
+        "send",
+        "--chat",
+        params.chatGuid,
+        "--question",
+        params.question,
+        ...params.choices.flatMap((choice) => ["--option", choice]),
+        ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+      ],
+      params.options,
+    );
+    return { messageId: resolveMessageId(result) };
+  },
+
   async sendAttachment(params: {
     chatGuid: string;
     buffer: Uint8Array;
