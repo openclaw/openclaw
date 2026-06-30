@@ -84,6 +84,45 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
   return `[${parts.join(" + ")} attached]`;
 }
 
+function normalizeSignalAgentBodyPart(value: string | undefined): string {
+  return (value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
+
+function hasGeneratedSignalReplyContextPrefix(body: string, header: string, quotedBlock: string) {
+  const generatedPrefix = `${header}\n${quotedBlock}`;
+  return body === generatedPrefix || body.startsWith(`${generatedPrefix}\n\n`);
+}
+
+function formatSignalBodyForAgentWithReplyContext(entry: {
+  bodyText: string;
+  commandBody: string;
+  replyToBody?: string;
+  replyToSender?: string;
+}): string {
+  const quote = normalizeSignalAgentBodyPart(entry.replyToBody);
+  if (!quote) {
+    return entry.bodyText;
+  }
+  const body = normalizeSignalAgentBodyPart(entry.bodyText);
+  const quotedBlock = quote
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  const quoteSender = normalizeSignalAgentBodyPart(entry.replyToSender);
+  const header = `Quoted Signal reply context${quoteSender ? ` from ${quoteSender}` : ""}:`;
+  if (hasGeneratedSignalReplyContextPrefix(body, header, quotedBlock)) {
+    return body;
+  }
+  const currentMessageText = normalizeSignalAgentBodyPart(entry.commandBody);
+  if (!body || (!currentMessageText && body === quote)) {
+    return `${header}\n${quotedBlock}`;
+  }
+  return `${header}\n${quotedBlock}\n\n${body}`;
+}
+
 function resolveSignalInboundRoute(params: {
   cfg: SignalEventHandlerDeps["cfg"];
   accountId: SignalEventHandlerDeps["accountId"];
@@ -150,6 +189,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: route.sessionKey,
     });
+    const bodyForAgent = formatSignalBodyForAgentWithReplyContext(entry);
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
@@ -238,7 +278,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       message: {
         body: combinedBody,
-        bodyForAgent: entry.bodyText,
+        bodyForAgent,
         inboundHistory,
         rawBody: entry.bodyText,
         commandBody: entry.commandBody,
