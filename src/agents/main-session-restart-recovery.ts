@@ -508,9 +508,12 @@ function isTextOnlyAssistantContent(message: unknown): boolean {
     if (content.length === 0) {
       return false;
     }
+    const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
     return content.every(
       (block) =>
-        block != null && typeof block === "object" && (block as { type?: unknown }).type === "text",
+        block != null &&
+        typeof block === "object" &&
+        TEXT_BLOCK_TYPES.has((block as { type?: unknown }).type as string),
     );
   }
   return false;

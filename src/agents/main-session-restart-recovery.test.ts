@@ -1777,6 +1777,62 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.status).toBe("failed");
   });
 
+  it("recovers from output_text assistant content block", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // OpenAI Responses API uses output_text blocks for assistant text content.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "summarize the report" },
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The report shows 15% growth." }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // output_text block → text-only assistant, auto-resumed.
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    const resumeParams = firstGatewayParams();
+    expect(String(resumeParams.message)).toContain("summarize the report");
+    expect(String(resumeParams.message)).toContain("<untrusted-text>");
+  });
+
+  it("recovers from input_text assistant content block", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // Some transcript formats use input_text blocks for assistant responses.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "what's the weather" },
+      {
+        role: "assistant",
+        content: [{ type: "input_text", text: "It will be sunny." }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // input_text block → text-only assistant, auto-resumed.
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    const resumeParams = firstGatewayParams();
+    expect(String(resumeParams.message)).toContain("what's the weather");
+    expect(String(resumeParams.message)).toContain("<untrusted-text>");
+  });
+
   it("recovers when user message is beyond the recent 20-message window", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
