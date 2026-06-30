@@ -18,7 +18,8 @@ struct RootTabsPhoneControlHub: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: self.isCompactHeight ? 10 : 16) {
                         self.headerCard
-                        ForEach(self.groups) { group in
+                        self.chatTalkRow
+                        ForEach(self.controlGroups) { group in
                             self.groupSection(group)
                         }
                         self.versionFooter
@@ -40,96 +41,94 @@ struct RootTabsPhoneControlHub: View {
         }
     }
 
-    @ViewBuilder
     private var headerCard: some View {
-        if self.isCompactHeight {
-            ProCard(padding: 8, radius: OpenClawProMetric.cardRadius) {
-                HStack(spacing: 12) {
-                    OpenClawProMark(size: 24, shadowRadius: 3)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(self.sidebarActiveAgentTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Text(self.gatewayDisplayLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    ProValuePill(value: self.gatewayStateText, color: self.gatewayStateColor)
+        let avatarSize: CGFloat = self.isCompactHeight ? 36 : 52
+        return HStack(alignment: .center, spacing: 12) {
+            OpenClawProMark(size: avatarSize, shadowRadius: avatarSize / 9)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(self.gatewayDisplayLabel)
+                    .font(.title3.weight(.bold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack(spacing: 4) {
+                    Text(self.sidebarActiveAgentTitle)
+                    Text("•")
+                    Text(self.gatewayStateText)
+                        .foregroundStyle(self.gatewayStateColor)
                 }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-        } else {
-            ProCard(radius: OpenClawProMetric.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 12) {
-                        OpenClawProMark(size: 32, shadowRadius: 4)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(self.sidebarActiveAgentTitle)
-                                .font(.headline)
-                                .lineLimit(1)
-                            Text(self.gatewayDisplayLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        Spacer(minLength: 8)
-                        ProValuePill(value: self.gatewayStateText, color: self.gatewayStateColor)
-                    }
-
-                    self.gatewayActionRow
-                }
+            Spacer(minLength: 8)
+            Button {
+                self.openPhoneRootDestination(.gateway)
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Color.primary.opacity(0.06), in: Circle())
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Gateway \(self.gatewayStateText)")
+            .accessibilityHint("Opens Settings / Gateway")
         }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var gatewayActionRow: some View {
+    private var controlGroups: [RootTabs.SidebarGroup] {
+        self.groups.filter { !$0.destinations.contains(.chat) }
+    }
+
+    private var chatTalkRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            self.bigDestinationCard(.chat)
+            self.bigDestinationCard(.talk)
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func bigDestinationCard(_ destination: RootTabs.SidebarDestination) -> some View {
         Button {
-            self.openPhoneRootDestination(.gateway)
+            self.openPhoneRootDestination(destination)
         } label: {
-            HStack(spacing: 10) {
-                ProStatusDot(color: self.gatewayStateColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(self.gatewayStateText)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(self.gatewayDisplayLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            ProCard(padding: 18, radius: OpenClawProMetric.cardRadius) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ControlCircleIcon(
+                        systemName: destination.systemImage,
+                        color: self.color(for: destination),
+                        size: 50)
+                    HStack(alignment: .top, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(destination.title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text(destination.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer(minLength: 8)
-                Text(self.gatewayActionTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(OpenClawBrand.accent)
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
             }
-            .padding(10)
-            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Gateway \(self.gatewayStateText)")
-        .accessibilityHint("Opens Settings / Gateway")
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func groupSection(_ group: RootTabs.SidebarGroup) -> some View {
-        VStack(alignment: .leading, spacing: self.isCompactHeight ? 6 : 8) {
-            ProSectionHeader(title: group.title.capitalized)
-            ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
-                VStack(spacing: 0) {
-                    ForEach(Array(group.destinations.enumerated()), id: \.element.id) { index, destination in
-                        if index > 0 {
-                            Divider().padding(.leading, 58)
-                        }
-                        self.destinationRow(destination)
+        ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
+            VStack(spacing: 0) {
+                ForEach(Array(group.destinations.enumerated()), id: \.element.id) { index, destination in
+                    if index > 0 {
+                        Divider().padding(.leading, 70)
                     }
+                    self.destinationRow(destination)
                 }
             }
         }
@@ -156,8 +155,8 @@ struct RootTabsPhoneControlHub: View {
     }
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: self.color(for: destination))
+        HStack(alignment: .center, spacing: 14) {
+            ControlCircleIcon(systemName: destination.systemImage, color: self.color(for: destination), size: 42)
             VStack(alignment: .leading, spacing: 3) {
                 Text(destination.title)
                     .font(.subheadline.weight(.semibold))
@@ -172,7 +171,7 @@ struct RootTabsPhoneControlHub: View {
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, self.isCompactHeight ? 8 : 10)
+        .padding(.vertical, self.isCompactHeight ? 12 : 16)
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
     }
@@ -325,19 +324,6 @@ struct RootTabsPhoneControlHub: View {
         }
     }
 
-    private var gatewayActionTitle: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected:
-            "Manage"
-        case .connecting:
-            "Details"
-        case .error:
-            "Fix"
-        case .disconnected:
-            "Connect"
-        }
-    }
-
     private var isCompactHeight: Bool {
         self.verticalSizeClass == .compact
     }
@@ -352,13 +338,21 @@ struct RootTabsPhoneControlHub: View {
 
     private func color(for destination: RootTabs.SidebarDestination) -> Color {
         switch destination {
-        case .chat, .talk, .overview, .gateway:
+        case .chat:
+            OpenClawBrand.ok
+        case .talk, .skillWorkshop:
+            OpenClawBrand.info
+        case .overview:
+            OpenClawBrand.warn
+        case .activity:
             OpenClawBrand.accent
-        case .instances:
+        case .workboard:
+            .purple
+        case .instances, .sessions, .dreaming:
             Color.secondary
-        case .activity, .usage, .docs:
+        case .usage, .docs:
             OpenClawBrand.accentHot
-        case .agents, .workboard, .skillWorkshop, .sessions, .dreaming, .cron, .settings:
+        case .agents, .cron, .settings, .gateway:
             OpenClawBrand.ok
         }
     }
@@ -376,6 +370,25 @@ struct RootTabsPhoneControlHub: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct ControlCircleIcon: View {
+    let systemName: String
+    let color: Color
+    var size: CGFloat = 36
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: self.size * 0.42, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: self.size, height: self.size)
+            .background(
+                LinearGradient(
+                    colors: [self.color.opacity(0.72), self.color],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing),
+                in: Circle())
     }
 }
 
