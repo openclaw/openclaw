@@ -191,36 +191,35 @@ function createNoProxyAwareEnvDispatcher(
           const settled: Promise<unknown>[] = [];
 
           if (originalCallback) {
+            let expectedSettled = 0;
             let settledCount = 0;
             const onSettled = (...cbArgs: unknown[]) => {
               settledCount++;
-              if (settledCount >= 2) {
+              if (settledCount >= expectedSettled) {
                 Reflect.apply(originalCallback, undefined, cbArgs);
               }
             };
-            // Build args for the bypass agent (use wrapped callback).
-            const bypassArgs = [...args.slice(0, cbIdx), onSettled];
             const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
             if (typeof bypassValue === "function") {
-              Reflect.apply(bypassValue, bypassAgent, bypassArgs);
+              expectedSettled++;
+              Reflect.apply(bypassValue, bypassAgent, [...args.slice(0, cbIdx), onSettled]);
             }
-            // Build args for the proxy dispatcher.
-            const proxyArgs = [...args.slice(0, cbIdx), onSettled];
-            return Reflect.apply(value, target, proxyArgs);
+            // Proxy dispatcher always gets a callback — its close/destroy
+            // may not be a function if the dispatcher is a mock, but the
+            // Proxy wrapper ensures the lifecycle method is always callable.
+            expectedSettled++;
+            return Reflect.apply(value, target, [...args.slice(0, cbIdx), onSettled]);
           }
 
-          // Promise-style: invoke both, return a promise that settles when
-          // both are done. Pass through any non-callback arguments (e.g. the
-          // optional error argument for destroy(err)).
+          // Promise-style: invoke all available lifecycle methods, return
+          // a single promise that settles when all are done.
           const lifecycleArgs = originalCallback ? [] : args;
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
             settled.push(Promise.resolve(Reflect.apply(bypassValue, bypassAgent, lifecycleArgs)));
           }
           settled.push(Promise.resolve(Reflect.apply(value, target, lifecycleArgs)));
-          return settled.length === 2
-            ? Promise.all(settled).then(() => undefined)
-            : settled[0];
+          return Promise.all(settled).then(() => undefined);
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
