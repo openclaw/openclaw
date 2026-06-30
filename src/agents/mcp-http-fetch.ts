@@ -67,20 +67,25 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     return new Response(null, init);
   }
   if (typeof response.text === "function") {
-    const contentLength = response.headers.get("content-length");
-    if (contentLength) {
-      const size = Number(contentLength);
-      if (Number.isSafeInteger(size) && size > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
-        return new Response(null, init);
-      }
+    const contentLengthBytes = parseSafeContentLength(response.headers.get("content-length"));
+    if (contentLengthBytes === null || contentLengthBytes > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+      return new Response(null, init);
     }
     const text = await response.text();
-    if (text.length > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+    if (Buffer.byteLength(text, "utf8") > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
       return new Response(null, init);
     }
     return new Response(text, init);
   }
   return new Response(null, init);
+}
+
+function parseSafeContentLength(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const size = Number(value);
+  return Number.isSafeInteger(size) && size >= 0 ? size : null;
 }
 
 async function buildManagedMcpResponse(
