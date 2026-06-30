@@ -120,8 +120,7 @@ describe("turns-store", () => {
 
     const result = await cleanupArchivedSessionTranscripts({
       directories: [transcriptDir],
-      olderThanMs: 1,
-      reason: "deleted",
+      rules: [{ reason: "deleted", olderThanMs: 1 }],
       nowMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expect(result.removed).toBeGreaterThanOrEqual(1);

@@ -6,10 +6,7 @@
  * resumable: seed skips already-finished transcript files; organize skips the
  * already-run segmentation step.
  */
-import {
-  readSqliteAgentCacheEntry,
-  writeSqliteAgentCacheEntry,
-} from "../cache/agent-cache-store.sqlite.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 /**
  * Spread-friendly optional `env`. Under exactOptionalPropertyTypes we must never pass
@@ -51,6 +48,51 @@ type CursorOptions = {
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
 };
+
+type AgentCacheOptions = {
+  agentId: string;
+  scope: string;
+  key: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+function readSqliteAgentCacheEntry(options: AgentCacheOptions): { value: unknown } | undefined {
+  const database = openOpenClawAgentDatabase({ agentId: options.agentId, env: options.env });
+  const row = database.db
+    .prepare(
+      `
+      SELECT value_json
+        FROM cache_entries
+       WHERE scope = ? AND key = ?
+         AND (expires_at IS NULL OR expires_at > ?)
+      `,
+    )
+    .get(options.scope, options.key, Date.now()) as { value_json?: unknown } | undefined;
+  if (!row) {
+    return undefined;
+  }
+  if (typeof row.value_json !== "string") {
+    return { value: null };
+  }
+  return { value: JSON.parse(row.value_json) };
+}
+
+function writeSqliteAgentCacheEntry(options: AgentCacheOptions & { value: unknown }): void {
+  const database = openOpenClawAgentDatabase({ agentId: options.agentId, env: options.env });
+  database.db
+    .prepare(
+      `
+      INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at)
+      VALUES (?, ?, ?, NULL, NULL, ?)
+      ON CONFLICT(scope, key) DO UPDATE SET
+        value_json = excluded.value_json,
+        blob = excluded.blob,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at
+      `,
+    )
+    .run(options.scope, options.key, JSON.stringify(options.value), Date.now());
+}
 
 function scopeOptions(options: CursorOptions): {
   agentId: string;
