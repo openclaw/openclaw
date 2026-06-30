@@ -8,6 +8,7 @@ import {
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
+  hasRegisteredPluginCommandInvocation,
   listProviderPluginCommandSpecs,
   listPluginCommands,
   matchPluginCommand,
@@ -524,6 +525,8 @@ describe("registerPluginCommand", () => {
     expect(telegramMatch?.command.name).toBe("voice");
     expect(telegramMatch?.command.channels).toEqual(["telegram"]);
     expect(matchPluginCommand("/voice", { channel: "discord" })).toBeNull();
+    expect(hasRegisteredPluginCommandInvocation("/voice")).toBe(true);
+    expect(hasRegisteredPluginCommandInvocation("/ voice")).toBe(true);
     expect(matchPluginCommand("/voice")?.command.name).toBe("voice");
     expectProviderCommandSpecCases([
       { provider: undefined, expectedNames: ["voice"] },
@@ -531,6 +534,17 @@ describe("registerPluginCommand", () => {
       { provider: "discord", expectedNames: [] },
     ]);
     expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
+  });
+
+  it("tracks runtime command ownership when argument policy declines execution", () => {
+    const result = registerVoiceCommandForTest({
+      acceptsArgs: false,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice extra")).toBeNull();
+    expect(hasRegisteredPluginCommandInvocation("/voice extra")).toBe(true);
+    expect(hasRegisteredPluginCommandInvocation("/missing extra")).toBe(false);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
