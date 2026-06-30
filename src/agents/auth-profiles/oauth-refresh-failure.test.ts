@@ -190,18 +190,13 @@ describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
         response.end("Failed to authenticate. API Error: 401 Invalid authentication credentials");
       },
       async (baseUrl) => {
-        let error: Error | undefined;
-        try {
-          await fetchClaudeCliOAuthProbe(baseUrl);
-        } catch (caught) {
-          error = caught instanceof Error ? caught : new Error(String(caught));
-        }
-
-        expect(error?.message).toContain(
-          "Re-auth with `openclaw models auth login --provider anthropic --method cli`",
+        const error = await fetchClaudeCliOAuthProbe(baseUrl).catch((caught) => caught);
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toMatch(
+          /Re-auth with `openclaw models auth login --provider anthropic --method cli`/,
         );
         console.log(
-          `[claude-cli-oauth-proof] server=401 → re-auth hint surfaced: ${error?.message}`,
+          `[claude-cli-oauth-proof] server=401 → re-auth hint: ${error?.message?.slice(0, 80)}`,
         );
       },
     );
@@ -218,7 +213,7 @@ describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
           ok: true,
           body: { provider: "claude-cli", ok: true },
         });
-        console.log("[claude-cli-oauth-proof] server=200 → normal response returned");
+        console.log("[claude-cli-oauth-proof] server=200 → normal response, no re-auth needed");
       },
     );
   });
