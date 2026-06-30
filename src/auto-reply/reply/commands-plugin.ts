@@ -22,6 +22,7 @@ import {
 } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 type ManifestRuntimeSlashCommandReservation = {
@@ -145,6 +146,10 @@ export const handlePluginCommand: CommandHandler = async (
       cfg,
     });
     if (manifestReservation) {
+      const unauthorized = rejectUnauthorizedCommand(params, `/${manifestReservation.commandName}`);
+      if (unauthorized) {
+        return unauthorized;
+      }
       return {
         shouldContinue: false,
         reply: {

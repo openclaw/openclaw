@@ -319,6 +319,25 @@ describe("handlePluginCommand", () => {
     expect(executePluginCommandMock).not.toHaveBeenCalled();
   });
 
+  it("requires authorization before returning manifest runtime handler guidance", async () => {
+    matchPluginCommandMock.mockReturnValue(null);
+    mockDevicePairRuntimeSlashPlugin();
+    const params = buildPluginParams("/pair qr", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.isAuthorizedSender = false;
+    params.ctx.CommandSource = "native";
+
+    const result = await handlePluginCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+    expect(executePluginCommandMock).not.toHaveBeenCalled();
+  });
+
   it("does not fail closed when a registered runtime command declines the message", async () => {
     matchPluginCommandMock.mockReturnValue(null);
     hasRegisteredPluginCommandInvocationMock.mockReturnValue(true);
