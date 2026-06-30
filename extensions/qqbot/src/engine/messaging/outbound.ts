@@ -33,6 +33,7 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -99,7 +100,12 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
-      { to, text: text?.slice(0, 50), replyToId, accountId: account.accountId },
+      {
+        to,
+        text: text ? truncateUtf16Safe(text, 50) : undefined,
+        replyToId,
+        accountId: account.accountId,
+      },
       null,
       2,
     ),
@@ -222,7 +228,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             timestamp: result.timestamp,
             refIdx: result.ext_info?.ref_idx,
           };
-          debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+          debugLog(`[qqbot] sendText: Sent text part: ${truncateUtf16Safe(item.content, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
         } else if (item.type === "voice") {

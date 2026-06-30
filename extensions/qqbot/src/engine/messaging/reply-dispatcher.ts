@@ -416,7 +416,7 @@ export async function sendTextAsVoiceReply(
       return false;
     }
 
-    log?.debug?.(`TTS: "${ttsText.slice(0, 50)}..."`);
+    log?.debug?.(`TTS: "${truncateUtf16Safe(ttsText, 50)}..."`);
     const ttsResult = await deps.tts.textToSpeech({
       text: ttsText,
       cfg,

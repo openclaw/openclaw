@@ -6,6 +6,7 @@
  * `DeliverDeps.mediaSender`.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
@@ -208,7 +209,7 @@ async function sendTextChunks(
     allowDm: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text chunk (${chunk.length}/${text.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text chunk: ${formatErrorMessage(err)}`,
   });
 }
@@ -237,7 +238,7 @@ export async function sendTextOnlyReply(
     forcePlainText: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
   });
 }
