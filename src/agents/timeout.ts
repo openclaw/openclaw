@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
+export const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
