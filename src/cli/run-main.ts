@@ -393,8 +393,7 @@ async function resolveLocalGatewayWebSocketUrl(config: OpenClawConfig): Promise<
   const gateway = config.gateway;
   const links = resolveControlUiLinks({
     port: resolveGatewayPort(config),
-    bind: gateway?.bind,
-    customBindHost: gateway?.customBindHost,
+    bind: "loopback",
     basePath: gateway?.controlUi?.basePath,
     tlsEnabled: gateway?.tls?.enabled === true,
   });

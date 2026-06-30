@@ -2647,8 +2647,7 @@ describe("runCli exit behavior", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
       port: 18789,
-      bind: undefined,
-      customBindHost: undefined,
+      bind: "loopback",
       basePath: undefined,
       tlsEnabled: false,
     });
@@ -2661,6 +2660,42 @@ describe("runCli exit behavior", () => {
       { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
     );
     expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
+  it("probes local gateways over loopback even when the gateway advertises a LAN bind", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          bind: "lan",
+          auth: {
+            mode: "token",
+            token: "local-token",
+          },
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
+      port: 18789,
+      bind: "loopback",
+      basePath: undefined,
+      tlsEnabled: false,
+    });
+    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+      token: "local-token",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+    );
   });
 
   it("starts the local TUI for bare root invocations when the gateway is unavailable", async () => {
