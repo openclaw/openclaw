@@ -1239,7 +1239,7 @@ extension OnboardingWizardView {
         return GatewayConnectDeepLink(
             host: host,
             port: components.port ?? Self.defaultTailscalePort(for: host),
-            tls: Self.defaultTailscaleTLS(for: host),
+            tls: true,
             bootstrapToken: nil,
             token: nil,
             password: nil)
@@ -1247,10 +1247,6 @@ extension OnboardingWizardView {
 
     private static func defaultTailscalePort(for host: String) -> Int {
         self.isTailscaleServeHost(host) ? 443 : 18789
-    }
-
-    private static func defaultTailscaleTLS(for host: String) -> Bool {
-        true
     }
 
     private static func isTailscaleServeHost(_ host: String) -> Bool {
