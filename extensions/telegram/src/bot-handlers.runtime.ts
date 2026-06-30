@@ -2794,8 +2794,8 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
-      const modelCallback = parseModelCallbackData(data);
+      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_idx_*, mdl_back)
+      let modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
         if (
           !(await isTelegramModelCallbackAuthorized({
@@ -2860,6 +2860,29 @@ export const registerTelegramHandlers = ({
             }
           }
         };
+
+        // Resolve an index-based selection (used when a model name is too long for
+        // a name-based callback_data) against the same sorted list the keyboard was
+        // built from. A list that changed since render yields no model at the index,
+        // so prompt the user to reopen rather than selecting the wrong model.
+        if (modelCallback.type === "selectIndex") {
+          const orderedModels = [...(byProvider.get(modelCallback.provider) ?? [])].toSorted(
+            (left, right) => left.localeCompare(right),
+          );
+          const indexedModel = orderedModels[modelCallback.index];
+          if (!indexedModel) {
+            try {
+              await editMessageWithButtons(
+                "That model list changed. Send /model again to refresh.",
+                [],
+              );
+            } catch (err) {
+              throw new TelegramRetryableCallbackError(err);
+            }
+            return;
+          }
+          modelCallback = { type: "select", provider: modelCallback.provider, model: indexedModel };
+        }
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {

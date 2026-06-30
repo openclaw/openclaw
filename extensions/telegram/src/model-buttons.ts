@@ -17,6 +17,7 @@ export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "selectIndex"; provider: string; index: number }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -47,6 +48,7 @@ const CALLBACK_PREFIX = {
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  selectIndex: "mdl_idx_",
 } as const;
 
 /**
@@ -70,6 +72,16 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     const page = parseStrictPositiveInteger(pageStr);
     if (provider && page !== undefined) {
       return { type: "list", provider, page };
+    }
+  }
+
+  // mdl_idx_{provider}_{index} (index fallback for models too long to name-encode)
+  const indexSelMatch = trimmed.match(/^mdl_idx_([a-z0-9_.-]+)_(\d+)$/i);
+  if (indexSelMatch) {
+    const [, provider, indexStr] = indexSelMatch;
+    const index = Number(indexStr);
+    if (provider && Number.isInteger(index)) {
+      return { type: "selectIndex", provider, index };
     }
   }
 
@@ -107,13 +119,29 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
+  /** Index of the model in the provider's sorted list; used as a length-safe
+   *  fallback when the model name does not fit a name-based callback. */
+  index?: number;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (fitsTelegramCallbackData(compactCallbackData)) {
+    return compactCallbackData;
+  }
+  // Long model names (e.g. namespaced Ollama ids) can exceed Telegram's 64-byte
+  // callback_data limit even compacted. Fall back to a provider+index reference
+  // resolved server-side against the same sorted list, so the model stays
+  // selectable instead of being silently dropped from the picker.
+  if (params.index !== undefined) {
+    const indexCallbackData = `${CALLBACK_PREFIX.selectIndex}${params.provider}_${params.index}`;
+    if (fitsTelegramCallbackData(indexCallbackData)) {
+      return indexCallbackData;
+    }
+  }
+  return null;
 }
 
 export function resolveModelSelection(params: {
@@ -210,9 +238,13 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
+  for (const [pageIndex, model] of pageModels.entries()) {
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      model,
+      index: startIndex + pageIndex,
+    });
+    // Skip only if even the index fallback cannot fit (pathological provider id).
     if (!callbackData) {
       continue;
     }
