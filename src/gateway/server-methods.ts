@@ -66,6 +66,10 @@ const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
   (module) => module.agentHandlers,
 );
+const loadAudioHandlers = lazyHandlerModule(
+  () => import("./server-methods/audio.js"),
+  (module) => module.audioHandlers,
+);
 const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
@@ -267,6 +271,10 @@ function authorizeGatewayMethod(
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
+  ...createLazyCoreHandlers({
+    methods: ["audio.transcribe"],
+    loadHandlers: loadAudioHandlers,
+  }),
   ...createLazyCoreHandlers({
     methods: ["connect"],
     loadHandlers: loadConnectHandlers,
