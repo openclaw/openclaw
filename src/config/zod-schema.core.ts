@@ -540,6 +540,15 @@ const ModelProviderSchema = z
     models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict()
+  .superRefine((provider, ctx) => {
+    if (provider.baseUrl !== undefined && provider.baseURL !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["baseURL"],
+        message: "use either baseUrl or baseURL, not both",
+      });
+    }
+  })
   .transform((provider) => {
     const { baseURL, ...canonical } = provider;
     if (baseURL !== undefined && canonical.baseUrl === undefined) {

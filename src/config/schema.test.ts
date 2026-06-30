@@ -883,8 +883,8 @@ describe("config schema", () => {
     expect((openai as Record<string, unknown>)?.baseURL).toBeUndefined();
   });
 
-  it("keeps baseUrl when already set and deletes baseURL alias", () => {
-    const result = OpenClawSchema.parse({
+  it("rejects providers that set both baseUrl and baseURL", () => {
+    const result = OpenClawSchema.safeParse({
       agents: {
         defaults: {
           memorySearch: { provider: "openai" },
@@ -899,9 +899,16 @@ describe("config schema", () => {
         },
       },
     });
-    const openai = result.models?.providers?.openai;
-    expect(openai?.baseUrl).toBe("https://my-proxy.example.com/v1");
-    expect((openai as Record<string, unknown>)?.baseURL).toBeUndefined();
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected config with both baseUrl and baseURL to be rejected");
+    }
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        path: ["models", "providers", "openai", "baseURL"],
+        message: "use either baseUrl or baseURL, not both",
+      }),
+    );
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
