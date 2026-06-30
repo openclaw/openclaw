@@ -295,7 +295,11 @@ function isLocalRelayHost(hostname: string): boolean {
 
 function parseRelayFrame(data: RawData): unknown {
   const text = rawDataToString(data);
-  return JSON.parse(text) as unknown;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function rawDataToString(data: RawData): string {

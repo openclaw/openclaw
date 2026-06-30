@@ -161,7 +161,10 @@ describe("Slack relay source", () => {
       delivery_id: "delivery-1",
     });
     expect(receivedAcks).toEqual([{ type: "ack", delivery_id: "delivery-1" }]);
-    expect(runtimeError).toHaveBeenCalledTimes(2);
+    // 1 runtime error: only the "fail-handler" handler throw.
+    // The "not-json" frame is now silently dropped by the guarded JSON.parse instead
+    // of crashing into runtimeError with an unhandled SyntaxError.
+    expect(runtimeError).toHaveBeenCalledTimes(1);
     expect(handleSlackMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "C1", text: "hello" }),
       {
