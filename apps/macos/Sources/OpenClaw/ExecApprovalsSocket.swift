@@ -146,26 +146,6 @@ private struct ExecHostResponse: Codable {
     var error: ExecHostError?
 }
 
-enum ExecHostOutputLimiter {
-    static let maxOutputFieldBytes = 80000
-    private static let truncationMarker = "... (truncated) "
-
-    static func truncate(_ value: String, maxBytes: Int = maxOutputFieldBytes) -> String {
-        guard maxBytes > self.truncationMarker.utf8.count else { return self.truncationMarker }
-        let valueBytes = Array(value.utf8)
-        guard valueBytes.count > maxBytes else { return value }
-
-        let markerBytes = self.truncationMarker.utf8.count
-        let maxTailBytes = maxBytes - markerBytes
-        var start = max(0, valueBytes.count - maxTailBytes)
-        while start < valueBytes.count, (valueBytes[start] & 0xC0) == 0x80 {
-            start += 1
-        }
-        let tail = String(decoding: valueBytes[start...], as: UTF8.self)
-        return "\(self.truncationMarker)\(tail)"
-    }
-}
-
 private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> String? {
     var buffer = Data()
     while buffer.count < maxBytes {
@@ -641,8 +621,8 @@ private enum ExecHostExecutor {
             exitCode: result.exitCode,
             timedOut: result.timedOut,
             success: result.success,
-            stdout: ExecHostOutputLimiter.truncate(result.stdout),
-            stderr: ExecHostOutputLimiter.truncate(result.stderr),
+            stdout: result.stdout,
+            stderr: result.stderr,
             error: result.errorMessage)
         return self.successResponse(payload)
     }
