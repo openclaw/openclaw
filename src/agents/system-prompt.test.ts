@@ -1047,6 +1047,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
+  it("keeps channel/identity-varying sections below the cache boundary (#98261)", () => {
+    const base = {
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram", capabilities: ["inlineButtons"] },
+      ownerNumbers: ["+15551230000"],
+    };
+    const prompt = buildAgentSystemPrompt(base);
+    const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    expect(boundary).toBeGreaterThan(-1);
+
+    // Channel-varying exec-approval guidance and identity-varying Authorized
+    // Senders must sit below the boundary so the cached prefix stays stable.
+    expect(prompt.indexOf("use native approval card/buttons first")).toBeGreaterThan(boundary);
+    expect(prompt.indexOf("## Authorized Senders")).toBeGreaterThan(boundary);
+
+    // The cacheable prefix (above the boundary) stays byte-identical when only
+    // the owner identity changes — the Authorized Senders section used to fork it.
+    const otherOwner = buildAgentSystemPrompt({ ...base, ownerNumbers: ["+15559999999"] });
+    expect(otherOwner.slice(0, otherOwner.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(
+      prompt.slice(0, boundary),
+    );
+
+    // ...and byte-identical when only the approval-UI capability changes — the
+    // exec-approval guidance used to fork it.
+    const plainApproval = buildAgentSystemPrompt({
+      ...base,
+      runtimeInfo: { channel: "telegram", capabilities: [] },
+    });
+    expect(plainApproval.slice(0, plainApproval.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(
+      prompt.slice(0, boundary),
+    );
+  });
+
   it("describes Telegram rich text for automatic final replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

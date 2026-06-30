@@ -1109,11 +1109,6 @@ export function buildAgentSystemPrompt(params: {
           "Routine low-risk calls: no narration.",
           "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
           "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
-          buildExecApprovalPromptGuidance({
-            runtimeChannel: params.runtimeInfo?.channel,
-            inlineButtonsEnabled,
-            runtimeCapabilities,
-          }),
           "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
           "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
           "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
@@ -1234,7 +1229,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),
@@ -1311,6 +1305,26 @@ export function buildAgentSystemPrompt(params: {
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
+
+  // Exec-approval guidance varies by channel and Authorized Senders varies by
+  // identity (and is dropped in minimal mode), so both sit below the cache
+  // boundary to keep the stable prefix byte-identical across channels — they
+  // previously leaked above it, forking the cacheable prefix early. See #98261.
+  // Exec-approval guidance stays suppressed when a provider overrides the Tool
+  // Call Style section, preserving the prior fallback-only behavior.
+  const execApprovalGuidance = normalizeProviderPromptBlock(
+    providerSectionOverrides.tool_call_style,
+  )
+    ? []
+    : [
+        buildExecApprovalPromptGuidance({
+          runtimeChannel,
+          inlineButtonsEnabled,
+          runtimeCapabilities,
+        }),
+        "",
+      ];
+  lines.push(...execApprovalGuidance, ...buildUserIdentitySection(ownerLine, isMinimal));
 
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
