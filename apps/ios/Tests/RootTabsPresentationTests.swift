@@ -251,20 +251,42 @@ import UIKit
         #expect(!CommandCenterTab.shouldShowHeaderMark(hasLeadingAction: false, showsHeaderMark: false))
     }
 
+    @Test func commandCenterCanUseParentNavigationStackForEmbeddedRoutes() {
+        let standalone = CommandCenterTab(openChat: {}, openSettings: {})
+        let embedded = CommandCenterTab(
+            ownsNavigationStack: false,
+            openChat: {},
+            openSettings: {})
+        let shellRouted = CommandCenterTab(
+            ownsNavigationStack: false,
+            openChat: {},
+            openSettings: {},
+            openSessions: {})
+
+        #expect(standalone.ownsNavigationStack)
+        #expect(standalone.openSessions == nil)
+        #expect(!embedded.ownsNavigationStack)
+        #expect(embedded.openSessions == nil)
+        #expect(shellRouted.openSessions != nil)
+    }
+
     @Test func chatSidebarDestinationCanUseRouteHeaderInsteadOfAgentBranding() {
         let standalone = ChatProTab()
         let routed = ChatProTab(
             headerTitle: "Chat",
             headerSubtitle: "Agent conversation",
             showsAgentBadge: false,
+            ownsNavigationStack: false,
             openSettings: {})
 
         #expect(standalone.showsAgentBadge)
+        #expect(standalone.ownsNavigationStack)
         #expect(standalone.headerTitle == nil)
         #expect(standalone.openSettings == nil)
         #expect(routed.headerTitle == "Chat")
         #expect(routed.headerSubtitle == "Agent conversation")
         #expect(!routed.showsAgentBadge)
+        #expect(!routed.ownsNavigationStack)
         #expect(routed.openSettings != nil)
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
@@ -310,9 +332,23 @@ import UIKit
             accessibilityLabel: "Show Sidebar",
             action: {})
         let routed = TalkProTab(headerLeadingAction: action, openSettings: {})
+        let embedded = TalkProTab(
+            headerLeadingAction: action,
+            ownsNavigationStack: false,
+            openSettings: {})
 
         #expect(routed.headerLeadingAction?.systemName == "sidebar.left")
         #expect(routed.headerLeadingAction?.accessibilityLabel == "Show Sidebar")
+        #expect(routed.ownsNavigationStack)
+        #expect(!embedded.ownsNavigationStack)
+    }
+
+    @Test func settingsCanUseParentNavigationStackForSidebarRoutes() {
+        let standalone = SettingsProTab()
+        let embedded = SettingsProTab(ownsNavigationStack: false)
+
+        #expect(standalone.ownsNavigationStack)
+        #expect(!embedded.ownsNavigationStack)
     }
 
     @Test func iPadPortraitUsesHiddenDrawerSidebar() {
