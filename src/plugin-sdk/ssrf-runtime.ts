@@ -30,4 +30,3 @@ export {
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";
 export { isPrivateOrLoopbackHost } from "../gateway/net.js";
-export { registerManagedProxyBrowserCdpBypass } from "../infra/net/proxy/proxy-lifecycle.js";

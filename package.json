@@ -59,8 +59,6 @@
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
     "!dist/plugin-sdk/sqlite-runtime-testing.js",
     "!dist/plugin-sdk/sqlite-runtime-testing.d.ts",
-    "!dist/plugin-sdk/ssrf-runtime-internal.js",
-    "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
     "!dist/plugin-sdk/test-env.js",
     "!dist/plugin-sdk/test-env.d.ts",
     "!dist/plugin-sdk/test-fixtures.js",
@@ -496,6 +494,10 @@
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"
+    },
+    "./plugin-sdk/ssrf-runtime-internal": {
+      "types": "./dist/plugin-sdk/ssrf-runtime-internal.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-runtime-internal.js"
     },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
