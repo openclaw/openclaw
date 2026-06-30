@@ -413,6 +413,7 @@ import {
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import {
   countProviderNativeToolsForPrecheck,
+  resolveAttemptPromptModeAndSkillsPrompt,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -1946,10 +1947,12 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // Runtime tool allowlists, including [], intentionally narrow the model surface.
-    const hasRuntimeToolAllowlist = params.toolsAllow !== undefined;
-    const effectivePromptMode = hasRuntimeToolAllowlist ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = hasRuntimeToolAllowlist ? undefined : skillsPrompt;
+    const { promptMode: effectivePromptMode, skillsPrompt: effectiveSkillsPrompt } =
+      resolveAttemptPromptModeAndSkillsPrompt({
+        promptMode,
+        skillsPrompt,
+        toolsAllow: params.toolsAllow,
+      });
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

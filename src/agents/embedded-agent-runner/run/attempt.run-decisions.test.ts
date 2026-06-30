@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   countProviderNativeToolsForPrecheck,
+  resolveAttemptPromptModeAndSkillsPrompt,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -81,6 +82,25 @@ describe("countProviderNativeToolsForPrecheck", () => {
         nativeWebSearchPolicyContext: {},
       }),
     ).toBe(expectedCount);
+  });
+});
+
+describe("resolveAttemptPromptModeAndSkillsPrompt", () => {
+  it.each([
+    ["no runtime allowlist", undefined, "full", "SKILLS"],
+    ["empty runtime allowlist", [], "minimal", "SKILLS"],
+    ["named runtime allowlist", ["read"], "minimal", undefined],
+  ] as const)("%s", (_name, toolsAllow, expectedPromptMode, expectedSkillsPrompt) => {
+    expect(
+      resolveAttemptPromptModeAndSkillsPrompt({
+        promptMode: "full",
+        skillsPrompt: "SKILLS",
+        toolsAllow,
+      }),
+    ).toEqual({
+      promptMode: expectedPromptMode,
+      ...(expectedSkillsPrompt ? { skillsPrompt: expectedSkillsPrompt } : {}),
+    });
   });
 });
 

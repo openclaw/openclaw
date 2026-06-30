@@ -7,6 +7,7 @@ import {
   resolveSessionLockMaxHoldFromTimeout,
   resolveSessionWriteLockOptions,
 } from "../../session-write-lock.js";
+import type { PromptMode } from "../../system-prompt.types.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { resolveWebSearchToolPolicy } from "../../web-search-tool-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -66,6 +67,21 @@ export function countProviderNativeToolsForPrecheck(params: {
   }
 
   return 1;
+}
+
+export function resolveAttemptPromptModeAndSkillsPrompt(params: {
+  promptMode: PromptMode;
+  skillsPrompt?: string;
+  toolsAllow?: readonly string[];
+}): { promptMode: PromptMode; skillsPrompt?: string } {
+  const hasRuntimeToolAllowlist = params.toolsAllow !== undefined;
+  const hasNamedRuntimeToolAllowlist = (params.toolsAllow?.length ?? 0) > 0;
+  return {
+    promptMode: hasRuntimeToolAllowlist ? "minimal" : params.promptMode,
+    ...(!hasNamedRuntimeToolAllowlist && params.skillsPrompt !== undefined
+      ? { skillsPrompt: params.skillsPrompt }
+      : {}),
+  };
 }
 
 /**
