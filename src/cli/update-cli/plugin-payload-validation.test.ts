@@ -45,6 +45,11 @@ describe("runPluginPayloadSmokeCheck", () => {
     await fs.writeFile(path.join(dir, "skills", "SKILL.md"), "# Skill\n", "utf8");
   }
 
+  async function writeManifestlessClaudeBundle(dir: string) {
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(path.join(dir, "skills", "SKILL.md"), "# Skill\n", "utf8");
+  }
+
   function resolveTestHostRoot(): string {
     const hostRoot = resolveOpenClawPackageRootSync({
       argv1: process.argv[1],
@@ -125,6 +130,25 @@ describe("runPluginPayloadSmokeCheck", () => {
       env: {},
     });
     expect(result.checked).toEqual(["claude-bundle"]);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("accepts marketplace manifestless bundle payloads without package.json", async () => {
+    const dir = path.join(tmpRoot, "marketplace-claude-bundle");
+    await writeManifestlessClaudeBundle(dir);
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        marketplace: {
+          source: "marketplace",
+          installPath: dir,
+          marketplaceName: "local",
+          marketplaceSource: "owner/repo",
+          marketplacePlugin: "claude-bundle",
+        },
+      },
+      env: {},
+    });
+    expect(result.checked).toEqual(["marketplace"]);
     expect(result.failures).toEqual([]);
   });
 

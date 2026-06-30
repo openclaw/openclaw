@@ -212,6 +212,10 @@ function isKnownNativePackageInstallRecord(record: PluginInstallRecord): boolean
   return record.source === "npm" || record.clawhubFamily === "code-plugin";
 }
 
+function canDetectBundlePayloadFromInstallPath(record: PluginInstallRecord): boolean {
+  return isBundleInstallRecord(record) || record.source === "marketplace";
+}
+
 function readBundleFormat(record: PluginInstallRecord): PluginBundleFormat | null {
   const raw = (record as { bundleFormat?: unknown }).bundleFormat;
   return raw === "codex" || raw === "claude" || raw === "cursor" ? raw : null;
@@ -247,7 +251,7 @@ async function resolveBundlePayloadFormat(params: {
   if (explicitManifestFormat) {
     return explicitManifestFormat;
   }
-  if (!isBundleInstallRecord(params.record)) {
+  if (!canDetectBundlePayloadFromInstallPath(params.record)) {
     return null;
   }
   return readBundleFormat(params.record) ?? detectBundleManifestFormat(params.installPath);
