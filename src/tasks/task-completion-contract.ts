@@ -2,10 +2,15 @@
 import type { TaskTerminalOutcome } from "./task-registry.types.js";
 
 /** Terminal fields required when a mandatory detached task completion is invalid. */
-export type RequiredCompletionTerminalResult = {
-  terminalOutcome?: Extract<TaskTerminalOutcome, "blocked">;
-  terminalSummary?: string;
-};
+export type RequiredCompletionTerminalResult =
+  | {
+      terminalOutcome: Extract<TaskTerminalOutcome, "blocked">;
+      terminalSummary: string;
+    }
+  | {
+      terminalOutcome?: undefined;
+      terminalSummary?: undefined;
+    };
 
 const PROGRESS_ONLY_PATTERN =
   /^(?:i(?:'|\u2019)ll|i will|i(?:'|\u2019)m|i am|i(?:'|\u2019)m going to|i am going to|let me|i need to)\s+(?:now\s+)?(?:analyz(?:e|ing)|apply|check(?:ing)?|continue|debug(?:ging)?|follow(?:ing)?\s+up|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?(?:\s+into)?|map(?:ping)?|open(?:ing)?|read(?:ing)?|report(?:ing)?(?:\s+back)?|review(?:ing)?|run(?:ning)?|start(?:ing)?|test(?:ing)?|trace|trac(?:e|ing)|try(?:ing)?|update|verify(?:ing)?|work(?:ing)?)/i;
