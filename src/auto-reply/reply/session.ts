@@ -78,6 +78,7 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -157,6 +158,21 @@ function resolveStaleSessionEndReason(params: {
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
+}
+
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
+}
+
+function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): SessionEntry {
+  return {
+    ...entry,
+    status: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: undefined,
+  };
 }
 
 export type SessionInitResult = {
@@ -537,17 +553,38 @@ async function initSessionStateAttemptLocked(
       mainKey,
       storePath,
     }));
+  const recoverTerminalVisibleEntry =
+    canReuseExistingEntry &&
+    !isSystemEvent &&
+    !resetTriggered &&
+    (entryFreshness?.fresh ?? false) &&
+    isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||
+      recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
+  const activeReplyOperation = replyRunRegistry.get(sessionKey);
+  const deferImplicitRolloverForActiveRun =
+    !resetTriggered &&
+    !freshEntry &&
+    canReuseExistingEntry &&
+    entryFreshness?.fresh === false &&
+    entryFreshness.staleReason != null &&
+    activeReplyOperation?.phase !== "queued" &&
+    activeReplyOperation?.sessionId === entry?.sessionId;
+  // Implicit daily/idle rollover must not rename a transcript while that exact
+  // session's active writer is still running. Admission will steer/wait/queue;
+  // queued pre-dispatch reservations still let the current turn roll over.
+  const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const previousSessionEntry =
+    (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({
@@ -562,23 +599,29 @@ async function initSessionStateAttemptLocked(
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
   }
 
-  if (!isNewSession && freshEntry && canReuseExistingEntry) {
-    sessionId = entry.sessionId;
-    systemSent = entry.systemSent ?? false;
-    abortedLastRun = entry.abortedLastRun ?? false;
-    persistedThinking = entry.thinkingLevel;
-    persistedVerbose = entry.verboseLevel;
-    persistedTrace = entry.traceLevel;
-    persistedReasoning = entry.reasoningLevel;
-    persistedTtsAuto = entry.ttsAuto;
-    persistedResponseUsage = entry.responseUsage;
-    persistedModelOverride = entry.modelOverride;
-    persistedProviderOverride = entry.providerOverride;
-    persistedModelOverrideSource = entry.modelOverrideSource;
-    persistedAuthProfileOverride = entry.authProfileOverride;
-    persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-    persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-    persistedLabel = entry.label;
+  const recoveredTerminalEntry =
+    entry && recoverTerminalVisibleEntry
+      ? recoverTerminalSessionEntryForVisibleTurn(entry)
+      : undefined;
+  const reusableEntry = recoveredTerminalEntry ?? entry;
+
+  if (!isNewSession && effectiveFreshEntry && canReuseExistingEntry && reusableEntry) {
+    sessionId = reusableEntry.sessionId;
+    systemSent = reusableEntry.systemSent ?? false;
+    abortedLastRun = reusableEntry.abortedLastRun ?? false;
+    persistedThinking = reusableEntry.thinkingLevel;
+    persistedVerbose = reusableEntry.verboseLevel;
+    persistedTrace = reusableEntry.traceLevel;
+    persistedReasoning = reusableEntry.reasoningLevel;
+    persistedTtsAuto = reusableEntry.ttsAuto;
+    persistedResponseUsage = reusableEntry.responseUsage;
+    persistedModelOverride = reusableEntry.modelOverride;
+    persistedProviderOverride = reusableEntry.providerOverride;
+    persistedModelOverrideSource = reusableEntry.modelOverrideSource;
+    persistedAuthProfileOverride = reusableEntry.authProfileOverride;
+    persistedAuthProfileOverrideSource = reusableEntry.authProfileOverrideSource;
+    persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
+    persistedLabel = reusableEntry.label;
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -633,7 +676,7 @@ async function initSessionStateAttemptLocked(
     }
   }
 
-  const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const baseEntry = !isNewSession && effectiveFreshEntry ? reusableEntry : undefined;
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -723,7 +766,7 @@ async function initSessionStateAttemptLocked(
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
     systemSent,
-    abortedLastRun,
+    abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,

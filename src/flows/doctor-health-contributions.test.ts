@@ -9,6 +9,7 @@ import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
+import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -52,6 +53,8 @@ const mocks = vi.hoisted(() => ({
   getHealthCheck: vi.fn(),
   registerHealthCheck: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
+  detectLegacyStateMigrations: vi.fn(),
+  runLegacyStateMigrations: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
@@ -130,6 +133,11 @@ vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
 
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
+}));
+
+vi.mock("../commands/doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
+  runLegacyStateMigrations: mocks.runLegacyStateMigrations,
 }));
 
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
@@ -379,6 +387,10 @@ describe("doctor health contributions", () => {
     mocks.registerHealthCheck.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
+    mocks.detectLegacyStateMigrations.mockReset();
+    mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [] });
+    mocks.runLegacyStateMigrations.mockReset();
+    mocks.runLegacyStateMigrations.mockResolvedValue({ changes: [], warnings: [] });
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
     mocks.detectLegacyClawdBrowserProfileResidue.mockReturnValue(null);
     mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset();
@@ -921,6 +933,28 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("passes the active config into legacy state migration", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const cfg = { session: { store: "/tmp/shared-sessions.json" } };
+    const detected = { preview: ["legacy sessions"], warnings: [] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+    const ctx = {
+      cfg,
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
+      detected,
+      config: cfg,
+      recoverCorruptTargetStore: false,
+    });
+  });
+
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-health");
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
@@ -1013,10 +1047,46 @@ describe("doctor health contributions", () => {
     }
     expect(contributionIds).toContain("core/doctor/sandbox/registry-files");
     expect(contributionIds).toContain("core/doctor/gateway-services/extra");
+    expect(contributionIds).toContain("core/doctor/state-integrity");
     expect(contributionIds).toContain("core/doctor/config-audit-scrub");
     expect(contributionIds).toContain("core/doctor/session-transcripts");
     expect(contributionIds).toContain("core/doctor/session-snapshots");
+    expect(contributionIds).toContain("core/doctor/plugin-registry");
+    expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps state integrity opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const stateIntegrityCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/state-integrity",
+    );
+    expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
+    expect(stateIntegrityCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [stateIntegrityCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/state-integrity"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

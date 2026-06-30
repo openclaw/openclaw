@@ -841,9 +841,11 @@ export async function runCodexAppServerAttempt(
       currentChannelProvider: resolveCodexMessageToolProvider(params),
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
+      currentMessageId: params.currentMessageId,
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
@@ -1504,6 +1506,52 @@ export async function runCodexAppServerAttempt(
     client = startupResult.client;
     thread = startupResult.thread;
     pluginAppServer = startupResult.pluginAppServer;
+    if (thread.lifecycle.action === "started") {
+      const activeThreadReviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+        provider: params.provider,
+        model: params.modelId,
+        bindingModelProvider: thread.modelProvider,
+        bindingModel: thread.model,
+        nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+          authProfileId: startupAuthProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          config: params.config,
+        }),
+      });
+      const activeThreadConfiguredAppServer = resolveCodexAppServerRuntimeOptions({
+        pluginConfig,
+        execPolicy,
+        modelProvider: activeThreadReviewerPolicyContext.modelProvider,
+        model: activeThreadReviewerPolicyContext.model,
+        config: params.config,
+        agentDir,
+        openClawSandboxActive: sandbox?.enabled === true,
+      });
+      const activeThreadAppServer = resolveCodexAppServerForModelProvider({
+        appServer: activeThreadConfiguredAppServer,
+        provider: activeThreadReviewerPolicyContext.modelProvider,
+        model: activeThreadReviewerPolicyContext.model,
+        config: params.config,
+        env: process.env,
+        agentDir,
+      });
+      const previousApprovalsReviewer = pluginAppServer.approvalsReviewer;
+      pluginAppServer = {
+        ...pluginAppServer,
+        approvalsReviewer: activeThreadAppServer.approvalsReviewer,
+      };
+      if (pluginAppServer.approvalsReviewer !== previousApprovalsReviewer) {
+        embeddedAgentLog.info(
+          "codex app-server approval reviewer updated from active thread model provider",
+          {
+            from: previousApprovalsReviewer,
+            to: pluginAppServer.approvalsReviewer,
+            modelProvider: activeThreadReviewerPolicyContext.modelProvider,
+          },
+        );
+      }
+    }
     sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
     codexEnvironmentSelection = startupResult.environmentSelection;
     codexExecutionCwd = startupResult.executionCwd;
@@ -1578,6 +1626,7 @@ export async function runCodexAppServerAttempt(
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
+  const activeCompletionBlockerItemIds = new Set<string>();
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -1627,6 +1676,7 @@ export async function runCodexAppServerAttempt(
     isTerminalTurnNotificationQueued: () => terminalTurnNotificationQueued,
     getActiveAppServerTurnRequests: () => activeAppServerTurnRequests,
     getActiveTurnItemCount: () => activeTurnItemIds.size,
+    getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
     turnCompletionIdleTimeoutMs,
     turnAssistantCompletionIdleTimeoutMs,
     turnAttemptIdleTimeoutMs,
@@ -1899,6 +1949,7 @@ export async function runCodexAppServerAttempt(
       currentPromptTexts: [codexTurnPromptText],
       turnWatches,
       activeTurnItemIds,
+      activeCompletionBlockerItemIds,
       activeAppServerTurnRequests,
       pendingOpenClawDynamicToolCompletionIds,
       turnCrossedToolHandoff,

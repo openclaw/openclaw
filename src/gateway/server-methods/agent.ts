@@ -13,6 +13,7 @@ import {
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -151,6 +152,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -173,6 +175,10 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
+}
 
 type AgentSendSessionLifecycleTransition = {
   cfg: OpenClawConfig;
@@ -213,6 +219,53 @@ function logAttachmentFailure(
 function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function respondDeletedAgentSession(params: {
+  cfg: OpenClawConfig;
+  canonicalKey: string;
+  entry?: SessionEntry | null;
+  acpMetadataSessionKey?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
+    params.cfg,
+    params.canonicalKey,
+    params.entry,
+    {
+      acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey,
+    },
+  );
+  if (deletedAgentId === null) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
+    ),
+  );
+  return true;
+}
+
+function respondDeletedAgentSessionForKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  });
+  return respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+  });
 }
 
 function resolveAllowModelOverrideFromClient(
@@ -581,13 +634,63 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
   sessionKey?: string;
   inputProvenance?: InputProvenance;
+  confirmedAcpManualSpawn?: boolean;
 }): GatewayAgentTaskTrackingMode {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
-  return params.client?.internal?.agentRunTracking === "plugin_subagent"
-    ? "plugin_subagent"
-    : "cli";
+  if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
+    return "plugin_subagent";
+  }
+  // A confirmed ACP manual-spawn child turn already owns its requester-visible
+  // `acp` task row from the spawn control plane (src/agents/acp-spawn.ts). The
+  // Gateway CLI path runs that same childRunId, so tracking it here would emit a
+  // duplicate row for one run. Suppress only the CLI branch; plugin-subagent and
+  // normal CLI tracking stay intact.
+  if (params.confirmedAcpManualSpawn) {
+    return "none";
+  }
+  return "cli";
+}
+
+function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  // The ACP spawn control plane reaches the gateway through the in-process
+  // backend client (src/gateway/call.ts -> mode "backend", id "gateway-client").
+  // Only that caller creates the replacement `acp` task row, so CLI suppression
+  // is gated to it. An operator-write UI/CLI/mobile or device-token client that
+  // merely sets acpTurnSource owns no such row and must keep CLI tracking.
+  return (
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function isConfirmedAcpManualSpawnTaskOwner(params: {
+  acpTurnSource?: string;
+  sessionKey?: string;
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+}): boolean {
+  const sessionKey = params.sessionKey;
+  if (
+    !isTrustedBackendAcpSpawnClient(params.client) ||
+    params.acpTurnSource !== "manual_spawn" ||
+    sessionKey == null ||
+    !isAcpSessionKey(sessionKey)
+  ) {
+    return false;
+  }
+  try {
+    return readAcpSessionMeta({ sessionKey }) != null;
+  } catch (err) {
+    params.logGateway.warn(
+      `failed to read ACP session metadata for manual-spawn task tracking ${sessionKey}; falling back to cli task tracking: ${formatForLog(
+        err,
+      )}`,
+    );
+    return false;
+  }
 }
 
 async function registerPluginSubagentRunFromGateway(params: {
@@ -1350,6 +1453,45 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId = inferredAgentId;
       }
     }
+    let requestedSessionKey =
+      requestedSessionKeyRaw ??
+      (!requestedSessionId
+        ? resolveExplicitAgentSessionKey({
+            cfg,
+            agentId,
+          })
+        : undefined);
+    if (agentId && requestedSessionKeyRaw) {
+      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
+      const requestedCanonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: requestedSessionKeyRaw,
+      });
+      const sessionAgentId = parsedRequestedSessionKey?.agentId
+        ? normalizeAgentId(parsedRequestedSessionKey.agentId)
+        : requestedCanonicalKey === "global"
+          ? agentId
+          : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+      if (sessionAgentId !== agentId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
+          ),
+        );
+        return;
+      }
+    }
+    // Keep deleted-agent rejection ahead of dedupe, media offload, reset, and
+    // dispatch so agent RPC shares the chat.send / sessions.send boundary.
+    if (
+      requestedSessionKey &&
+      respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+    ) {
+      return;
+    }
     // Drop an exec-approval followup whose session key was rebound by /new or
     // /reset while the approval was pending, before the handler touches the
     // rebound session (store write, run registration, dedupe, accepted ack).
@@ -1385,37 +1527,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           entry: { ts: Date.now(), ok: true, payload: droppedPayload },
         });
         respond(true, droppedPayload, undefined, { runId });
-        return;
-      }
-    }
-    let requestedSessionKey =
-      requestedSessionKeyRaw ??
-      (!requestedSessionId
-        ? resolveExplicitAgentSessionKey({
-            cfg,
-            agentId,
-          })
-        : undefined);
-    if (agentId && requestedSessionKeyRaw) {
-      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
-      const requestedCanonicalKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: requestedSessionKeyRaw,
-      });
-      const sessionAgentId = parsedRequestedSessionKey?.agentId
-        ? normalizeAgentId(parsedRequestedSessionKey.agentId)
-        : requestedCanonicalKey === "global"
-          ? agentId
-          : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
-      if (sessionAgentId !== agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
-          ),
-        );
         return;
       }
     }
@@ -1734,8 +1845,20 @@ export const agentHandlers: GatewayRequestHandlers = {
           storePath,
           entry,
           canonicalKey,
+          legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        if (
+          respondDeletedAgentSession({
+            cfg: cfgLocal,
+            canonicalKey,
+            entry,
+            acpMetadataSessionKey: legacyKey,
+            respond,
+          })
+        ) {
+          return;
+        }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
           cfgLocal.session?.maintenance,
         );
@@ -1767,6 +1890,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               policy: resetPolicy,
             })
           : undefined;
+        const visibleRequest =
+          request.bootstrapContextRunKind !== "cron" &&
+          request.bootstrapContextRunKind !== "heartbeat" &&
+          !request.internalEvents?.length;
         const resolveFailedSessionTranscriptMissingForEntry = (
           candidateEntry: SessionEntry | undefined,
         ) => {
@@ -1834,7 +1961,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         let rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction = !isSystemGatewayRun && !request.internalEvents?.length;
+        const touchInteraction = visibleRequest;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -1996,6 +2123,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             ? freshEntry?.sessionId
             : freshSessionId;
           const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
+          const freshRecoverTerminalSession =
+            freshCanReuseSession &&
+            visibleRequest &&
+            isRecoverableTerminalSessionStatus(freshEntry?.status);
+          const shouldClearTerminalState =
+            freshRecoverTerminalSession &&
+            !freshSessionRotatedSinceLoad &&
+            patchSessionId === freshEntry?.sessionId;
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
@@ -2024,14 +2159,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             space: nextGroup.groupSpace,
             ...(pluginOwnerId ? { pluginOwnerId } : {}),
-            ...(shouldClearRotatedState
+            ...(shouldClearRotatedState || shouldClearTerminalState
               ? {
                   status: undefined,
                   startedAt: undefined,
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
-                  sessionFile: undefined,
+                  ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
                 }
               : {}),
           };
@@ -2508,10 +2643,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+      // Confirmed only when the caller is the trusted in-process backend ACP
+      // spawn client, the turn is an ACP manual spawn, the canonical session key
+      // is ACP-shaped, and persisted ACP metadata exists for it; the spawn
+      // control plane owns that childRunId's `acp` task row in those cases.
+      const confirmedAcpManualSpawn = isConfirmedAcpManualSpawnTaskOwner({
+        acpTurnSource: request.acpTurnSource,
+        sessionKey: resolvedSessionKey,
+        client,
+        logGateway: context.logGateway,
+      });
       const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
         client,
         sessionKey: resolvedSessionKey,
         inputProvenance,
+        confirmedAcpManualSpawn,
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";

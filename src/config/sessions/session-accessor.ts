@@ -52,6 +52,7 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
+  projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
@@ -1155,8 +1156,17 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
-function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
-  return JSON.stringify(entry ?? null);
+function createReplySessionInitializationRevision(params: {
+  entry: SessionEntry | undefined;
+  storePath: string;
+}): string {
+  const { entry, storePath } = params;
+  // Snapshot reads may see promptRef-only disk entries while commit reads can
+  // see hydrated prompt text and runtime-only resolvedSkills cache entries.
+  // Compare the canonical persisted shape so cache hydration is not a conflict.
+  return JSON.stringify(
+    entry ? projectSessionEntryForPersistenceRevision({ storePath, entry }) : null,
+  );
 }
 
 function resolveInitializedReplySessionEntry(params: {
@@ -1355,9 +1365,16 @@ function findSessionCompactionCheckpoint(params: {
   if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
     return undefined;
   }
-  return [...params.entry.compactionCheckpoints]
-    .toSorted((a, b) => b.createdAt - a.createdAt)
-    .find((checkpoint) => checkpoint.checkpointId === checkpointId);
+  let newest: SessionCompactionCheckpoint | undefined;
+  for (const checkpoint of params.entry.compactionCheckpoints) {
+    if (checkpoint.checkpointId !== checkpointId) {
+      continue;
+    }
+    if (!newest || checkpoint.createdAt > newest.createdAt) {
+      newest = checkpoint;
+    }
+  }
+  return newest;
 }
 
 type ApplySessionCompactionCheckpointMutationParams = {
@@ -1625,10 +1642,12 @@ export async function persistSessionResetLifecycle(params: {
   });
 
   if (params.cleanupPreviousTranscript && params.previousSessionId) {
-    cleanupPreviousResetTranscripts({
+    await archivePreviousSessionTranscript({
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-      previousEntry: params.previousEntry,
-      previousSessionId: params.previousSessionId,
+      previousEntry:
+        params.previousEntry.sessionId === params.previousSessionId
+          ? params.previousEntry
+          : { ...params.previousEntry, sessionId: params.previousSessionId },
       storePath: params.storePath,
     });
   }
@@ -1702,7 +1721,10 @@ export function loadReplySessionInitializationSnapshot(params: {
       const entry = resolveSessionStoreEntry({ store: entries, sessionKey }).existing;
       return entry ? { ...entry } : undefined;
     },
-    revision: createReplySessionInitializationRevision(currentEntry),
+    revision: createReplySessionInitializationRevision({
+      entry: currentEntry,
+      storePath: params.storePath,
+    }),
   };
 }
 
@@ -1733,7 +1755,10 @@ export async function commitReplySessionInitialization(params: {
     async (store): Promise<ReplySessionInitializationCommitResult> => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
       const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
-      const revision = createReplySessionInitializationRevision(currentEntry);
+      const revision = createReplySessionInitializationRevision({
+        entry: currentEntry,
+        storePath: params.storePath,
+      });
       if (revision !== params.expectedRevision) {
         return {
           ok: false,
@@ -2699,34 +2724,6 @@ async function restoreTemporarySessionMapping(
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);
-  }
-}
-
-function cleanupPreviousResetTranscripts(params: {
-  agentId: string;
-  previousEntry: SessionEntry;
-  previousSessionId: string;
-  storePath: string;
-}): void {
-  const transcriptCandidates = new Set<string>();
-  const resolved = resolveSessionFilePath(
-    params.previousSessionId,
-    params.previousEntry,
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-      storePath: params.storePath,
-    }),
-  );
-  if (resolved) {
-    transcriptCandidates.add(resolved);
-  }
-  transcriptCandidates.add(resolveSessionTranscriptPath(params.previousSessionId, params.agentId));
-  for (const candidate of transcriptCandidates) {
-    try {
-      fs.unlinkSync(candidate);
-    } catch {
-      // Best-effort cleanup.
-    }
   }
 }
 

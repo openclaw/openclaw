@@ -387,7 +387,12 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 }
 
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  // Strip fenced code blocks and inline code before link extraction to avoid
+  // false positives from [[...]] patterns in code (bash tests, Scala generics).
+  const searchable = markdown
+    .replace(/(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
+    .replace(/`[^`]+`/g, "``")
+    .replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

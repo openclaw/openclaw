@@ -26,6 +26,20 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
+export type PluginMarketplaceEntriesOptions = {
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+  offline?: boolean;
+};
+
+export type PluginMarketplaceRefreshOptions = {
+  expectedSha256?: string;
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+};
+
 export type PluginSearchOptions = {
   json?: boolean;
   limit?: number;
@@ -58,7 +72,7 @@ export type PluginAuthoringValidateOptions = {
 export type PluginAuthoringInitOptions = {
   directory?: string;
   force?: boolean;
-  name?: string;
+  type?: string;
 };
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
@@ -261,10 +275,11 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("init")
-    .description("Create a simple tool plugin project")
+    .description("Create a plugin project")
     .argument("<id>", "Plugin id")
     .option("--directory <path>", "Output directory")
     .option("--name <name>", "Display name")
+    .option("--type <type>", "Scaffold type (tool or provider)", "tool")
     .option("--force", "Overwrite an existing output directory", false)
     .action(async (id: string, opts: PluginAuthoringInitOptions) => {
       const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
@@ -274,6 +289,30 @@ export function registerPluginsCli(program: Command) {
   const marketplace = plugins
     .command("marketplace")
     .description("Inspect Claude-compatible plugin marketplaces");
+
+  marketplace
+    .command("entries")
+    .description("List entries from the configured OpenClaw marketplace feed")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to list")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--offline", "Read the latest accepted snapshot without fetching the feed", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceEntriesOptions) => {
+      const { runPluginMarketplaceEntriesCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceEntriesCommand(opts);
+    });
+
+  marketplace
+    .command("refresh")
+    .description("Refresh the configured OpenClaw marketplace feed snapshot")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to refresh")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--expected-sha256 <hash>", "Expected hosted feed SHA-256 payload checksum")
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceRefreshOptions) => {
+      const { runPluginMarketplaceRefreshCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceRefreshCommand(opts);
+    });
 
   marketplace
     .command("list")

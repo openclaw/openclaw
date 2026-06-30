@@ -252,6 +252,7 @@ describe("tool-cards", () => {
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
     expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(rawBody!.querySelector("code.markdown-block-art")).toBeNull();
     expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
       presentation: {
@@ -265,6 +266,36 @@ describe("tool-cards", () => {
         url: "/__openclaw__/canvas/documents/cv_counter/index.html",
       },
     });
+  });
+
+  it("marks expanded raw block-art output so QR whitespace uses block-art rendering", () => {
+    const container = document.createElement("div");
+    const blockArt = "  ▄▄▄▄▄▄▄  \n  █ ▄▄▄ █  \n  █▄▄▄▄▄█  ";
+    render(
+      renderToolCard(
+        {
+          id: "msg:view:block-art",
+          name: "canvas_render",
+          outputText: blockArt,
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "qr_preview",
+            url: "/__openclaw__/canvas/documents/qr_preview/index.html",
+          },
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
+    rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const code = container.querySelector("code.markdown-block-art");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe(blockArt);
   });
 
   it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", () => {

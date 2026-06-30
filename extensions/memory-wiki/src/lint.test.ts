@@ -67,6 +67,69 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
+  it("does not report broken-wikilink for [[...]] inside fenced code blocks or inline code", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-fenced-code-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "code-snippets.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.code-snippets",
+          title: "Code Snippets",
+        },
+        body: [
+          "# Code Snippets",
+          "",
+          "Normal text with no wikilinks here.",
+          "",
+          "```bash",
+          'if [[ "$name" == "Alice" ]]; then',
+          "  echo found",
+          "fi",
+          "```",
+          "",
+          "```scala",
+          "val result = Future[Option[User]] {",
+          '  collectionName = "users"',
+          "}",
+          "```",
+          "",
+          'Inline code: `val userId: String` and `[[ "$str" == "test" ]]`.',
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.code-snippets"],
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const linkIssues = result.issues.filter(
+      (issue) => issue.path === "sources/code-snippets.md" && issue.code === "broken-wikilink",
+    );
+    expect(linkIssues).toHaveLength(0);
+  });
+
   it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-raw-sources-",

@@ -41,6 +41,14 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   ...IMESSAGE_ACTION_NAMES,
   "upload-file",
 ]);
+const GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
+  "renameGroup",
+  "setGroupIcon",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+]);
+
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
@@ -388,6 +396,9 @@ function assertActionEnabled(
 export const imessageMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeIMessageMessageTool,
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
+    GROUP_MANAGEMENT_ACTIONS.has(action),
   messageActionTargetAliases: {
     react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
@@ -415,7 +426,24 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    toolContext,
+    senderIsOwner,
+    gatewayClientScopes,
+  }) => {
+    // Group administration mutates the host's Messages identity, so model-driven
+    // actions need owner provenance or an admin-scoped Gateway caller.
+    if (
+      GROUP_MANAGEMENT_ACTIONS.has(action) &&
+      senderIsOwner !== true &&
+      !gatewayClientScopes?.includes("operator.admin")
+    ) {
+      throw new Error("iMessage group management requires an owner or operator.admin requester.");
+    }
     const runtime = await loadIMessageActionsRuntime();
     const account = resolveIMessageAccount({
       cfg,

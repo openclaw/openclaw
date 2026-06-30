@@ -182,12 +182,12 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toContain(
       "github.event_name == 'pull_request'",
     );
-    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
-    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
@@ -396,12 +396,19 @@ describe("ci workflow guards", () => {
   });
 
   it("bounds platform checkout fetches without GNU timeout", () => {
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
+
+    expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
     for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
@@ -412,6 +419,10 @@ describe("ci workflow guards", () => {
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
+      );
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain(
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
