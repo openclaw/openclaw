@@ -2577,6 +2577,7 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      let contextEngineAssemblySucceeded = false;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -3334,6 +3335,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            contextEngineAssemblySucceeded = true;
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
                 preassemblyContextEngineMessagesForPrecheck;
@@ -4601,24 +4603,37 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
-          const preemptiveCompaction = skipPromptSubmission
-            ? null
-            : shouldPreemptivelyCompactBeforePrompt({
-                messages: hookMessagesForCurrentPrompt,
-                ...(unwindowedLlmBoundaryMessagesForPrecheck
-                  ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-                  : {}),
-                systemPrompt: systemPromptForHook,
-                prompt: llmBoundaryPromptForPrecheck,
-                contextTokenBudget,
-                reserveTokens,
-                toolResultMaxChars: promptToolResultMaxChars,
-                llmBoundaryTokenPressure: {
-                  estimatedPromptTokens: llmBoundaryTokenPressure,
-                  source: "llm_boundary_normalized_prompt",
-                  renderedChars: llmBoundaryPromptForPrecheck.length,
-                },
-              });
+          let preemptiveCompaction = null;
+          const shouldSkipPrecheck =
+            skipPromptSubmission ||
+            (contextEngineAssemblySucceeded &&
+              activeContextEngine?.info.ownsCompaction &&
+              contextEnginePromptAuthority !== "preassembly_may_overflow");
+
+          if (shouldSkipPrecheck && !skipPromptSubmission) {
+            log.info(
+              `[context-overflow-precheck] skipped: context engine "${activeContextEngine!.info.id}" owns compaction`,
+            );
+          }
+
+          if (!shouldSkipPrecheck) {
+            preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+              messages: hookMessagesForCurrentPrompt,
+              ...(unwindowedLlmBoundaryMessagesForPrecheck
+                ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
+                : {}),
+              systemPrompt: systemPromptForHook,
+              prompt: llmBoundaryPromptForPrecheck,
+              contextTokenBudget,
+              reserveTokens,
+              toolResultMaxChars: promptToolResultMaxChars,
+              llmBoundaryTokenPressure: {
+                estimatedPromptTokens: llmBoundaryTokenPressure,
+                source: "llm_boundary_normalized_prompt",
+                renderedChars: llmBoundaryPromptForPrecheck.length,
+              },
+            });
+          }
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({
               result: preemptiveCompaction,
