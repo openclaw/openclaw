@@ -350,6 +350,76 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/send requires text or media/i);
   });
 
+  it("rejects message sends whose body is only an unfenced leaked invoke block", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: [
+            '<mm:invoke name="exec">',
+            '<mm:parameter name="command">pwd</mm:parameter>',
+            "</mm:invoke>",
+          ].join("\n"),
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/send requires text or media/i);
+  });
+
+  it("preserves a fenced invoke example in the send body", async () => {
+    // The outbound send path is code-aware, so a fenced invoke example is real
+    // user content and must reach the channel untouched, not be stripped as a
+    // #97750 degraded tool-call leak.
+    const sentText: string[] = [];
+    const sendText: NonNullable<
+      NonNullable<typeof workspaceTestPlugin.outbound>["sendText"]
+    > = async (ctx) => {
+      sentText.push(ctx.text);
+      return { channel: "workspace", messageId: "workspace-test-message" };
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            outbound: {
+              ...workspaceTestPlugin.outbound,
+              sendText,
+            },
+          },
+        },
+      ]),
+    );
+
+    const body = [
+      "Here is the dialect:",
+      "```",
+      '<mm:invoke name="exec">',
+      '<mm:parameter name="command">pwd</mm:parameter>',
+      "</mm:invoke>",
+      "```",
+    ].join("\n");
+
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: body,
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "send", channel: "workspace" });
+    expect(sentText).toHaveLength(1);
+    expect(sentText[0]).toContain('<mm:invoke name="exec">');
+    expect(sentText[0]).toContain('<mm:parameter name="command">pwd</mm:parameter>');
+  });
+
   it.each([
     {
       name: "structured poll params",

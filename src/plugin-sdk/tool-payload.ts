@@ -3,6 +3,7 @@ import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
 } from "../../packages/tool-call-repair/src/index.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
 /** Plugin-facing plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -34,9 +35,17 @@ export function parseStandalonePlainTextToolCallBlocks(
   return parseStandaloneRepairToolCallBlocks(text, options);
 }
 
-/** Removes full-line standalone plain-text tool call blocks from visible text. */
+/**
+ * Removes full-line standalone plain-text tool call blocks from visible text.
+ *
+ * Code-aware by default: a complete invoke block inside a Markdown code fence or
+ * inline span is an example, not a #97750 degraded tool-call leak, so it is left
+ * intact. Plugin callers (e.g. the Discord reply-safety path) get this guard for
+ * free by computing the regions here rather than threading a predicate.
+ */
 export function stripPlainTextToolCallBlocks(text: string): string {
-  return stripRepairToolCallBlocks(text);
+  const codeRegions = findCodeRegions(text);
+  return stripRepairToolCallBlocks(text, (offset) => isInsideCode(offset, codeRegions));
 }
 
 type ToolPayloadTextBlock = {

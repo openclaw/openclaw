@@ -601,4 +601,72 @@ describe("stripPlainTextToolCallBlocks", () => {
 
     expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
+
+  it("preserves a fenced multiline namespaced invoke example", () => {
+    // A complete multiline invoke inside a Markdown fence is documentation, not
+    // a #97750 degraded leak. The public wrapper is code-aware by default, so it
+    // must leave fenced examples untouched.
+    const raw = [
+      "The attribute dialect looks like:",
+      "```",
+      '<mm:invoke name="exec">',
+      '<mm:parameter name="command">',
+      "pwd",
+      "</mm:parameter>",
+      "</mm:invoke>",
+      "```",
+      "done",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves a fenced multiline plain invoke example", () => {
+    const raw = [
+      "Example:",
+      "```",
+      '<invoke name="read">',
+      '<parameter name="path">src/index.ts</parameter>',
+      "</invoke>",
+      "```",
+      "done",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves an inline-code invoke example on its own line", () => {
+    const raw = [
+      "Use this:",
+      '`<invoke name="exec"><parameter name="command">ls</parameter></invoke>`',
+      "done",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("still strips an unfenced standalone invoke block while preserving its fenced sibling", () => {
+    const raw = [
+      "```",
+      '<invoke name="exec">',
+      '<parameter name="command">pwd</parameter>',
+      "</invoke>",
+      "```",
+      '<invoke name="exec">',
+      '<parameter name="command">pwd</parameter>',
+      "</invoke>",
+      "after",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(
+      [
+        "```",
+        '<invoke name="exec">',
+        '<parameter name="command">pwd</parameter>',
+        "</invoke>",
+        "```",
+        "after",
+      ].join("\n"),
+    );
+  });
 });

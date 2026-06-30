@@ -233,6 +233,38 @@ describe("stripInternalRuntimeScaffolding", () => {
     ).toBe("Before\nAfter");
   });
 
+  it("preserves a fenced multiline invoke example before outbound delivery", () => {
+    // The outbound sanitizer is code-aware, so a complete invoke inside a
+    // Markdown fence is an example, not a leaked call, and must survive.
+    const raw = [
+      "Here is the dialect:",
+      "```",
+      '<mm:invoke name="exec">',
+      '<mm:parameter name="command">',
+      "pwd",
+      "</mm:parameter>",
+      "</mm:invoke>",
+      "```",
+      "After",
+    ].join("\n");
+
+    expect(stripInternalRuntimeScaffolding(raw)).toBe(raw);
+  });
+
+  it("still strips an unfenced standalone leaked invoke block", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "Before",
+          '<mm:invoke name="exec">',
+          '<mm:parameter name="command">pwd</mm:parameter>',
+          "</mm:invoke>",
+          "After",
+        ].join("\n"),
+      ),
+    ).toBe("Before\nAfter");
+  });
+
   it("removes stray standalone marker lines", () => {
     expect(
       stripInternalRuntimeScaffolding(
