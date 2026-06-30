@@ -16,6 +16,9 @@ const CODEX_LOGIN_PROVIDER = "openai";
 const CODEX_LOGIN_METHOD = "device-code";
 const CODEX_LOGIN_FLOW_TTL_MS = 15 * 60_000;
 const CODEX_LOGIN_PROVIDER_ALIASES = new Set(["codex", "openai", "openai-codex"]);
+const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
+const PUBLIC_CHAT_TYPES = new Set(["channel", "forum", "group", "public", "supergroup", "topic"]);
+const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "internal", "web"]);
 
 type CodexLoginFlowRecord = {
   expiresAt: number;
@@ -40,6 +43,87 @@ function resolveCodexLoginProvider(rawProvider: string | undefined): string | nu
     return CODEX_LOGIN_PROVIDER;
   }
   return CODEX_LOGIN_PROVIDER_ALIASES.has(normalized) ? CODEX_LOGIN_PROVIDER : null;
+}
+
+function hasConfiguredCommandOwners(params: HandleCommandsParams): boolean {
+  const owners = params.cfg.commands?.ownerAllowFrom;
+  return Array.isArray(owners) && owners.some((owner) => normalizeOptionalString(String(owner)));
+}
+
+function hasInternalAdminScope(params: HandleCommandsParams): boolean {
+  return (
+    Array.isArray(params.ctx.GatewayClientScopes) &&
+    params.ctx.GatewayClientScopes.includes("operator.admin")
+  );
+}
+
+function canStartCodexLogin(params: HandleCommandsParams): boolean {
+  return (
+    params.command.isAuthorizedSender &&
+    params.command.senderIsOwner &&
+    (hasConfiguredCommandOwners(params) || hasInternalAdminScope(params))
+  );
+}
+
+function normalizeSurface(value: unknown): string {
+  return normalizeLowercaseStringOrEmpty(String(value ?? "")).replace(/_/gu, "-");
+}
+
+function hasPrivateTarget(value: unknown): boolean {
+  const normalized = normalizeSurface(value);
+  return /^(?:direct|dm|im|private|user):/u.test(normalized);
+}
+
+function hasPublicTarget(value: unknown): boolean {
+  const normalized = normalizeSurface(value);
+  return /^(?:channel|forum|group|guild|public|room|topic):/u.test(normalized);
+}
+
+function isPrivateLoginContext(params: HandleCommandsParams): boolean {
+  const surface = normalizeSurface(
+    params.command.channel || params.command.surface || params.ctx.Surface,
+  );
+  if (WEB_LOGIN_SURFACES.has(surface)) {
+    return true;
+  }
+  if (params.isGroup) {
+    return false;
+  }
+  const chatType = normalizeSurface(params.ctx.ChatType);
+  if (PRIVATE_CHAT_TYPES.has(chatType)) {
+    return true;
+  }
+  if (PUBLIC_CHAT_TYPES.has(chatType)) {
+    return false;
+  }
+  const targets = [
+    params.ctx.OriginatingTo,
+    params.ctx.To,
+    params.command.to,
+    params.command.from,
+    params.ctx.From,
+  ];
+  if (targets.some(hasPrivateTarget)) {
+    return true;
+  }
+  if (targets.some(hasPublicTarget)) {
+    return false;
+  }
+  return false;
+}
+
+function resolveProviderScopedProfileId(
+  authProfileOverride: string | undefined,
+  provider: string,
+): string | undefined {
+  const profileId = normalizeOptionalString(authProfileOverride);
+  if (!profileId) {
+    return undefined;
+  }
+  const providerPrefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+  return normalizeLowercaseStringOrEmpty(profileId).startsWith(providerPrefix)
+    ? profileId
+    : undefined;
 }
 
 function keyPart(value: unknown, fallback: string): string {
@@ -109,18 +193,11 @@ function buildLoginPrompter(params: {
   };
 }
 
-function buildFinalReply(params: { emittedMessages: string[]; status: string }): ReplyPayload {
-  const prefix = params.emittedMessages.map((message) => message.trim()).filter(Boolean);
-  return {
-    text: [...prefix, params.status].join("\n\n"),
-  };
+function buildFinalReply(status: string): ReplyPayload {
+  return { text: status };
 }
 
-async function emitLoginMessage(
-  params: HandleCommandsParams,
-  emittedMessages: string[],
-  text: string,
-): Promise<void> {
+async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) {
     return;
@@ -129,13 +206,14 @@ async function emitLoginMessage(
     await params.opts.onBlockReply({ text: trimmed });
     return;
   }
-  emittedMessages.push(trimmed);
+  throw new Error("Channel /login requires immediate block delivery for device codes.");
 }
 
 async function runChannelCodexLogin(params: {
   commandParams: HandleCommandsParams;
   provider: string;
   agentId: string;
+  profileId?: string;
   runLoginFlow?: RunLoginFlow;
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
@@ -150,8 +228,12 @@ async function runChannelCodexLogin(params: {
   if (activeFlow) {
     activeCodexLoginFlows.delete(flowKey);
   }
+  if (!params.commandParams.opts?.onBlockReply) {
+    return {
+      text: "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
+    };
+  }
 
-  const emittedMessages: string[] = [];
   const flowRecord = { expiresAt: now + CODEX_LOGIN_FLOW_TTL_MS };
   activeCodexLoginFlows.set(flowKey, flowRecord);
   try {
@@ -159,24 +241,20 @@ async function runChannelCodexLogin(params: {
       provider: params.provider,
       method: CODEX_LOGIN_METHOD,
       agent: params.agentId,
+      ...(params.profileId ? { profileId: params.profileId } : {}),
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
       prompter: buildLoginPrompter({
-        sendMessage: async (text) =>
-          await emitLoginMessage(params.commandParams, emittedMessages, text),
+        sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
       }),
       isRemote: true,
       openUrl: async () => {},
     });
-    return buildFinalReply({
-      emittedMessages,
-      status: "Codex login complete. Try your request again now.",
-    });
+    return buildFinalReply("Codex login complete. Try your request again now.");
   } catch {
-    return buildFinalReply({
-      emittedMessages,
-      status: "Codex login did not complete. Send `/login codex` to request a new code.",
-    });
+    return buildFinalReply(
+      "Codex login did not complete. Send `/login codex` to request a new code.",
+    );
   } finally {
     if (activeCodexLoginFlows.get(flowKey) === flowRecord) {
       activeCodexLoginFlows.delete(flowKey);
@@ -193,10 +271,12 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     return null;
   }
 
-  if (!params.command.isAuthorizedSender || !params.command.senderIsOwner) {
+  if (!canStartCodexLogin(params)) {
     return {
       shouldContinue: false,
-      reply: { text: "Only an OpenClaw owner/admin can start Codex login from this channel." },
+      reply: {
+        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+      },
     };
   }
 
@@ -217,11 +297,20 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
       },
     };
   }
+  if (!isPrivateLoginContext(params)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "Codex login codes are only sent in a private chat or Web UI session. Open a private chat with OpenClaw and send `/login codex` there.",
+      },
+    };
+  }
 
   const reply = await runChannelCodexLogin({
     commandParams: params,
     provider,
     agentId,
+    profileId: resolveProviderScopedProfileId(params.sessionEntry?.authProfileOverride, provider),
   });
   return { shouldContinue: false, reply };
 };

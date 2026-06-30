@@ -22,13 +22,14 @@ function buildLoginParams(
     ctx?: Partial<HandleCommandsParams["ctx"]>;
     opts?: HandleCommandsParams["opts"];
     sessionKey?: string;
+    sessionEntry?: HandleCommandsParams["sessionEntry"];
     agentId?: string;
   } = {},
 ): HandleCommandsParams {
   const params = buildCommandTestParams(
     commandBody,
     {
-      commands: { text: true },
+      commands: { text: true, ownerAllowFrom: ["owner"] },
       channels: { slack: { allowFrom: ["owner"] } },
       session: { mainKey: "main" },
     } as OpenClawConfig,
@@ -36,8 +37,9 @@ function buildLoginParams(
       Provider: "slack",
       Surface: "slack",
       OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+      OriginatingTo: "direct:owner",
       AccountId: "workspace-a",
+      ChatType: "direct",
       MessageThreadId: "thread-1",
       ...overrides.ctx,
     },
@@ -54,10 +56,13 @@ function buildLoginParams(
     senderIsOwner: true,
     isAuthorizedSender: true,
     from: "slack:owner",
-    to: "channel:C123",
+    to: "direct:owner",
     ...overrides.command,
   };
   params.opts = overrides.opts;
+  if (overrides.sessionEntry !== undefined) {
+    params.sessionEntry = overrides.sessionEntry;
+  }
   return params;
 }
 
@@ -75,6 +80,10 @@ function mockSuccessfulLoginFlow(): void {
   });
 }
 
+function blockReplyOpts(): NonNullable<HandleCommandsParams["opts"]> {
+  return { onBlockReply: vi.fn(async () => {}) };
+}
+
 describe("handleLoginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,6 +93,7 @@ describe("handleLoginCommand", () => {
   it("registers /login as a built-in command handler", () => {
     expect(buildBuiltinChatCommands().find((entry) => entry.key === "login")).toMatchObject({
       nativeName: "login",
+      nativeProviders: ["telegram"],
       textAliases: ["/login"],
       scope: "both",
     });
@@ -130,12 +140,13 @@ describe("handleLoginCommand", () => {
             Provider: surface,
             Surface: surface,
             OriginatingChannel: surface,
-            OriginatingTo: `${surface}:conversation-1`,
+            OriginatingTo: "direct:conversation-1",
+            ChatType: "direct",
           },
           command: {
             channel: surface,
             channelId: surface,
-            to: `${surface}:conversation-1`,
+            to: "direct:conversation-1",
           },
           opts: { onBlockReply },
         }),
@@ -151,13 +162,91 @@ describe("handleLoginCommand", () => {
     },
   );
 
-  it("falls back to returning the pairing message when no block dispatcher is available", async () => {
+  it("rejects dispatcher-less contexts before starting device-code polling", async () => {
     mockSuccessfulLoginFlow();
 
     const result = await handleLoginCommand(buildLoginParams("/login openai"), true);
 
-    expect(result?.reply?.text).toContain("ABCD-EFGH");
-    expect(result?.reply?.text).toContain("Codex login complete");
+    expect(result?.reply?.text).toBe(
+      "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
+    );
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects grouped shared-channel login before emitting a device code", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    mockSuccessfulLoginFlow();
+    const params = buildLoginParams("/login codex", {
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        ChatType: "channel",
+      },
+      command: {
+        channel: "slack",
+        to: "channel:C123",
+      },
+      opts: { onBlockReply },
+    });
+    params.isGroup = true;
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Codex login codes are only sent in a private chat or Web UI session. Open a private chat with OpenClaw and send `/login codex` there.",
+      },
+    });
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("reauths the active OpenAI profile when the session is pinned", async () => {
+    mockSuccessfulLoginFlow();
+
+    await handleLoginCommand(
+      buildLoginParams("/login codex", {
+        opts: blockReplyOpts(),
+        sessionEntry: {
+          authProfileOverride: "openai:owner@example.com",
+          sessionId: "sess-owner",
+          updatedAt: 1,
+        },
+      }),
+      true,
+    );
+
+    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        profileId: "openai:owner@example.com",
+      }),
+    );
+  });
+
+  it("does not pass unrelated pinned profiles into OpenAI login", async () => {
+    mockSuccessfulLoginFlow();
+
+    await handleLoginCommand(
+      buildLoginParams("/login codex", {
+        opts: blockReplyOpts(),
+        sessionEntry: {
+          authProfileOverride: "anthropic:owner@example.com",
+          sessionId: "sess-owner",
+          updatedAt: 1,
+        },
+      }),
+      true,
+    );
+
+    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        profileId: expect.any(String),
+      }),
+    );
   });
 
   it("dedupes an active flow for the same channel thread and provider", async () => {
@@ -174,8 +263,14 @@ describe("handleLoginCommand", () => {
         }),
     );
 
-    const first = handleLoginCommand(buildLoginParams("/login codex"), true);
-    const second = await handleLoginCommand(buildLoginParams("/login codex"), true);
+    const first = handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    const second = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
 
     expect(second).toEqual({
       shouldContinue: false,
@@ -197,7 +292,32 @@ describe("handleLoginCommand", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "Only an OpenClaw owner/admin can start Codex login from this channel." },
+      reply: {
+        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+      },
+    });
+    expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects allowlisted senders when no command owner is configured", async () => {
+    const params = buildLoginParams("/login codex", {
+      command: {
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+      },
+    });
+    params.cfg = {
+      ...params.cfg,
+      commands: { text: true },
+    } as OpenClawConfig;
+
+    const result = await handleLoginCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+      },
     });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
@@ -205,7 +325,10 @@ describe("handleLoginCommand", () => {
   it("normalizes Codex login aliases to the OpenAI provider", async () => {
     mockSuccessfulLoginFlow();
 
-    await handleLoginCommand(buildLoginParams("/login openai-codex"), true);
+    await handleLoginCommand(
+      buildLoginParams("/login openai-codex", { opts: blockReplyOpts() }),
+      true,
+    );
 
     expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai" }),

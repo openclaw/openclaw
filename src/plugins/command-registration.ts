@@ -40,7 +40,6 @@ function getReservedCommands(): Set<string> {
     "status",
     "diagnostics",
     "codex",
-    "login",
     "whoami",
     "context",
     "btw",

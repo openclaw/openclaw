@@ -948,6 +948,18 @@ function formatForwardedExternalRunFailureText(message: string): string {
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
 }
 
+function supportsChannelCodexLogin(provider: string | null | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  const normalizedProvider = provider.trim().toLowerCase().replace(/_/gu, "-");
+  return (
+    normalizedProvider === "openai" ||
+    normalizedProvider === "codex" ||
+    normalizedProvider === "openai-codex"
+  );
+}
+
 function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
@@ -978,14 +990,21 @@ function buildExternalRunFailureReply(
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
+    const channelLoginHint = supportsCodexLogin
+      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "Re-auth";
+    const retryLoginHint = supportsCodexLogin
+      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "re-auth";
     if (oauthRefreshFailure.reason) {
       return {
-        text: `⚠️ Model login expired on the gateway${providerText}. Send \`/login codex\` in this chat or channel to pair a new Codex login, or re-auth with \`${loginCommand}\` in a terminal, then try again.`,
+        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with \`${loginCommand}\` in a terminal, then try again.`,
         isGenericRunnerFailure: false,
       };
     }
     return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send \`/login codex\` in this chat or channel, or re-auth with \`${loginCommand}\` in a terminal.`,
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with \`${loginCommand}\` in a terminal.`,
       isGenericRunnerFailure: false,
     };
   }

@@ -202,7 +202,7 @@ plugins.
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
-    | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login in the current chat or channel. Owner/admin only |
+    | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
     | `/model [name\|#\|status]` | Show or set the model |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
@@ -474,6 +474,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
+    - **`/login codex`** sends device pairing codes only through private chat or Web UI response paths. Telegram group/topic invocations ask the owner to DM the bot instead.
     - **`/stop`** targets the active chat session to abort the current run.
 
   </Accordion>

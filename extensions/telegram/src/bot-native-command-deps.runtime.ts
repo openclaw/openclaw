@@ -4,7 +4,7 @@ import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+} from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
@@ -45,7 +45,8 @@ export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
     return getPluginCommandSpecs;
   },
   async runModelsAuthLoginFlow(opts) {
-    const { runModelsAuthLoginFlow } = await import("openclaw/plugin-sdk/provider-auth-runtime");
+    const { runModelsAuthLoginFlow } =
+      await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
     return await runModelsAuthLoginFlow(opts);
   },
   async editMessageTelegram(...args) {
