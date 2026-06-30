@@ -302,7 +302,9 @@ export const registerTelegramHandlers = ({
   };
   const resolveTelegramDebounceEntryMs = (entry: TelegramDebounceEntry): number =>
     entry.debounceLane === "forward"
-      ? Math.max(debounceMs, FORWARD_BURST_MIN_DEBOUNCE_MS)
+      ? debounceMs > 0
+        ? debounceMs
+        : FORWARD_BURST_MIN_DEBOUNCE_MS
       : debounceMs;
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
     const text = getTelegramTextParts(entry.msg).text;

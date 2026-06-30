@@ -1065,7 +1065,7 @@ describe("createTelegramBot", () => {
   });
 
   it("lets stop cancel pending same-chat forwarded debounce using configured inbound timing", async () => {
-    const DEBOUNCE_MS = 4321;
+    const DEBOUNCE_MS = 42;
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -1154,6 +1154,69 @@ describe("createTelegramBot", () => {
       expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
         "reply:forwarded first",
       );
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("uses the forwarded debounce fallback when inbound debounce is disabled", async () => {
+    const FORWARDED_FALLBACK_MS = 80;
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: 0,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    replySpy.mockImplementation(async (ctx: MsgContext) => {
+      return { text: `reply:${ctx.Body ?? ""}` };
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: { update_id: 123 },
+          message: {
+            chat: { id: 7, type: "private" },
+            text: "forwarded first",
+            date: 1736380800,
+            message_id: 123,
+            from: { id: 42, first_name: "Ada" },
+            forward_date: 1736380700,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        },
+        finalHandler: messageHandler,
+      });
+
+      const fallbackDebounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === FORWARDED_FALLBACK_MS,
+      );
+      expect(fallbackDebounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[fallbackDebounceCallIndex]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+      expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
     }
