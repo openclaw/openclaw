@@ -81,7 +81,7 @@
         "@types/express": "5.0.6",
         "@types/hosted-git-info": "3.0.5",
         "@types/markdown-it": "14.1.2",
-        "@types/node": "25.9.1",
+        "@types/node": "^25.9.1",
         "@types/proper-lockfile": "4.1.4",
         "@types/ws": "8.18.1",
         "@typescript/native-preview": "7.0.0-dev.20260527.2",

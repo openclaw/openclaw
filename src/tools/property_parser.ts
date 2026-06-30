@@ -30,3 +30,7 @@ export async function parsePropertyQuery(query: string) {
     hasView: viewMatch ? "True" : null,
   };
 }
+
+const query = process.argv[2];
+const result = await parsePropertyQuery(query);
+console.log(JSON.stringify(result));
