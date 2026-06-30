@@ -14,6 +14,7 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -921,6 +922,26 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
+function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  switch (normalized) {
+    case "server_error":
+    case "upstream_error":
+      return "server_error";
+    case "overloaded_error":
+      return "overloaded";
+    default:
+      return null;
+  }
+}
+
+function classifyFailoverClassificationFromErrorType(
+  raw: string | undefined,
+): FailoverClassification | null {
+  const reason = classifyFailoverReasonFromErrorType(raw);
+  return reason ? toReasonClassification(reason) : null;
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1180,9 +1201,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
           errorType: signal.errorType,
         })
       : null;
+  const messageOrDetailClassification = mergeMessageAndDetailClassification(
+    messageClassification,
+    detailClassification,
+  );
+  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
-    : mergeMessageAndDetailClassification(messageClassification, detailClassification);
+    : (messageOrDetailClassification ?? errorTypeClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -1540,7 +1566,7 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
 export function isRawAssistantErrorPassthrough(params: {
@@ -1560,7 +1586,7 @@ export function isRawAssistantErrorPassthrough(params: {
     friendlyError.startsWith("HTTP ");
   return (
     friendlyError === rawError ||
-    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
   );
@@ -1657,8 +1683,17 @@ function isStructuredServerErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
+  const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (parsedType === "server_error" || parsedType === "upstream_error") {
+    return true;
+  }
   const value = normalizeLowercaseStringOrEmpty(raw);
-  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+  return (
+    value.includes('"type":"server_error"') ||
+    value.includes('"code":"server_error"') ||
+    value.includes('"type":"upstream_error"') ||
+    value.includes('"code":"upstream_error"')
+  );
 }
 
 export function parseImageDimensionError(raw: string): {

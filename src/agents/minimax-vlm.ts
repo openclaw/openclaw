@@ -54,7 +54,10 @@ function coerceApiHost(params: {
   try {
     const url = new URL(raw);
     return url.origin;
-  } catch {}
+  } catch {
+    // Bare hosts are retried with https:// below; malformed absolute URLs fall
+    // back to provider defaults instead of sending requests to invalid endpoints.
+  }
 
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;

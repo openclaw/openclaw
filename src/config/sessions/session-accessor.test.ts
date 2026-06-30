@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applyRestartRecoveryLifecycle,
@@ -531,6 +532,60 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionId: "second-session",
     });
+  });
+
+  it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "first-session",
+        skillsSnapshot: {
+          prompt: `<available_skills>${"x".repeat(600)}</available_skills>`,
+          skills: [{ name: "skill-0" }],
+          version: 1,
+        },
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const cachedStore = loadSessionStore(storePath, { clone: false });
+    const cachedEntry = cachedStore[sessionKey];
+    if (!cachedEntry?.skillsSnapshot) {
+      throw new Error("expected cached skills snapshot");
+    }
+    cachedEntry.skillsSnapshot = {
+      ...cachedEntry.skillsSnapshot,
+      resolvedSkills: [
+        createCanonicalFixtureSkill({
+          baseDir: "/skills/skill-0",
+          description: "skill-0 description",
+          filePath: "/skills/skill-0/SKILL.md",
+          name: "skill-0",
+          source: `# skill-0\n\n${"x".repeat(3000)}`,
+        }),
+      ],
+    };
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        sessionId: "next-session",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("next-session");
   });
 
   it("can borrow cached entry objects for read-only hot paths", async () => {
@@ -1358,7 +1413,7 @@ describe("session accessor file-backed seam", () => {
     ).toHaveLength(1);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
@@ -1410,6 +1465,16 @@ describe("session accessor file-backed seam", () => {
     expect(result.replayedMessages).toBe(2);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
     expect(fs.existsSync(previousTranscript)).toBe(false);
+    const archivedPreviousTranscripts = fs
+      .readdirSync(tempDir)
+      .filter((file) => file.startsWith("previous-session.jsonl.reset."));
+    expect(archivedPreviousTranscripts).toHaveLength(1);
+    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
+    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
+      '"id":"previous-session"',
+    );
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
     expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
   });
 

@@ -448,6 +448,7 @@ function createMockReplyOperation(): {
       sessionId: "session",
       abortSignal: new AbortController().signal,
       resetTriggered: false,
+      terminalRecovery: false,
       phase: "running",
       result: null,
       setPhase: vi.fn(),
@@ -461,6 +462,7 @@ function createMockReplyOperation(): {
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
+      markTerminalRecovery: vi.fn(),
     },
   };
 }
