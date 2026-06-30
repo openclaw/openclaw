@@ -394,3 +394,43 @@ export async function getCallHistoryFromStore(
   }
   return [];
 }
+
+/** Look up a single call record by callId from the persisted store.
+ *  Returns the most recent snapshot when multiple persisted records exist
+ *  for the same call (e.g., state transitions persisted over time). */
+export function getCallFromStore(storePath: string, callId: CallId): CallRecord | undefined {
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) return undefined;
+  try {
+    const events = readCallRecordEvents(stores);
+    // readCallRecordEvents returns oldest-first; find the latest match (#96727).
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].callId === callId) return events[i];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Look up a single call record by provider call ID from the persisted store.
+ *  Returns the most recent snapshot when multiple persisted records exist
+ *  for the same providerCallId. */
+export function getCallByProviderCallIdFromStore(
+  storePath: string,
+  providerCallId: string,
+): CallRecord | undefined {
+  const stores = tryCreateCallRecordStateStores(storePath);
+  if (!stores) return undefined;
+  try {
+    const events = readCallRecordEvents(stores);
+    // readCallRecordEvents returns oldest-first; find the latest match (#96727).
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].providerCallId === providerCallId) return events[i];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+

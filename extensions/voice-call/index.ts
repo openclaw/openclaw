@@ -23,7 +23,10 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
-import type { CallRecord } from "./src/types.js";
+import {
+  getCallByProviderCallIdFromStore,
+  getCallFromStore,
+} from "./src/manager/store.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
@@ -231,33 +234,6 @@ function asParamRecord(params: unknown): Record<string, unknown> {
 
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
-}
-
-type VoiceCallStatus = Pick<
-  CallRecord,
-  | "callId"
-  | "providerCallId"
-  | "provider"
-  | "direction"
-  | "state"
-  | "startedAt"
-  | "answeredAt"
-  | "endedAt"
-  | "endReason"
->;
-
-function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
-  return {
-    callId: call.callId,
-    ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),
-    provider: call.provider,
-    direction: call.direction,
-    state: call.state,
-    startedAt: call.startedAt,
-    ...(call.answeredAt !== undefined ? { answeredAt: call.answeredAt } : {}),
-    ...(call.endedAt !== undefined ? { endedAt: call.endedAt } : {}),
-    ...(call.endReason !== undefined ? { endReason: call.endReason } : {}),
-  };
 }
 
 const VOICE_CALL_RUNTIME_KEY = Symbol.for("openclaw.voice-call.runtime");
@@ -651,18 +627,21 @@ export default definePluginEntry({
             normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
           const rt = await ensureRuntime();
           if (!raw) {
-            respond(true, {
-              found: true,
-              calls: rt.manager.getActiveCalls().map(toVoiceCallStatus),
-            });
+            respond(true, { found: true, calls: rt.manager.getActiveCalls() });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          // Active-only lookup first; fall back to persisted store for
+          // completed/evicted calls (#96586).
+          const call =
+            rt.manager.getCall(raw) ||
+            rt.manager.getCallByProviderCallId(raw) ||
+            getCallFromStore(rt.manager.callStorePath, raw) ||
+            getCallByProviderCallIdFromStore(rt.manager.callStorePath, raw);
           if (!call) {
             respond(true, { found: false });
             return;
           }
-          respond(true, { found: true, call: toVoiceCallStatus(call) });
+          respond(true, { found: true, call });
         } catch (err) {
           sendError(respond, err);
         }
@@ -794,11 +773,15 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
+                // Active-only lookup first; fall back to persisted store for
+                // completed/evicted calls so get_status can return transcripts
+                // after the call ends (#96586).
                 const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
-                return json(
-                  call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
-                );
+                  rt.manager.getCall(callId) ||
+                  rt.manager.getCallByProviderCallId(callId) ||
+                  getCallFromStore(rt.manager.callStorePath, callId) ||
+                  getCallByProviderCallIdFromStore(rt.manager.callStorePath, callId);
+                return json(call ? { found: true, call } : { found: false });
               }
             }
           }
@@ -809,8 +792,13 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
-            return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
+            // Active-only first, then persisted store fallback (#96586).
+            const call =
+              rt.manager.getCall(sid) ||
+              rt.manager.getCallByProviderCallId(sid) ||
+              getCallFromStore(rt.manager.callStorePath, sid) ||
+              getCallByProviderCallIdFromStore(rt.manager.callStorePath, sid);
+            return json(call ? { found: true, call } : { found: false });
           }
 
           const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;

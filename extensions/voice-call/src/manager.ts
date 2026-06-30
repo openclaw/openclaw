@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
+import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
@@ -82,7 +82,6 @@ export class CallManager {
   private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
-  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
@@ -104,14 +103,14 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
-  constructor(
-    config: VoiceCallConfig,
-    storePath?: string,
-    coreSession?: VoiceCallCoreSessionConfig,
-  ) {
+  constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
-    this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
+  }
+
+  /** Read-only store path for status lookups that need persistence fallback. */
+  get callStorePath(): string {
+    return this.storePath;
   }
 
   /**
@@ -359,7 +358,6 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
-      coreSession: this.coreSession,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
@@ -431,7 +429,10 @@ export class CallManager {
   }
 
   /**
-   * Get an active call by ID.
+   * Get an active call by ID. This is an active-only lookup for live
+   * webhook, realtime, and auto-response paths. Use the standalone
+   * {@link getCallFromStore} for read-only status queries that need
+   * to reach completed/evicted calls (#96586).
    */
   getCall(callId: CallId): CallRecord | undefined {
     return this.activeCalls.get(callId);
@@ -439,6 +440,8 @@ export class CallManager {
 
   /**
    * Get an active call by provider call ID (e.g., Twilio CallSid).
+   * Active-only; use {@link getCallByProviderCallIdFromStore} for
+   * read-only status lookups.
    */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
     return getCallByProviderCallIdFromMaps({

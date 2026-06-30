@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
-import { getCallHistoryFromStore } from "./manager/store.js";
+import {
+  getCallByProviderCallIdFromStore,
+  getCallFromStore,
+  getCallHistoryFromStore,
+} from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
@@ -733,7 +737,13 @@ export function registerVoiceCallCli(params: {
       }
       const rt = await ensureRuntime();
       if (options.callId) {
-        const call = rt.manager.getCall(options.callId);
+        // Active-only first, then persisted store fallback so completed/evicted
+        // calls are still reachable via CLI status (#96586).
+        const call =
+          rt.manager.getCall(options.callId) ||
+          rt.manager.getCallByProviderCallId(options.callId) ||
+          getCallFromStore(rt.manager.callStorePath, options.callId) ||
+          getCallByProviderCallIdFromStore(rt.manager.callStorePath, options.callId);
         writeStdoutJson(call ?? { found: false });
         return;
       }
