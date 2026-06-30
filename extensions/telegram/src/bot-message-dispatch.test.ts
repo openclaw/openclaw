@@ -3734,6 +3734,59 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).not.toHaveBeenCalled();
   });
 
+  it("normalizes isReasoning block payloads through normalization", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "<think>block reasoning</think>answer text", isReasoning: true },
+          { kind: "block", assistantMessageIndex: 0 },
+        );
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    // Block reasoning payload should survive normalizeDeliveryPayload and reach
+    // the lane coordinator. The reasoning lane should receive the stripped thinking text.
+    expect(reasoningDraftStream.update).toHaveBeenCalled();
+  });
+
+  it("strips isReasoning from final payloads during normalization", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "<think>final reasoning</think>final answer", isReasoning: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+        } as unknown as Parameters<typeof dispatchWithContext>[0]["context"]["ctxPayload"],
+      }),
+    });
+
+    // isReasoning should be stripped by normalizeDeliveryPayload before the shared
+    // outbound planner processes it, preventing shouldSuppressReasoningPayload from
+    // dropping the payload. The delivered payload must not carry isReasoning.
+    const delivered = expectDeliveredReply(0, {
+      text: "Thinking\n\n_final reasoning_\n\nfinal answer",
+    });
+    expect(delivered).not.toHaveProperty("isReasoning");
+  });
+
   it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
     const { answerDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

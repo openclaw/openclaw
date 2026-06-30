@@ -1602,9 +1602,16 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
-      const keepReasoningLane = payload.isReasoning === true && durableReasoningPayloadsEnabled;
-      const payloadForPlan = keepReasoningLane ? { ...payload } : payload;
-      if (keepReasoningLane) {
+      // Always strip isReasoning before passing to the shared outbound planner.
+      // shouldSuppressReasoningPayload returns true for isReasoning payloads,
+      // which would cause createOutboundPayloadPlanEntry to return null and
+      // silently drop the payload before Telegram's lane coordinator can
+      // process it. The dispatch-level guard (reasoningPayloadsEnabled)
+      // handles the actual filtering decision — normalization should be
+      // transparent and let the lane coordinator decide.
+      const hasReasoningFlag = payload.isReasoning === true;
+      const payloadForPlan = hasReasoningFlag ? { ...payload } : payload;
+      if (hasReasoningFlag) {
         delete payloadForPlan.isReasoning;
       }
       const normalized = projectOutboundPayloadPlanForDelivery(
