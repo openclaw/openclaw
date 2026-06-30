@@ -1,8 +1,19 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
+import { password, text } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
 
+vi.mock("@clack/prompts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@clack/prompts")>();
+  return {
+    ...actual,
+    password: vi.fn(),
+    text: vi.fn(),
+  };
+});
+
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
 });
 
@@ -47,5 +58,44 @@ describe("createClackPrompter", () => {
     await prompter.plain?.('{"ok":true}');
 
     expect(write).toHaveBeenCalledWith('{"ok":true}\n');
+  });
+
+  it("normalizes nullish clack text results to empty strings", async () => {
+    vi.mocked(text).mockResolvedValueOnce(undefined as never);
+    const validate = vi.fn((value: string) => (value ? undefined : "Required"));
+    const prompter = createClackPrompter();
+
+    const result = await prompter.text({
+      message: "Name",
+      validate,
+    });
+
+    const validateText = vi.mocked(text).mock.calls[0]?.[0].validate;
+    expect(validateText?.(undefined)).toBe("Required");
+    expect(validate).toHaveBeenCalledWith("");
+    expect(result).toBe("");
+  });
+
+  it("preserves string clack text results without trimming", async () => {
+    vi.mocked(text).mockResolvedValueOnce("  Alice  ");
+    const prompter = createClackPrompter();
+
+    const result = await prompter.text({
+      message: "Name",
+    });
+
+    expect(result).toBe("  Alice  ");
+  });
+
+  it("normalizes non-string clack password results to empty strings", async () => {
+    vi.mocked(password).mockResolvedValueOnce({ cancelled: true } as never);
+    const prompter = createClackPrompter();
+
+    const result = await prompter.text({
+      message: "Token",
+      sensitive: true,
+    });
+
+    expect(result).toBe("");
   });
 });
