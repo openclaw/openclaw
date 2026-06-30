@@ -2120,6 +2120,7 @@ export async function runReplyAgent(params: {
       blockReplyPipeline?.didStreamSubstantiveReply() && !blockReplyPipeline.isAborted(),
     );
     const hasDirectBlockProgress = (directlySentBlockKeys?.size ?? 0) > 0;
+    const hasSubstantiveDirectBlockReply = (directlySentBlockPayloads?.length ?? 0) > 0;
     const hasRunToolActivity = (runResult.meta?.toolSummary?.calls ?? 0) > 0;
     const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
       blockReplyPipeline,
@@ -2173,7 +2174,9 @@ export async function runReplyAgent(params: {
         // and target-only records are activity, not proof that the current
         // route/thread received the final/status answer.
         hasVisibleReplyEvidence:
-          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence || hasSubstantiveBlockReply,
+          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence ||
+          hasSubstantiveBlockReply ||
+          hasSubstantiveDirectBlockReply,
         hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
         hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
       });

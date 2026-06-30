@@ -1881,7 +1881,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("surfaces the Discord message-tool-only guard after tool progress without final delivery", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.({ text: "🛠️ tool progress is visible", isStatusNotice: true } as ReplyPayload);
+      await params.onBlockReply?.({
+        text: "🛠️ tool progress is visible",
+        isStatusNotice: true,
+      } as ReplyPayload);
       return { payloads: [], meta: { stopReason: "stop" } };
     });
 
@@ -2147,7 +2150,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("does not surface the Discord message-tool-only guard after tool progress followed by message.send evidence", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.({ text: "🛠️ tool progress is visible", isStatusNotice: true } as ReplyPayload);
+      await params.onBlockReply?.({
+        text: "🛠️ tool progress is visible",
+        isStatusNotice: true,
+      } as ReplyPayload);
       return {
         payloads: [{ text: "NO_REPLY" }],
         messagingToolSentTexts: ["visible result"],
@@ -2330,10 +2336,85 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it("does not synthesize a Discord guard after a substantive direct block delivery", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "directly delivered answer",
+        mediaUrls: ["https://example.com/result.png"],
+      });
+      return { payloads: [{ text: "NO_REPLY" }], meta: { stopReason: "stop" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:chan",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "directly delivered answer",
+        mediaUrls: ["https://example.com/result.png"],
+      }),
+    );
+  });
+
+  it("still synthesizes a Discord guard after a status-only direct block delivery", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "upload in progress",
+        mediaUrls: ["https://example.com/progress.png"],
+        isStatusNotice: true,
+      } as ReplyPayload);
+      return { payloads: [{ text: "NO_REPLY" }], meta: { stopReason: "stop" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:chan",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+  });
+
   it("surfaces the Discord guard for non-message-tool-only tool progress followed by an empty final", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.({ text: "🛠️ process still running", isStatusNotice: true } as ReplyPayload);
+      await params.onBlockReply?.({
+        text: "🛠️ process still running",
+        isStatusNotice: true,
+      } as ReplyPayload);
       return { payloads: [], meta: { stopReason: "stop" } };
     });
 
@@ -2521,7 +2602,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const payload = Array.isArray(res) ? res[0] : res;
 
     expect(payload?.text).toBe("automatic final result");
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBeUndefined();
+    expect(
+      getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression,
+    ).toBeUndefined();
   });
 
   it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {
