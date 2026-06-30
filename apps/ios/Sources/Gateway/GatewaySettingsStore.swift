@@ -181,8 +181,7 @@ enum GatewaySettingsStore {
             host: String,
             port: Int,
             useTLS: Bool,
-            stableID: String,
-            allowTailscalePlaintext: Bool)
+            stableID: String)
         case discovered(stableID: String, useTLS: Bool)
     }
 
@@ -198,7 +197,6 @@ enum GatewaySettingsStore {
         var useTLS: Bool
         var host: String?
         var port: Int?
-        var allowTailscalePlaintext: Bool?
     }
 
     static func loadTalkProviderApiKey(provider: String) -> String? {
@@ -216,16 +214,14 @@ enum GatewaySettingsStore {
         host: String,
         port: Int,
         useTLS: Bool,
-        stableID: String,
-        allowTailscalePlaintext: Bool = false)
+        stableID: String)
     {
         let payload = LastGatewayConnectionData(
             kind: .manual,
             stableID: stableID,
             useTLS: useTLS,
             host: host,
-            port: port,
-            allowTailscalePlaintext: allowTailscalePlaintext)
+            port: port)
         self.saveLastGatewayConnectionData(payload)
     }
 
@@ -259,8 +255,7 @@ enum GatewaySettingsStore {
             host: host,
             port: port,
             useTLS: stored.useTLS,
-            stableID: stableID,
-            allowTailscalePlaintext: stored.allowTailscalePlaintext == true)
+            stableID: stableID)
     }
 
     static func clearLastGatewayConnection(defaults: UserDefaults = .standard) {
@@ -312,8 +307,7 @@ enum GatewaySettingsStore {
             stableID: stableID,
             useTLS: useTLS,
             host: kind == .manual ? host : nil,
-            port: kind == .manual ? port : nil,
-            allowTailscalePlaintext: false)
+            port: kind == .manual ? port : nil)
         guard self.saveLastGatewayConnectionData(payload) else { return }
         self.removeLastGatewayDefaults(defaults)
     }

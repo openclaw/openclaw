@@ -299,7 +299,7 @@ struct OnboardingConnectionPathStep: View {
                 self.pathRow(
                     icon: "lock.icloud",
                     title: "Tailscale",
-                    detail: "Enter a Tailscale URL, MagicDNS name, or 100.x IP.",
+                    detail: "Enter a Tailscale Serve URL or MagicDNS name.",
                     color: OpenClawBrand.accent,
                     action: self.onChooseTailscaleOrRemote)
                 Divider().padding(.leading, 56)

@@ -303,8 +303,6 @@ final class GatewayConnectionController {
         port: Int,
         useTLS: Bool,
         authOverride: ManualAuthOverride? = nil,
-        allowTailscalePlaintext: Bool = false,
-        hasTailnetIPv4: Bool = GatewayConnectionController.hasTailnetIPv4(),
         forceReconnect: Bool = false) async
     {
         self.requestLocalNetworkAccess(reason: "connect_manual")
@@ -319,16 +317,7 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password)
-        if allowTailscalePlaintext, self.isTailscaleCgnatHost(host), !hasTailnetIPv4 {
-            self.appModel?.gatewayStatusText =
-                "Tailscale is off on this iPhone. Turn it on, then retry this gateway."
-            return
-        }
-        let resolvedUseTLS = self.resolveManualUseTLS(
-            host: host,
-            useTLS: useTLS,
-            allowTailscalePlaintext: allowTailscalePlaintext,
-            hasTailnetIPv4: hasTailnetIPv4)
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
@@ -369,8 +358,7 @@ final class GatewayConnectionController {
             host: host,
             port: resolvedPort,
             useTLS: resolvedUseTLS && tlsParams != nil,
-            stableID: stableID,
-            allowTailscalePlaintext: allowTailscalePlaintext)
+            stableID: stableID)
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -386,12 +374,11 @@ final class GatewayConnectionController {
         self.requestLocalNetworkAccess(reason: "connect_last_known")
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
-        case let .manual(host, port, useTLS, _, allowTailscalePlaintext):
+        case let .manual(host, port, useTLS, _):
             await self.connectManual(
                 host: host,
                 port: port,
                 useTLS: useTLS,
-                allowTailscalePlaintext: allowTailscalePlaintext,
                 forceReconnect: true)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
@@ -650,11 +637,8 @@ final class GatewayConnectionController {
         password: String?) -> Bool
     {
         switch lastKnown {
-        case let .manual(host, port, useTLS, stableID, allowTailscalePlaintext):
-            let resolvedUseTLS = self.resolveManualUseTLS(
-                host: host,
-                useTLS: useTLS,
-                allowTailscalePlaintext: allowTailscalePlaintext)
+        case let .manual(host, port, useTLS, stableID):
+            let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
             let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
             let tlsParams = stored.map { fp in
                 GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -665,9 +649,8 @@ final class GatewayConnectionController {
                 useTLS: resolvedUseTLS && tlsParams != nil)
             else { return false }
 
-            let canAutoconnectPlaintextTailnet = allowTailscalePlaintext && !resolvedUseTLS
-            // Security: autoconnect only to TLS-pinned gateways or validated Tailscale IP routes.
-            guard tlsParams != nil || canAutoconnectPlaintextTailnet else { return false }
+            // Security: saved manual autoconnect only resumes TLS-pinned gateways.
+            guard tlsParams != nil else { return false }
 
             self.didAutoConnect = true
             self.startAutoConnect(
@@ -856,61 +839,19 @@ extension GatewayConnectionController {
 
     private func resolveManualUseTLS(
         host: String,
-        useTLS: Bool,
-        allowTailscalePlaintext: Bool = false,
-        hasTailnetIPv4: Bool = GatewayConnectionController.hasTailnetIPv4()) -> Bool
+        useTLS: Bool) -> Bool
     {
-        useTLS || self.shouldRequireTLS(
-            host: host,
-            allowTailscalePlaintext: allowTailscalePlaintext,
-            hasTailnetIPv4: hasTailnetIPv4)
+        useTLS || self.shouldRequireTLS(host: host)
     }
 
-    private func shouldRequireTLS(
-        host: String,
-        allowTailscalePlaintext: Bool = false,
-        hasTailnetIPv4: Bool = GatewayConnectionController.hasTailnetIPv4()) -> Bool
-    {
-        if allowTailscalePlaintext, hasTailnetIPv4, self.isTailscaleCgnatHost(host) {
-            return false
-        }
-        return !LoopbackHost.isLocalNetworkHost(host)
+    private func shouldRequireTLS(host: String) -> Bool {
+        !LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
-    private func isTailscaleCgnatHost(_ host: String) -> Bool {
-        var normalized = host
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if normalized.hasSuffix(".") {
-            normalized.removeLast()
-        }
-        guard let ipv4 = IPv4Address(normalized) else { return false }
-        let bytes = Array(ipv4.rawValue)
-        return bytes[0] == 100 && (64...127).contains(Int(bytes[1]))
-    }
-
-    private static func hasTailnetIPv4() -> Bool {
-        NetworkInterfaceIPv4.addresses().contains { entry in
-            guard self.isLikelyTailnetInterface(entry.name) else { return false }
-            let parts = entry.ip.split(separator: ".")
-            guard parts.count == 4 else { return false }
-            let octets = parts.compactMap { Int($0) }
-            guard octets.count == 4 else { return false }
-            return octets[0] == 100 && (64...127).contains(octets[1])
-        }
-    }
-
-    private static func isLikelyTailnetInterface(_ name: String) -> Bool {
-        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // 100.64/10 is shared CGNAT space; require a VPN/tailnet-style interface before allowing ws://.
-        return normalized.hasPrefix("utun") || normalized.contains("tailscale")
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -1168,15 +1109,11 @@ extension GatewayConnectionController {
 
     func _test_resolveManualUseTLS(
         host: String,
-        useTLS: Bool,
-        allowTailscalePlaintext: Bool = false,
-        hasTailnetIPv4: Bool = false) -> Bool
+        useTLS: Bool) -> Bool
     {
         self.resolveManualUseTLS(
             host: host,
-            useTLS: useTLS,
-            allowTailscalePlaintext: allowTailscalePlaintext,
-            hasTailnetIPv4: hasTailnetIPv4)
+            useTLS: useTLS)
     }
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {

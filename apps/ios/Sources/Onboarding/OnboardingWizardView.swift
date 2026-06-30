@@ -73,7 +73,6 @@ struct OnboardingWizardView: View {
     @State private var tailscaleGatewayInput: String = ""
     @State private var tailscaleGatewayStatus: String?
     @State private var showTailscaleAdvancedSettings: Bool = false
-    @State private var validatedTailscalePlaintextLink: GatewayConnectDeepLink?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
     private static let tailscaleAppStoreURL = URL(string: "https://apps.apple.com/app/tailscale/id1470499037")!
 
@@ -511,7 +510,7 @@ struct OnboardingWizardView: View {
     private var remoteDomainConnectSection: some View {
         Group {
             Section {
-                TextField("openclaw-gateway.tailnet.ts.net or 100.x IP", text: self.$tailscaleGatewayInput)
+                TextField("openclaw-gateway.tailnet.ts.net", text: self.$tailscaleGatewayInput)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -544,8 +543,7 @@ struct OnboardingWizardView: View {
             } footer: {
                 Text(
                     """
-                    Enter the Gateway's MagicDNS name or Tailscale IP. MagicDNS uses Tailscale Serve over HTTPS; \
-                    raw 100.x IPs use the tailnet-protected gateway port.
+                    Enter the Gateway's MagicDNS name or Tailscale Serve URL. Secure Tailscale connections use HTTPS.
                     """)
             }
 
@@ -837,7 +835,6 @@ extension OnboardingWizardView {
     }
 
     private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
-        self.validatedTailscalePlaintextLink = nil
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualPortText = String(link.port)
@@ -1020,7 +1017,7 @@ extension OnboardingWizardView {
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let last = GatewaySettingsStore.loadLastGatewayConnection() {
                 switch last {
-                case let .manual(host, port, useTLS, _, _):
+                case let .manual(host, port, useTLS, _):
                     self.manualHost = host
                     self.manualPort = port
                     self.manualTLS = useTLS
@@ -1151,7 +1148,6 @@ extension OnboardingWizardView {
     private func connectManual(
         connectionID: String = "manual",
         routeLabel: String? = nil,
-        allowTailscalePlaintext: Bool = false,
         link: GatewayConnectDeepLink? = nil) async
     {
         let host = (link?.host ?? self.manualHost).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1172,8 +1168,7 @@ extension OnboardingWizardView {
             host: host,
             port: port,
             useTLS: useTLS,
-            authOverride: authOverride,
-            allowTailscalePlaintext: allowTailscalePlaintext)
+            authOverride: authOverride)
     }
 
     private func connectTailscaleGateway() async {
@@ -1182,25 +1177,24 @@ extension OnboardingWizardView {
         GatewayDiagnostics.log("onboarding tailscale connect tapped input=\(Self.redactedGatewayInput(rawInput))")
         guard !rawInput.isEmpty else {
             GatewayDiagnostics.log("onboarding tailscale connect blocked reason=empty-input")
-            self.tailscaleGatewayStatus = "Enter a Tailscale URL, MagicDNS name, or 100.x address."
+            self.tailscaleGatewayStatus = "Enter a Tailscale Serve URL or MagicDNS name."
             return
         }
         guard let link = self.tailscaleGatewayLink(from: rawInput) else {
             GatewayDiagnostics.log("onboarding tailscale connect blocked reason=parse-failed")
-            self.tailscaleGatewayStatus = "Use a secure Tailscale URL, MagicDNS host, or 100.x address."
+            self.tailscaleGatewayStatus = "Use a secure Tailscale Serve URL or MagicDNS host."
             return
         }
-        let allowTailscalePlaintext = Self.isTailscaleIPAddress(link.host)
-        if allowTailscalePlaintext, !Self.hasTailnetIPv4() {
-            GatewayDiagnostics.log("onboarding tailscale connect blocked reason=tailnet-off host=\(link.host)")
-            self.tailscaleGatewayStatus = "Tailscale is off on this iPhone. Turn it on, then retry here."
-            self.connectMessage = "Waiting for Tailscale."
-            self.statusLine = "Turn on Tailscale to reach \(link.host)."
+        if Self.isTailscaleIPAddress(link.host) {
+            GatewayDiagnostics.log("onboarding tailscale connect blocked reason=raw-ip-requires-secure-serve")
+            self.tailscaleGatewayStatus =
+                "Use this gateway's MagicDNS or Tailscale Serve URL. Raw 100.x IPs are not supported on iOS."
+            self.connectMessage = "Tailscale Serve URL required."
+            self.statusLine = "Use a secure Tailscale URL for first-time setup."
             return
         }
 
         self.applyGatewayLink(link)
-        self.validatedTailscalePlaintextLink = allowTailscalePlaintext ? link : nil
         self.connectingGatewayID = "tailscale"
         self.connectMessage = "Checking Tailscale route…"
         self.statusLine = "Checking \(link.host):\(link.port)…"
@@ -1214,11 +1208,8 @@ extension OnboardingWizardView {
 
         guard reachable else {
             GatewayDiagnostics.log("onboarding tailscale probe failed host=\(link.host) port=\(link.port)")
-            let serveHint = link.port == 18789 && Self.isTailscaleIPAddress(link.host)
-                ? " If your Gateway uses Tailscale Serve, enter its MagicDNS URL instead of the 100.x address."
-                : ""
             self.tailscaleGatewayStatus =
-                "Can't reach \(link.host):\(link.port). Turn on Tailscale on this iPhone, then retry.\(serveHint)"
+                "Can't reach \(link.host):\(link.port). Turn on Tailscale on this iPhone, then retry."
             self.connectMessage = "Tailscale route not reachable."
             self.statusLine = "Waiting for Tailscale to reach \(link.host)."
             return
@@ -1230,7 +1221,6 @@ extension OnboardingWizardView {
         await self.connectManual(
             connectionID: "tailscale",
             routeLabel: "Tailscale",
-            allowTailscalePlaintext: allowTailscalePlaintext,
             link: link)
     }
 
@@ -1260,7 +1250,7 @@ extension OnboardingWizardView {
     }
 
     private static func defaultTailscaleTLS(for host: String) -> Bool {
-        !self.isTailscaleIPAddress(host)
+        true
     }
 
     private static func isTailscaleServeHost(_ host: String) -> Bool {
@@ -1273,18 +1263,6 @@ extension OnboardingWizardView {
         let octets = parts.compactMap { Int($0) }
         guard octets.count == 4 else { return false }
         return octets[0] == 100 && (64...127).contains(octets[1])
-    }
-
-    private static func hasTailnetIPv4() -> Bool {
-        NetworkInterfaceIPv4.addresses().contains { entry in
-            self.isLikelyTailnetInterface(entry.name) && self.isTailscaleIPAddress(entry.ip)
-        }
-    }
-
-    private static func isLikelyTailnetInterface(_ name: String) -> Bool {
-        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // 100.64/10 is shared CGNAT space; require a VPN/tailnet-style interface before allowing ws://.
-        return normalized.hasPrefix("utun") || normalized.contains("tailscale")
     }
 
     private static func redactedGatewayInput(_ input: String) -> String {
@@ -1307,21 +1285,6 @@ extension OnboardingWizardView {
             self.statusLine = "Retrying last connection…"
         }
         defer { self.connectingGatewayID = nil }
-        if let tailscaleLink = self.validatedTailscalePlaintextLink {
-            guard Self.hasTailnetIPv4() else {
-                self.tailscaleGatewayStatus = "Tailscale is off on this iPhone. Turn it on, then retry here."
-                self.connectMessage = "Waiting for Tailscale."
-                self.statusLine = "Turn on Tailscale to reach \(tailscaleLink.host)."
-                return
-            }
-            self.applyGatewayLink(tailscaleLink)
-            self.validatedTailscalePlaintextLink = tailscaleLink
-            await self.connectManual(
-                connectionID: silent ? "retry-auto" : "retry",
-                routeLabel: "Tailscale",
-                allowTailscalePlaintext: true)
-            return
-        }
         await self.gatewayController.connectLastKnown()
     }
 

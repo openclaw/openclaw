@@ -133,51 +133,15 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "fd00::1", useTLS: false) == false)
     }
 
-    @Test @MainActor func explicitTailscalePathAllowsCgnatPlaintext() {
+    @Test @MainActor func manualConnectionsKeepTailscaleCgnatSecure() {
         let controller = self.makeController()
 
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.64.0.9",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == false)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.104.129.13",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == false)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.127.255.255",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == false)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.128.0.9",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == true)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "gateway.ts.net",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == true)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.104.129.13",
-                useTLS: true,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: true) == true)
-        #expect(
-            controller._test_resolveManualUseTLS(
-                host: "100.104.129.13",
-                useTLS: false,
-                allowTailscalePlaintext: true,
-                hasTailnetIPv4: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.64.0.9", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.104.129.13", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.127.255.255", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.128.0.9", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "100.104.129.13", useTLS: true) == true)
     }
 
     @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() {

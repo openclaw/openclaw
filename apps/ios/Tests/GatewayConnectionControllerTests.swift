@@ -394,22 +394,7 @@ import UIKit
             host: "gateway.example.com",
             port: 443,
             useTLS: true,
-            stableID: "manual|gateway.example.com|443",
-            allowTailscalePlaintext: false))
-    }
-
-    @Test @MainActor func tailscalePlaintextManualConnectionDoesNotSwitchToTLSWhenTailnetIsOff() async {
-        let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-        await controller.connectManual(
-            host: "100.104.129.13",
-            port: 18789,
-            useTLS: false,
-            allowTailscalePlaintext: true,
-            hasTailnetIPv4: false)
-
-        #expect(appModel.gatewayStatusText == "Tailscale is off on this iPhone. Turn it on, then retry this gateway.")
+            stableID: "manual|gateway.example.com|443"))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
