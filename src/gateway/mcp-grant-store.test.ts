@@ -9,7 +9,7 @@ import {
   sweepExpiredAttachGrants,
 } from "./mcp-grant-store.js";
 
-const T0 = 1_000_000_000_000; // fixed epoch for deterministic TTL tests
+const T0 = 1_000_000_000_000;
 
 describe("mcp-grant-store", () => {
   beforeEach(() => resetAttachGrantsForTest());
@@ -30,7 +30,6 @@ describe("mcp-grant-store", () => {
     const g = mintAttachGrant({ sessionKey: "agent:main:x", ttlMs: 1_000, nowMs: T0 });
     expect(resolveAttachGrant(g.token, T0)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 999)?.sessionKey).toBe("agent:main:x");
-    // at/after expiry → undefined, and the lookup self-sweeps it
     expect(resolveAttachGrant(g.token, T0 + 1_000)).toBeUndefined();
     expect(resolveAttachGrant(g.token, T0 + 1_001)).toBeUndefined();
     expect(attachGrantStoreSize()).toBe(0);
@@ -43,7 +42,6 @@ describe("mcp-grant-store", () => {
   it("binds the sessionKey to the grant (token carries scope identity, not the caller)", () => {
     const a = mintAttachGrant({ sessionKey: "agent:main:telegram:1", nowMs: T0 });
     const b = mintAttachGrant({ sessionKey: "agent:main:telegram:2", nowMs: T0 });
-    // each token resolves only to its own bound session — the basis for header-spoof resistance
     expect(resolveAttachGrant(a.token, T0)?.sessionKey).toBe("agent:main:telegram:1");
     expect(resolveAttachGrant(b.token, T0)?.sessionKey).toBe("agent:main:telegram:2");
     expect(a.token).not.toBe(b.token);
@@ -83,8 +81,6 @@ describe("mcp-grant-store", () => {
   it("evicts expired grants on mint, bounding the store (no accumulation)", () => {
     mintAttachGrant({ sessionKey: "s", ttlMs: 1_000, nowMs: T0 });
     expect(attachGrantStoreSize()).toBe(1);
-    // a later mint past the first's expiry sweeps the stale entry before inserting — without
-    // sweep-on-mint the never-looked-up grant would linger and the size would be 2.
     mintAttachGrant({ sessionKey: "s", ttlMs: 1_000, nowMs: T0 + 5_000 });
     expect(attachGrantStoreSize()).toBe(1);
   });
