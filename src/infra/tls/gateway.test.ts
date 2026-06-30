@@ -203,8 +203,9 @@ describe("loadGatewayTlsRuntime", () => {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const execFileAsync = promisify(execFile);
-      try {
-        await execFileAsync("openssl", [
+      const opensslPath = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+      if (opensslPath) {
+        await execFileAsync(opensslPath, [
           "req",
           "-x509",
           "-newkey",
@@ -220,8 +221,8 @@ describe("loadGatewayTlsRuntime", () => {
           "-subj",
           "/CN=openclaw-gateway",
         ]);
-      } catch {
-        return; // skip: openssl not available in this environment
+      } else {
+        return; // skip: openssl not available
       }
 
       const fs = await import("node:fs/promises");
