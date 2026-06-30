@@ -742,6 +742,7 @@ export const tr: TranslationMap = {
       uptime: "Çalışma Süresi",
       tickInterval: "Tick Aralığı",
       lastChannelsRefresh: "Son Kanal Yenilemesi",
+      configPath: "Config Path",
       channelsHint:
         "WhatsApp, Telegram, Discord, Signal veya iMessage bağlamak için Kanallar'ı kullanın.",
     },

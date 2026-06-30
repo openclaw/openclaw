@@ -738,6 +738,7 @@ export const ar: TranslationMap = {
       uptime: "مدة التشغيل",
       tickInterval: "فاصل النبض",
       lastChannelsRefresh: "آخر تحديث للقنوات",
+      configPath: "Config Path",
       channelsHint: "استخدم القنوات لربط WhatsApp أو Telegram أو Discord أو Signal أو iMessage.",
     },
     stats: {

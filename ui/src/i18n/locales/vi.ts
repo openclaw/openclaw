@@ -740,6 +740,7 @@ export const vi: TranslationMap = {
       uptime: "Thời gian hoạt động",
       tickInterval: "Khoảng thời gian tick",
       lastChannelsRefresh: "Lần làm mới kênh gần nhất",
+      configPath: "Config Path",
       channelsHint: "Dùng Kênh để liên kết WhatsApp, Telegram, Discord, Signal hoặc iMessage.",
     },
     stats: {

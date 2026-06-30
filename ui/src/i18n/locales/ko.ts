@@ -737,6 +737,7 @@ export const ko: TranslationMap = {
       uptime: "가동 시간",
       tickInterval: "틱 간격",
       lastChannelsRefresh: "마지막 채널 새로고침",
+      configPath: "Config Path",
       channelsHint:
         "Channels를 사용해 WhatsApp, Telegram, Discord, Signal 또는 iMessage를 연결하세요.",
     },

@@ -740,6 +740,7 @@ export const id: TranslationMap = {
       uptime: "Waktu aktif",
       tickInterval: "Interval Tick",
       lastChannelsRefresh: "Refresh Saluran Terakhir",
+      configPath: "Config Path",
       channelsHint:
         "Gunakan Channels untuk menautkan WhatsApp, Telegram, Discord, Signal, atau iMessage.",
     },

@@ -744,6 +744,7 @@ export const ja_JP: TranslationMap = {
       uptime: "稼働時間",
       tickInterval: "Tick 間隔",
       lastChannelsRefresh: "前回の Channels 更新",
+      configPath: "Config Path",
       channelsHint:
         "Channels を使用して、WhatsApp、Telegram、Discord、Signal、または iMessage をリンクします。",
     },

@@ -741,6 +741,7 @@ export const pl: TranslationMap = {
       uptime: "Czas działania",
       tickInterval: "Interwał tyknięcia",
       lastChannelsRefresh: "Ostatnie odświeżenie kanałów",
+      configPath: "Config Path",
       channelsHint: "Użyj Kanałów, aby połączyć WhatsApp, Telegram, Discord, Signal lub iMessage.",
     },
     stats: {
