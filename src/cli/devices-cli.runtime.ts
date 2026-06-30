@@ -111,6 +111,7 @@ type ApprovePairingGatewayContext = {
 type PendingNodeApprovalNotice = {
   node: NodeListNode;
   command: string;
+  connectionReminder: string | null;
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
@@ -166,6 +167,16 @@ function buildNodeApproveCommand(opts: DevicesRpcOpts, requestId: string): strin
     args.push("--timeout", timeout);
   }
   return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function formatNodeConnectionFlagReminder(opts: DevicesRpcOpts): string | null {
+  const flags = [
+    normalizeOptionalString(opts.url) ? "--url" : null,
+    normalizeOptionalString(opts.token) ? "--token" : null,
+  ].filter((flag) => flag !== null);
+  return flags.length > 0
+    ? `Reuse the same connection option${flags.length === 1 ? "" : "s"} when rerunning: ${flags.join(", ")}.`
+    : null;
 }
 
 async function tryReadPendingNodeApprovals(opts: DevicesRpcOpts): Promise<NodeListNode[]> {
@@ -235,7 +246,15 @@ function buildPendingNodeApprovalNoticesForOpts(
 ): PendingNodeApprovalNotice[] {
   return nodes.flatMap((node) => {
     const requestId = normalizeOptionalString(node.pendingRequestId);
-    return requestId ? [{ node, command: buildNodeApproveCommand(opts, requestId) }] : [];
+    return requestId
+      ? [
+          {
+            node,
+            command: buildNodeApproveCommand(opts, requestId),
+            connectionReminder: formatNodeConnectionFlagReminder(opts),
+          },
+        ]
+      : [];
   });
 }
 
@@ -244,7 +263,11 @@ function formatNodeApprovalNotice(notice: PendingNodeApprovalNotice): string {
   const label = sanitizeForLog(
     normalizeOptionalString(notice.node.displayName) ?? notice.node.nodeId,
   );
-  return `Node ${action} pending for ${label}. Run ${sanitizeForLog(notice.command)}`;
+  const lines = [`Node ${action} pending for ${label}. Run ${sanitizeForLog(notice.command)}`];
+  if (notice.connectionReminder) {
+    lines.push(notice.connectionReminder);
+  }
+  return lines.join("\n");
 }
 
 async function findPairedDevicePendingNodeApprovalNotices(

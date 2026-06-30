@@ -527,7 +527,13 @@ describe("devices cli approve", () => {
         ],
       });
 
-    await runDevicesApprove(["192.168.0.202"]);
+    await runDevicesApprove([
+      "192.168.0.202",
+      "--url",
+      "ws://gateway-user:url-secret@gateway.example:18789/openclaw?cluster=qa",
+      "--token",
+      "secret-token",
+    ]);
 
     expectGatewayCall(2, { method: "node.list" });
     expectGatewayCall(3, { method: "device.pair.list" });
@@ -535,6 +541,13 @@ describe("devices cli approve", () => {
     expect(errorOutput).toContain("unknown requestId");
     expect(errorOutput).toContain("Node reapproval pending for Colin's S25");
     expect(errorOutput).toContain("openclaw nodes approve node-req-1");
+    expect(errorOutput).toContain(
+      "Reuse the same connection options when rerunning: --url, --token.",
+    );
+    expect(errorOutput).not.toContain("gateway-user");
+    expect(errorOutput).not.toContain("url-secret");
+    expect(errorOutput).not.toContain("gateway.example");
+    expect(errorOutput).not.toContain("secret-token");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
@@ -1415,12 +1428,23 @@ describe("devices cli list", () => {
         ],
       });
 
-    await runDevicesCommand(["list"]);
+    await runDevicesCommand([
+      "list",
+      "--url",
+      "ws://gateway-user:url-secret@gateway.example:18789/openclaw?cluster=qa",
+      "--token",
+      "secret-token",
+    ]);
 
     expectGatewayCall(1, { method: "node.list" });
     const output = readRuntimeOutput();
     expect(output).toContain("Node reapproval pending for Colin's S25");
     expect(output).toContain("openclaw nodes approve node-req-1");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway-user");
+    expect(output).not.toContain("url-secret");
+    expect(output).not.toContain("gateway.example");
+    expect(output).not.toContain("secret-token");
   });
 
   it("does not show upgrade context for key-mismatched pending requests", async () => {
