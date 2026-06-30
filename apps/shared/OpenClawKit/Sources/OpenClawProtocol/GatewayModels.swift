@@ -193,19 +193,22 @@ public struct ResponseFrame: Codable, Sendable {
     public let ok: Bool
     public let payload: AnyCodable?
     public let error: ErrorShape?
+    public let meta: [String: AnyCodable]?
 
     public init(
         type: String,
         id: String,
         ok: Bool,
         payload: AnyCodable?,
-        error: ErrorShape?)
+        error: ErrorShape?,
+        meta: [String: AnyCodable]?)
     {
         self.type = type
         self.id = id
         self.ok = ok
         self.payload = payload
         self.error = error
+        self.meta = meta
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -214,6 +217,7 @@ public struct ResponseFrame: Codable, Sendable {
         case ok
         case payload
         case error
+        case meta
     }
 }
 
