@@ -139,6 +139,36 @@ describe("Anthropic provider", () => {
     expect(config.authToken).toBeNull();
   });
 
+  it("wires buildGuardedModelFetch into the GitHub Copilot Anthropic SDK fetch option", async () => {
+    const model = makeAnthropicModel({
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+    });
+    const context = {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    } satisfies Context;
+
+    streamAnthropic(model, context, {
+      apiKey: "copilot-token",
+    });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+      baseURL?: string;
+      fetch?: unknown;
+    };
+
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe("copilot-token");
+    expect(config.baseURL).toBe("https://api.githubcopilot.com");
+    // Bounded-read contract: a custom `fetch` is wired through the SDK. The
+    // cap itself is exercised in `provider-transport-fetch.test.ts`; this
+    // test only proves the cap is in scope on this code path.
+    expect(typeof config.fetch).toBe("function");
+  });
+
   it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
