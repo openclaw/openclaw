@@ -150,6 +150,91 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "Hello there\nActual message")
     }
 
+    @Test func keepsCleanedTextPlainWhenInputHasSingleLineBreaks() {
+        let markdown = """
+        First line
+        Second line
+
+        Third paragraph
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "First line\nSecond line\n\nThird paragraph")
+    }
+
+    @Test func addsMarkdownHardBreaksForVisibleSingleLineRendering() {
+        let markdown = """
+        First line
+        Second line
+
+        Third paragraph
+        """
+
+        let result = ChatMarkdownPreprocessor.markdownForRendering(markdown)
+
+        #expect(result == "First line  \nSecond line\n\nThird paragraph")
+    }
+
+    @Test func leavesFencedCodeLineBreaksUntouchedForRendering() {
+        let markdown = """
+        Before
+        ```text
+        alpha
+        beta
+        ```
+        After
+        """
+
+        let result = ChatMarkdownPreprocessor.markdownForRendering(markdown)
+
+        #expect(result == "Before\n```text\nalpha\nbeta\n```\nAfter")
+    }
+
+    @Test func leavesTildeFencedCodeLineBreaksUntouchedForRendering() {
+        let markdown = """
+        Before
+        ~~~text
+        alpha
+        beta
+        ~~~
+        After
+        """
+
+        let result = ChatMarkdownPreprocessor.markdownForRendering(markdown)
+
+        #expect(result == "Before\n~~~text\nalpha\nbeta\n~~~\nAfter")
+    }
+
+    @Test func leavesIndentedCodeLineBreaksUntouchedForRendering() {
+        let markdown = """
+        Before
+            alpha
+            beta
+        After
+        """
+
+        let result = ChatMarkdownPreprocessor.markdownForRendering(markdown)
+
+        #expect(result == "Before  \n    alpha\n    beta\nAfter")
+    }
+
+    @Test func leavesShorterFenceTextInsideLongFenceUntouchedForRendering() {
+        let markdown = """
+        Before
+        ````markdown
+        ```text
+        alpha
+        ```
+        ````
+        After
+        """
+
+        let result = ChatMarkdownPreprocessor.markdownForRendering(markdown)
+
+        #expect(result == "Before\n````markdown\n```text\nalpha\n```\n````\nAfter")
+    }
+
     @Test func stripsTrailingUntrustedContextSuffix() {
         let markdown = """
         User-visible text

@@ -40,10 +40,11 @@ struct ChatMarkdownRenderer: View {
     }
 
     private func markdownText(_ markdown: String) -> AttributedString {
+        let renderMarkdown = ChatMarkdownPreprocessor.markdownForRendering(markdown)
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
+        return (try? AttributedString(markdown: renderMarkdown, options: options)) ?? AttributedString(markdown)
     }
 }
 

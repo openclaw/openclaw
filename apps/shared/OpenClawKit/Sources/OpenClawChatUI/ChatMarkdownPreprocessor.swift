@@ -220,4 +220,58 @@ enum ChatMarkdownPreprocessor {
         output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    static func markdownForRendering(_ raw: String) -> String {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var fenceMarker: Character?
+        var fenceLength = 0
+        var output: [String] = []
+
+        for index in lines.indices {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let next = index + 1 < lines.count ? lines[index + 1] : nil
+            let nextTrimmed = next?.trimmingCharacters(in: .whitespaces) ?? ""
+            if let fence = self.fenceBoundary(in: line) {
+                if let currentMarker = fenceMarker {
+                    if fence.marker == currentMarker, fence.count >= fenceLength, !fence.hasTrailingContent {
+                        fenceMarker = nil
+                        fenceLength = 0
+                    }
+                } else {
+                    fenceMarker = fence.marker
+                    fenceLength = fence.count
+                }
+                output.append(line)
+                continue
+            }
+            if fenceMarker != nil ||
+                line.hasPrefix("    ") ||
+                line.hasPrefix("\t") ||
+                trimmed.isEmpty ||
+                next == nil ||
+                nextTrimmed.isEmpty ||
+                self.fenceBoundary(in: next ?? "") != nil ||
+                line.hasSuffix("  ") ||
+                line.hasSuffix("\\")
+            {
+                output.append(line)
+                continue
+            }
+            output.append("\(line)  ")
+        }
+
+        return output.joined(separator: "\n")
+    }
+
+    private static func fenceBoundary(in line: String) -> (marker: Character, count: Int, hasTrailingContent: Bool)? {
+        let leadingSpaces = line.prefix { $0 == " " }.count
+        guard leadingSpaces < 4, !line.hasPrefix("\t") else { return nil }
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let markerCount = trimmed.prefix { $0 == marker }.count
+        guard markerCount >= 3 else { return nil }
+        let remaining = trimmed.dropFirst(markerCount).trimmingCharacters(in: .whitespaces)
+        return (marker: marker, count: markerCount, hasTrailingContent: !remaining.isEmpty)
+    }
 }
