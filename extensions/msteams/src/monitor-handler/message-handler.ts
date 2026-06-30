@@ -20,6 +20,10 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -248,8 +252,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
 
     log.info("received message", {
-      rawText: rawText.slice(0, 50),
-      text: text.slice(0, 50),
+      rawText: truncateUtf16Safe(rawText, 50),
+      text: truncateUtf16Safe(text, 50),
       attachments: attachments.length,
       attachmentTypes,
       from: from?.id,
@@ -503,7 +507,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const preview = sliceUtf16Safe(rawBody.replace(/\s+/g, " "), 0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
