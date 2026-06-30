@@ -748,6 +748,43 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     );
   });
 
+  it("skips gateway resolution when active target SecretRefs use exec providers", async () => {
+    const { markerPath, config: execConfig } = await createExecProviderConfig(
+      "models/providers/google/api-key",
+    );
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: {
+        ...execConfig,
+        models: {
+          providers: {
+            google: {
+              enabled: true,
+              apiKey: {
+                source: "exec",
+                provider: "default",
+                id: "models/providers/google/api-key",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      commandName: "reply",
+      targetIds: new Set(["models.providers.*.apiKey"]),
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(result.resolvedConfig.models?.providers?.google?.apiKey).toBe("exec-local-key");
+    expect(result.targetStatesByPath["models.providers.google.apiKey"]).toBe("resolved_local");
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          "reply: skipped gateway secrets.resolve because active target SecretRefs use exec providers at models.providers.google.apiKey; resolved command secrets locally.",
+        ),
+      ),
+    ).toBe(true);
+    expect(await markerExists(markerPath)).toBe(true);
+  });
+
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
     const restoreDeps = setGoogleWebSearchTargetDeps();
     const envKey = "WEB_SEARCH_GEMINI_API_KEY_LOCAL_FALLBACK";

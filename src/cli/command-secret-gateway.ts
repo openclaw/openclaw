@@ -350,6 +350,50 @@ function collectConfiguredTargetRefPaths(params: {
   return configuredTargetRefPaths;
 }
 
+function collectActiveConfiguredExecSecretRefPaths(params: {
+  config: OpenClawConfig;
+  targetIds: Set<string>;
+  allowedPaths?: ReadonlySet<string>;
+  forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
+}): string[] {
+  const defaults = params.config.secrets?.defaults;
+  const context = createResolverContext({
+    sourceConfig: params.config,
+    env: process.env,
+  });
+  commandSecretGatewayDeps.collectConfigAssignments({
+    config: structuredClone(params.config),
+    context,
+  });
+  const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
+  const execRefPaths = new Set<string>();
+  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+    params.config,
+    params.targetIds,
+  )) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref?.source !== "exec") {
+      continue;
+    }
+    if (
+      activePaths.has(target.path) ||
+      params.forcedActivePaths?.has(target.path) ||
+      params.optionalActivePaths?.has(target.path)
+    ) {
+      execRefPaths.add(target.path);
+    }
+  }
+  return [...execRefPaths].sort();
+}
+
 function classifyConfiguredTargetRefs(params: {
   config: OpenClawConfig;
   configuredTargetRefPaths: Set<string>;
@@ -935,6 +979,31 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       hadUnresolvedTargets: false,
     };
   }
+  const activeTargetExecSecretRefPaths =
+    resolutionPolicy.allowExecSecretRefs && params.commandName === "reply"
+      ? collectActiveConfiguredExecSecretRefPaths({
+          config: params.config,
+          targetIds: params.targetIds,
+          allowedPaths: params.allowedPaths,
+          forcedActivePaths: params.forcedActivePaths,
+          optionalActivePaths: params.optionalActivePaths,
+        })
+      : [];
+  if (activeTargetExecSecretRefPaths.length > 0) {
+    return await resolveCommandSecretRefsWithoutGateway({
+      config: params.config,
+      commandName: params.commandName,
+      targetIds: params.targetIds,
+      preflightDiagnostics: preflight.diagnostics,
+      mode,
+      allowedPaths: params.allowedPaths,
+      forcedActivePaths: params.forcedActivePaths,
+      optionalActivePaths: params.optionalActivePaths,
+      resolutionPolicy,
+      reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because active target SecretRefs use exec providers at ${activeTargetExecSecretRefPaths.join(", ")}; resolved command secrets locally.`,
+    });
+  }
+
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
     ? []
     : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
