@@ -82,23 +82,22 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    const detectedBundleFormat = detectBundleManifestFormat(installPath);
-    if (detectedBundleFormat || isBundleInstallRecord(record)) {
-      const bundleValidation = validateBundlePayload({ installPath, record });
-      if (bundleValidation) {
-        failures.push({
-          pluginId,
-          installPath,
-          reason: bundleValidation.reason,
-          detail: bundleValidation.detail,
-        });
-      }
-      continue;
-    }
-
     const packageJsonPath = path.join(installPath, "package.json");
     const packageJsonStat = await safeStat(packageJsonPath);
     if (!packageJsonStat?.isFile()) {
+      const detectedBundleFormat = detectBundleManifestFormat(installPath);
+      if (detectedBundleFormat || isBundleInstallRecord(record)) {
+        const bundleValidation = validateBundlePayload({ installPath, record });
+        if (bundleValidation) {
+          failures.push({
+            pluginId,
+            installPath,
+            reason: bundleValidation.reason,
+            detail: bundleValidation.detail,
+          });
+        }
+        continue;
+      }
       failures.push({
         pluginId,
         installPath,

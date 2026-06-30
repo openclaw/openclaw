@@ -273,6 +273,28 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
+  it("keeps native package validation precedence for dual-format roots", async () => {
+    const dir = path.join(tmpRoot, "dual-format");
+    await writePackage(dir, {
+      name: "@openclaw/dual-format",
+      openclaw: { extensions: ["./dist/missing.js"] },
+    });
+    await writeClaudeBundle(dir);
+    const result = await runPluginPayloadSmokeCheck({
+      records: { dual: { source: "marketplace", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "dual",
+        installPath: dir,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: extension entry not found: ./dist/missing.js",
+      },
+    ]);
+  });
+
   it("reports only extension-entry failure for an empty extensions list even if main is missing", async () => {
     const dir = path.join(tmpRoot, "brave-empty");
     await writePackage(dir, {
