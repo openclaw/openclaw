@@ -633,17 +633,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     authProfileId: resolvedCompactionTarget.authProfileId,
   });
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.
-  await ensureSelectedAgentHarnessPlugin({
-    config: params.config,
-    provider,
-    modelId,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-    agentHarnessId: boundHarnessRuntime,
-    agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
-    workspaceDir: resolvedWorkspace,
-  });
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
+  if (runtimeProvider !== provider || selectedHarnessRuntime) {
+    await ensureSelectedAgentHarnessPlugin({
+      config: params.config,
+      provider,
+      modelId,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
+      workspaceDir: resolvedWorkspace,
+    });
+  }
+  const cfgThinkLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
+  let thinkLevel: ThinkLevel = params.thinkLevel ?? cfgThinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);

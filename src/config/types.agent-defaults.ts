@@ -521,7 +521,15 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve target before floor and context-window caps. */
+  /** Id of a registered compaction provider plugin. */
+  provider?: string;
+  /**
+   * Override the thinking level used during compaction summarization.
+   * When set, compaction uses this level instead of the session's current thinking level.
+   * Default: unset (uses session thinking level, typically "off" for embedded runners).
+   */
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
@@ -558,13 +566,7 @@ export type AgentCompactionConfig = {
   /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**
-   * Id of a registered compaction provider plugin.
-   * When set, the provider's summarize() is called instead of
-   * the built-in summarizeInStages(). Falls back to built-in on failure.
-   */
-  provider?: string;
-  /**
-   * Rotate the active session transcript after compaction so the next turn
+   * Rotate the active session JSONL file after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
    * transcript stays archived.
    * Default: false (existing behavior preserved).
