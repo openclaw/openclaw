@@ -221,22 +221,21 @@ function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): bo
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function respondDeletedAgentSessionForKey(params: {
-  sessionKey: string;
-  agentId?: string;
+function respondDeletedAgentSession(params: {
+  cfg: OpenClawConfig;
+  canonicalKey: string;
+  entry?: SessionEntry | null;
+  acpMetadataSessionKey?: string;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
-  const sessionLoadOptions = {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-  };
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(
-    params.sessionKey,
-    sessionLoadOptions,
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
+    params.cfg,
+    params.canonicalKey,
+    params.entry,
+    {
+      acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey,
+    },
   );
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
-    acpMetadataSessionKey: legacyKey ?? canonicalKey,
-  });
   if (deletedAgentId === null) {
     return false;
   }
@@ -249,6 +248,24 @@ function respondDeletedAgentSessionForKey(params: {
     ),
   );
   return true;
+}
+
+function respondDeletedAgentSessionForKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  });
+  return respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+  });
 }
 
 function resolveAllowModelOverrideFromClient(
@@ -1505,11 +1522,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    // Reject orphaned deleted-agent session keys before any side effect (dedupe
-    // reservation, attachment media offload, reset, dispatch), matching the
-    // chat.send / sessions.send invariant. Voice-wake auto-routing below only
-    // retargets to knownAgents, so a post-routing key is never deleted; guarding
-    // the original requestedSessionKey here covers every dispatch path.
+    // Keep deleted-agent rejection ahead of dedupe, media offload, reset, and
+    // dispatch so agent RPC shares the chat.send / sessions.send boundary.
     if (
       requestedSessionKey &&
       respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
@@ -1834,18 +1848,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
-        const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfgLocal, canonicalKey, entry, {
-          acpMetadataSessionKey: legacyKey ?? canonicalKey,
-        });
-        if (deletedAgentId !== null) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Agent "${deletedAgentId}" no longer exists in configuration`,
-            ),
-          );
+        if (
+          respondDeletedAgentSession({
+            cfg: cfgLocal,
+            canonicalKey,
+            entry,
+            acpMetadataSessionKey: legacyKey,
+            respond,
+          })
+        ) {
           return;
         }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
