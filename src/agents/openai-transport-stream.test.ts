@@ -10294,7 +10294,7 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
-  it("does not promote tool calls when provider omits final finish_reason", async () => {
+  it("promotes tool calls when stream completes cleanly without finish_reason", async () => {
     const model = {
       id: "qwen3.6-27b",
       name: "Qwen 3.6 27B",
@@ -10324,7 +10324,138 @@ describe("openai transport stream", () => {
               tool_calls: [
                 {
                   index: 0,
-                  id: "call_unfinished",
+                  id: "call_cleanstream",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+      sawStreamDONE: () => true,
+    });
+
+    expect(output.stopReason).toBe("toolUse");
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it("does not promote native tool calls when stream ends without [DONE] and without finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_nodone",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    // sawStreamDONE defaults to false — connection drop without [DONE]
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    // EOF without [DONE] and without finish_reason → fail-closed
+    expect(output.stopReason).toBe("stop");
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
+  });
+
+  it("strips tool calls when stream has visible text and no finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Let me think about this." },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_with_text",
                   function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
                 },
               ],
@@ -10344,6 +10475,8 @@ describe("openai transport stream", () => {
 
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
+    // Visible text + tool calls without finish_reason is ambiguous;
+    // conservatively strip tool calls.
     expect(output.stopReason).toBe("stop");
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
