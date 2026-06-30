@@ -14,6 +14,7 @@ vi.mock("../../commands/models/auth.js", () => ({
 
 const { handleLoginCommand, testing } = await import("./commands-login.js");
 const { loadCommandHandlers } = await import("./commands-handlers.runtime.js");
+const { handlePluginCommand } = await import("./commands-plugin.js");
 
 function buildLoginParams(
   commandBody: string,
@@ -98,6 +99,13 @@ describe("handleLoginCommand", () => {
       scope: "both",
     });
     expect(loadCommandHandlers()).toContain(handleLoginCommand);
+  });
+
+  it("keeps plugin text commands ahead of built-in /login", () => {
+    const handlers = loadCommandHandlers();
+    expect(handlers.indexOf(handlePluginCommand)).toBeLessThan(
+      handlers.indexOf(handleLoginCommand),
+    );
   });
 
   it("starts Codex device-code login and emits the pairing code through block delivery", async () => {

@@ -45,8 +45,8 @@ import { handleWhoamiCommand } from "./commands-whoami.js";
 
 export function loadCommandHandlers(): CommandHandler[] {
   return [
-    handleLoginCommand,
     handlePluginCommand,
+    handleLoginCommand,
     handleDockCommand,
     handleBtwCommand,
     handleBashCommand,
