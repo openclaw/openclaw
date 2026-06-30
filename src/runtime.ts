@@ -95,11 +95,18 @@ export const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
+export class ExitError extends Error {
+  constructor(public code: number) {
+    super(`exit ${code}`);
+    this.name = "ExitError";
+  }
+}
+
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new ExitError(code);
     },
   };
 }
