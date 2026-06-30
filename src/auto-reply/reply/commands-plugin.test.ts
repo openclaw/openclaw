@@ -1,16 +1,15 @@
 // Tests plugin command dispatch and plugin-scoped command aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearPluginCommands, pluginCommands } from "../../plugins/command-registry-state.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const matchPluginCommandMock = vi.hoisted(() => vi.fn());
 const executePluginCommandMock = vi.hoisted(() => vi.fn());
-const hasRegisteredPluginCommandInvocationMock = vi.hoisted(() => vi.fn());
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/commands.js", () => ({
-  hasRegisteredPluginCommandInvocation: hasRegisteredPluginCommandInvocationMock,
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
 }));
@@ -65,7 +64,7 @@ function mockDevicePairRuntimeSlashPlugin() {
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hasRegisteredPluginCommandInvocationMock.mockReturnValue(false);
+    clearPluginCommands();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
   });
 
@@ -340,7 +339,12 @@ describe("handlePluginCommand", () => {
 
   it("does not fail closed when a registered runtime command declines the message", async () => {
     matchPluginCommandMock.mockReturnValue(null);
-    hasRegisteredPluginCommandInvocationMock.mockReturnValue(true);
+    pluginCommands.set("/pair", {
+      name: "pair",
+      description: "Pair a device",
+      pluginId: "device-pair",
+      handler: async () => ({ text: "ok" }),
+    });
     mockDevicePairRuntimeSlashPlugin();
 
     const result = await handlePluginCommand(

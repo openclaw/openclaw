@@ -56,10 +56,18 @@ export {
   validatePluginCommandDefinition,
 };
 
-function parsePluginCommandInvocation(commandBody: string): {
-  alternateKeys: string[];
-  args?: string;
-} | null {
+/**
+ * Check if a command body matches a registered plugin command.
+ * Returns the command definition and parsed args if matched.
+ *
+ * Note: If a command has `acceptsArgs: false` and the user provides arguments,
+ * the command will not match. This allows the message to fall through to
+ * built-in handlers or the agent. Document this behavior to plugin authors.
+ */
+export function matchPluginCommand(
+  commandBody: string,
+  options: { channel?: string } = {},
+): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
   if (!trimmed.startsWith("/")) {
     return null;
@@ -86,21 +94,8 @@ function parsePluginCommandInvocation(commandBody: string): {
   if (key.includes("-")) {
     alternateKeys.push(key.replace(/-/g, "_"));
   }
-  return {
-    alternateKeys,
-    ...(args ? { args } : {}),
-  };
-}
-
-function findRegisteredPluginCommandForInvocation(
-  commandBody: string,
-): RegisteredPluginCommand | null {
-  const parsed = parsePluginCommandInvocation(commandBody);
-  if (!parsed) {
-    return null;
-  }
-  return (
-    parsed.alternateKeys
+  const command =
+    alternateKeys
       .map(
         (candidateKey) =>
           pluginCommands.get(candidateKey) ??
@@ -108,51 +103,19 @@ function findRegisteredPluginCommandForInvocation(
             listPluginInvocationNames(candidate).includes(candidateKey),
           ),
       )
-      .find(Boolean) ?? null
-  );
-}
-
-/** Returns true when a runtime plugin command owns this invocation name. */
-export function hasRegisteredPluginCommandInvocation(commandBody: string): boolean {
-  return Boolean(findRegisteredPluginCommandForInvocation(commandBody));
-}
-
-/**
- * Check if a command body matches a registered plugin command.
- * Returns the command definition and parsed args if matched.
- *
- * Note: If a command has `acceptsArgs: false` and the user provides arguments,
- * the command will not match. This allows the message to fall through to
- * built-in handlers or the agent. Document this behavior to plugin authors.
- */
-export function matchPluginCommand(
-  commandBody: string,
-  options: { channel?: string } = {},
-): { command: RegisteredPluginCommand; args?: string } | null {
-  const parsed = parsePluginCommandInvocation(commandBody);
-  if (!parsed) {
-    return null;
-  }
-
-  const registeredCommand = findRegisteredPluginCommandForInvocation(commandBody);
-  const command =
-    registeredCommand && pluginCommandSupportsChannel(registeredCommand, options.channel)
-      ? registeredCommand
-      : null;
+      .filter((candidate) => candidate && pluginCommandSupportsChannel(candidate, options.channel))
+      .find(Boolean) ?? null;
 
   if (!command) {
     return null;
   }
 
   // If command doesn't accept args but args were provided, don't match
-  if (parsed.args && !command.acceptsArgs) {
+  if (args && !command.acceptsArgs) {
     return null;
   }
 
-  return {
-    command,
-    ...(parsed.args ? { args: parsed.args } : {}),
-  };
+  return { command, args: args || undefined };
 }
 
 /**

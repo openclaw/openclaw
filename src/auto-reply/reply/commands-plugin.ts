@@ -9,12 +9,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isReservedCommandName } from "../../plugins/command-registration.js";
 import {
-  hasRegisteredPluginCommandInvocation,
-  matchPluginCommand,
-  executePluginCommand,
-} from "../../plugins/commands.js";
+  isReservedCommandName,
+  listPluginInvocationKeys,
+} from "../../plugins/command-registration.js";
+import { pluginCommands } from "../../plugins/command-registry-state.js";
+import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -55,6 +55,18 @@ function listCommandNameCandidates(commandName: string): string[] {
     candidates.add(commandName.replace(/-/g, "_"));
   }
   return [...candidates];
+}
+
+function hasRegisteredPluginCommandInvocation(commandName: string): boolean {
+  const candidateKeys = new Set(
+    listCommandNameCandidates(commandName).map((candidate) => `/${candidate}`),
+  );
+  if ([...candidateKeys].some((candidateKey) => pluginCommands.has(candidateKey))) {
+    return true;
+  }
+  return Array.from(pluginCommands.values()).some((command) =>
+    listPluginInvocationKeys(command).some((invocationKey) => candidateKeys.has(invocationKey)),
+  );
 }
 
 function resolveManifestRuntimeSlashCommandReservation(params: {
@@ -138,7 +150,8 @@ export const handlePluginCommand: CommandHandler = async (
   // Try to match a plugin command
   const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
   if (!match) {
-    if (hasRegisteredPluginCommandInvocation(command.commandBodyNormalized)) {
+    const commandName = normalizeSlashCommandName(command.commandBodyNormalized);
+    if (commandName && hasRegisteredPluginCommandInvocation(commandName)) {
       return null;
     }
     const manifestReservation = resolveManifestRuntimeSlashCommandReservation({
