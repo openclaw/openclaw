@@ -1959,3 +1959,100 @@ describe("isUndiciSocketError", () => {
     expect(isUndiciSocketError(err)).toBe(false);
   });
 });
+
+describe("undici socket retry transport simulation (#97608)", () => {
+  const baseModel: Model = {
+    id: "claude-sonnet-4-6",
+    provider: "anthropic",
+    api: "messages",
+    baseUrl: "https://api.anthropic.com/v1",
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+
+  beforeEach(() => {
+    managedStreamCleanupRegistrations.length = 0;
+    fetchWithSsrFGuardMock.mockReset();
+    ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
+    resolveProviderRequestPolicyConfigMock.mockReturnValue({
+      allowPrivateNetwork: false,
+    });
+    shouldUseEnvHttpProxyForUrlMock.mockReturnValue(false);
+  });
+
+  it("retries once on UND_ERR_SOCKET and succeeds on fresh connection", async () => {
+    // Simulate a stale keep-alive socket failure on first attempt,
+    // then a successful response on retry with a fresh connection.
+    const socketError = Object.assign(
+      new Error("socket hang up"),
+      { code: "UND_ERR_SOCKET" },
+    );
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(socketError)
+      .mockResolvedValueOnce({
+        response: new Response(
+          'data: {"type":"message","content":[{"text":"Hello from retry"}]}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      });
+
+    const guardedFetch = buildGuardedModelFetch(baseModel);
+    const response = await guardedFetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true, model: "claude-sonnet-4-6", messages: [] }),
+      },
+    );
+
+    // Verify the retry happened: fetchWithSsrFGuard was called twice.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+
+    // Verify the retry response is valid.
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("Hello from retry");
+  });
+
+  it("throws after UND_ERR_SOCKET retry also fails", async () => {
+    // Both attempts fail with socket errors — the error should propagate.
+    const socketError = Object.assign(
+      new Error("socket hang up"),
+      { code: "UND_ERR_SOCKET" },
+    );
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(socketError)
+      .mockRejectedValueOnce(socketError);
+
+    const guardedFetch = buildGuardedModelFetch(baseModel);
+    await expect(
+      guardedFetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      }),
+    ).rejects.toThrow("socket hang up");
+
+    // Both attempts were made — no infinite retry.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on non-socket errors", async () => {
+    // Non-UND_ERR_SOCKET errors should propagate immediately without retry.
+    const genericError = new Error("network timeout");
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(genericError);
+
+    const guardedFetch = buildGuardedModelFetch(baseModel);
+    await expect(
+      guardedFetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+      }),
+    ).rejects.toThrow("network timeout");
+
+    // Only one attempt — no retry for non-socket errors.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+});
