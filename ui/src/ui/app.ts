@@ -76,6 +76,12 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
+import {
+  blobToBase64,
+  createIdleDictationSnapshot,
+  DictationRecorder,
+  insertDictation,
+} from "./chat/dictation-recorder.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
   reconcileRealtimeTalkCatalogSelection,
@@ -325,6 +331,15 @@ export class OpenClawApp extends LitElement {
     text: string;
     senderLabel?: string | null;
   } | null = null;
+  @state() dictation = createIdleDictationSnapshot();
+  private dictationSelection = { start: 0, end: 0 };
+  private dictationSessionKey = "";
+  private readonly dictationRecorder = new DictationRecorder({
+    onChange: (snapshot) => {
+      this.dictation = snapshot;
+    },
+    onMaxDuration: () => void this.confirmDictation(),
+  });
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
@@ -882,6 +897,7 @@ export class OpenClawApp extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.dictationRecorder.cancel();
     document.removeEventListener("keydown", this.globalKeydownHandler);
     this.nativeBridgeCleanup?.();
     this.nativeBridgeCleanup = null;
@@ -1192,6 +1208,67 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleChatDraftChangeInternal>[0],
       next,
     );
+  }
+
+  async startDictation(selection?: { start: number; end: number }) {
+    if (!this.connected || this.dictation.phase === "requesting") {
+      return;
+    }
+    this.dictationSelection = selection ?? {
+      start: this.chatMessage.length,
+      end: this.chatMessage.length,
+    };
+    this.dictationSessionKey = this.sessionKey;
+    await this.dictationRecorder.start();
+  }
+
+  cancelDictation() {
+    this.dictationRecorder.cancel();
+  }
+
+  dismissDictationError() {
+    this.dictationRecorder.reset();
+  }
+
+  async confirmDictation() {
+    if (!this.client || !this.connected) {
+      this.dictationRecorder.fail("Connect to the gateway before transcribing dictation.");
+      return;
+    }
+    const blob = await this.dictationRecorder.confirm();
+    if (!blob) {
+      if (this.dictation.phase === "error" || this.dictation.phase === "idle") {
+        return;
+      }
+      this.dictationRecorder.fail("No audio was captured. Try speaking closer to the microphone.");
+      return;
+    }
+    try {
+      const result = await this.client.request<{ transcript?: string }>("audio.transcribe", {
+        audio: await blobToBase64(blob),
+        mimeType: blob.type || "audio/webm",
+      });
+      const transcript = result.transcript?.trim();
+      if (!transcript) {
+        throw new Error("No speech was detected in the recording.");
+      }
+      if (this.sessionKey !== this.dictationSessionKey) {
+        this.dictationRecorder.reset();
+        return;
+      }
+      const nextDraft = insertDictation(
+        this.chatMessage,
+        transcript,
+        this.dictationSelection.start,
+        this.dictationSelection.end,
+      );
+      this.handleChatDraftChange(nextDraft);
+      this.dictationRecorder.reset();
+    } catch (error) {
+      this.dictationRecorder.fail(
+        error instanceof Error ? error.message : "Dictation transcription failed. Try again.",
+      );
+    }
   }
 
   handleChatInputHistoryKey(input: ChatInputHistoryKeyInput): ChatInputHistoryKeyResult {

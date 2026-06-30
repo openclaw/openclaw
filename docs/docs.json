@@ -1658,7 +1658,14 @@
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
+                "pages": [
+                  "web/index",
+                  "web/control-ui",
+                  "web/dictation",
+                  "web/dashboard",
+                  "web/webchat",
+                  "web/tui"
+                ]
               }
             ]
           },

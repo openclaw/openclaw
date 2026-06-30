@@ -705,6 +705,111 @@
   flex-direction: column;
 }
 
+.dictation {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 4px 14px;
+  color: var(--text);
+}
+
+.dictation__waveform {
+  display: flex;
+  flex: 1;
+  height: 30px;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.dictation__waveform span {
+  width: 3px;
+  height: calc(4px + 24px * var(--dictation-level));
+  min-height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 78%, var(--text));
+  transition: height 90ms ease-out;
+}
+
+.dictation__timer {
+  min-width: 38px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.dictation__action {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dictation__action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.dictation__action:hover,
+.dictation__action:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.dictation__action--confirm,
+.agent-chat__input-btn--dictating {
+  color: var(--accent);
+}
+
+.dictation__message {
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dictation--error .dictation__message {
+  color: var(--danger);
+}
+
+.agent-chat__input:has(.dictation--requesting) .agent-chat__toolbar,
+.agent-chat__input:has(.dictation--recording) .agent-chat__toolbar,
+.agent-chat__input:has(.dictation--transcribing) .agent-chat__toolbar {
+  display: none;
+}
+
+.dictation__pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dictation-pulse 1s ease-in-out infinite;
+}
+
+@keyframes dictation-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictation__pulse {
+    animation: none;
+  }
+
+  .dictation__waveform span {
+    transition: none;
+  }
+}
+
 .agent-chat__sr-only {
   position: absolute;
   width: 1px;

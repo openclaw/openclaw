@@ -3,6 +3,7 @@ import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { DictationSnapshot } from "./chat/dictation-recorder.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
@@ -151,6 +152,7 @@ export type AppViewState = {
   chatInputHistoryItems: string[] | null;
   chatInputHistoryIndex: number;
   chatDraftBeforeHistory: string | null;
+  dictation: DictationSnapshot;
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
@@ -549,6 +551,10 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleChatDraftChange: (next: string) => void;
+    startDictation: (selection?: { start: number; end: number }) => Promise<void>;
+    confirmDictation: () => Promise<void>;
+    cancelDictation: () => void;
+    dismissDictationError: () => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     resetChatInputHistoryNavigation: () => void;
     handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;

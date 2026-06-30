@@ -23,6 +23,7 @@ import { copyToClipboard } from "../chat/clipboard.ts";
 import { decodeCodeBlockCopyPayload } from "../chat/code-block-copy-payload.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
+import type { DictationSnapshot } from "../chat/dictation-recorder.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -122,6 +123,7 @@ export type ChatProps = {
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
+  dictation?: DictationSnapshot;
   queue: ChatQueueItem[];
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -169,6 +171,10 @@ export type ChatProps = {
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
+  onStartDictation?: (selection: { start: number; end: number }) => void;
+  onConfirmDictation?: () => void;
+  onCancelDictation?: () => void;
+  onDismissDictationError?: () => void;
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
@@ -2477,6 +2483,23 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
+    if (e.ctrlKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      if (!e.repeat && props.onStartDictation && props.dictation?.phase === "idle") {
+        const target = e.target as HTMLTextAreaElement;
+        props.onStartDictation({ start: target.selectionStart, end: target.selectionEnd });
+        const finishOnRelease = (event: KeyboardEvent) => {
+          if (event.key.toLowerCase() !== "m") {
+            return;
+          }
+          document.removeEventListener("keyup", finishOnRelease);
+          props.onConfirmDictation?.();
+        };
+        document.addEventListener("keyup", finishOnRelease);
+      }
+      return;
+    }
+
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
@@ -2754,32 +2777,111 @@ export function renderChat(props: ChatProps) {
         : nothing}
 
       <div class="agent-chat__composer-combobox">
-        <textarea
-          ${ref((el) => {
-            composerTextarea = el instanceof HTMLTextAreaElement ? el : null;
-            if (composerTextarea) {
-              adjustTextareaHeight(composerTextarea);
-            }
-          })}
-          .value=${visibleDraft}
-          dir=${detectTextDirection(visibleDraft)}
-          ?disabled=${!props.connected}
-          aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
-          aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          @keydown=${handleKeyDown}
-          @beforeinput=${handleBeforeInput}
-          @input=${handleInput}
-          @compositionstart=${() => {
-            vs.composerComposing = true;
-          }}
-          @compositionend=${handleCompositionEnd}
-          @blur=${handleBlur}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
+        ${props.dictation && props.dictation.phase !== "idle"
+          ? html`
+              <div
+                class="dictation dictation--${props.dictation.phase}"
+                role=${props.dictation.phase === "error" ? "alert" : "status"}
+                aria-live="polite"
+                aria-label=${props.dictation.phase === "recording"
+                  ? t("chat.composer.dictationRecording")
+                  : props.dictation.phase === "transcribing"
+                    ? t("chat.composer.dictationTranscribing")
+                    : t("chat.composer.dictationRequesting")}
+              >
+                ${props.dictation.phase === "recording"
+                  ? html`
+                      <div class="dictation__waveform" aria-hidden="true">
+                        ${props.dictation.levels.map(
+                          (level) =>
+                            html`<span style=${`--dictation-level: ${level.toFixed(2)}`}></span>`,
+                        )}
+                      </div>
+                      <time class="dictation__timer"
+                        >${Math.floor(props.dictation.elapsedMs / 60_000)}:${String(
+                          Math.floor(props.dictation.elapsedMs / 1000) % 60,
+                        ).padStart(2, "0")}</time
+                      >
+                      <button
+                        class="dictation__action"
+                        type="button"
+                        @click=${props.onCancelDictation}
+                        aria-label=${t("chat.composer.dictationCancel")}
+                        title=${t("chat.composer.dictationCancel")}
+                      >
+                        ${icons.x}
+                      </button>
+                      <button
+                        class="dictation__action dictation__action--confirm"
+                        type="button"
+                        @click=${props.onConfirmDictation}
+                        aria-label=${t("chat.composer.dictationConfirm")}
+                        title=${t("chat.composer.dictationConfirm")}
+                      >
+                        ${icons.check}
+                      </button>
+                    `
+                  : props.dictation.phase === "error"
+                    ? html`
+                        <span class="dictation__message">${props.dictation.error}</span>
+                        <button
+                          class="dictation__action"
+                          type="button"
+                          @click=${props.onDismissDictationError}
+                          aria-label=${t("chat.composer.dictationDismissError")}
+                          title=${t("chat.composer.dictationDismissError")}
+                        >
+                          ${icons.x}
+                        </button>
+                      `
+                    : html`
+                        <span class="dictation__pulse" aria-hidden="true"></span>
+                        <span class="dictation__message"
+                          >${props.dictation.phase === "transcribing"
+                            ? t("chat.composer.dictationTranscribing")
+                            : t("chat.composer.dictationRequesting")}</span
+                        >
+                        ${props.dictation.phase === "requesting"
+                          ? html`
+                              <button
+                                class="dictation__action"
+                                type="button"
+                                @click=${props.onCancelDictation}
+                                aria-label=${t("chat.composer.dictationCancel")}
+                              >
+                                ${icons.x}
+                              </button>
+                            `
+                          : nothing}
+                      `}
+              </div>
+            `
+          : html`<textarea
+              ${ref((el) => {
+                composerTextarea = el instanceof HTMLTextAreaElement ? el : null;
+                if (composerTextarea) {
+                  adjustTextareaHeight(composerTextarea);
+                }
+              })}
+              .value=${visibleDraft}
+              dir=${detectTextDirection(visibleDraft)}
+              ?disabled=${!props.connected}
+              aria-autocomplete="list"
+              aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+              aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+              aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+              @keydown=${handleKeyDown}
+              @beforeinput=${handleBeforeInput}
+              @input=${handleInput}
+              @compositionstart=${() => {
+                vs.composerComposing = true;
+              }}
+              @compositionend=${handleCompositionEnd}
+              @blur=${handleBlur}
+              @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              placeholder=${placeholder}
+              rows="1"
+            ></textarea>`}
         <span
           id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           class="agent-chat__sr-only"
@@ -2804,6 +2906,37 @@ export function renderChat(props: ChatProps) {
             <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
           </button>
 
+          ${props.onStartDictation
+            ? html`
+                <button
+                  type="button"
+                  class="agent-chat__input-btn ${props.dictation?.phase === "recording"
+                    ? "agent-chat__input-btn--dictating"
+                    : ""}"
+                  @click=${() => {
+                    if (props.dictation?.phase === "recording") {
+                      props.onConfirmDictation?.();
+                      return;
+                    }
+                    props.onStartDictation?.({
+                      start: composerTextarea?.selectionStart ?? visibleDraft.length,
+                      end: composerTextarea?.selectionEnd ?? visibleDraft.length,
+                    });
+                  }}
+                  title=${t("chat.composer.startDictation")}
+                  aria-label=${t("chat.composer.startDictation")}
+                  aria-keyshortcuts="Control+M"
+                  ?disabled=${!props.connected ||
+                  props.dictation?.phase === "requesting" ||
+                  props.dictation?.phase === "transcribing"}
+                >
+                  ${icons.mic}
+                  <span class="agent-chat__control-label"
+                    >${t("chat.composer.startDictation")}</span
+                  >
+                </button>
+              `
+            : nothing}
           ${props.onToggleRealtimeTalk
             ? html`
                 <button
@@ -2876,6 +3009,15 @@ export function renderChat(props: ChatProps) {
       @drop=${(e: DragEvent) => handleDrop(e, props)}
       @dragover=${(e: DragEvent) => e.preventDefault()}
       @keydown=${(e: KeyboardEvent) => {
+        if (
+          e.key === "Escape" &&
+          props.dictation &&
+          (props.dictation.phase === "requesting" || props.dictation.phase === "recording")
+        ) {
+          e.preventDefault();
+          props.onCancelDictation?.();
+          return;
+        }
         if (e.key === "Escape" && props.replyTarget && !e.defaultPrevented) {
           e.preventDefault();
           props.onClearReply?.();

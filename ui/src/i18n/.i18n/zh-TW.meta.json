@@ -1,11 +1,19 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-06-26T22:05:54.449Z",
+  "fallbackKeys": [
+    "chat.composer.dictationCancel",
+    "chat.composer.dictationConfirm",
+    "chat.composer.dictationDismissError",
+    "chat.composer.dictationRecording",
+    "chat.composer.dictationRequesting",
+    "chat.composer.dictationTranscribing",
+    "chat.composer.startDictation"
+  ],
+  "generatedAt": "2026-06-30T03:43:27.749Z",
   "locale": "zh-TW",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "08e6ec5c2e8416d0049d2452906c20d096e17e384299af89cde872f0cfbb5015",
-  "totalKeys": 1416,
+  "sourceHash": "b353149bfa7ebd61b5834a6a7cc571c0561035adadb02c2673dfb0683cb389c6",
+  "totalKeys": 1423,
   "translatedKeys": 1416,
   "workflow": 1
 }

@@ -1821,6 +1821,67 @@ describe("chat voice controls", () => {
   });
 });
 
+describe("chat composer dictation", () => {
+  it("renders recording feedback and explicit completion controls", () => {
+    const onConfirmDictation = vi.fn();
+    const onCancelDictation = vi.fn();
+    const container = renderChatView({
+      dictation: {
+        phase: "recording",
+        elapsedMs: 7_000,
+        levels: [0.1, 0.5, 0.9],
+        error: null,
+      },
+      onConfirmDictation,
+      onCancelDictation,
+    });
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector(".dictation__timer")?.textContent).toContain("0:07");
+    const confirm = requireElement(
+      container,
+      `[aria-label="${t("chat.composer.dictationConfirm")}"]`,
+      "dictation confirm button",
+    ) as HTMLButtonElement;
+    const cancel = requireElement(
+      container,
+      `[aria-label="${t("chat.composer.dictationCancel")}"]`,
+      "dictation cancel button",
+    ) as HTMLButtonElement;
+
+    confirm.click();
+    cancel.click();
+    expect(onConfirmDictation).toHaveBeenCalledOnce();
+    expect(onCancelDictation).toHaveBeenCalledOnce();
+  });
+
+  it("starts at the caret and confirms when Ctrl+M is released", () => {
+    const onStartDictation = vi.fn();
+    const onConfirmDictation = vi.fn();
+    const container = renderChatView({
+      draft: "hello world",
+      getDraft: () => "hello world",
+      dictation: { phase: "idle", elapsedMs: 0, levels: [], error: null },
+      onStartDictation,
+      onConfirmDictation,
+    });
+    const textarea = requireElement(
+      container,
+      "textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    textarea.setSelectionRange(6, 11);
+
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "m", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "m", ctrlKey: true }));
+
+    expect(onStartDictation).toHaveBeenCalledWith({ start: 6, end: 11 });
+    expect(onConfirmDictation).toHaveBeenCalledOnce();
+  });
+});
+
 describe("chat composer IME composition", () => {
   it("defers draft sync while IME composition is active", () => {
     const onDraftChange = vi.fn();
