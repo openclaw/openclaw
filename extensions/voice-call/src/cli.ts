@@ -26,6 +26,7 @@ import {
 } from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
+import { toVoiceCallStatus } from "./types.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
@@ -744,12 +745,12 @@ export function registerVoiceCallCli(params: {
           rt.manager.getCallByProviderCallId(options.callId) ||
           getCallFromStore(rt.manager.callStorePath, options.callId) ||
           getCallByProviderCallIdFromStore(rt.manager.callStorePath, options.callId);
-        writeStdoutJson(call ?? { found: false });
+        writeStdoutJson(call ? toVoiceCallStatus(call) : { found: false });
         return;
       }
       writeStdoutJson({
         found: true,
-        calls: rt.manager.getActiveCalls(),
+        calls: rt.manager.getActiveCalls().map(toVoiceCallStatus),
       });
     });
 

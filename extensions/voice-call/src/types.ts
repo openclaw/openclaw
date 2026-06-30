@@ -169,6 +169,40 @@ export const CallRecordSchema = z.object({
 export type CallRecord = z.infer<typeof CallRecordSchema>;
 
 // -----------------------------------------------------------------------------
+// Status Projection (safe for read-only status queries)
+// -----------------------------------------------------------------------------
+
+/** Subset of CallRecord fields safe for external status consumers.
+ *  Excludes phone numbers, transcripts, session keys, and internal metadata. */
+export type VoiceCallStatus = Pick<
+  CallRecord,
+  | "callId"
+  | "providerCallId"
+  | "provider"
+  | "direction"
+  | "state"
+  | "startedAt"
+  | "answeredAt"
+  | "endedAt"
+  | "endReason"
+>;
+
+/** Project a full CallRecord to the safe VoiceCallStatus subset. */
+export function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
+  return {
+    callId: call.callId,
+    ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),
+    provider: call.provider,
+    direction: call.direction,
+    state: call.state,
+    startedAt: call.startedAt,
+    ...(call.answeredAt !== undefined ? { answeredAt: call.answeredAt } : {}),
+    ...(call.endedAt !== undefined ? { endedAt: call.endedAt } : {}),
+    ...(call.endReason !== undefined ? { endReason: call.endReason } : {}),
+  };
+}
+
+// -----------------------------------------------------------------------------
 // Webhook Types
 // -----------------------------------------------------------------------------
 

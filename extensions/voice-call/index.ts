@@ -23,6 +23,7 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
+import { toVoiceCallStatus } from "./src/types.js";
 import {
   getCallByProviderCallIdFromStore,
   getCallFromStore,
@@ -627,7 +628,7 @@ export default definePluginEntry({
             normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
           const rt = await ensureRuntime();
           if (!raw) {
-            respond(true, { found: true, calls: rt.manager.getActiveCalls() });
+            respond(true, { found: true, calls: rt.manager.getActiveCalls().map(toVoiceCallStatus) });
             return;
           }
           // Active-only lookup first; fall back to persisted store for
@@ -641,7 +642,7 @@ export default definePluginEntry({
             respond(true, { found: false });
             return;
           }
-          respond(true, { found: true, call });
+          respond(true, { found: true, call: toVoiceCallStatus(call) });
         } catch (err) {
           sendError(respond, err);
         }
@@ -781,7 +782,7 @@ export default definePluginEntry({
                   rt.manager.getCallByProviderCallId(callId) ||
                   getCallFromStore(rt.manager.callStorePath, callId) ||
                   getCallByProviderCallIdFromStore(rt.manager.callStorePath, callId);
-                return json(call ? { found: true, call } : { found: false });
+                return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
               }
             }
           }
@@ -798,7 +799,7 @@ export default definePluginEntry({
               rt.manager.getCallByProviderCallId(sid) ||
               getCallFromStore(rt.manager.callStorePath, sid) ||
               getCallByProviderCallIdFromStore(rt.manager.callStorePath, sid);
-            return json(call ? { found: true, call } : { found: false });
+            return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 
           const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
