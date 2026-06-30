@@ -106,7 +106,7 @@ function buildLifecycleFallbackStepNotice(
   data: Record<string, unknown> | undefined,
 ): string | undefined {
   const outcome = normalizeOptionalString(data?.fallbackStepFinalOutcome);
-  if (outcome === "chain_exhausted") {
+  if (outcome !== "succeeded") {
     return undefined;
   }
   const selected = formatLifecycleFallbackStepModelRef(data?.fallbackStepFromModel);

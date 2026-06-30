@@ -295,6 +295,49 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("does not announce transient fallback_step handoffs before a candidate succeeds", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fallback-step-multihop",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-fallback-step-multihop",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "proof-fail/fail-model",
+        fallbackStepToModel: "proof-mid/mid-model",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "next_fallback",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "proof-mid/mid-model",
+        fallbackStepToModel: "proof-ok/ok-model",
+        fallbackStepFromFailureReason: "overloaded",
+        fallbackStepFinalOutcome: "succeeded",
+      },
+    });
+
+    const fallbackNotices = collectedTexts().filter((text) => text.includes("Model Fallback:"));
+    expect(fallbackNotices).toEqual([
+      "codex: ↪️ Model Fallback: proof-ok/ok-model (selected proof-mid/mid-model; overloaded)",
+    ]);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(2);
+    relay.dispose();
+  });
+
   it("remaps cron-run parent session keys while relaying stream events", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-cron",
