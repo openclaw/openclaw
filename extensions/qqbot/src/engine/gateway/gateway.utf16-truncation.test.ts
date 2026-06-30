@@ -28,7 +28,16 @@ describe("gateway onMessageSent TTS preview UTF-16 truncation", () => {
     expect(out.length).toBe(30);
   });
 
-  it('undefined TTS falls back to empty string (the `meta.ttsText ?? ""` path is surrogate-safe)', () => {
-    expect(truncateUtf16Safe(undefined ?? "", 30)).toBe("");
+  it("present TTS is truncated (the helper only runs on a defined string, not on undefined)", () => {
+    const ttsText: string | undefined = "a".repeat(29) + emoji;
+    const out = ttsText === undefined ? "undefined" : truncateUtf16Safe(ttsText, 30);
+    expect(out.length).toBe(29);
+    expect(out).toBe("a".repeat(29));
+  });
+
+  it("absent TTS renders as the string `undefined` (preserves the `meta.ttsText?.slice(0, 30)` log line semantics)", () => {
+    const ttsText: string | undefined = undefined;
+    const out = ttsText === undefined ? "undefined" : truncateUtf16Safe(ttsText, 30);
+    expect(out).toBe("undefined");
   });
 });

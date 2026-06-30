@@ -62,7 +62,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
-      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${truncateUtf16Safe(meta.ttsText ?? "", 30)}`,
+      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText === undefined ? "undefined" : truncateUtf16Safe(meta.ttsText, 30)}`,
     );
     const attachments: RefAttachmentSummary[] = [];
     if (meta.mediaType) {
