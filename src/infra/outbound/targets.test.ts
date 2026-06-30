@@ -85,6 +85,61 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res).toEqual({ ok: true, to: "default-room" });
   });
 
+  it("uses a plugin-resolved alias defaultTo when no explicit target is provided", () => {
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        createTestChannelPlugin({
+          id: "signalish",
+          label: "Signalish",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "signalish", messageId: "signalish-msg" }),
+            resolveTarget: ({ to }) =>
+              to?.trim()
+                ? { ok: true, to: to.trim() }
+                : { ok: false, error: new Error("Signalish target is required") },
+          },
+          messaging: {
+            targetPrefixes: ["signal"],
+          },
+          resolveDefaultTo: ({ cfg }) => {
+            const signalish = (
+              cfg.channels as Record<
+                string,
+                { defaultTo?: string; aliases?: Record<string, string> }
+              >
+            ).signalish;
+            const raw = signalish?.defaultTo?.trim();
+            const alias = raw
+              ?.replace(/^signal:/i, "")
+              .trim()
+              .toLowerCase();
+            return (alias ? signalish?.aliases?.[alias] : undefined) ?? raw;
+          },
+        }),
+      ]),
+    );
+    const cfg = {
+      channels: {
+        signalish: {
+          aliases: {
+            me: "+15551234567",
+          },
+          defaultTo: "signal:me",
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveOutboundTarget({
+      channel: "signalish",
+      to: "",
+      cfg,
+      mode: "implicit",
+    });
+
+    expect(res).toEqual({ ok: true, to: "+15551234567" });
+  });
+
   it("passes bootstrap opt-in to channel plugin resolution", () => {
     const cfg: OpenClawConfig = {
       channels: { alpha: { defaultTo: "Alpha:Room One" } },
