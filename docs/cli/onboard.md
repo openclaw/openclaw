@@ -247,7 +247,7 @@ openclaw configure
 openclaw agents add <name>
 ```
 
-Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
+Use `openclaw setup` as the same guided onboarding entry point. Use `openclaw setup --baseline` when you only need the baseline config/workspace, `openclaw configure` later for targeted changes, and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

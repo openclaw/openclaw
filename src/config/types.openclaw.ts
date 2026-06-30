@@ -127,6 +127,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
+    securityAcknowledgedAt?: string;
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
