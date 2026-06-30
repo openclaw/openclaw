@@ -2920,6 +2920,56 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.sessionId).toBe("session-81281");
   });
 
+  it("passes through explicit long cacheRetention for detected Azure OpenAI completions providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildModelConfig("azure-openai/gpt-5.5", {
+      cacheRetention: "long",
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "azure-openai", "gpt-5.5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "azure-openai",
+      id: "gpt-5.5",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      sessionId: "session-azure",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+    expect(calls[0]?.sessionId).toBe("session-azure");
+  });
+
+  it("passes through explicit disabled cacheRetention for detected Azure OpenAI completions providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildModelConfig("azure-openai/gpt-5.5", {
+      cacheRetention: "none",
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "azure-openai", "gpt-5.5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "azure-openai",
+      id: "gpt-5.5",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      sessionId: "session-azure",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("none");
+    expect(calls[0]?.sessionId).toBe("session-azure");
+  });
+
   it("keeps explicit cacheRetention off openai-completions providers without prompt-cache-key support", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildModelConfig("omlx-local/local_model", {

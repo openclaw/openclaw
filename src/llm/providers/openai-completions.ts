@@ -11,6 +11,7 @@ import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { detectOpenAICompletionsCompat } from "../../agents/openai-completions-compat.js";
 import {
   projectOpenAITools,
   reconcileOpenAICompletionsToolChoice,
@@ -1287,6 +1288,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
   const isCloudflareAiGateway =
     provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
+  const { defaults: sharedCompatDefaults } = detectOpenAICompletionsCompat(model);
 
   const isNonStandard =
     provider === "cerebras" ||
@@ -1340,8 +1342,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
     sendSessionAffinityHeaders: false,
-    supportsPromptCacheKey: false,
-    supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
+    supportsPromptCacheKey: sharedCompatDefaults.supportsPromptCacheKey,
+    supportsLongCacheRetention:
+      !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway) &&
+      sharedCompatDefaults.supportsLongCacheRetention,
   };
 }
 

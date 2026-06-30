@@ -478,6 +478,87 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBeUndefined();
   });
 
+  it("sends prompt cache keys for Azure Foundry regional chat completions URLs", async () => {
+    let capturedCacheKey: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "custom-azure-openai",
+        baseUrl: "https://westus.api.cognitive.microsoft.com/openai/v1",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
+  });
+
+  it("sends prompt cache keys for Azure OpenAI chat completions", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          capturedRetention = (payload as { prompt_cache_retention?: unknown })
+            .prompt_cache_retention;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
+    expect(capturedRetention).toBe("24h");
+  });
+
+  it("omits Azure OpenAI prompt cache keys when cache retention is disabled", async () => {
+    let capturedCacheKey: unknown = "unset";
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        cacheRetention: "none",
+        sessionId: "session-123",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBeUndefined();
+  });
+
   it("omits prompt cache retention when third-party models have not opted into cache keys", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;

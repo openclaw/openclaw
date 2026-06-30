@@ -3587,6 +3587,8 @@ function detectCompat(model: OpenAIModeModel) {
     requiresReasoningContentOnAssistantMessages:
       compatDefaults.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: compatDefaults.requiresNonEmptyUserOrAssistantMessage,
+    supportsPromptCacheKey: compatDefaults.supportsPromptCacheKey,
+    supportsLongCacheRetention: compatDefaults.supportsLongCacheRetention,
   };
 }
 
@@ -3637,8 +3639,9 @@ function getCompat(model: OpenAIModeModel): {
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
-    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
-    supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
+    supportsPromptCacheKey: compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
+    supportsLongCacheRetention:
+      compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
     visibleReasoningDetailTypes:
