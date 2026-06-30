@@ -1148,6 +1148,16 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-access-token-value");
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
+
+  it("keeps diagnostic code fields while redacting opaque code values", () => {
+    const output = redactSecrets({
+      status: { code: "SYSTEM_RUN_DENIED" },
+      oauth: { code: "oauth-code-value-1234567890" },
+    });
+
+    expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
+  });
 });
 
 describe("redactSensitiveLines", () => {

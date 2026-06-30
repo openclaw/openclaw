@@ -91,6 +91,7 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|code|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+const STRUCTURED_STATUS_CODE_VALUE_RE = /^[A-Z][A-Z0-9_:-]{0,47}$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -1055,6 +1056,9 @@ function redactSensitiveFieldValueWithOptions(
   }
   if (redacted !== value) {
     return redacted;
+  }
+  if (key.toLowerCase() === "code" && STRUCTURED_STATUS_CODE_VALUE_RE.test(value)) {
+    return value;
   }
   if (isSensitiveFieldKey(key)) {
     if (isShellReferenceToKey(key, value)) {
