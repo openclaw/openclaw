@@ -14,6 +14,7 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveConfigIncludes } from "../config/includes.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,15 +80,30 @@ function looksLikeEnvRef(value: string): boolean {
   return v.startsWith("${") && v.endsWith("}");
 }
 
+function getIncludeResolvedParsedConfig(snapshot: ConfigFileSnapshot | null | undefined): unknown {
+  if (!snapshot?.parsed || typeof snapshot.parsed !== "object") {
+    return undefined;
+  }
+  if (!snapshot.exists || !snapshot.path) {
+    return snapshot.parsed;
+  }
+  try {
+    return resolveConfigIncludes(snapshot.parsed, snapshot.path);
+  } catch {
+    return snapshot.parsed;
+  }
+}
+
 function getParsedConfigString(
   snapshot: ConfigFileSnapshot | null | undefined,
   path: string,
 ): string | undefined {
-  if (!snapshot?.parsed || typeof snapshot.parsed !== "object") {
+  const parsed = getIncludeResolvedParsedConfig(snapshot);
+  if (!parsed || typeof parsed !== "object") {
     return undefined;
   }
   const parts = path.split(".");
-  let current: unknown = snapshot.parsed;
+  let current: unknown = parsed;
   for (const part of parts) {
     if (!current || typeof current !== "object") {
       return undefined;
@@ -603,10 +619,11 @@ function isConfigOwnedEnvRef(
   if (!varName) {
     return false;
   }
-  const parsedEnv =
-    configSnapshot?.parsed && typeof configSnapshot.parsed === "object"
-      ? (configSnapshot.parsed as Record<string, unknown>).env
-      : undefined;
+  const parsed = getIncludeResolvedParsedConfig(configSnapshot);
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+  const parsedEnv = (parsed as Record<string, unknown>).env;
   if (!parsedEnv || typeof parsedEnv !== "object") {
     return false;
   }
