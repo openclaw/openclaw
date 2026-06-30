@@ -368,6 +368,22 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("shows one-shot allow-always message when ask is not always and allow-always is unavailable", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      ask: "on-miss",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
+    );
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",
