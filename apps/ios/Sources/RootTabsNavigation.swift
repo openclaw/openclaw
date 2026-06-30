@@ -264,6 +264,10 @@ extension RootTabs {
         return discoveredGatewayCount > 0
     }
 
+    static func chatReturnTitle(for destination: SidebarDestination) -> String {
+        "Back to \(destination.title)"
+    }
+
     struct SidebarGroup: Identifiable {
         let title: String
         let destinations: [SidebarDestination]

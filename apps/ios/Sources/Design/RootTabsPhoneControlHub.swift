@@ -6,10 +6,16 @@ struct RootTabsPhoneControlHub: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var navigationPath: [RootTabs.SidebarDestination] = []
     @State private var didApplyInitialDestination = false
+    @State private var handledDestinationRequestID = 0
+    @State private var handledRootRequestID = 0
 
     let groups: [RootTabs.SidebarGroup]
     let initialDestination: RootTabs.SidebarDestination?
+    let requestedDestination: RootTabs.SidebarDestination?
+    let destinationRequestID: Int
+    let rootRequestID: Int
     let openRootDestination: (RootTabs.SidebarDestination) -> Void
+    let openChatFromControlDetail: (RootTabs.SidebarDestination) -> Void
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
@@ -36,6 +42,14 @@ struct RootTabsPhoneControlHub: View {
             }
             .onAppear {
                 self.applyInitialDestinationIfNeeded()
+                self.applyRequestedDestinationIfNeeded()
+                self.applyRootRequestIfNeeded()
+            }
+            .onChange(of: self.destinationRequestID) { _, _ in
+                self.applyRequestedDestinationIfNeeded()
+            }
+            .onChange(of: self.rootRequestID) { _, _ in
+                self.applyRootRequestIfNeeded()
             }
         }
     }
@@ -202,18 +216,18 @@ struct RootTabsPhoneControlHub: View {
                 headerTitle: "Overview",
                 headerLeadingAction: self.phoneDetailBackAction,
                 showsHeaderMark: false,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.overview) },
                 openSettings: { self.openPhoneRootDestination(.gateway) },
                 openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.activity) },
                 openSettings: { self.openPhoneRootDestination(.gateway) })
         case .workboard:
             IPadWorkboardScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.workboard) },
                 openSettings: { self.openPhoneRootDestination(.gateway) })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
@@ -228,7 +242,7 @@ struct RootTabsPhoneControlHub: View {
         case .sessions:
             CommandSessionsScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openPhoneRootDestination(.chat) })
+                openChat: { self.openChatFromControlDetail(.sessions) })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -282,10 +296,27 @@ struct RootTabsPhoneControlHub: View {
         guard !self.didApplyInitialDestination else { return }
         self.didApplyInitialDestination = true
         guard let initialDestination, initialDestination != .overview else { return }
-        if self.opensRootTab(initialDestination) {
-            self.openPhoneRootDestination(initialDestination)
+        self.applyDestination(initialDestination)
+    }
+
+    private func applyRequestedDestinationIfNeeded() {
+        guard self.destinationRequestID != self.handledDestinationRequestID else { return }
+        self.handledDestinationRequestID = self.destinationRequestID
+        guard let requestedDestination else { return }
+        self.applyDestination(requestedDestination)
+    }
+
+    private func applyRootRequestIfNeeded() {
+        guard self.rootRequestID != self.handledRootRequestID else { return }
+        self.handledRootRequestID = self.rootRequestID
+        self.navigationPath.removeAll()
+    }
+
+    private func applyDestination(_ destination: RootTabs.SidebarDestination) {
+        if self.opensRootTab(destination) {
+            self.openPhoneRootDestination(destination)
         } else {
-            self.navigationPath = [initialDestination]
+            self.navigationPath = [destination]
         }
     }
 
@@ -417,7 +448,11 @@ extension RootTabsPhoneControlHub {
         RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            requestedDestination: nil,
+            destinationRequestID: 0,
+            rootRequestID: 0,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
     }
 }

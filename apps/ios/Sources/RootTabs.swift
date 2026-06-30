@@ -26,6 +26,11 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
+    @State private var requestedPhoneControlDestination: SidebarDestination?
+    @State private var requestedPhoneControlDestinationID: Int = 0
+    @State private var requestedPhoneControlRootRequestID: Int = 0
+    @State private var chatReturnDestination: SidebarDestination?
+    @State private var suppressNextPhoneControlRootReset = false
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -142,12 +147,18 @@ struct RootTabs: View {
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
                 initialDestination: Self.requestedInitialSidebarDestination,
-                openRootDestination: { self.selectSidebarDestination($0) })
+                requestedDestination: self.requestedPhoneControlDestination,
+                destinationRequestID: self.requestedPhoneControlDestinationID,
+                rootRequestID: self.requestedPhoneControlRootRequestID,
+                openRootDestination: { self.selectSidebarDestination($0) },
+                openChatFromControlDetail: { self.openChatFromControlDetail($0) })
                 .tabItem { Label("Control", systemImage: "square.grid.2x2") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
-            ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            ChatProTab(
+                headerLeadingAction: self.phoneChatReturnAction,
+                openSettings: { self.selectSidebarDestination(.gateway) })
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
 
@@ -173,6 +184,9 @@ struct RootTabs: View {
                 .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
+        }
+        .onChange(of: self.selectedTab) { _, selectedTab in
+            self.handlePhoneSelectedTabChange(selectedTab)
         }
     }
 
@@ -571,6 +585,15 @@ struct RootTabs: View {
             action: { self.showSidebar() })
     }
 
+    private var phoneChatReturnAction: OpenClawSidebarHeaderAction? {
+        guard !self.usesSidebarTabs, let chatReturnDestination else { return nil }
+        return OpenClawSidebarHeaderAction(
+            systemName: "chevron.left",
+            accessibilityLabel: Self.chatReturnTitle(for: chatReturnDestination),
+            accessibilityIdentifier: "OpenClawChatBackToControlDetailButton",
+            action: { self.openPhoneControlDetail(chatReturnDestination) })
+    }
+
     private var sidebarHideButton: some View {
         Button {
             self.hideSidebar()
@@ -948,7 +971,13 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
-    private func selectSidebarDestination(_ destination: SidebarDestination) {
+    private func selectSidebarDestination(
+        _ destination: SidebarDestination,
+        preservingChatReturn: Bool = false)
+    {
+        if destination != .chat || !preservingChatReturn {
+            self.chatReturnDestination = nil
+        }
         self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
@@ -956,10 +985,50 @@ extension RootTabs {
         self.selectedSidebarDestination = destination
         self.selectedSettingsRoute = destination.settingsRoute
         self.selectedTab = destination.appTab
+        self.requestPhoneControlDestinationIfNeeded(destination)
         guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(.easeInOut(duration: 0.22)) {
             self.setSidebarVisible(false)
         }
+    }
+
+    private func openChatFromControlDetail(_ returnDestination: SidebarDestination) {
+        self.chatReturnDestination = returnDestination
+        self.selectSidebarDestination(.chat, preservingChatReturn: true)
+    }
+
+    private func openPhoneControlDetail(_ destination: SidebarDestination) {
+        self.suppressNextPhoneControlRootReset = true
+        self.selectSidebarDestination(destination)
+        if destination == .overview {
+            self.requestPhoneControlDestinationIfNeeded(destination, force: true)
+        }
+    }
+
+    private func handlePhoneSelectedTabChange(_ selectedTab: AppTab) {
+        if selectedTab != .chat {
+            self.chatReturnDestination = nil
+        }
+        guard selectedTab == .control else {
+            self.suppressNextPhoneControlRootReset = false
+            return
+        }
+        guard !self.suppressNextPhoneControlRootReset else {
+            self.suppressNextPhoneControlRootReset = false
+            return
+        }
+        self.requestedPhoneControlRootRequestID &+= 1
+    }
+
+    private func requestPhoneControlDestinationIfNeeded(
+        _ destination: SidebarDestination,
+        force: Bool = false)
+    {
+        guard !self.usesSidebarTabs else { return }
+        guard destination.appTab == .control else { return }
+        guard force || destination != .overview else { return }
+        self.requestedPhoneControlDestination = destination
+        self.requestedPhoneControlDestinationID &+= 1
     }
 
     private func selectSettingsRoute(_ route: SettingsRoute) {

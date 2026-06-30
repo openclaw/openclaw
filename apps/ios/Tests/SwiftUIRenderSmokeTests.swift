@@ -77,7 +77,11 @@ import UIKit
             let root = RootTabsPhoneControlHub(
                 groups: RootTabs.phoneControlGroups,
                 initialDestination: nil,
-                openRootDestination: { _ in })
+                requestedDestination: nil,
+                destinationRequestID: 0,
+                rootRequestID: 0,
+                openRootDestination: { _ in },
+                openChatFromControlDetail: { _ in })
                 .environment(appModel)
 
             _ = Self.host(root)
@@ -89,7 +93,11 @@ import UIKit
         let root = RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            requestedDestination: nil,
+            destinationRequestID: 0,
+            rootRequestID: 0,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
