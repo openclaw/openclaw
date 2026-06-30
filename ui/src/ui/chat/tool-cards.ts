@@ -291,6 +291,19 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       continue;
     }
 
+    if (kind === "toolprogress") {
+      const name = typeof item.name === "string" ? item.name : "tool";
+      const cardId = resolveToolCardId(item, m, index, prefix);
+      const text = extractToolText(item);
+      if (text) {
+        const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
+        if (existing) {
+          existing.progressText = text;
+        }
+      }
+      continue;
+    }
+
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
@@ -674,6 +687,9 @@ export function renderToolCard(
         isError,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
+      ${card.progressText && !card.outputText
+        ? html`<div class="chat-tool-msg-collapse__progress muted">${card.progressText}</div>`
+        : nothing}
       ${opts.expanded
         ? html`
             <div class="chat-tool-msg-body">
