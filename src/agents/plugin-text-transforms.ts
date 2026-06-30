@@ -62,7 +62,7 @@ function transformContentText(content: unknown, replacements?: PluginTextReplace
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
-  if (Object.hasOwn(next, "arguments")) {
+  if (next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
     next.arguments = transformToolCallArgumentText(next.arguments, replacements);
   }
   return next;
