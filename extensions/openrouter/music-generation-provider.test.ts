@@ -1,6 +1,8 @@
 // Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
@@ -372,5 +374,46 @@ describe("openrouter music generation provider", () => {
     });
 
     expect(result.tracks).toHaveLength(1);
+  });
+
+  it("real HTTP server proof: malformed SSE frame → skip, valid audio → decoded", async () => {
+    const audioBytes = Buffer.from("valid-audio-bytes");
+    const sseBody = [
+      "data: NOT JSON {{{\n",
+      `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBytes.toString("base64") } } }] })}\n`,
+      "data: [DONE]\n",
+    ].join("");
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(sseBody);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      postJsonRequestMock.mockImplementation(async (params: { url: string }) => {
+        const pathname = new URL(params.url).pathname;
+        const res = await fetch(`${baseUrl}${pathname}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "google/lyria-3-clip-preview", prompt: "test" }),
+        });
+        return { response: res, release: vi.fn(async () => {}) };
+      });
+
+      const result = await buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "real server proof",
+        cfg: {},
+      });
+
+      expect(result.tracks).toHaveLength(1);
+      expect(result.tracks[0]?.buffer).toEqual(audioBytes);
+    } finally {
+      server.close();
+    }
   });
 });
