@@ -627,7 +627,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
-test("sessions.create with adoptDashboard reuses existing active dashboard session", async () => {
+test("sessions.create without key reuses existing active dashboard session", async () => {
   await createSessionStoreDir();
   const existingKey = "agent:ops:dashboard:existing-session";
   await writeSessionStore({
@@ -646,7 +646,6 @@ test("sessions.create with adoptDashboard reuses existing active dashboard sessi
     entry?: { label?: string };
   }>("sessions.create", {
     agentId: "ops",
-    adoptDashboard: true,
   });
 
   expect(created.ok).toBe(true);
