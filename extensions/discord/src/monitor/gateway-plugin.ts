@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createNodeProxyAgent,
+  resolveEnvHttpProxyAgentOptions,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import {
   captureWsEvent,
   resolveEffectiveDebugProxyUrl,
@@ -383,6 +387,29 @@ export function waitForDiscordGatewayPluginRegistration(
   return registrationPromises.get(plugin as discordGateway.GatewayPlugin);
 }
 
+function createEnvProxyDiscordGatewayAgent(
+  runtime: RuntimeEnv,
+): DiscordGatewayWebSocketAgent | undefined {
+  const envProxyOptions = resolveEnvHttpProxyAgentOptions();
+  if (!envProxyOptions) {
+    return undefined;
+  }
+  try {
+    return createNodeProxyAgent({
+      mode: "env",
+      targetUrl: "wss://gateway.discord.gg",
+      protocol: "https",
+    });
+  } catch (err) {
+    runtime.error?.(
+      danger(
+        `discord: env proxy unavailable for gateway WebSocket; using direct agent: ${formatErrorMessage(err)}`,
+      ),
+    );
+    return undefined;
+  }
+}
+
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
@@ -399,10 +426,21 @@ export function createDiscordGatewayPlugin(params: {
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
-  let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
-    lookup: discordDnsLookup,
-  });
 
+  // Try env proxy first (HTTP_PROXY/HTTPS_PROXY)
+  let wsAgent: DiscordGatewayWebSocketAgent;
+  const envProxyAgent = createEnvProxyDiscordGatewayAgent(params.runtime);
+  if (envProxyAgent) {
+    wsAgent = envProxyAgent;
+    params.runtime.log?.("discord: gateway WebSocket using env proxy");
+  } else {
+    // Fallback to direct connection
+    wsAgent = new HttpsAgent({
+      lookup: discordDnsLookup,
+    });
+  }
+
+  // Explicit channels.discord.proxy overrides env
   if (proxy) {
     try {
       validateDiscordProxyUrl(proxy);
