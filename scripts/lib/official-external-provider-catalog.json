@@ -359,6 +359,9 @@
           "id": "codex",
           "label": "Codex"
         },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
         "providers": [
           {
             "id": "codex",

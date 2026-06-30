@@ -147,6 +147,9 @@ report disabled even after a one-off install command.
 `install` enables Codex app-server plugin support, optionally adds a configured
 marketplace source, installs or re-enables the configured plugin through Codex
 app-server, reloads MCP servers, and verifies that the MCP server exposes tools.
+Because installation changes trusted host resources, only an owner or an
+`operator.admin` Gateway client can run `install`. Other authorized senders can
+continue to use the read-only `status` command, including with overrides.
 
 ## Marketplace choices
 

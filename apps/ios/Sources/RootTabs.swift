@@ -26,6 +26,9 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
+    // Embedded Settings rows push onto the sidebar stack; clear it before
+    // changing sidebar roots so stale settings detail screens cannot survive.
+    @State private var sidebarNavigationPath: [SettingsRoute] = []
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
@@ -218,13 +221,19 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if self.isSidebarVisible {
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        self.hideSidebar()
-                    }
-                    .transition(.opacity)
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.black.opacity(0.28)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            self.hideSidebar()
+                        }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .zIndex(0)
 
                 self.sidebarColumn
                     .frame(width: sidebarWidth, alignment: .topLeading)
@@ -234,6 +243,7 @@ struct RootTabs: View {
                     }
                     .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
                     .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(1)
             }
         }
     }
@@ -378,7 +388,10 @@ struct RootTabs: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .truncationMode(.tail)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
@@ -398,18 +411,22 @@ struct RootTabs: View {
                 headerTitle: "Chat",
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .talk:
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openSessions: { self.selectSidebarDestination(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
@@ -472,22 +489,28 @@ struct RootTabs: View {
                 SettingsProTab(
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
+                navigateToRoute: self.pushSidebarSettingsRoute,
                 onRouteChange: self.handleSettingsRouteChange)
         }
     }
 
     private var sidebarDetailNavigationShell: some View {
-        NavigationStack {
+        NavigationStack(path: self.$sidebarNavigationPath) {
             self.sidebarDetailShell
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -926,6 +949,7 @@ struct RootTabs: View {
 
 extension RootTabs {
     private func selectSidebarDestination(_ destination: SidebarDestination) {
+        self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
@@ -939,6 +963,7 @@ extension RootTabs {
     }
 
     private func selectSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath.removeAll()
         if route != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
@@ -950,6 +975,11 @@ extension RootTabs {
         withAnimation(.easeInOut(duration: 0.22)) {
             self.setSidebarVisible(false)
         }
+    }
+
+    private func pushSidebarSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath = [route]
+        self.handleSettingsRouteChange(route)
     }
 
     private func handleSettingsRouteChange(_ route: SettingsRoute?) {

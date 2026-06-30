@@ -1887,7 +1887,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw setup
   - H2: Options
-  - H3: Wizard auto-trigger
+  - H3: Baseline mode
   - H2: Examples
   - H2: Notes
   - H2: Related
@@ -8447,6 +8447,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Signal setup (signal-cli)
   - H2: What the wizard writes
   - H2: Related docs
+
+## releases/index.md
+
+- Route: /releases
+- Headings:
+  - H1: Release notes
+  - H2: Coming soon
+  - H2: Raw release history
 
 ## security/CONTRIBUTING-THREAT-MODEL.md
 

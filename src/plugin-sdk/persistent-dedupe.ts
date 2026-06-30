@@ -326,7 +326,12 @@ function parseLegacyDedupeData(raw: string): {
   data: Record<string, number>;
   invalidCount: number;
 } {
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return { data: {}, invalidCount: 0 };
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { data: {}, invalidCount: 0 };
   }

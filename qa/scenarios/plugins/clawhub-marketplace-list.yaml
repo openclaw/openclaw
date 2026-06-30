@@ -25,7 +25,7 @@ scenario:
     - scripts/e2e/lib/release-scenarios/write-marketplace.mjs
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the release-plugin-marketplace Docker E2E lane as QA Lab evidence for ClawHub marketplace list coverage.
     args:
       - --lane

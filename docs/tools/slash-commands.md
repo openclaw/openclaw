@@ -256,7 +256,7 @@ plugins.
     | Command | Description |
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
-    | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options |
+    | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
     | `/focus <target>` | Bind the current Discord thread or Telegram topic to a session target |
     | `/unfocus` | Remove the current thread binding |
     | `/agents` | List thread-bound agents for the current session |
