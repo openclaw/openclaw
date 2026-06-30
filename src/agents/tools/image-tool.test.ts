@@ -472,15 +472,14 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
+  const payload = { content: "ok", base_resp: { status_code: 0, status_msg: "" } };
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
     statusText: "OK",
     headers: new Headers(),
-    json: async () => ({
-      content: "ok",
-      base_resp: { status_code: 0, status_msg: "" },
-    }),
+    json: async () => payload,
+    arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(payload)).buffer,
   });
   global.fetch = withFetchPreconnect(fetch);
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
@@ -488,15 +487,14 @@ function stubMinimaxOkFetch() {
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
+  const payload = { content, base_resp: baseResp };
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
     statusText: "OK",
     headers: new Headers(),
-    json: async () => ({
-      content,
-      base_resp: baseResp,
-    }),
+    json: async () => payload,
+    arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(payload)).buffer,
   });
   global.fetch = withFetchPreconnect(fetch);
   return fetch;
