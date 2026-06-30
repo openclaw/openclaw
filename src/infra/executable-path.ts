@@ -46,8 +46,10 @@ function resolveWindowsExecutableExtensions(
     "",
     ...(
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
@@ -60,8 +62,10 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   return new Set(
     (
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
