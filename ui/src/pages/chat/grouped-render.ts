@@ -658,9 +658,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const preview =
       toolLabels.length === 0
         ? "Tool output"
-      : toolLabels.length <= 3
-        ? toolLabels.join(", ")
-        : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
+        : toolLabels.length <= 3
+          ? toolLabels.join(", ")
+          : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
