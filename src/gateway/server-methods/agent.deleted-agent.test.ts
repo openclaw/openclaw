@@ -134,4 +134,36 @@ describe("agent RPC deleted-agent guard", () => {
       expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects deleted-agent sessions before stale exec followup dedupe", async () => {
+    const orphanKey = mockDeletedAgentSession();
+
+    const respond = vi.fn() as unknown as RespondFn;
+    const dedupe = new Map();
+
+    await agentHandlers.agent({
+      req: { id: "req-followup" } as never,
+      params: {
+        sessionKey: orphanKey,
+        message: "approval followup",
+        idempotencyKey: "exec-approval-followup:req-followup",
+        execApprovalFollowupExpectedSessionId: "old-session",
+      },
+      respond,
+      context: {
+        dedupe,
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+      } as never,
+      client: { connect: { client: { mode: "backend" } } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'Agent "deleted-agent" no longer exists in configuration',
+    });
+    expect(dedupe.size).toBe(0);
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+  });
 });
