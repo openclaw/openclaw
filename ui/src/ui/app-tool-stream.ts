@@ -60,6 +60,7 @@ type ToolStreamHost = {
   } | null;
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamKind?: "assistant" | "progress" | null;
   chatStreamStartedAt: number | null;
   chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
   toolStreamById: Map<string, ToolStreamEntry>;
@@ -436,6 +437,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.chatStreamKind = null;
 }
 
 export type CompactionStatus = {
@@ -758,6 +760,18 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  if (payload.stream === "item") {
+    const data = payload.data ?? {};
+    const kind = toTrimmedString(data.kind);
+    const progressText = toTrimmedString(data.progressText);
+    if (kind === "preamble" && progressText) {
+      host.chatStream = progressText;
+      host.chatStreamKind = "progress";
+      host.chatStreamStartedAt ??= typeof payload.ts === "number" ? payload.ts : Date.now();
+    }
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
@@ -789,6 +803,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     if (
       host.chatRunId &&
       payload.runId === host.chatRunId &&
+      host.chatStreamKind !== "progress" &&
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
@@ -797,6 +812,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         { text: host.chatStream, ts: now, toolCallId },
       ];
       host.chatStream = null;
+      host.chatStreamKind = null;
       host.chatStreamStartedAt = null;
     }
     entry = {

@@ -202,8 +202,10 @@ function materializeVisibleAssistantStreamMessages(
     replacementMessages?: unknown[];
   } = {},
 ): unknown[] {
+  const includeCurrent = state.chatStreamKind === "progress" ? false : opts.includeCurrent;
   return materializeVisibleStreamState(messages, state, {
     ...opts,
+    includeCurrent,
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
@@ -395,6 +397,7 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamKind?: "assistant" | "progress" | null;
   chatStreamStartedAt: number | null;
   chatVerboseLevel: string | null;
   lastError: string | null;
@@ -793,6 +796,7 @@ async function loadChatHistoryUncached(
           clearToolStreamSegments(state);
         }
         state.chatStream = null;
+        state.chatStreamKind = null;
         state.chatStreamStartedAt = null;
         recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
           requestSessionKey: sessionKey,
@@ -805,6 +809,7 @@ async function loadChatHistoryUncached(
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
         maybeResetToolStream(state);
         state.chatStream = null;
+        state.chatStreamKind = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedToolStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
@@ -815,7 +820,10 @@ async function loadChatHistoryUncached(
           streamReconciliation.isHiddenStreamText,
         );
         if (state.chatStream === null) {
+          state.chatStreamKind = null;
           state.chatStreamStartedAt = null;
+        } else {
+          state.chatStreamKind = "assistant";
         }
         maybeResetToolStream(state);
       } else if (historyReplacedSomeToolStream) {
@@ -829,7 +837,10 @@ async function loadChatHistoryUncached(
         });
         state.chatStream = visibleCurrentTail;
         if (state.chatStream === null) {
+          state.chatStreamKind = null;
           state.chatStreamStartedAt = null;
+        } else {
+          state.chatStreamKind = "assistant";
         }
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
@@ -1140,6 +1151,7 @@ export async function sendChatMessage(
   const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
+  state.chatStreamKind = "assistant";
   state.chatStreamStartedAt = now;
 
   try {
@@ -1361,6 +1373,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
       state.chatStream = next;
+      state.chatStreamKind = "assistant";
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
