@@ -9,6 +9,7 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
+import { formatRateLimitOrOverloadedErrorCopy } from "./sanitize-user-facing-text.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
@@ -176,6 +177,21 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("HTTP 429 overloaded body classification (#98101)", () => {
+  const raw =
+    '429 {"error":{"code":"1305","message":"The service may be temporarily overloaded, please try again later"}}';
+
+  it("classifies a 429 body with overloaded text as overloaded", () => {
+    expect(classifyFailoverReason(raw)).toBe("overloaded");
+  });
+
+  it("returns overloaded user-facing copy for a 429 body with overloaded text", () => {
+    expect(formatRateLimitOrOverloadedErrorCopy(raw)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
   });
 });
 

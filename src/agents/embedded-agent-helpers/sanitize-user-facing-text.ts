@@ -127,6 +127,10 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  if (leadingStatus?.code === 429 && isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
   if (isRateLimitErrorMessage(raw)) {
     return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
   }

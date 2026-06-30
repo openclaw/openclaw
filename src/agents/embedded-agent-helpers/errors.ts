@@ -809,6 +809,9 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
+    if (message && isOverloadedErrorMessage(message)) {
+      return toReasonClassification("overloaded");
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -1051,6 +1054,11 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
+  }
+  // HTTP 429 bodies that explicitly say "overloaded" should classify as
+  // overloaded, not as the generic rate-limit fallback (#98101).
+  if (leadingStatus?.code === 429 && isOverloadedErrorMessage(raw)) {
+    return toReasonClassification("overloaded");
   }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");
