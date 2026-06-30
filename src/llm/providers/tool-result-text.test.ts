@@ -1,7 +1,7 @@
 // Tool-result text extraction keeps provider replay text-first and bounded before
 // structured fallback content can cross external model-provider boundaries.
 import { describe, expect, it } from "vitest";
-import { extractToolResultText } from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 describe("extractToolResultText", () => {
   it("redacts structured secret fields with the shared tool-payload contract", () => {
@@ -116,5 +116,30 @@ describe("extractToolResultText", () => {
     expect(text.length).toBeLessThan(8_100);
     expect(text).toContain("…(truncated)…");
     expect(text).not.toContain(tail);
+  });
+});
+
+describe("describeToolResultMediaPlaceholder", () => {
+  it("describes image-only tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([{ type: "image", mimeType: "image/png", data: "img" }]),
+    ).toBe("(see attached image)");
+  });
+
+  it("describes audio-only tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "audio", mimeType: "audio/mpeg", data: "audio" },
+      ]),
+    ).toBe("(see attached audio)");
+  });
+
+  it("describes mixed image and audio tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "image", mimeType: "image/png", data: "img" },
+        { type: "audio", mimeType: "audio/mpeg", data: "audio" },
+      ]),
+    ).toBe("(see attached media)");
   });
 });

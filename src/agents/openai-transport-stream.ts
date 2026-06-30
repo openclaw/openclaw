@@ -27,7 +27,10 @@ import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deploy
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
-import { extractToolResultText } from "../llm/providers/tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -1278,6 +1281,7 @@ function convertResponsesMessages(
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -1286,7 +1290,11 @@ function convertResponsesMessages(
         output:
           hasImages && model.input.includes("image")
             ? ([
-                ...(hasText ? [{ type: "input_text", text: sanitizedTextResult }] : []),
+                ...(hasText
+                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  : mediaPlaceholder === "(see attached media)"
+                    ? [{ type: "input_text", text: mediaPlaceholder }]
+                    : []),
                 ...msg.content
                   .filter((item) => item.type === "image")
                   .map((item) => ({
@@ -1295,10 +1303,7 @@ function convertResponsesMessages(
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(
-                textResult,
-                hasImages ? "(see attached image)" : "(no output)",
-              ),
+            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;

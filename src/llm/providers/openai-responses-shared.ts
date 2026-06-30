@@ -49,7 +49,7 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
-import { extractToolResultText } from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -57,7 +57,6 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
 
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
@@ -405,6 +404,7 @@ export function convertResponsesMessages<TApi extends Api>(
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
 
@@ -416,6 +416,11 @@ export function convertResponsesMessages<TApi extends Api>(
           contentParts.push({
             type: "input_text",
             text: sanitizedTextResult,
+          });
+        } else if (mediaPlaceholder === "(see attached media)") {
+          contentParts.push({
+            type: "input_text",
+            text: mediaPlaceholder,
           });
         }
 
@@ -431,10 +436,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
         output = contentParts;
       } else {
-        output = sanitizeToolResultText(
-          textResult,
-          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
-        );
+        output = sanitizeToolResultText(textResult, mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT);
       }
 
       messages.push({

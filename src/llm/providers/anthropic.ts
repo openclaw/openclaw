@@ -68,7 +68,7 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
-import { extractToolResultText } from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
@@ -137,6 +137,7 @@ function convertContentBlocks(content: readonly unknown[]):
         }
     > {
   const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     Array.isArray(content) &&
     content.some(
@@ -145,7 +146,8 @@ function convertContentBlocks(content: readonly unknown[]):
     );
 
   if (!hasImages) {
-    return sanitizeSurrogates(text);
+    const sanitized = sanitizeSurrogates(text);
+    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
   }
 
   const blocks: Array<
@@ -163,7 +165,7 @@ function convertContentBlocks(content: readonly unknown[]):
   if (text.trim().length > 0) {
     blocks.push({ type: "text" as const, text: sanitizeSurrogates(text) });
   } else {
-    blocks.push({ type: "text" as const, text: "(see attached image)" });
+    blocks.push({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
   }
 
   for (const block of Array.isArray(content) ? content : []) {

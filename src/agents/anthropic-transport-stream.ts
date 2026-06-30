@@ -13,7 +13,10 @@ import {
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../llm/providers/anthropic-thinking-replay.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
-import { extractToolResultText } from "../llm/providers/tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -299,6 +302,7 @@ function toClaudeCodeName(name: string): string {
 
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     Array.isArray(content) &&
     content.some(
@@ -306,7 +310,7 @@ function convertContentBlocks(content: readonly unknown[]) {
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(text);
+    return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
   const blocks: Array<
     | { type: "text"; text: string }
@@ -318,7 +322,7 @@ function convertContentBlocks(content: readonly unknown[]) {
   if (text.trim().length > 0) {
     blocks.push({ type: "text", text: sanitizeTransportPayloadText(text) });
   } else {
-    blocks.push({ type: "text", text: "(see attached image)" });
+    blocks.push({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   for (const block of Array.isArray(content) ? content : []) {
     if (!block || typeof block !== "object") {
