@@ -99,11 +99,19 @@ async function publishProfileEvent(
   // Publish to each relay in parallel with timeout
   const publishPromises = relays.map(async (relay) => {
     try {
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
-      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("timeout")),
+            RELAY_PUBLISH_TIMEOUT_MS,
+          );
+        });
 
-      await Promise.race([...pool.publish([relay], event), timeoutPromise]);
+        await Promise.race([...pool.publish([relay], event), timeoutPromise]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
 
       successes.push(relay);
     } catch (err) {
