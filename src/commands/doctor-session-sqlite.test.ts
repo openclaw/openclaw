@@ -295,7 +295,7 @@ describe("runDoctorSessionSqlite", () => {
       mode: "import",
       store: store.storePath,
     });
-    const manifestPath = importReport.migrationRun?.manifestPath;
+    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
     manifest.targets[0].completedMoves = [];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -396,7 +396,7 @@ describe("runDoctorSessionSqlite", () => {
       mode: "import",
       store: store.storePath,
     });
-    const manifestPath = importReport.migrationRun?.manifestPath;
+    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
     manifest.targets[0].issues = [
@@ -436,7 +436,7 @@ describe("runDoctorSessionSqlite", () => {
       mode: "import",
       store: store.storePath,
     });
-    const manifestPath = importReport.migrationRun?.manifestPath;
+    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
     manifest.failedAt = "2030-01-01T00:00:00.000Z";
     manifest.targets[0].issues = [
@@ -938,6 +938,13 @@ function readMigrationManifest(manifestPath: string | undefined): TestMigrationM
     throw new Error("expected migration manifest path");
   }
   return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as TestMigrationManifest;
+}
+
+function requireMigrationManifestPath(manifestPath: string | undefined): string {
+  if (!manifestPath) {
+    throw new Error("expected migration manifest path");
+  }
+  return manifestPath;
 }
 
 function writeFailedManifest(
