@@ -118,6 +118,60 @@ function scanNamespacedInvoke(text: string, start: number): XmlishPrefixScan {
   return viable ? { kind: "viable" } : { kind: "no" };
 }
 
+// Matches the optional namespace plus the `function_calls` keyword as one unit,
+// mirroring scanNamespacedInvoke for the wrapper open. A partial of any allowed
+// `<ns>function_calls` spelling keeps the streamed prefix viable.
+function scanNamespacedFunctionCalls(text: string, start: number): XmlishPrefixScan {
+  let viable = false;
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    const scan = scanCaseInsensitiveLiteral(text, start, `${ns}function_calls`);
+    if (scan.kind === "complete") {
+      return scan;
+    }
+    if (scan.kind === "viable") {
+      viable = true;
+    }
+  }
+  return viable ? { kind: "viable" } : { kind: "no" };
+}
+
+// Walks the optional `<function_calls>` wrapper open one grammar phase at a time,
+// mirroring XMLISH_FUNCTION_CALLS_OPEN_RE (`^<\s*(?:antml:|mm:)?function_calls\s*>`).
+// A streamed buffer that ends partway through any phase stays viable; we only reject
+// once the text definitively cannot become a legal wrapper open. This keeps
+// grammar-legal split forms (`< function_calls >`, extra whitespace) buffered
+// instead of leaking as visible text mid-stream, the same way
+// isViableXmlishInvokeOpenPrefix guards the invoke open one level down.
+function isViableXmlishFunctionCallsOpenPrefix(text: string): boolean {
+  const length = text.length;
+  // Phase: leading `<`.
+  if (length === 0) {
+    return true;
+  }
+  if (text[0] !== "<") {
+    return false;
+  }
+  // Phase: optional whitespace, then optional namespace + `function_calls`.
+  let cursor = skipWhitespace(text, 1);
+  if (cursor >= length) {
+    return true;
+  }
+  const wrapper = scanNamespacedFunctionCalls(text, cursor);
+  if (wrapper.kind === "no") {
+    return false;
+  }
+  if (wrapper.kind === "viable") {
+    return true;
+  }
+  // Phase: optional whitespace, then the closing `>`. A complete wrapper open would
+  // already have matched XMLISH_FUNCTION_CALLS_OPEN_RE, so only the partial remains.
+  cursor = skipWhitespace(text, wrapper.cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  return text[cursor] === ">";
+}
+
 // Walks the attribute-dialect invoke open one grammar phase at a time, mirroring
 // XMLISH_INVOKE_OPEN_RE (`^<\s*(?:antml:|mm:)?invoke\s+name\s*=\s*(quoted)\s*>`). A
 // streamed buffer that ends partway through any phase stays viable; we only reject
@@ -224,11 +278,11 @@ function couldStillBeXmlishInvokeToolCall(
     const afterWrapper = text.slice(wrapperComplete[0].length).replace(/^\s+/, "");
     return afterWrapper.length === 0 || couldStillBeXmlishInvokeOpen(afterWrapper, matcher);
   }
-  // Still streaming the wrapper open tag itself keeps the buffer alive.
-  for (const ns of XMLISH_INVOKE_NAMESPACES) {
-    if (`<${ns}function_calls>`.startsWith(text)) {
-      return true;
-    }
+  // Still streaming the wrapper open tag itself keeps the buffer alive. Mirror the
+  // wrapper grammar's optional whitespace/namespace so a grammar-legal split such as
+  // `< function_calls` stays buffered instead of leaking as visible text.
+  if (isViableXmlishFunctionCallsOpenPrefix(text)) {
+    return true;
   }
   return couldStillBeXmlishInvokeOpen(text, matcher);
 }

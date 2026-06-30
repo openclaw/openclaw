@@ -160,6 +160,61 @@ async function expectWhitespaceSplitInvokeOpenPromotes(params: {
   }
 }
 
+// Streams a `<function_calls>` wrapper open whose whitespace is split across chunks,
+// then asserts the buffered wrapper prefix is promoted to a tool call instead of
+// leaking as visible text. The intermediate chunks land on grammar-legal whitespace
+// (a space after `<` or before `>`) that the literal wrapper-prefix recognizer used
+// to reject one level above the invoke open.
+async function expectWhitespaceSplitFunctionCallsWrapperPromotes(params: {
+  ns: string;
+  wrapperOpenChunks: readonly string[];
+}): Promise<void> {
+  const { ns, wrapperOpenChunks } = params;
+  const { source, stream } = createControlledPlainTextToolCallCompatStream();
+  const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+  const wrapperOpen = wrapperOpenChunks.join("");
+  const rawToolText = [
+    wrapperOpen,
+    `<${ns}invoke name="read">`,
+    `<${ns}parameter name="path">`,
+    "src/index.ts",
+    `</${ns}parameter>`,
+    `</${ns}invoke>`,
+    `</${ns}function_calls>`,
+  ].join("\n");
+
+  try {
+    source.push({ type: "start", partial: { content: [] } } as never);
+    expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+    for (const chunk of wrapperOpenChunks) {
+      source.push({ type: "text_delta", contentIndex: 0, delta: chunk } as never);
+    }
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText.slice(wrapperOpen.length),
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawToolText }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    // First event after `start` must be the promoted tool call, never a leaked
+    // text delta carrying the buffered wrapper markup.
+    const event = await nextEvent(iterator, "converted whitespace-split function_calls wrapper");
+    expect(event.type).toBe("toolcall_start");
+  } finally {
+    source.end();
+    await iterator.return?.();
+  }
+}
+
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
     expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
@@ -2301,6 +2356,21 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       ns: "",
       quote: "'",
       openChunks: ["<invoke name =", ` 'read'>`],
+    });
+  });
+
+  it("keeps whitespace-split function_calls wrappers buffered for conversion", async () => {
+    // `< function_calls >` (spaces inside the wrapper open) split mid-whitespace: the
+    // wrapper-prefix recognizer must stay viable across the split instead of flushing
+    // raw markup, the same grammar-drift class as the invoke open one level down.
+    await expectWhitespaceSplitFunctionCallsWrapperPromotes({
+      ns: "",
+      wrapperOpenChunks: ["< function_calls", " >"],
+    });
+    // Namespaced wrapper with a leading space after `<`, split inside the keyword run.
+    await expectWhitespaceSplitFunctionCallsWrapperPromotes({
+      ns: "antml:",
+      wrapperOpenChunks: ["< antml:function_calls", ">"],
     });
   });
 
