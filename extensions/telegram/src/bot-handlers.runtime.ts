@@ -31,6 +31,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { isDurablyRetryableMediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -68,7 +69,6 @@ import {
   hasInboundMedia,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
-  isRetryableMediaFetchError,
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -2273,7 +2273,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      const retryable = isRetryableMediaFetchError(mediaErr);
+      const retryable = isDurablyRetryableMediaFetchError(mediaErr);
       if (retryable) {
         // Keep the durable spool entry so a transient/shutdown media fetch
         // failure is re-driven after restart instead of acked and lost (#98076).

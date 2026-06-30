@@ -1015,3 +1015,65 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("isDurablyRetryableMediaFetchError", () => {
+  let isDurablyRetryableMediaFetchError: FetchModule["isDurablyRetryableMediaFetchError"];
+  let MediaFetchError: FetchModule["MediaFetchError"];
+
+  beforeAll(async () => {
+    const mod = await import("./fetch.js");
+    isDurablyRetryableMediaFetchError = mod.isDurablyRetryableMediaFetchError;
+    MediaFetchError = mod.MediaFetchError;
+  });
+
+  const transientCause = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  const abortCause = () => Object.assign(new Error("aborted"), { name: "AbortError" });
+
+  it("retries transient-network fetch failures", () => {
+    expect(
+      isDurablyRetryableMediaFetchError(
+        new MediaFetchError("fetch_failed", "x", { cause: transientCause() }),
+      ),
+    ).toBe(true);
+  });
+
+  it("retries shutdown/abort fetch failures the in-loop policy skips", () => {
+    expect(
+      isDurablyRetryableMediaFetchError(
+        new MediaFetchError("fetch_failed", "x", { cause: abortCause() }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not retry permanent fetch failures (SSRF/guard, local path)", () => {
+    expect(
+      isDurablyRetryableMediaFetchError(
+        new MediaFetchError("fetch_failed", "blocked: private address", {
+          cause: new Error("blocked: private address"),
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("retries 408/5xx HTTP errors but not other 4xx or size limits", () => {
+    for (const status of [408, 500, 502, 503, 504]) {
+      expect(
+        isDurablyRetryableMediaFetchError(new MediaFetchError("http_error", "x", { status })),
+      ).toBe(true);
+    }
+    for (const status of [400, 401, 403, 404, 429]) {
+      expect(
+        isDurablyRetryableMediaFetchError(new MediaFetchError("http_error", "x", { status })),
+      ).toBe(false);
+    }
+    expect(isDurablyRetryableMediaFetchError(new MediaFetchError("max_bytes", "too big"))).toBe(
+      false,
+    );
+  });
+
+  it("does not retry non-network non-MediaFetchError values", () => {
+    expect(isDurablyRetryableMediaFetchError(new Error("boom"))).toBe(false);
+    expect(isDurablyRetryableMediaFetchError("nope")).toBe(false);
+    expect(isDurablyRetryableMediaFetchError(undefined)).toBe(false);
+  });
+});

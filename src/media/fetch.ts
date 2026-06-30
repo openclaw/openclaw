@@ -550,6 +550,29 @@ function shouldRetryMediaFetch(err: unknown): boolean {
   return isTransientNetworkError(err);
 }
 
+/**
+ * Whether a media fetch failure should be retried by a durable ingress spool
+ * after a restart (e.g. Telegram inbound spool replay), as opposed to the
+ * in-fetch retry loop owned by {@link shouldRetryMediaFetch}.
+ *
+ * It retries everything the in-loop policy retries, plus shutdown/abort
+ * `fetch_failed` errors: an in-loop retry mid-shutdown is futile, but a
+ * restart-window abort is a primary inbound-media loss vector and is
+ * recoverable on replay. Permanent failures (size limit, non-retryable HTTP,
+ * and SSRF/guard or local-path `fetch_failed`) stay non-retryable so they do
+ * not loop in the spool.
+ */
+export function isDurablyRetryableMediaFetchError(err: unknown): boolean {
+  if (shouldRetryMediaFetch(err)) {
+    return true;
+  }
+  return (
+    err instanceof MediaFetchError &&
+    err.code === "fetch_failed" &&
+    (isAbortError(err) || isAbortError(err.cause))
+  );
+}
+
 async function withMediaFetchRetry<T>(
   options: FetchMediaOptions,
   fn: () => Promise<T>,
