@@ -233,6 +233,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
     const output = toolResultPayloadAt(onToolResult, 1);
@@ -247,6 +249,8 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { content: [{ type: "text", text: "file data" }] },
     });
 
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(3);
