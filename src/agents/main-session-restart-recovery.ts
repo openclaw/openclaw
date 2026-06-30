@@ -488,6 +488,34 @@ function findLastUserMessage(messages: unknown[]): string | undefined {
   return undefined;
 }
 
+/** Returns true when the message is an assistant text-only message (all content
+ *  blocks are type "text"). Custom/internal block types like reasoning, thinking,
+ *  branchSummary, bashExecution, or unknown content are excluded — they must
+ *  stay fail-closed and not trigger auto-resume after restart. */
+function isTextOnlyAssistantContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as { role?: unknown; content?: unknown };
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  const content = msg.content;
+  if (typeof content === "string") {
+    return true;
+  }
+  if (Array.isArray(content)) {
+    if (content.length === 0) {
+      return false;
+    }
+    return content.every(
+      (block) =>
+        block != null && typeof block === "object" && (block as { type?: unknown }).type === "text",
+    );
+  }
+  return false;
+}
+
 /** Canonical OpenClaw-normalized tool-call content-block types (see agents/tool-call-id.ts TOOL_CALL_TYPES).
  *  Includes snake_case and lowercase variants that appear in persisted transcript records
  *  (chat/tool-content.ts, gateway/chat-display-projection.ts, utils/transcript-tools.ts). */
@@ -995,7 +1023,8 @@ async function recoverStore(params: {
       const isNonResumableAssistantTail =
         resumeBlockReason === "transcript tail is not resumable" &&
         !isApprovalPendingToolResult(lastMeaningful) &&
-        hasInspectableContent(lastMeaningful);
+        hasInspectableContent(lastMeaningful) &&
+        isTextOnlyAssistantContent(lastMeaningful);
       if (isNonResumableAssistantTail) {
         let lastUserMessage = findLastUserMessage(messages);
         // The initial 20-message window may not contain a user message in

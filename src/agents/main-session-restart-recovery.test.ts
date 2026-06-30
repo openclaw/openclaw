@@ -1639,6 +1639,144 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.status).toBe("failed");
   });
 
+  it("gates reasoning-block assistant tails from auto-resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // Custom/internal reasoning block — not assistant text, must stay fail-closed.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "solve this math problem" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", reasoning: "Let me think step by step..." },
+          { type: "text", text: "The answer is 42." },
+        ],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // reasoning block tail → not text-only assistant, gated.
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("gates thinking-block assistant tails from auto-resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // thinking block — internal content type, must stay fail-closed.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "debug the issue" },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking logs..." }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // thinking block tail → not text-only assistant, gated.
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("gates branchSummary-block assistant tails from auto-resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // branchSummary block — internal content type, must stay fail-closed.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "summarize the branch" },
+      {
+        role: "assistant",
+        content: [{ type: "branchSummary", summary: "3 files changed" }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // branchSummary block tail → not text-only assistant, gated.
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("gates bashExecution-block assistant tails from auto-resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // bashExecution block — internal content type, must stay fail-closed.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tests" },
+      {
+        role: "assistant",
+        content: [{ type: "bashExecution", command: "npm test" }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // bashExecution block tail → not text-only assistant, gated.
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
+  it("gates unknown-content-block assistant tails from auto-resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    // Unknown content type — future-proofing: unrecognized types stay fail-closed.
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do something" },
+      {
+        role: "assistant",
+        content: [{ type: "unknownBlockType", data: "some data" }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // unknown block tail → not text-only assistant, gated.
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("failed");
+  });
+
   it("recovers when user message is beyond the recent 20-message window", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
