@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import type { AgentMessage } from "../runtime/index.js";
 import type { AgentEndEvent, ExtensionAPI, ExtensionFactory } from "../sessions/index.js";
 import { messageAnchorId } from "./accordion-blocks.js";
+import { associateSegmentationTopics } from "./associate-topics.js";
 import { isSuppressedMemoryNoise } from "./noise.js";
 import { segmentConversationTurns } from "./segment-spans.js";
 import { appendTurns, type NewTurn } from "./turns-store.js";
@@ -104,14 +105,22 @@ export function captureConversationTurns(opts: {
     ...(opts.env ? { env: opts.env } : {}),
   });
   try {
-    segmentConversationTurns({
+    const segmentation = segmentConversationTurns({
       agentId: opts.agentId,
       sessionKey: opts.sessionKey,
       ...(opts.env ? { env: opts.env } : {}),
     });
+    // Fuel the associative store from the same segmentation output: durable topic tags
+    // linked to their non-noise spans/boxes. Idempotent, so replaying a turn is safe.
+    associateSegmentationTopics({
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      segmentation,
+      ...(opts.env ? { env: opts.env } : {}),
+    });
   } catch (err) {
     console.warn(
-      `[conversational-memory] turn segmentation failed: ${err instanceof Error ? err.message : String(err)}`,
+      `[conversational-memory] turn segmentation/association failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
   return inserted;
