@@ -499,12 +499,8 @@ describe("devices cli approve", () => {
           }),
         ],
       })
-      .mockRejectedValueOnce(
-        Object.assign(new Error("unknown requestId"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-        }),
-      )
+      .mockRejectedValueOnce(new Error("device pairing approval denied"))
+      .mockRejectedValueOnce({ message: "unknown requestId", gatewayCode: "INVALID_REQUEST" })
       .mockResolvedValueOnce({
         nodes: [
           {
@@ -535,8 +531,8 @@ describe("devices cli approve", () => {
       "secret-token",
     ]);
 
-    expectGatewayCall(2, { method: "node.list" });
-    expectGatewayCall(3, { method: "device.pair.list" });
+    expectGatewayCall(3, { method: "node.list" });
+    expectGatewayCall(4, { method: "device.pair.list" });
     const errorOutput = readRuntimeErrorOutput();
     expect(errorOutput).toContain("unknown requestId");
     expect(errorOutput).toContain("Node reapproval pending for Colin's S25");

@@ -318,13 +318,19 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
 }
 
 function isUnknownRequestIdError(error: unknown): boolean {
-  const maybeGatewayError = error as (Error & { gatewayCode?: unknown }) | undefined;
-  return (
-    maybeGatewayError instanceof Error &&
-    maybeGatewayError.name === "GatewayClientRequestError" &&
-    maybeGatewayError.gatewayCode === "INVALID_REQUEST" &&
-    normalizeLowercaseStringOrEmpty(maybeGatewayError.message).includes("unknown requestid")
-  );
+  const maybeGatewayError =
+    typeof error === "object" && error !== null
+      ? (error as { gatewayCode?: unknown; message?: unknown })
+      : undefined;
+  const gatewayCode = maybeGatewayError?.gatewayCode;
+  if (gatewayCode !== undefined && gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message =
+    typeof maybeGatewayError?.message === "string"
+      ? maybeGatewayError.message
+      : normalizeErrorMessage(error);
+  return normalizeLowercaseStringOrEmpty(message).includes("unknown requestid");
 }
 
 function resolveLocalPairingFallback(
@@ -424,12 +430,19 @@ async function approvePairingWithFallback(
     );
   } catch (error) {
     if (isDevicePairingApprovalDenied(error) && !scopes?.includes(ADMIN_SCOPE)) {
-      return await callGatewayCli(
-        "device.pair.approve",
-        opts,
-        { requestId },
-        { scopes: [ADMIN_SCOPE] },
-      );
+      try {
+        return await callGatewayCli(
+          "device.pair.approve",
+          opts,
+          { requestId },
+          { scopes: [ADMIN_SCOPE] },
+        );
+      } catch (adminError) {
+        if (isUnknownRequestIdError(adminError)) {
+          return null;
+        }
+        throw adminError;
+      }
     }
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
