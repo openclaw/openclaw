@@ -310,6 +310,59 @@ import Testing
         #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
     }
 
+    @Test func keepsGatewaySpeechProviderInNativeModeWithoutRealtimeBlock() {
+        let config: [String: Any] = [
+            "talk": [
+                "provider": "xiaomi",
+                "providers": [
+                    "xiaomi": [
+                        "modelId": "mimo-tts",
+                        "voiceId": "xiaomi-voice",
+                    ],
+                ],
+                "resolved": [
+                    "provider": "xiaomi",
+                    "config": [
+                        "modelId": "mimo-tts",
+                        "voiceId": "xiaomi-voice",
+                    ],
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.activeProvider == "xiaomi")
+        #expect(parsed.executionMode == .native)
+        #expect(parsed.defaultModelId == "mimo-tts")
+        #expect(parsed.defaultVoiceId == "xiaomi-voice")
+
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(parsed)
+
+        #expect(!manager._test_gatewayTalkUsesRealtime())
+        #expect(!manager._test_gatewayTalkUsesRealtimeRelay())
+        #expect(manager._test_executionMode() == .native)
+        #expect(manager._test_gatewayTalkTransportLabel() == "Native")
+        #expect(manager._test_gatewayTalkProviderLabel() == "xiaomi")
+        #expect(manager._test_gatewayTalkDefaultModelId() == "mimo-tts")
+        #expect(TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "xiaomi"))
+        #expect(manager._test_canUseGatewayTalkSpeak())
+    }
+
+    @Test func doesNotRouteLocalOrRealtimeProvidersThroughGatewaySpeak() {
+        #expect(!TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "elevenlabs"))
+        #expect(!TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "system"))
+        #expect(!TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "openai"))
+        #expect(!TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "  "))
+        #expect(TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "microsoft"))
+    }
+
     @Test func mapsWebRTCRealtimeTransportToGatewayRelayOnIOS() {
         let config: [String: Any] = [
             "talk": [

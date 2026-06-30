@@ -1539,11 +1539,47 @@ final class TalkModeManager: NSObject {
             let voiceId: String? = if let apiKey, !apiKey.isEmpty {
                 await resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
             } else {
-                nil
+                preferredVoice
             }
-            let canUseElevenLabs = (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
+            let canUseGatewayTalkSpeak = self.canUseGatewayTalkSpeak()
+            let canUseElevenLabs = !canUseGatewayTalkSpeak && (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
 
-            if canUseElevenLabs, let voiceId, let apiKey {
+            if canUseGatewayTalkSpeak {
+                do {
+                    GatewayDiagnostics.log("talk tts: provider=\(self.activeTalkProvider) via gateway talk.speak")
+                    let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+                    self.applyVoiceModeDescriptor(TalkVoiceModeDescriptorBuilder.build(
+                        providerId: self.activeTalkProvider,
+                        providerLabel: Self.displayName(forProvider: self.activeTalkProvider),
+                        modelId: modelId,
+                        voiceId: voiceId,
+                        transport: "gateway",
+                        isRealtime: false))
+                    self.startSpeechInterruptionRecognitionIfNeeded()
+                    self.statusText = "Speaking (Gateway)…"
+                    try await self.playGatewayTalkSpeak(
+                        text: cleaned,
+                        directive: directive,
+                        voiceId: voiceId,
+                        modelId: modelId,
+                        outputFormat: self.defaultOutputFormat,
+                        language: language)
+                } catch {
+                    self.logger.error(
+                        "gateway talk.speak failed: \(error.localizedDescription, privacy: .public); falling back to system voice")
+                    GatewayDiagnostics.log("talk tts: provider=system (gateway talk.speak error)")
+                    self.applyVoiceModeDescriptor(TalkVoiceModeDescriptorBuilder.build(
+                        providerId: "system",
+                        providerLabel: Self.displayName(forProvider: "system"),
+                        modelId: nil,
+                        voiceId: language,
+                        transport: "native",
+                        isRealtime: false))
+                    self.startSpeechInterruptionRecognitionIfNeeded()
+                    self.statusText = "Speaking (System)…"
+                    try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                }
+            } else if canUseElevenLabs, let voiceId, let apiKey {
                 GatewayDiagnostics.log("talk tts: provider=elevenlabs voiceId=\(voiceId)")
                 let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
                 self.applyVoiceModeDescriptor(TalkVoiceModeDescriptorBuilder.build(
@@ -1656,6 +1692,15 @@ final class TalkModeManager: NSObject {
         self.restoreConfiguredVoiceModeDescriptor()
     }
 
+    private func canUseGatewayTalkSpeak() -> Bool {
+        self.executionMode == .native && Self.shouldUseGatewayTalkSpeak(provider: self.activeTalkProvider)
+    }
+
+    private static func shouldUseGatewayTalkSpeak(provider: String) -> Bool {
+        let normalized = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !normalized.isEmpty && normalized != Self.defaultTalkProvider && normalized != "system" && normalized != "openai"
+    }
+
     private func resolvedElevenLabsAPIKey() -> String? {
         let configuredKey = self.apiKey?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1688,6 +1733,97 @@ final class TalkModeManager: NSObject {
             normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
             language: language,
             latencyTier: TalkTTSValidation.validatedLatencyTier(directive?.latencyTier))
+    }
+
+    private func playGatewayTalkSpeak(
+        text: String,
+        directive: TalkDirective?,
+        voiceId: String?,
+        modelId: String?,
+        outputFormat: String?,
+        language: String?) async throws
+    {
+        guard let gateway else {
+            throw NSError(domain: "TalkSpeak", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "gateway not connected",
+            ])
+        }
+        var params: [String: Any] = ["text": text]
+        Self.addTalkSpeakStringParam(&params, key: "voiceId", value: voiceId)
+        Self.addTalkSpeakStringParam(&params, key: "modelId", value: directive?.modelId ?? modelId)
+        Self.addTalkSpeakStringParam(&params, key: "outputFormat", value: directive?.outputFormat ?? outputFormat)
+        if let speed = directive?.speed {
+            params["speed"] = speed
+        }
+        if let rateWPM = directive?.rateWPM {
+            params["rateWpm"] = rateWPM
+        }
+        if let stability = directive?.stability {
+            params["stability"] = stability
+        }
+        if let similarity = directive?.similarity {
+            params["similarity"] = similarity
+        }
+        if let style = directive?.style {
+            params["style"] = style
+        }
+        if let speakerBoost = directive?.speakerBoost {
+            params["speakerBoost"] = speakerBoost
+        }
+        if let seed = directive?.seed {
+            params["seed"] = seed
+        }
+        Self.addTalkSpeakStringParam(&params, key: "normalize", value: directive?.normalize)
+        Self.addTalkSpeakStringParam(&params, key: "language", value: directive?.language ?? language)
+        if let latencyTier = directive?.latencyTier {
+            params["latencyTier"] = latencyTier
+        }
+
+        let payload = try JSONSerialization.data(withJSONObject: params)
+        guard let paramsJSON = String(data: payload, encoding: .utf8) else {
+            throw NSError(domain: "TalkSpeak", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "failed to encode talk.speak params",
+            ])
+        }
+        let response = try await gateway.request(
+            method: "talk.speak",
+            paramsJSON: paramsJSON,
+            timeoutSeconds: 35)
+        let result = try JSONDecoder().decode(TalkSpeakResult.self, from: response)
+        guard let audioData = Data(base64Encoded: result.audiobase64), !audioData.isEmpty else {
+            throw NSError(domain: "TalkSpeak", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio",
+            ])
+        }
+
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            continuation.yield(audioData)
+            continuation.finish()
+        }
+        let sampleRate = TalkTTSValidation.pcmSampleRate(from: result.outputformat)
+        let playback: StreamingPlaybackResult
+        if let sampleRate {
+            self.lastPlaybackWasPCM = true
+            playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
+        } else {
+            self.lastPlaybackWasPCM = false
+            playback = await self.mp3Player.play(stream: stream)
+        }
+        self.logger.info(
+            "gateway talk.speak provider=\(result.provider, privacy: .public) " +
+                "format=\(result.outputformat ?? "unknown", privacy: .public) " +
+                "finished=\(playback.finished, privacy: .public)")
+        if !playback.finished, playback.interruptedAt == nil {
+            throw NSError(domain: "TalkSpeak", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed",
+            ])
+        }
+    }
+
+    private static func addTalkSpeakStringParam(_ params: inout [String: Any], key: String, value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return }
+        params[key] = trimmed
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded() {
@@ -2677,7 +2813,7 @@ extension TalkModeManager {
             realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
         }
 
-        let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider || executionMode != .native
+        let usesRealtimeConfig = executionMode != .native
         self.activeTalkProvider = activeProvider
         self.executionMode = executionMode
         self.realtimeWebRTCEnabled = usesRealtimeConfig
@@ -3092,6 +3228,14 @@ extension TalkModeManager {
         self.applyOpenAIRealtimeSelectionDefaults()
     }
 
+    func _test_applyLoadedTalkConfig(_ parsed: TalkModeGatewayConfigState) {
+        self.applyLoadedTalkConfig(parsed, redactedFallbackMissingScope: nil)
+    }
+
+    static func _test_shouldUseGatewayTalkSpeak(provider: String) -> Bool {
+        self.shouldUseGatewayTalkSpeak(provider: provider)
+    }
+
     func _test_executionMode() -> TalkModeExecutionMode {
         self.executionMode
     }
@@ -3106,6 +3250,26 @@ extension TalkModeManager {
 
     func _test_gatewayTalkUsesRealtimeRelay() -> Bool {
         self.gatewayTalkUsesRealtimeRelay
+    }
+
+    func _test_gatewayTalkUsesRealtime() -> Bool {
+        self.gatewayTalkUsesRealtime
+    }
+
+    func _test_gatewayTalkTransportLabel() -> String {
+        self.gatewayTalkTransportLabel
+    }
+
+    func _test_gatewayTalkProviderLabel() -> String {
+        self.gatewayTalkProviderLabel
+    }
+
+    func _test_gatewayTalkDefaultModelId() -> String? {
+        self.gatewayTalkDefaultModelId
+    }
+
+    func _test_canUseGatewayTalkSpeak() -> Bool {
+        self.canUseGatewayTalkSpeak()
     }
 
     func _test_markNativeFallbackActive(after issue: TalkRuntimeIssue) {
