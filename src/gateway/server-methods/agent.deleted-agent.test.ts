@@ -1,6 +1,3 @@
-/**
- * Tests that the agent RPC rejects deleted-agent sessions before dispatch.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { agentHandlers } from "./agent.js";
@@ -100,8 +97,6 @@ describe("agent RPC deleted-agent guard", () => {
       code: ErrorCodes.INVALID_REQUEST,
       message: 'Agent "deleted-agent" no longer exists in configuration',
     });
-    // Guard runs before attachment parsing (inbound media offload), the
-    // pre-accept dedupe reservation, and run dispatch.
     expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
     expect(dedupe.size).toBe(0);
     expect(agentCommandFromIngressMock).not.toHaveBeenCalled();

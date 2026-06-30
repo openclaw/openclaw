@@ -1,6 +1,3 @@
-/**
- * Live Gateway integration tests for deleted-agent guard on agent RPC.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
