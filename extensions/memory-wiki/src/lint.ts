@@ -15,6 +15,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   isUnmanagedRawSourceSummary,
+  parseWikiMarkdown,
   renderWikiMarkdown,
   type WikiPageSummary,
 } from "./markdown.js";
@@ -370,6 +371,9 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
       body: "# Lint Report\n",
     }),
   );
+  // The lint report is itself a wiki page. Keep its metadata fail-closed before
+  // replacing the managed body so malformed frontmatter is never rewritten.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",

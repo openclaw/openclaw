@@ -537,4 +537,29 @@ describe("lintMemoryWikiVault", () => {
       "Frontmatter failed to parse: Unexpected scalar",
     );
   });
+
+  it("rejects a malformed lint report without changing its bytes", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-malformed-report-",
+    });
+    const reportPath = path.join(rootDir, "reports", "lint.md");
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    const malformedReport = [
+      "---",
+      "pageType: report",
+      "id: report.lint",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Lint Report",
+      "",
+      "Existing report body.",
+      "",
+    ].join("\n");
+    await fs.writeFile(reportPath, malformedReport, "utf8");
+
+    await expect(lintMemoryWikiVault(config)).rejects.toThrow("Unexpected scalar");
+    await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+  });
 });
