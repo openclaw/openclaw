@@ -259,7 +259,11 @@ export async function containerRestRequest<T = unknown>(
     return undefined as T;
   }
 
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Signal REST returned malformed JSON");
+  }
 }
 
 /**
