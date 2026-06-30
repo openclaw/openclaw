@@ -166,6 +166,11 @@ export type API = {
       }
     >;
   }>;
+  getGroupLinkDetail(groupId: string): Promise<{
+    link?: string;
+    expiration_date?: number;
+    enabled: number;
+  }>;
   sendMessage(
     message: string | Record<string, unknown>,
     threadId: string,
