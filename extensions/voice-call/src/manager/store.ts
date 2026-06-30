@@ -400,12 +400,16 @@ export async function getCallHistoryFromStore(
  *  for the same call (e.g., state transitions persisted over time). */
 export function getCallFromStore(storePath: string, callId: CallId): CallRecord | undefined {
   const stores = tryCreateCallRecordStateStores(storePath);
-  if (!stores) return undefined;
+  if (!stores) {
+    return undefined;
+  }
   try {
     const events = readCallRecordEvents(stores);
     // readCallRecordEvents returns oldest-first; find the latest match (#96727).
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].callId === callId) return events[i];
+      if (events[i].callId === callId) {
+        return events[i];
+      }
     }
     return undefined;
   } catch {
@@ -421,12 +425,16 @@ export function getCallByProviderCallIdFromStore(
   providerCallId: string,
 ): CallRecord | undefined {
   const stores = tryCreateCallRecordStateStores(storePath);
-  if (!stores) return undefined;
+  if (!stores) {
+    return undefined;
+  }
   try {
     const events = readCallRecordEvents(stores);
     // readCallRecordEvents returns oldest-first; find the latest match (#96727).
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].providerCallId === providerCallId) return events[i];
+      if (events[i].providerCallId === providerCallId) {
+        return events[i];
+      }
     }
     return undefined;
   } catch {
