@@ -97,11 +97,9 @@ export async function runPluginPayloadSmokeCheck(params: {
         );
         continue;
       }
-    } else {
-      if (!isBundleRecord) {
-        failures.push(formatPackagePayloadReadFailure({ pluginId, installPath, packagePayload }));
-        continue;
-      }
+    } else if (!isBundleRecord) {
+      failures.push(formatPackagePayloadReadFailure({ pluginId, installPath, packagePayload }));
+      continue;
     }
 
     const bundleFailure = validateBundleInstallRecordPayload({ pluginId, installPath, record });
