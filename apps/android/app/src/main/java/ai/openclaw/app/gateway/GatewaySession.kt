@@ -385,6 +385,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private val pendingIds = ConcurrentHashMap.newKeySet<String>()
     private val messagePumpJob =
       scope.launch(Dispatchers.IO) {
         for (text in incomingMessages) {
@@ -422,17 +423,20 @@ class GatewaySession(
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
+      pendingIds.add(id)
+      if (isClosed.get()) {
+        pending.remove(id)
+        pendingIds.remove(id)
+        throw IllegalStateException("Gateway closed")
+      }
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
-      } catch (err: Throwable) {
-        pending.remove(id)
-        throw err
-      }
-      return try {
-        withTimeout(timeoutMs) { deferred.await() }
+        return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
-        pending.remove(id)
         throw IllegalStateException("request timeout")
+      } finally {
+        pending.remove(id)
+        pendingIds.remove(id)
       }
     }
 
@@ -445,23 +449,36 @@ class GatewaySession(
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
+      pendingIds.add(id)
+      if (isClosed.get()) {
+        pending.remove(id)
+        pendingIds.remove(id)
+        throw IllegalStateException("Gateway closed")
+      }
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
         pending.remove(id)
+        pendingIds.remove(id)
         throw err
       }
       scope.launch(Dispatchers.IO) {
-        val response =
-          try {
-            withTimeout(timeoutMs) { deferred.await() }
-          } catch (_: TimeoutCancellationException) {
-            pending.remove(id)
-            onError(ErrorShape("UNAVAILABLE", "request timeout"))
-            return@launch
+        try {
+          val response =
+            try {
+              withTimeout(timeoutMs) { deferred.await() }
+            } catch (_: TimeoutCancellationException) {
+              onError(ErrorShape("UNAVAILABLE", "request timeout"))
+              return@launch
+            } catch (_: CancellationException) {
+              return@launch
+            }
+          if (!response.ok) {
+            onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
           }
-        if (!response.ok) {
-          onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        } finally {
+          pending.remove(id)
+          pendingIds.remove(id)
         }
       }
     }
@@ -496,6 +513,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
         }
+        failPending()
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
@@ -894,6 +912,7 @@ class GatewaySession(
           ErrorShape(code, msg, details)
         }
       pending.remove(id)?.complete(RpcResponse(id, ok, payloadJson, error))
+      pendingIds.remove(id)
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -1003,10 +1022,10 @@ class GatewaySession(
     }
 
     private fun failPending() {
-      for ((_, waiter) in pending) {
-        waiter.cancel()
+      for (id in pendingIds) {
+        pending.remove(id)?.cancel()
       }
-      pending.clear()
+      pendingIds.clear()
     }
   }
 
