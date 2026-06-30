@@ -24,7 +24,7 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
-import { canMutateCodexHost } from "./command-authorization.js";
+import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import {
   buildHelp,
   formatAccount,
@@ -233,6 +233,12 @@ const CODEX_NATIVE_EXECUTION_SUBCOMMANDS = new Set([
   "compact",
   "review",
 ]);
+const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
+  ...CODEX_NATIVE_EXECUTION_SUBCOMMANDS,
+  "detach",
+  "unbind",
+  "stop",
+]);
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
@@ -377,6 +383,13 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
+  }
+  if (
+    CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
+    !returnsBeforeNativeCodexExecution(normalized, rest) &&
+    !canMutateCodexHost(ctx)
+  ) {
+    return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
   }
   const sandboxBlock = resolveCodexNativeCommandSandboxBlock(ctx, normalized, rest);
   if (sandboxBlock) {
@@ -603,6 +616,8 @@ function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly st
       );
     case "compact":
     case "review":
+    case "detach":
+    case "unbind":
     case "stop":
       return args.length > 0;
     default:
@@ -1000,14 +1015,14 @@ async function setConversationPermissions(
   if (args.length > 1) {
     return "Usage: /codex permissions [default|yolo|status]";
   }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
-    return "Cannot set Codex permissions because this command did not include an OpenClaw session file.";
-  }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
     return "Usage: /codex permissions [default|yolo|status]";
+  }
+  const target = await resolveControlTarget(ctx);
+  if (!target) {
+    return "Cannot set Codex permissions because this command did not include an OpenClaw session file.";
   }
   return await deps.setCodexConversationPermissions({
     sessionFile: target.sessionFile,

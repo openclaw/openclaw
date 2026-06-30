@@ -104,6 +104,7 @@ import {
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   isNativeCommandTurn,
   resolveCommandTurnContext,
@@ -2148,12 +2149,23 @@ export async function dispatchReplyFromConfig(
       logVerbose(
         `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
       );
+      // Bound native runtimes need the current owner decision, not stale bind-time identity.
+      // The resolver folds internal operator.admin authority into this owner decision.
+      const bindingAuthorization = resolveCommandAuthorization({
+        ctx,
+        cfg,
+        commandAuthorized: ctx.CommandAuthorized,
+      });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
             await prepareHookMediaMetadata();
+            const authorizedInboundClaimEvent = {
+              ...inboundClaimEvent,
+              senderIsOwner: bindingAuthorization.senderIsOwner,
+            };
             return hookRunner.runInboundClaimForPluginOutcome(
               pluginOwnedBinding.pluginId,
-              inboundClaimEvent,
+              authorizedInboundClaimEvent,
               { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
             );
           })()

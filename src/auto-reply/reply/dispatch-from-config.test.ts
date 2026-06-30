@@ -6576,6 +6576,8 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
+      OwnerAllowFrom: ["user-9"],
+      GatewayClientScopes: ["operator.write"],
       CommandAuthorized: true,
       WasMentioned: false,
       CommandBody: "who are you",
@@ -6594,7 +6596,13 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0] as unknown as
       | [
           unknown,
-          { accountId?: unknown; channel?: unknown; content?: unknown; conversationId?: unknown },
+          {
+            accountId?: unknown;
+            channel?: unknown;
+            content?: unknown;
+            conversationId?: unknown;
+            senderIsOwner?: unknown;
+          },
           {
             accountId?: unknown;
             channelId?: unknown;
@@ -6608,6 +6616,8 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
     expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
+    expect(inboundClaimCall?.[1]?.senderIsOwner).toBe(true);
+    expect(inboundClaimCall?.[1]).not.toHaveProperty("gatewayClientScopes");
     expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
     expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
