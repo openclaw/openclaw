@@ -1453,44 +1453,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId = inferredAgentId;
       }
     }
-    // Drop an exec-approval followup whose session key was rebound by /new or
-    // /reset while the approval was pending, before the handler touches the
-    // rebound session (store write, run registration, dedupe, accepted ack).
-    if (execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
-      const expectedSessionId = normalizeOptionalString(
-        request.execApprovalFollowupExpectedSessionId,
-      );
-      let currentSessionId: string | undefined;
-      try {
-        currentSessionId = normalizeOptionalString(
-          loadSessionEntry(requestedSessionKeyRaw).entry?.sessionId,
-        );
-      } catch {
-        currentSessionId = undefined;
-      }
-      if (
-        isExecApprovalFollowupSessionRebound({
-          expectedSessionId,
-          resolvedSessionId: currentSessionId,
-        })
-      ) {
-        context.logGateway.info(
-          `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
-        );
-        const droppedPayload = {
-          runId,
-          status: "ok" as const,
-          summary: "exec approval followup dropped: session was reset before the approval resolved",
-        };
-        setGatewayDedupeEntries({
-          dedupe: context.dedupe,
-          keys: agentDedupeKeys,
-          entry: { ts: Date.now(), ok: true, payload: droppedPayload },
-        });
-        respond(true, droppedPayload, undefined, { runId });
-        return;
-      }
-    }
     let requestedSessionKey =
       requestedSessionKeyRaw ??
       (!requestedSessionId
@@ -1529,6 +1491,44 @@ export const agentHandlers: GatewayRequestHandlers = {
       respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
     ) {
       return;
+    }
+    // Drop an exec-approval followup whose session key was rebound by /new or
+    // /reset while the approval was pending, before the handler touches the
+    // rebound session (store write, run registration, dedupe, accepted ack).
+    if (execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
+      const expectedSessionId = normalizeOptionalString(
+        request.execApprovalFollowupExpectedSessionId,
+      );
+      let currentSessionId: string | undefined;
+      try {
+        currentSessionId = normalizeOptionalString(
+          loadSessionEntry(requestedSessionKeyRaw).entry?.sessionId,
+        );
+      } catch {
+        currentSessionId = undefined;
+      }
+      if (
+        isExecApprovalFollowupSessionRebound({
+          expectedSessionId,
+          resolvedSessionId: currentSessionId,
+        })
+      ) {
+        context.logGateway.info(
+          `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
+        );
+        const droppedPayload = {
+          runId,
+          status: "ok" as const,
+          summary: "exec approval followup dropped: session was reset before the approval resolved",
+        };
+        setGatewayDedupeEntries({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+          entry: { ts: Date.now(), ok: true, payload: droppedPayload },
+        });
+        respond(true, droppedPayload, undefined, { runId });
+        return;
+      }
     }
     // Reserve the run before awaited attachment/session/delivery work so duplicate calls dedupe and
     // pre-registration chat.abort can be made durable by idempotency key.
