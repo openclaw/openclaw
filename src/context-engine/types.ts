@@ -47,6 +47,46 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
+export type ContextEngineControlOperation = "status" | "doctor" | "rotate";
+
+export type ContextEngineControlCapabilities = {
+  status: boolean;
+  doctor: boolean;
+  rotate: boolean;
+};
+
+export type ContextEngineControlStatusResult = {
+  operation: "status";
+  active: boolean;
+  messageCount: number;
+  lastRotatedAt: string | null;
+};
+
+export type ContextEngineControlDoctorResult = {
+  operation: "doctor";
+  ok: boolean;
+  warnings: string[];
+};
+
+export type ContextEngineControlRotateResult = {
+  operation: "rotate";
+  messageCount: number;
+  lastRotatedAt: string;
+};
+
+export type ContextEngineControlResult =
+  | ContextEngineControlStatusResult
+  | ContextEngineControlDoctorResult
+  | ContextEngineControlRotateResult;
+
+export type ContextEngineControlRequest = {
+  agentId?: string;
+  operation: ContextEngineControlOperation;
+  sessionId?: string;
+  sessionKey?: string;
+  runtimeContext?: Record<string, unknown>;
+};
+
 export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
 
 export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
@@ -421,6 +461,16 @@ export interface ContextEngine {
      */
     abortSignal?: AbortSignal;
   }): Promise<CompactResult>;
+
+  /**
+   * Optional safe control surface used by authenticated product/runtime hosts.
+   * Results must be sanitized and bounded; transcript text, local paths,
+   * credentials, provider debug, and shell output do not belong here.
+   */
+  getControlCapabilities?():
+    | ContextEngineControlCapabilities
+    | Promise<ContextEngineControlCapabilities>;
+  control?(params: ContextEngineControlRequest): Promise<ContextEngineControlResult>;
 
   /**
    * Prepare context-engine-managed subagent state before the child run starts.
