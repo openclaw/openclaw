@@ -1216,6 +1216,7 @@ function createRawOllamaStreamFn(
           auditContext: "ollama-stream.chat",
         });
 
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         try {
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
@@ -1228,7 +1229,7 @@ function createRawOllamaStreamFn(
             throw new Error("Ollama API returned empty response body");
           }
 
-          const reader = response.body.getReader();
+          reader = response.body.getReader();
           let accumulatedRawContent = "";
           let accumulatedVisibleContent = "";
           let accumulatedThinking = "";
@@ -1464,7 +1465,7 @@ function createRawOllamaStreamFn(
           });
         } finally {
           try {
-            reader.releaseLock();
+            reader?.releaseLock();
           } catch {}
           await release();
         }
