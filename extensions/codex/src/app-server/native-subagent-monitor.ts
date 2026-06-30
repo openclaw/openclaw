@@ -697,6 +697,7 @@ export class CodexNativeSubagentMonitor {
           `${childState.completionDeliveryAttempt} attempts`,
       });
     }
+    const finalAttempts = childState.completionDeliveryAttempt;
     childState.pendingCompletion = undefined;
     childState.pendingCompletionEventAt = undefined;
     childState.completionDeliveryAttempt = 0;
@@ -708,7 +709,7 @@ export class CodexNativeSubagentMonitor {
     embeddedAgentLog.warn("Gave up delivering Codex native subagent completion", {
       parentThreadId: childState.parentThreadId,
       childThreadId: childState.childThreadId,
-      attempts: childState.completionDeliveryAttempt,
+      attempts: finalAttempts,
     });
   }
 
