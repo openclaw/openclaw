@@ -105,31 +105,58 @@ type StoreRows = {
 };
 
 /**
- * Replay the rule step-by-step over the non-noise seqs. State is carried forward: once a box
- * collapses it stays collapsed (the accordion never auto-re-expands), so each box's collapse seq
- * is the FIRST step its id appears in the rule's output. Returns the collapse seq per box.
+ * Replay the rule step-by-step over the non-noise seqs. The rule is evaluated once per distinct
+ * non-noise seq (a faithful replay — we never reimplement decideAutoCollapse), but the per-step
+ * overhead is kept flat: the growing prefix is extended with sorted-array pointers instead of
+ * re-filtering the whole history every step, and a single box-state array is mutated in place
+ * instead of rebuilt. State is carried forward — once a box collapses it stays collapsed (the
+ * accordion never auto-re-expands), so each box's collapse seq is the FIRST step its id appears
+ * in the rule's output. Returns the collapse seq per box.
  */
 function replayCollapseSeqs(rows: StoreRows, params: CollapseParams): Map<string, number> {
+  // getTurns/listSpans already order ascending; sort defensively so the pointer walk is correct
+  // regardless of caller-supplied row order. Span order does not affect decideAutoCollapse output.
+  const sortedTurns = [...rows.turns].toSorted((a, b) => a.seq - b.seq);
+  const sortedSpans = [...rows.spans].toSorted((a, b) => a.start_seq - b.start_seq);
   const stepSeqs = [
-    ...new Set(rows.turns.filter((t) => t.noise_class !== "suppressed").map((t) => t.seq)),
+    ...new Set(sortedTurns.filter((t) => t.noise_class !== "suppressed").map((t) => t.seq)),
   ].toSorted((a, b) => a - b);
+
+  const prefixTurns: CollapseInput["turns"][number][] = [];
+  const prefixSpans: CollapseInput["spans"][number][] = [];
+  const boxInput: BoxLike[] = rows.boxes.map((box) => ({ ...box, state: "live" }));
+  const boxIndexById = new Map(boxInput.map((box, index) => [box.box_id, index]));
   const collapseSeqByBox = new Map<string, number>();
+
+  let turnIdx = 0;
+  let spanIdx = 0;
   for (const step of stepSeqs) {
-    const prefixTurns = rows.turns.filter((t) => t.seq <= step);
+    while (turnIdx < sortedTurns.length && sortedTurns[turnIdx].seq <= step) {
+      prefixTurns.push(sortedTurns[turnIdx]);
+      turnIdx += 1;
+    }
     // Only spans started by this step exist yet — bounds box topics to what was seen so far.
-    const prefixSpans = rows.spans.filter((s) => s.start_seq <= step);
-    const boxInput: BoxLike[] = rows.boxes.map((box) => ({
-      ...box,
-      state: collapseSeqByBox.has(box.box_id) ? "collapsed" : "live",
-    }));
+    while (spanIdx < sortedSpans.length && sortedSpans[spanIdx].start_seq <= step) {
+      prefixSpans.push(sortedSpans[spanIdx]);
+      spanIdx += 1;
+    }
     const collapsed = decideAutoCollapse(
       { turns: prefixTurns, spans: prefixSpans, boxes: boxInput },
       params,
     );
     for (const boxId of collapsed) {
-      if (!collapseSeqByBox.has(boxId)) {
-        collapseSeqByBox.set(boxId, step);
+      if (collapseSeqByBox.has(boxId)) {
+        continue;
       }
+      collapseSeqByBox.set(boxId, step);
+      const index = boxIndexById.get(boxId);
+      if (index !== undefined) {
+        boxInput[index] = { ...boxInput[index], state: "collapsed" };
+      }
+    }
+    // Every box has collapsed and the rule never re-expands — no later step can change anything.
+    if (collapseSeqByBox.size === boxInput.length) {
+      break;
     }
   }
   return collapseSeqByBox;
@@ -214,7 +241,6 @@ export function runTuningHarness(options: {
     boxes,
     entities: resolveEntityOccurrences(spans, associations),
   });
-  const headSeq = reference.totalNonNoiseTurns === 0 ? 0 : Math.max(...turns.map((t) => t.seq));
 
   const candidates = options.candidates ?? defaultCandidates();
   const rows: StoreRows = { turns, spans, boxes };
@@ -222,7 +248,7 @@ export function runTuningHarness(options: {
   const ranked: RankedCandidate[] = candidates.map((candidate) => {
     const collapseSeqByBox = replayCollapseSeqs(rows, candidate.params);
     collapseMaps.set(candidate.name, collapseSeqByBox);
-    const score = scoreCandidate({ events: eventsFromMap(collapseSeqByBox), headSeq }, reference);
+    const score = scoreCandidate({ events: eventsFromMap(collapseSeqByBox) }, reference);
     return { name: candidate.name, params: candidate.params, score };
   });
   // Recall-safety-first: higher value wins; ties broken by name for determinism.

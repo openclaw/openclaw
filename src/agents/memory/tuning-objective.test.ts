@@ -51,10 +51,7 @@ describe("scoreCandidate", () => {
       spans: [span("box-B", "sol", 1, 3), span("box-B", "sol", 8, 10)],
       boxes: [{ box_id: "box-B" }],
     });
-    const score = scoreCandidate(
-      { events: [{ boxId: "box-B", collapseSeq: 5 }], headSeq: 10 },
-      reference,
-    );
+    const score = scoreCandidate({ events: [{ boxId: "box-B", collapseSeq: 5 }] }, reference);
     expect(score.recallFailures).toBe(1); // collapsed at 5, needed again at 8
   });
 
@@ -67,14 +64,8 @@ describe("scoreCandidate", () => {
       entities: [{ boxId: "box-2", seq: 9 }],
     });
     // Both collapse at seq 6 and hide exactly 2 owned turns → identical savings.
-    const safe = scoreCandidate(
-      { events: [{ boxId: "box-1", collapseSeq: 6 }], headSeq: 10 },
-      reference,
-    );
-    const unsafe = scoreCandidate(
-      { events: [{ boxId: "box-2", collapseSeq: 6 }], headSeq: 10 },
-      reference,
-    );
+    const safe = scoreCandidate({ events: [{ boxId: "box-1", collapseSeq: 6 }] }, reference);
+    const unsafe = scoreCandidate({ events: [{ boxId: "box-2", collapseSeq: 6 }] }, reference);
 
     expect(safe.savings).toBe(unsafe.savings); // tie on the secondary term
     expect(safe.recallFailures).toBe(0);

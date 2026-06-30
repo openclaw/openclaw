@@ -18,8 +18,6 @@ export type CollapseEvent = { boxId: string; collapseSeq: number };
 /** A candidate's collapse decisions over the replayed history. */
 export type CollapseTimeline = {
   events: readonly CollapseEvent[];
-  /** Last non-noise seq in history; future-need is measured relative to it. */
-  headSeq: number;
 };
 
 /** Closed score shape. Higher `value` is better; recall failures dominate. */

@@ -10,7 +10,7 @@
  */
 import { runBackfillOrganize } from "../agents/memory/backfill-organize.js";
 import { runBackfillSeed } from "../agents/memory/backfill-seed.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 export type MemoryBackfillCommandOptions = {
@@ -23,10 +23,11 @@ export type MemoryBackfillCommandOptions = {
 };
 
 /**
- * Validate the operator-supplied agent id, then run seed → organize foreground. Returns the
- * normalized id only when the raw input is already a clean id: a value that the normalizer
- * would coerce to a DIFFERENT id (e.g. `../other`) is rejected rather than silently
- * targeting another agent's data (V5 — no traversal before path resolution).
+ * Validate the operator-supplied agent id with the canonical `isValidAgentId` (VALID_ID_RE),
+ * then return its normalized form. Rejecting up front with the same predicate the rest of the
+ * system uses means a malformed id (leading `_`/`-`, path traversal like `../other`, embedded
+ * dots) never reaches path/DB resolution (V5 — no traversal before path resolution); we do NOT
+ * let `normalizeAgentId` silently coerce a bad id into a different agent's data.
  */
 function resolveCommandAgentId(raw: string | undefined, runtime: RuntimeEnv): string | null {
   const trimmed = raw?.trim();
@@ -35,13 +36,12 @@ function resolveCommandAgentId(raw: string | undefined, runtime: RuntimeEnv): st
     runtime.exit(1);
     return null;
   }
-  const agentId = normalizeAgentId(trimmed);
-  if (agentId !== trimmed.toLowerCase()) {
+  if (!isValidAgentId(trimmed)) {
     runtime.error(`Invalid --agent id: ${trimmed}`);
     runtime.exit(1);
     return null;
   }
-  return agentId;
+  return normalizeAgentId(trimmed);
 }
 
 export async function runMemoryBackfillCommand(
