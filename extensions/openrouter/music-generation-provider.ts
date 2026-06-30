@@ -125,7 +125,13 @@ function processOpenRouterSseLine(
   if (data === "[DONE]") {
     return true;
   }
-  const audio = readDeltaAudio(JSON.parse(data));
+  let parsedData: unknown;
+  try {
+    parsedData = JSON.parse(data);
+  } catch {
+    return false;
+  }
+  const audio = readDeltaAudio(parsedData);
   if (audio?.data) {
     result.audioBuffers.push(Buffer.from(audio.data, "base64"));
   }

@@ -352,4 +352,25 @@ describe("openrouter music generation provider", () => {
       }),
     ).rejects.toThrow("OpenRouter music generation stream ended before completion");
   });
+
+  it("skips malformed SSE data frames and processes valid audio frames", async () => {
+    const audioBytes = Buffer.from("valid-audio-bytes");
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        "data: NOT JSON {{{\n",
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBytes.toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-clip-preview",
+      prompt: "skip malformed",
+      cfg: {},
+    });
+
+    expect(result.tracks).toHaveLength(1);
+  });
 });
