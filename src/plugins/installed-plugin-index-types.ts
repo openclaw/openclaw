@@ -91,7 +91,10 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
->;
+> & {
+  /** Agent workspace ID that owns this install record. Undefined means global. */
+  agentId?: string;
+};
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 

@@ -384,13 +384,13 @@ function isPathInsideOrEqual(parent: string, child: string): boolean {
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
-  opts?: { channelIds?: string[] },
+  opts?: { agentId?: string; channelIds?: string[] },
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
   const actions = createEmptyConfigUninstallActions();
 
   const pluginsConfig = cfg.plugins ?? {};
 
-  // Remove from entries
+  // Remove from entries (skipped when agentId is set — PR 2 adds otherInstalls check)
   let entries = pluginsConfig.entries;
   if (entries && pluginId in entries) {
     const { [pluginId]: _, ...rest } = entries;
@@ -398,11 +398,12 @@ export function removePluginFromConfig(
     actions.entry = true;
   }
 
-  // Remove from installs
+  // Remove from installs (agent-aware key)
   let installs = pluginsConfig.installs;
-  const installRecord = installs?.[pluginId];
-  if (installs && pluginId in installs) {
-    const { [pluginId]: _, ...rest } = installs;
+  const installKey = opts?.agentId ? `${pluginId}:${opts.agentId}` : pluginId;
+  const installRecord = installs?.[installKey];
+  if (installs && installKey in installs) {
+    const { [installKey]: _, ...rest } = installs;
     installs = Object.keys(rest).length > 0 ? rest : undefined;
     actions.install = true;
   }
@@ -526,6 +527,7 @@ export function removePluginFromConfig(
 export type UninstallPluginParams = {
   config: OpenClawConfig;
   pluginId: string;
+  agentId?: string;
   channelIds?: string[];
   deleteFiles?: boolean;
   extensionsDir?: string;
@@ -537,15 +539,19 @@ export type UninstallPluginParams = {
  * their managed install directory.
  */
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
-  const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
+  const { config, pluginId, agentId, channelIds, deleteFiles = true, extensionsDir } = params;
+
+  // Build the install record key based on agentId
+  const installKey = agentId ? `${pluginId}:${agentId}` : pluginId;
 
   const hasEntry = pluginId in (config.plugins?.entries ?? {});
-  const hasInstall = pluginId in (config.plugins?.installs ?? {});
-  const installRecord = config.plugins?.installs?.[pluginId];
+  const hasInstall = installKey in (config.plugins?.installs ?? {});
+  const installRecord = config.plugins?.installs?.[installKey];
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Remove from config
   const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
+    agentId,
     channelIds,
   });
 

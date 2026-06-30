@@ -377,10 +377,15 @@ function shouldPreserveReplacedInstallPath(params: {
 
 function resolveReplacedManagedInstallRemoval(params: {
   pluginId: string;
+  agentId?: string;
   previousInstall?: PluginInstallRecord;
   nextInstall: Omit<PluginInstallUpdate, "pluginId">;
 }): PluginUninstallDirectoryRemoval | null {
   if (!params.previousInstall) {
+    return null;
+  }
+  // Only remove previous install if agentId matches (or both are global)
+  if (params.previousInstall.agentId !== params.agentId) {
     return null;
   }
   const previousInstallPath = resolveComparableInstallPath(params.previousInstall);
@@ -405,7 +410,8 @@ function resolveReplacedManagedInstallRemoval(params: {
     config: {
       plugins: {
         installs: {
-          [params.pluginId]: params.previousInstall,
+          [params.agentId ? `${params.pluginId}:${params.agentId}` : params.pluginId]:
+            params.previousInstall,
         },
       },
     } as OpenClawConfig,
@@ -455,9 +461,15 @@ export async function persistPluginInstall(params: {
     () => loadInstalledPluginIndexInstallRecords(),
     { command: "install" },
   );
-  const previousInstall = installRecords[params.pluginId];
+  // Build the correct install record key for global vs agent-specific lookups
+  const installRecordKey = params.install.agentId
+    ? `${params.pluginId}:${params.install.agentId}`
+    : params.pluginId;
+  const previousInstall = installRecords[installRecordKey];
+  // AgentId propagates through the removed install record
   const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
     pluginId: params.pluginId,
+    agentId: params.install.agentId,
     previousInstall,
     nextInstall: params.install,
   });

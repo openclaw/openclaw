@@ -45,30 +45,63 @@ export function resolveNpmInstallRecordSpec(params: {
   return resolvedSpec;
 }
 
+/**
+ * Generates a unique key for install records that supports multiple installs
+ * of the same plugin to different agents.
+ * Format: pluginId (for global) or pluginId:agentId (for agent-specific)
+ */
+function buildInstallRecordKey(pluginId: string, agentId?: string): string {
+  if (agentId === undefined || agentId === "") {
+    return pluginId;
+  }
+  return `${pluginId}:${agentId}`;
+}
+
+/**
+ * Extracts the original pluginId from an install record key.
+ * Keys can be "pluginId" (global) or "pluginId:agentId" (agent-specific).
+ */
+export function extractPluginIdFromKey(key: string): string {
+  const colonIndex = key.indexOf(":");
+  if (colonIndex === -1) {
+    return key;
+  }
+  return key.substring(0, colonIndex);
+}
+
 /** Records or updates a plugin install record in OpenClaw config. */
 export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,
 ): OpenClawConfig {
-  const { pluginId, ...record } = update;
-  const previous = clearStaleInstallRecordFields(cfg.plugins?.installs?.[pluginId]);
-  const installs = {
-    ...cfg.plugins?.installs,
-    [pluginId]: {
-      ...previous,
-      ...record,
-      installedAt: record.installedAt ?? new Date().toISOString(),
-    },
+  const { pluginId, agentId, ...record } = update;
+  const installs = { ...cfg.plugins?.installs };
+
+  // Find an existing record for this specific pluginId + agentId combination
+  let existingKey: string | undefined;
+  for (const [key, existingRecord] of Object.entries(installs)) {
+    const recordPluginId = extractPluginIdFromKey(key);
+    if (recordPluginId === pluginId && existingRecord.agentId === agentId) {
+      existingKey = key;
+      break;
+    }
+  }
+
+  const newKey = existingKey ?? buildInstallRecordKey(pluginId, agentId);
+  const previous = clearStaleInstallRecordFields(installs[newKey]);
+
+  installs[newKey] = {
+    ...previous,
+    ...record,
+    ...(agentId ? { agentId } : {}),
+    installedAt: record.installedAt ?? new Date().toISOString(),
   };
 
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
-      installs: {
-        ...installs,
-        [pluginId]: installs[pluginId],
-      },
+      installs,
     },
   };
 }

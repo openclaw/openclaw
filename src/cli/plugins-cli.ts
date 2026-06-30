@@ -188,6 +188,7 @@ export function registerPluginsCli(program: Command) {
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
+    .option("--agent <id>", "Target agent workspace (omit to install as a global plugin)")
     .action(
       async (
         raw: string,
@@ -197,6 +198,7 @@ export function registerPluginsCli(program: Command) {
           link?: boolean;
           pin?: boolean;
           marketplace?: string;
+          agent?: string;
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
