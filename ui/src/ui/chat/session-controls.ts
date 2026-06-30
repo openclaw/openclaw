@@ -45,7 +45,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import type { FastMode, GatewayThinkingLevelOption, SessionsListResult, SessionsPatchResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -1391,36 +1391,34 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      await client.request("sessions.patch", {
+      const patched = await client.request<SessionsPatchResult>("sessions.patch", {
         key: targetSessionKey,
         ...scopedAgentParamsForSession(state, targetSessionKey),
         model: nextModel || null,
       });
-      // Refresh the sessions list first so the model-fallback reconciliation
-      // below reads the authoritative server-confirmed model from the session
-      // row.  The server can silently fall back to a different provider (e.g.
-      // when the requested provider is unreachable), and the refreshed row
-      // carries the final effective model after all fallback lifecycle hooks
-      // have run — matching the contract already used by the /model command.
       await refreshSessionOptions(state);
-      // Reconcile the cached override for explicit (non-empty) selections.
-      // When the user picked Default the cache was already set to null above
-      // and must stay null so the selector keeps following the current
-      // default model.
+      // Reconcile the cached override when the user made an explicit (non-empty)
+      // model selection.  `patched.resolved` from the RPC carries the request-time
+      // resolution even before the sessions list is populated.  When the sessions
+      // list already has a row (existing session), prefer the refreshed row
+      // because it carries the final effective model after server-side fallback
+      // lifecycle hooks.  When the row is absent (new session, test scenarios),
+      // fall back to `patched.resolved` so the dropdown still shows the resolved
+      // model rather than getting blanked out.
       if (nextModel) {
         const row = state.sessionsResult?.sessions?.find(
           (s) => s.key === targetSessionKey,
         );
+        const resolvedModel =
+          row?.model ?? patched.resolved?.model ?? nextModel;
+        const resolvedProvider =
+          row?.modelProvider ?? patched.resolved?.modelProvider ?? "";
         const resolvedValue = resolvePreferredServerChatModelValue(
-          row?.model,
-          row?.modelProvider,
+          resolvedModel,
+          resolvedProvider,
           state.chatModelCatalog ?? [],
         );
         const resolvedOverride = createChatModelOverride(resolvedValue);
-        // Only update when the resolved override differs.  This avoids
-        // unnecessary re-renders and preserves the cached override kind
-        // (raw vs qualified) when the server confirms the same model the
-        // user requested — no provider fallback occurred.
         if (
           JSON.stringify(resolvedOverride) !==
           JSON.stringify(state.chatModelOverrides[targetSessionKey])
