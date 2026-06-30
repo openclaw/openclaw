@@ -400,7 +400,9 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
 export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const codeMasked = markdown
     .replace(FENCED_CODE_BLOCK_RE, (match, open, close) => {
-      if (open[0] === close[0] && close.length >= open.length) return "\n";
+      if (open[0] === close[0] && close.length >= open.length) {
+        return "\n";
+      }
       return match;
     })
     .replace(INLINE_CODE_PATTERN, "``");
