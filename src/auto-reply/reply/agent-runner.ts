@@ -8,6 +8,7 @@ import {
   resolveAgentConfig,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { clearCliSession } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
@@ -1753,6 +1754,24 @@ export async function runReplyAgent(params: {
     );
 
     if (runOutcome.kind === "final") {
+      // Fix #97887: clear CLI session binding when a CLI provider run ends
+      // in failure. The FailoverError path returns kind:"final" directly,
+      // bypassing the clearCliSessionBinding flag that is only populated in
+      // runResult.meta.agentMeta on success. Without this, stale CLI session
+      // IDs persist in sessions.json, causing infinite retry on next message.
+      const finalProvider = followupRun.run.provider;
+      if (finalProvider && activeSessionEntry && isCliProvider(finalProvider, cfg)) {
+        clearCliSession(activeSessionEntry, finalProvider);
+        if (sessionKey && activeSessionStore) {
+          activeSessionStore[sessionKey] = activeSessionEntry;
+        }
+        if (storePath && sessionKey) {
+          await updateSessionEntry({ storePath, sessionKey }, (entry) => {
+            clearCliSession(entry, finalProvider);
+            return entry;
+          }).catch(() => undefined);
+        }
+      }
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
