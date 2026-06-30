@@ -10,10 +10,9 @@ These pages will be the reader-facing version of OpenClaw releases. They keep
 the main story, practical impact, source links, and contributor credit together
 without making you scan the raw changelog first.
 
-## Coming soon
+## Available releases
 
-The release archive is being backfilled. New polished release notes will appear
-here after the release copy is finalized.
+- [v2026.6.11](/releases/2026.6.11)
 
 ## Raw release history
 
