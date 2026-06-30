@@ -113,12 +113,10 @@ describe("resolveSystemRunExecArgv", () => {
         policyBlocked: true,
         execution: {
           rawExecutable: "safe",
-          resolvedPath: null,
           executableName: "safe",
         },
         policy: {
           rawExecutable: "safe",
-          resolvedPath: null,
           executableName: "safe",
         },
       },
