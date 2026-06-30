@@ -96,6 +96,18 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Raft plugin",
+    "target": "Raft plugin"
+  },
+  {
+    "source": "raft",
+    "target": "raft"
+  },
+  {
     "source": "Web tools",
     "target": "Web 工具"
   },
