@@ -77,6 +77,18 @@ const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runCrestodianMock = vi.hoisted(() =>
   vi.fn<(options?: unknown) => Promise<void>>(async () => {}),
 );
+const launchTuiCliMock = vi.hoisted(() =>
+  vi.fn<(opts: unknown, launchOptions?: unknown) => Promise<void>>(async () => {}),
+);
+const probeGatewayReachableMock = vi.hoisted(() =>
+  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
+);
+const resolveControlUiLinksMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: { reset?: boolean }) => Promise<void>;
@@ -200,6 +212,10 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: pinRuntimePathsMock,
 }));
 
+vi.mock("../gateway/control-ui-links.js", () => ({
+  resolveControlUiLinks: resolveControlUiLinksMock,
+}));
+
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   pinConfigDir: pinConfigDirMock,
@@ -305,6 +321,14 @@ vi.mock("../commands/onboard.js", () => ({
   setupWizardCommand: setupWizardCommandMock,
 }));
 
+vi.mock("../commands/onboard-helpers.js", () => ({
+  probeGatewayReachable: probeGatewayReachableMock,
+}));
+
+vi.mock("../tui/tui-launch.js", () => ({
+  launchTuiCli: launchTuiCliMock,
+}));
+
 vi.mock("../crestodian/crestodian.js", () => ({
   runCrestodian: runCrestodianMock,
 }));
@@ -365,6 +389,11 @@ describe("runCli exit behavior", () => {
       exists: true,
       valid: true,
       sourceConfig: { gateway: { mode: "local" } },
+    });
+    probeGatewayReachableMock.mockResolvedValue({ ok: true });
+    resolveControlUiLinksMock.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
@@ -2589,20 +2618,116 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("keeps bare root invocations on Crestodian when config already exists", async () => {
-    await withInteractiveTty(async () => {
-      await runCli(["node", "openclaw"]);
+  it("starts the gateway-backed TUI for bare root invocations when config already exists", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "gateway-ref-password" }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
     });
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
+      port: 18789,
+      bind: undefined,
+      customBindHost: undefined,
+      basePath: undefined,
+      tlsEnabled: false,
+    });
+    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+      password: "gateway-ref-password",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+    );
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
+  it("starts the local TUI for bare root invocations when the gateway is unavailable", async () => {
+    probeGatewayReachableMock.mockResolvedValueOnce({ ok: false, detail: "offline" });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects configured bare root TUI startup without an interactive TTY", async () => {
+    const previousExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.exitCode = undefined;
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+
+    try {
+      await runCli(["node", "openclaw"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
+      );
+      expect(launchTuiCliMock).not.toHaveBeenCalled();
+      expect(runCrestodianMock).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+      if (stdinDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
+  it("keeps invalid configured bare root invocations on Crestodian", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: false,
+      sourceConfig: { gateway: { mode: "local" } },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
     expect(runCrestodianMock).toHaveBeenCalledOnce();
     const crestodianOptions = requireRunCrestodianOptions();
     expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
     expect(crestodianOptions.onReady).toBeTypeOf("function");
   });
 
-  it("bootstraps env proxy before bare Crestodian startup", async () => {
+  it("bootstraps env proxy before bare TUI startup", async () => {
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
     const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -2625,12 +2750,12 @@ describe("runCli exit behavior", () => {
     }
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(runCrestodianMock).toHaveBeenCalledOnce();
-    const crestodianOptions = requireRunCrestodianOptions();
-    expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
-    expect(crestodianOptions.onReady).toBeTypeOf("function");
+    expect(launchTuiCliMock).toHaveBeenCalledOnce();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runCrestodianMock.mock.invocationCallOrder[0],
+      probeGatewayReachableMock.mock.invocationCallOrder[0],
+    );
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
+      launchTuiCliMock.mock.invocationCallOrder[0],
     );
   });
 

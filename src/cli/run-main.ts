@@ -290,6 +290,94 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
   return isUnconfiguredConfigSnapshot(snapshot);
 }
 
+type BareRootLaunchTarget =
+  | { kind: "onboarding" }
+  | { kind: "tui"; local: boolean; gatewayUrl?: string }
+  | { kind: "crestodian" };
+
+async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return null;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return { kind: "onboarding" };
+  }
+  if (!snapshot.valid) {
+    return { kind: "crestodian" };
+  }
+  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig);
+}
+
+async function resolveConfiguredTuiLaunchTarget(
+  config: OpenClawConfig,
+): Promise<BareRootLaunchTarget> {
+  const gatewayUrl = await resolveReachableGatewayUrl(config);
+  if (gatewayUrl) {
+    return { kind: "tui", local: false, gatewayUrl };
+  }
+  return { kind: "tui", local: true };
+}
+
+async function resolveReachableGatewayUrl(config: OpenClawConfig): Promise<string | null> {
+  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
+  const gatewayMode = normalizeOptionalString(config.gateway?.mode);
+  const url =
+    gatewayMode === "remote" && remoteUrl
+      ? remoteUrl
+      : await resolveLocalGatewayWebSocketUrl(config);
+  const gateway = config.gateway;
+  const [token, password] = await Promise.all([
+    resolveGatewayProbeSecret({
+      config,
+      value: gatewayMode === "remote" ? gateway?.remote?.token : gateway?.auth?.token,
+      path: gatewayMode === "remote" ? "gateway.remote.token" : "gateway.auth.token",
+    }),
+    resolveGatewayProbeSecret({
+      config,
+      value: gatewayMode === "remote" ? gateway?.remote?.password : gateway?.auth?.password,
+      path: gatewayMode === "remote" ? "gateway.remote.password" : "gateway.auth.password",
+    }),
+  ]);
+  const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
+  const probe = await probeGatewayReachable({
+    url,
+    ...(token ? { token } : {}),
+    ...(password ? { password } : {}),
+  });
+  return probe.ok ? url : null;
+}
+
+async function resolveGatewayProbeSecret(params: {
+  config: OpenClawConfig;
+  value: unknown;
+  path: string;
+}): Promise<string | undefined> {
+  try {
+    const { resolveSetupSecretInputString } = await import("../wizard/setup.secret-input.js");
+    return await resolveSetupSecretInputString(params);
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveLocalGatewayWebSocketUrl(config: OpenClawConfig): Promise<string> {
+  const [{ resolveGatewayPort }, { resolveControlUiLinks }] = await Promise.all([
+    import("../config/paths.js"),
+    import("../gateway/control-ui-links.js"),
+  ]);
+  const gateway = config.gateway;
+  const links = resolveControlUiLinks({
+    port: resolveGatewayPort(config),
+    bind: gateway?.bind,
+    customBindHost: gateway?.customBindHost,
+    basePath: gateway?.controlUi?.basePath,
+    tlsEnabled: gateway?.tls?.enabled === true,
+  });
+  return links.wsUrl;
+}
+
 function pauseNonTtyStdinForCliExit(): void {
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -836,14 +924,17 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
+    const shouldRunBareRootCommand = shouldStartCrestodianForBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
-    if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
+    if (shouldRunBareRootCommand || shouldRunModernOnboardCrestodian) {
       await ensureCliEnvProxyDispatcher();
     }
+    const bareRootLaunchTarget = shouldRunBareRootCommand
+      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      : null;
 
-    if (shouldRunBareRootCrestodian) {
-      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+    if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "onboarding") {
         if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(
             "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
@@ -853,6 +944,28 @@ export async function runCli(argv: string[] = process.argv) {
         }
         const { setupWizardCommand } = await import("../commands/onboard.js");
         await setupWizardCommand({});
+        return;
+      }
+      if (bareRootLaunchTarget.kind === "tui") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { launchTuiCli } = await import("../tui/tui-launch.js");
+        await launchTuiCli(
+          {
+            deliver: false,
+            ...(bareRootLaunchTarget.local ? { local: true } : {}),
+          },
+          {
+            ...(bareRootLaunchTarget.gatewayUrl
+              ? { gatewayUrl: bareRootLaunchTarget.gatewayUrl, authSource: "config" as const }
+              : {}),
+          },
+        );
         return;
       }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
