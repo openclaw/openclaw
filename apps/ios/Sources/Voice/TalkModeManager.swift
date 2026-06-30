@@ -283,7 +283,9 @@ final class TalkModeManager: NSObject {
     func applyAudioRoutePreferenceChanged() {
         guard self.isEnabled || self.isListening || self.isSpeaking else { return }
         do {
-            if self.realtimeRelaySession != nil {
+            if let realtimeSession {
+                try realtimeSession.applyAudioRoutePreferenceChanged()
+            } else if self.realtimeRelaySession != nil {
                 try Self.configureRealtimeAudioSession()
             } else {
                 try Self.configureAudioSession()
@@ -402,20 +404,23 @@ final class TalkModeManager: NSObject {
             UserDefaults.standard.string(forKey: TalkModeProviderSelection.storageKey))
     }
 
-    private var shouldForceRealtimeRelayFromSelection: Bool {
+    private var shouldUseOpenAIRealtimeSelectionFallback: Bool {
         self.talkProviderSelection == .openAIRealtime
     }
 
     private func applyOpenAIRealtimeSelectionDefaults() {
+        let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
+            UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
         self.activeTalkProvider = "openai"
-        self.executionMode = .realtimeRelay
-        self.runtimeRoute = .realtimeRelay
-        self.realtimeProvider = self.realtimeProvider ?? "openai"
-        self.realtimeModelId = self.realtimeModelId ?? Self.defaultRealtimeModelIdFallback
+        self.executionMode = .realtimeWebRTC
+        self.runtimeRoute = .realtimeWebRTC
+        self.realtimeProvider = "openai"
+        self.realtimeModelId = Self.defaultRealtimeModelIdFallback
+        self.realtimeVoiceId = realtimeVoiceOverride
         self.gatewayTalkProviderLabel = TalkModeProviderSelection.openAIRealtime.label
         self.gatewayTalkUsesRealtime = true
-        self.gatewayTalkUsesRealtimeRelay = true
-        self.gatewayTalkTransportLabel = "Gateway Relay"
+        self.gatewayTalkUsesRealtimeRelay = false
+        self.gatewayTalkTransportLabel = "Native WebRTC"
         self.gatewayTalkRealtimeProviderLabel = Self.displayName(forProvider: self.realtimeProvider ?? "openai")
         self.gatewayTalkRealtimeModelId = self.realtimeModelId
         self.gatewayTalkRealtimeVoiceId = self.realtimeVoiceId
@@ -1025,7 +1030,10 @@ final class TalkModeManager: NSObject {
             if Self.isTerminalChatSendFailure(ack.status) {
                 self.statusText = normalizedStatus == "error" ? "Chat error" : "Aborted"
                 self.logger.warning(
-                    "chat.send terminal ack runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
+                    """
+                    chat.send terminal ack runId=\(runId, privacy: .public) \
+                    status=\(normalizedStatus, privacy: .public)
+                    """)
                 GatewayDiagnostics.log(
                     "talk: chat.send terminal ack runId=\(runId) status=\(normalizedStatus)")
                 if restartAfter {
@@ -2764,7 +2772,10 @@ extension TalkModeManager {
             defaultRealtimeModelId: Self.defaultRealtimeModelIdFallback)
         let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
             UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        let realtimeVoiceId = realtimeVoiceOverride ?? parsed.realtimeVoiceId
+        let parsedRealtimeVoiceId = providerSelection == .openAIRealtime && parsed.realtimeProvider != "openai"
+            ? nil
+            : parsed.realtimeVoiceId
+        let realtimeVoiceId = realtimeVoiceOverride ?? parsedRealtimeVoiceId
         self.activeTalkProvider = routing.activeProvider
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
@@ -2895,7 +2906,7 @@ extension TalkModeManager {
 
     private func applyTalkConfigLoadFailure(_ error: Error) {
         self.configuredProviderModelId = nil
-        if self.shouldForceRealtimeRelayFromSelection {
+        if self.shouldUseOpenAIRealtimeSelectionFallback {
             self.applyOpenAIRealtimeSelectionDefaults()
             GatewayDiagnostics.log("talk config unavailable; keeping openai realtime selection")
         } else {

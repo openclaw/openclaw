@@ -3,6 +3,7 @@ import OpenClawKit
 
 enum TalkModeExecutionMode: Equatable {
     case native
+    case realtimeWebRTC
     case realtimeRelay
 }
 
@@ -224,10 +225,11 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
 enum TalkModeRuntimeRoute: Equatable {
     case localElevenLabs
     case gatewayTalkSpeak
+    case realtimeWebRTC
     case realtimeRelay
 
     var usesRealtime: Bool {
-        self == .realtimeRelay
+        self == .realtimeRelay || self == .realtimeWebRTC
     }
 
     var usesGatewayTalkSpeak: Bool {
@@ -263,7 +265,9 @@ enum TalkModeRoutingResolver {
         case .gatewayDefault:
             // Only an explicit realtime config selects the realtime transport. Other Gateway
             // speech providers stay native and synthesize through talk.speak.
-            if parsed.executionMode == .realtimeRelay {
+            if parsed.executionMode == .realtimeWebRTC {
+                route = .realtimeWebRTC
+            } else if parsed.executionMode == .realtimeRelay {
                 route = .realtimeRelay
             } else if Self.normalized(activeProvider) == Self.normalized(defaultProvider) {
                 // Preserve the shipped local ElevenLabs path, including its streaming playback.
@@ -276,17 +280,28 @@ enum TalkModeRoutingResolver {
             route = .localElevenLabs
         case .openAIRealtime:
             activeProvider = "openai"
-            realtimeProvider = realtimeProvider ?? "openai"
-            realtimeModelId = realtimeModelId ?? defaultRealtimeModelId
-            route = .realtimeRelay
+            realtimeProvider = "openai"
+            realtimeModelId = defaultRealtimeModelId
+            route = .realtimeWebRTC
         }
 
         return TalkModeResolvedRouting(
             activeProvider: activeProvider,
-            executionMode: route.usesRealtime ? .realtimeRelay : .native,
+            executionMode: Self.executionMode(for: route),
             realtimeProvider: realtimeProvider,
             realtimeModelId: realtimeModelId,
             route: route)
+    }
+
+    private static func executionMode(for route: TalkModeRuntimeRoute) -> TalkModeExecutionMode {
+        switch route {
+        case .localElevenLabs, .gatewayTalkSpeak:
+            .native
+        case .realtimeWebRTC:
+            .realtimeWebRTC
+        case .realtimeRelay:
+            .realtimeRelay
+        }
     }
 
     private static func normalized(_ value: String) -> String {
@@ -426,17 +441,34 @@ enum TalkModeGatewayConfigParser {
         guard let realtime else { return .native }
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
+        let provider = Self.firstString(realtime, keys: ["provider"])?.lowercased()
+            ?? Self.singleRealtimeProviderId(realtime["providers"]?.dictionaryValue)?.lowercased()
         let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
         guard mode == "realtime" else {
-            return .native
-        }
-        if transport == "managed-room" {
             return .native
         }
         if brain != nil, brain != "agent-consult" {
             return .native
         }
-        return .realtimeRelay
+        switch transport {
+        case "managed-room":
+            return .native
+        case "gateway-relay":
+            return .realtimeRelay
+        case "provider-websocket":
+            return .realtimeRelay
+        case "webrtc":
+            if provider != "openai" {
+                return .realtimeRelay
+            }
+        case nil:
+            if provider != "openai" {
+                return .realtimeRelay
+            }
+        default:
+            return .realtimeRelay
+        }
+        return .realtimeWebRTC
     }
 
     private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
