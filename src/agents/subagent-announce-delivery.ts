@@ -1547,6 +1547,19 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (params.expectsCompletionMessage) {
+        // A pending gateway response means the completion-agent handoff has not
+        // completed yet. Treating this as delivered: true would silently drop the
+        // completion notification across all spawn depths, leaving the parent
+        // session waiting forever. Return delivered: false so the dispatch falls
+        // through to the steering fallback, which uses the active-requester queue
+        // wake path and may still succeed. (#93323)
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+        };
+      }
       return {
         delivered: true,
         path: "direct",
