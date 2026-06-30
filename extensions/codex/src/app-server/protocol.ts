@@ -355,6 +355,11 @@ export type CodexModel = {
   inputModalities: string[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
+  contextWindow?: number | null;
+  maxContextWindow?: number | null;
+  effectiveContextWindowPercent?: number | null;
+  effectiveContextWindow?: number | null;
+  autoCompactTokenLimit?: number | null;
 };
 
 export type CodexReasoningEffortOption = {

@@ -89,6 +89,10 @@ describe("codex provider", () => {
           hidden: false,
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+          contextWindow: 272_000,
+          maxContextWindow: 1_000_000,
+          effectiveContextWindow: 258_400,
+          autoCompactTokenLimit: 244_800,
         },
         {
           id: "hidden-model",
@@ -121,6 +125,8 @@ describe("codex provider", () => {
       name: "gpt-5.4",
       reasoning: true,
       input: ["text", "image"],
+      contextWindow: 272_000,
+      contextTokens: 258_400,
       compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
     });
   });
