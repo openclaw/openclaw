@@ -26,6 +26,7 @@ import {
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
+  supersedeQueuedTurnEndParkedWork,
   type ContinuationWorkReasonCategory,
   type PendingContinuationWork,
 } from "./work-store.js";
@@ -47,6 +48,21 @@ const SUPERSEDED_GRACE_MULTIPLIER = 2;
 const workTimers = new Map<string, NodeJS.Timeout>();
 const idleRetryFailureTimers = new Map<string, { fireAt: number; handle: NodeJS.Timeout }>();
 const idleRetryControllers = new Map<string, AbortController>();
+
+// Memoize the reply-run-registry module import. The dynamic import keeps the
+// reply graph off the continuation static import cycle, but a fresh `import()`
+// per call can race a concurrently in-flight import of the same module (e.g. the
+// idle-retry waiter started moments earlier), intermittently resolving a
+// different module instance. Caching the promise gives every caller the one
+// resolved registry, which the active-turn gate depends on being stable.
+let replyRunRegistryModulePromise:
+  | Promise<typeof import("../reply/reply-run-registry.js")>
+  | undefined;
+
+function importReplyRunRegistry(): Promise<typeof import("../reply/reply-run-registry.js")> {
+  replyRunRegistryModulePromise ??= import("../reply/reply-run-registry.js");
+  return replyRunRegistryModulePromise;
+}
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -328,7 +344,7 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     const idle =
       trigger.kind === "reply-run-ended"
         ? await (async () => {
-            const { replyRunRegistry } = await import("../reply/reply-run-registry.js");
+            const { replyRunRegistry } = await importReplyRunRegistry();
             return await replyRunRegistry.waitForIdle(sessionKey, undefined, {
               signal: controller.signal,
             });
@@ -419,7 +435,7 @@ async function driveContinuationTurn(
     import("../../sessions/session-key-utils.js"),
     import("../../agents/embedded-agent-runner/lanes.js"),
     import("../reply/get-reply.js"),
-    import("../reply/reply-run-registry.js"),
+    importReplyRunRegistry(),
     import("../../process/command-queue.js"),
   ]);
 
@@ -587,7 +603,7 @@ export async function dispatchPendingContinuationWork(params: {
   const recoverRunning = params.recoverRunning === true;
   let runningRecoveryBlockedByActiveReply = false;
   if (recoverRunning) {
-    const { replyRunRegistry } = await import("../reply/reply-run-registry.js");
+    const { replyRunRegistry } = await importReplyRunRegistry();
     runningRecoveryBlockedByActiveReply = replyRunRegistry.isActive(params.sessionKey);
   }
   const works = consumePendingWork(params.sessionKey, {
@@ -811,12 +827,35 @@ export async function scheduleContinuationWork(params: {
     accumulatedChainTokens: params.chainState.accumulatedChainTokens,
     ...(params.chainState.chainId ? { chainId: params.chainState.chainId } : {}),
   };
+
+  // #1135: an immediate (delaySeconds=0) continue_work captured while the
+  // electing turn is still active must become eligible only AFTER that turn
+  // finalizes — never fire a hedge while `requests-in-flight` is true. Park it on
+  // the session's end-of-turn lifecycle event from the moment it is scheduled
+  // instead of arming a now-dated timer that would skip with requests-in-flight
+  // and start a hedge loop. The active current turn is the expected condition at
+  // call time, not a failure. Positive delays already arm a future timer (no
+  // immediate skip) and keep their own offset. The `reason` only sets the
+  // observability category — it is never an admission gate.
+  const { replyRunRegistry } = await importReplyRunRegistry();
+  const parkOnTurnEnd = delayMs === 0 && replyRunRegistry.isActive(params.sessionKey);
+  const recoveryHedgeAt = electedAt + params.config.maxDelayMs;
+  const idleRetry = parkOnTurnEnd
+    ? ({
+        trigger: "reply-run-ended" as const,
+        reasonCategory: classifyContinuationWorkReason(params.request.reason),
+        armedAt: electedAt,
+      } satisfies PendingContinuationWork["idleRetry"])
+    : undefined;
+
   const work: PendingContinuationWork = {
     sessionKey: params.sessionKey,
     hop,
     delayMs,
     electedAt,
-    dueAt,
+    // A parked wake fires on the lifecycle event (idleRetry bypasses dueAt); its
+    // dueAt is the slow lost-event recovery hedge, mirroring the busy-skip path.
+    dueAt: parkOnTurnEnd ? recoveryHedgeAt : dueAt,
     maxChainLength: params.config.maxChainLength,
     chainStartedAt: params.chainState.chainStartedAt,
     accumulatedChainTokens: params.chainState.accumulatedChainTokens,
@@ -824,6 +863,7 @@ export async function scheduleContinuationWork(params: {
     ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
     ...(params.chainState.chainId ? { chainId: params.chainState.chainId } : {}),
     ...(params.request.traceparent ? { traceparent: params.request.traceparent } : {}),
+    ...(idleRetry ? { idleRetry } : {}),
   };
   const enqueued = enqueuePendingWork(work);
   if (!enqueued) {
@@ -837,9 +877,18 @@ export async function scheduleContinuationWork(params: {
     traceparent: params.request.traceparent,
     log: (message) => params.log?.(message),
   });
-  // Let callers persist the advanced chain state before even zero-delay work
-  // can start the next turn; the timer fires on the next event-loop tick.
-  armNextWorkTimer(params.sessionKey, dueAt);
+  if (parkOnTurnEnd) {
+    params.log?.(
+      `[continuation:work-parked-on-turn-end] session=${params.sessionKey} hop=${hop} reasonCategory=${idleRetry?.reasonCategory ?? "unknown"}`,
+    );
+    // Wake on the end-of-turn event; keep only a slow hedge as the lost-event net.
+    registerIdleRetry(params.sessionKey, { kind: "reply-run-ended" });
+    armNextWorkTimer(params.sessionKey, recoveryHedgeAt);
+  } else {
+    // Let callers persist the advanced chain state before even zero-delay work
+    // can start the next turn; the timer fires on the next event-loop tick.
+    armNextWorkTimer(params.sessionKey, dueAt);
+  }
   return { scheduled: true, capped: false, chainState: nextState };
 }
 
@@ -877,6 +926,21 @@ export async function scheduleContinuationWorkBatch(params: {
 }): Promise<ContinuationWorkBatchResult> {
   let chainState = params.chainState;
   let scheduledCount = 0;
+  // #1135 cross-turn coalesce: a new model turn's election(s) supersede any
+  // still-queued end-of-turn-parked wake from a PRIOR turn for this session. The
+  // courtesy/hold/ack repeat loop never accumulates rows — the newest election
+  // carries the live intent and fires once at finalization. Folded BEFORE the
+  // batch loop so distinct elections WITHIN this turn (#982) are preserved; only
+  // prior-turn parked duplicates are folded.
+  const folded = supersedeQueuedTurnEndParkedWork(
+    params.sessionKey,
+    "Superseded by a newer continue_work election before its end-of-turn wake fired.",
+  );
+  if (folded > 0) {
+    params.log?.(
+      `[continuation:work-turn-end-parked-coalesced] session=${params.sessionKey} folded=${folded}`,
+    );
+  }
   for (const request of params.requests) {
     const result = await scheduleContinuationWork({
       sessionKey: params.sessionKey,

@@ -190,6 +190,11 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
     ...(work.parentRunId ? { parentRunId: work.parentRunId } : {}),
     ...(work.chainId ? { chainId: work.chainId } : {}),
     ...(work.traceparent ? { traceparent: work.traceparent } : {}),
+    // #1135: a continue_work captured during an active turn parks on the
+    // end-of-turn lifecycle event from the moment it is enqueued, so the marker
+    // must survive the durable write (not just live on the runtime object).
+    ...(work.busySkipCount !== undefined ? { busySkipCount: work.busySkipCount } : {}),
+    ...(work.idleRetry ? { idleRetry: work.idleRetry } : {}),
   };
   const flow = createManagedTaskFlow({
     ownerKey: work.sessionKey,
@@ -488,6 +493,39 @@ export function markPendingWorkSuperseded(work: PendingContinuationWork, summary
     currentStep: `superseded: ${summary}`.slice(0, 200),
     notCommittedTag: "work-supersede-not-committed",
   });
+}
+
+/**
+ * #1135 cross-turn coalesce — fold any still-queued end-of-turn-parked wakes for
+ * a session into the newest election about to be scheduled.
+ *
+ * A continue_work captured during an active turn parks behind that session's
+ * end-of-turn event (idleRetry trigger `reply-run-ended`). When a LATER turn
+ * elects again before the prior parked wake has fired (the session stayed busy
+ * across the window), the prior wake is a redundant duplicate of the same
+ * "fire at this session's next finalization" intent — the model re-elected, so
+ * the newest election carries the live intent. Folding the prior rows keeps the
+ * pending pile bounded (the courtesy/hold/ack repeat loop never accumulates) and
+ * delivers exactly one wake at finalization, without dropping anything by reason
+ * text. Only end-of-turn-parked `queued` rows are eligible — a future-dated
+ * delayed wake (its own offset) and an in-flight `running` turn are never folded.
+ * Returns the number of rows folded.
+ */
+export function supersedeQueuedTurnEndParkedWork(sessionKey: string, summary: string): number {
+  let folded = 0;
+  for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
+    if (!isContinuationWorkFlow(flow) || flow.status !== "queued") {
+      continue;
+    }
+    const state = decodeWorkState(flow);
+    if (!state || state.idleRetry?.trigger !== "reply-run-ended") {
+      continue;
+    }
+    if (markPendingWorkSuperseded(workToRuntime(flow, state, "queued"), summary)) {
+      folded++;
+    }
+  }
+  return folded;
 }
 
 /**
