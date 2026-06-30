@@ -92,7 +92,8 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   "i",
 );
 const STRUCTURED_STATUS_CODE_VALUE_RE = /^[A-Z][A-Z0-9_:-]{0,47}$/u;
-const STRUCTURED_INTERNAL_WARNING_CODE_VALUE_RE = /^(?:invalid|cyclic)-[a-z0-9-]{1,80}$/u;
+const STRUCTURED_INTERNAL_WARNING_CODE_VALUE_RE =
+  /^(?:cyclic|duplicate|invalid|missing|orphaned|skipped|stale|truncated|unknown|unlinked|unresolved)-[a-z0-9-]{1,80}$/u;
 const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
