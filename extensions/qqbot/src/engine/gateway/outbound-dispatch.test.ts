@@ -476,10 +476,11 @@ describe("dispatchOutbound", () => {
       account: { ...account, config: { streaming: true } },
     });
 
-    expect(sendC2CStreamMessageMock.mock.calls.map((call) => call[2]?.content_raw)).toEqual([
-      "final answer",
-      "final answer",
-    ]);
+    const streamedTexts = sendC2CStreamMessageMock.mock.calls.map((call) => {
+      const req = call[2] as { content_raw?: string };
+      return req.content_raw;
+    });
+    expect(streamedTexts).toEqual(["final answer", "final answer"]);
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
