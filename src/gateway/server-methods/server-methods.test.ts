@@ -941,6 +941,43 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it.each([
+    ["output_text", ""],
+    ["output_text", "NO_REPLY"],
+    ["input_text", ""],
+    ["input_text", "NO_REPLY"],
+  ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type, text }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it("preserves visible output_text from a failed assistant turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "output_text", text: "A partial reply before the run failed." },
+    ]);
+  });
+
   it("projects thinking-only assistant errors as a generic safe failure", () => {
     const result = projectRecentChatDisplayMessages([
       {

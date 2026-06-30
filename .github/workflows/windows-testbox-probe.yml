@@ -297,6 +297,10 @@ jobs:
         if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
         run: |
           if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
+              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
+              exit 1
+            }
             Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
             exit 1
           }

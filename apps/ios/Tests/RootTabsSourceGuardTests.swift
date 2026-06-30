@@ -193,7 +193,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("case .docs:"))
         #expect(source.contains("OpenClawDocsScreen("))
         #expect(source.contains("headerLeadingAction: self.phoneDetailBackAction"))
-        #expect(source.contains("gatewayAction: { self.openRootDestination(.gateway) }"))
+        #expect(source.contains("gatewayAction: { self.openPhoneRootDestination(.gateway) }"))
         #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
         #expect(!source.contains("https://docs.openclaw.ai"))
     }
@@ -239,7 +239,7 @@ struct RootTabsSourceGuardTests {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
         #expect(source.contains("private var gatewayActionRow: some View"))
-        #expect(source.contains("self.openRootDestination(.gateway)"))
+        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
         #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
         #expect(source.contains("accessibilityLabel: \"Back to Control\""))
         #expect(source.contains("accessibilityIdentifier: \"OpenClawPhoneDetailBackButton\""))
@@ -253,7 +253,22 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("private func metric(label:"))
     }
 
-    @Test func `workboard uses real gateway methods`() throws {
+    @Test func phoneHubClearsDetailPathBeforeRootTabHandoff() throws {
+        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
+        let handoff = try Self.extract(
+            source,
+            from: "private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination)",
+            to: "private func opensRootTab(_ destination: RootTabs.SidebarDestination)")
+        let clearRange = try #require(handoff.range(of: "self.navigationPath.removeAll()"))
+        let openRange = try #require(handoff.range(of: "self.openRootDestination(destination)"))
+
+        #expect(source.contains("NavigationStack(path: self.$navigationPath)"))
+        #expect(!source.contains("self.openRootDestination(.gateway)"))
+        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
+        #expect(clearRange.lowerBound < openRange.lowerBound)
+    }
+
+    @Test func workboardUsesRealGatewayMethods() throws {
         let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
 
         #expect(source.contains("workboard.cards.list"))
@@ -519,11 +534,16 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains("NavigationLink(value: SettingsRoute.gateway)"))
         #expect(rootSource.contains("case .settings:"))
         #expect(rootSource
-            .matches(of: /SettingsProTab\(\s*headerLeadingAction: self\.sidebarHeaderLeadingAction,/)
+            .matches(
+                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: self\.handleSettingsRouteChange/)
             .count >= 1)
         #expect(rootSource
             .contains(
                 "directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway"))
+        #expect(rootSource.contains("ownsNavigationStack: false"))
+        #expect(rootSource.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
+        #expect(rootSource.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
+        #expect(rootSource.contains("self.sidebarNavigationPath.removeAll()"))
         #expect(rootSource.matches(of: /SettingsProTab\(\s*initialRoute: self\.selectedSettingsRoute,/).count == 1)
         #expect(rootSource.contains(".id(self.settingsTabViewID)"))
         #expect(rootSource.contains("@State private var selectedSettingsRouteRequestID: Int = 0"))
@@ -538,6 +558,10 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.selectedSidebarDestination = .settings"))
         #expect(rootSource.contains("self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId"))
         #expect(rootSource.contains("onRouteChange: self.handleSettingsRouteChange"))
+        #expect(rootSource.contains("navigateToRoute: self.pushSidebarSettingsRoute"))
+        #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
+        #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
+        #expect(settingsTabSource.contains("navigateToRoute(.notifications)"))
         #expect(rootSource.contains("private func handleSettingsRouteChange(_ route: SettingsRoute?)"))
         #expect(settingsTabSource.contains("let onRouteChange: ((SettingsRoute?) -> Void)?"))
         #expect(settingsTabSource.contains("self.onRouteChange?(self.navigationPath.last)"))
@@ -548,6 +572,20 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains("title: \"Channels / Integrations\""))
         #expect(settingsSource.contains("route: .channels"))
         #expect(docsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
+    }
+
+    @Test func `push enrollment stays behind notification disclosure flow`() throws {
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+
+        #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
+        #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
+        #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
+        #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(modelSource.contains("notifications_not_authorized"))
+        #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
@@ -580,6 +618,7 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
+        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
         #expect(actionsSource.contains("await TCPProbe.probe(host: trimmed, port: port"))
         #expect(actionsSource.contains("Check Tailscale or LAN."))
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
@@ -594,6 +633,32 @@ struct RootTabsSourceGuardTests {
         #expect(trustSource.contains("Trust and connect"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
+    }
+
+    @Test func `local network access is requested from visible gateway flows`() throws {
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+
+        #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
+        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
+        #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\")"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_last_known\")"))
+
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"scene_active\")"))
+        #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"onboarding_dismissed\")"))
+        #expect(rootSource.contains("self.requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
+        #expect(rootSource.contains("guard self.didEvaluateOnboarding else { return }"))
+        #expect(rootSource.contains("onRequestLocalNetworkAccess: { reason in"))
+
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 
     @Test func `gateway settings preview matrix covers primary states`() throws {
@@ -784,6 +849,20 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsProTab.swift")
+    }
+
+    private static func onboardingWizardSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func openClawAppSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OpenClawApp.swift")
     }
 
     private static func notificationPermissionGuidanceDialogSourceURL() -> URL {

@@ -63,7 +63,6 @@ export const th: TranslationMap = {
     docs: "เอกสาร",
     theme: "ธีม",
     colorMode: "โหมดสี",
-    colorModeOption: "โหมดสี: {mode}",
     resources: "ทรัพยากร",
     search: "ค้นหา",
     save: "บันทึก",
@@ -1409,6 +1408,7 @@ export const th: TranslationMap = {
     jaJP: "日本語 (ญี่ปุ่น)",
     ko: "한국어 (เกาหลี)",
     fr: "Français (ฝรั่งเศส)",
+    hi: "हिन्दी (ฮินดี)",
     ar: "العربية (อาหรับ)",
     it: "Italiano (อิตาลี)",
     tr: "Türkçe (ตุรกี)",
@@ -1419,6 +1419,7 @@ export const th: TranslationMap = {
     vi: "Tiếng Việt (เวียดนาม)",
     nl: "Nederlands (ดัตช์)",
     fa: "فارسی (เปอร์เซีย)",
+    ru: "Русский (รัสเซีย)",
   },
   cron: {
     quickCreate: {

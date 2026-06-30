@@ -131,6 +131,7 @@ export type GatewayClientOptions = {
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;

@@ -9,6 +9,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import { toErrorObject } from "../infra/errors.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -430,7 +431,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
       },
       (error: unknown) => {
         cleanup();
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -522,18 +523,4 @@ export function hasLocalServiceProcessExited(
   child: Pick<ChildProcess, "exitCode" | "signalCode">,
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Selects and invokes native agent harnesses for embedded run attempts.
  */
@@ -11,6 +12,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
@@ -43,7 +45,7 @@ import {
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
-import type { AgentHarness, AgentHarnessSupport } from "./types.js";
+import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
@@ -153,6 +155,56 @@ function compareHarnessSupport(
   return left.harness.id.localeCompare(right.harness.id);
 }
 
+function buildAgentHarnessSupportContext(params: {
+  provider: string;
+  modelId?: string;
+  requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
+  config?: OpenClawConfig;
+}): AgentHarnessSupportContext {
+  const providerOwnership = resolveProviderRefOwnership({
+    provider: params.provider,
+    config: params.config,
+  });
+  return {
+    provider: params.provider,
+    modelId: params.modelId,
+    modelProvider: buildAgentHarnessSupportModelProvider(params),
+    requestedRuntime: params.requestedRuntime,
+    providerOwnerStatus: providerOwnership.status,
+    providerOwnerPluginIds:
+      providerOwnership.status === "unowned" ? [] : providerOwnership.pluginIds,
+  };
+}
+
+function buildAgentHarnessSupportModelProvider(params: {
+  provider: string;
+  modelId?: string;
+  config?: OpenClawConfig;
+}): AgentHarnessSupportContext["modelProvider"] {
+  const providerConfig = findNormalizedProviderValue(
+    params.config?.models?.providers,
+    params.provider,
+  );
+  if (!providerConfig) {
+    return undefined;
+  }
+  const modelConfig = params.modelId
+    ? providerConfig.models?.find((entry) => entry.id === params.modelId)
+    : undefined;
+  return {
+    api: modelConfig?.api ?? providerConfig.api ?? "openai-responses",
+    baseUrl: modelConfig?.baseUrl ?? providerConfig.baseUrl,
+    azureApiVersion: readStringParam(
+      modelConfig?.params?.azureApiVersion ?? providerConfig.params?.azureApiVersion,
+    ),
+    request: providerConfig.request,
+  };
+}
+
+function readStringParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export function selectAgentHarness(params: {
   provider: string;
   modelId?: string;
@@ -200,11 +252,13 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
-      const support = forced.supports({
+      const supportContext = buildAgentHarnessSupportContext({
         provider: params.provider,
         modelId: params.modelId,
         requestedRuntime: runtime,
+        config: params.config,
       });
+      const support = forced.supports(supportContext);
       if (support.supported) {
         return buildSelectionDecision({
           harness: forced,
@@ -261,14 +315,21 @@ function selectAgentHarnessDecision(params: {
     throw new MissingAgentHarnessError(runtime);
   }
 
-  const candidates = pluginHarnesses.map((harness) => ({
-    harness,
-    support: harness.supports({
-      provider: params.provider,
-      modelId: params.modelId,
-      requestedRuntime: runtime,
-    }),
-  }));
+  const candidates =
+    pluginHarnesses.length > 0
+      ? (() => {
+          const supportContext = buildAgentHarnessSupportContext({
+            provider: params.provider,
+            modelId: params.modelId,
+            requestedRuntime: runtime,
+            config: params.config,
+          });
+          return pluginHarnesses.map((harness) => ({
+            harness,
+            support: harness.supports(supportContext),
+          }));
+        })()
+      : [];
   const supported = candidates
     .filter(
       (

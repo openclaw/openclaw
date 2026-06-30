@@ -14,6 +14,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -28,6 +29,7 @@ import type {
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
@@ -46,6 +48,8 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
@@ -89,6 +93,10 @@ export type RunEmbeddedAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Transport-native chat/conversation ID for hook identity context. */
+  chatId?: string;
+  /** Channel-specific identity metadata surfaced to plugin hooks. */
+  channelContext?: PluginHookChannelContext;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -117,7 +125,8 @@ export type RunEmbeddedAgentParams = {
   forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
-  sessionFile: string;
+  /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
+  sessionFile?: string;
   workspaceDir: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
@@ -251,6 +260,8 @@ export type RunEmbeddedAgentParams = {
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
+  suppressLiveStreamOutput?: boolean;
   /**
    * Treat a clean empty assistant stop as an intentional silent reply.
    * Only set when the caller's prompt policy already allows an exact NO_REPLY

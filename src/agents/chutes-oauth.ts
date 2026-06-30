@@ -6,6 +6,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
+import { readProviderJsonResponse, readResponseTextLimited } from "./provider-http-errors.js";
+
+const CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -115,7 +118,7 @@ async function fetchChutesUserInfo(params: {
     await cancelUnreadResponseBody(response);
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
   if (!data || typeof data !== "object") {
     return null;
   }
@@ -151,15 +154,15 @@ export async function exchangeChutesCodeForTokens(params: {
     body,
   });
   if (!response.ok) {
-    const text = await response.text();
+    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
     throw new Error(`Chutes token exchange failed: ${text}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response, "Chutes token exchange");
 
   const access = data.access_token?.trim();
   const refresh = data.refresh_token?.trim();
@@ -222,15 +225,15 @@ export async function refreshChutesTokens(params: {
     body,
   });
   if (!response.ok) {
-    const text = await response.text();
+    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
     throw new Error(`Chutes token refresh failed: ${text}`);
   }
 
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response, "Chutes token refresh");
   const access = data.access_token?.trim();
   const newRefresh = data.refresh_token?.trim();
   const expires = resolveChutesExpiresAt(data.expires_in, now);

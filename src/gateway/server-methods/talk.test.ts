@@ -1408,6 +1408,49 @@ describe("talk.client.toolCall handler", () => {
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
+  it.each([
+    ["timeout", "Realtime agent consult ended before the run started."],
+    ["error", "Realtime agent consult failed before the run started."],
+    ["ok", "Realtime agent consult completed before the tool result subscription started."],
+  ] as const)(
+    "rejects terminal agent consult chat.send ACKs with status %s",
+    async (status, message) => {
+      mocks.chatSend.mockImplementationOnce(
+        async ({
+          respond,
+        }: {
+          respond: (ok: boolean, result?: unknown, error?: unknown) => void;
+        }) => {
+          respond(true, { runId: `run-${status}`, status }, undefined);
+        },
+      );
+      const respond = vi.fn();
+
+      await talkHandlers["talk.client.toolCall"]({
+        req: { type: "req", id: "1", method: "talk.client.toolCall" },
+        params: {
+          sessionKey: "main",
+          relaySessionId: "relay-1",
+          callId: "call-1",
+          name: "openclaw_agent_consult",
+          args: { question: "What now?" },
+        },
+        client: { connId: "conn-1" } as never,
+        isWebchatConnect: () => false,
+        respond: respond as never,
+        context: {
+          getRuntimeConfig: () => ({}) as OpenClawConfig,
+        } as never,
+      });
+
+      expect(mocks.registerTalkRealtimeRelayAgentRun).not.toHaveBeenCalled();
+      expectRespondError(respond, {
+        code: ErrorCodes.UNAVAILABLE,
+        message,
+      });
+    },
+  );
+
   it("rejects client tool calls that are not the agent consult tool", async () => {
     const respond = vi.fn();
 

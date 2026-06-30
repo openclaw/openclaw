@@ -1,6 +1,7 @@
 export type ChangedScope = {
   runNode: boolean;
   runMacos: boolean;
+  runIosBuild: boolean;
   runAndroid: boolean;
   runWindows: boolean;
   runSkillsPython: boolean;

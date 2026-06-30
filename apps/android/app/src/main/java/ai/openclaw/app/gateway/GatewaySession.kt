@@ -260,24 +260,6 @@ class GatewaySession(
     currentConnection?.closeQuietly()
   }
 
-  fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
-
-  /** Refreshes the canvas plugin surface URL and caches the normalized Android-reachable URL. */
-  suspend fun refreshCanvasHostUrl(timeoutMs: Long = 8_000): String? {
-    val refreshed =
-      refreshPluginSurfaceUrl(
-        method = "node.pluginSurface.refresh",
-        params = buildJsonObject { put("surface", JsonPrimitive("canvas")) },
-        timeoutMs = timeoutMs,
-      )
-    if (!refreshed.isNullOrBlank()) {
-      pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
-    }
-    return refreshed
-  }
-
-  fun currentMainSessionKey(): String? = mainSessionKey
-
   /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
@@ -294,28 +276,6 @@ class GatewaySession(
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       false
-    }
-  }
-
-  private suspend fun refreshPluginSurfaceUrl(
-    method: String,
-    params: JsonElement?,
-    timeoutMs: Long,
-  ): String? {
-    val conn = currentConnection ?: return null
-    return try {
-      val res = conn.request(method, params, timeoutMs)
-      if (!res.ok) return null
-      val obj = res.payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() } ?: return null
-      val raw =
-        obj["pluginSurfaceUrls"]
-          .asObjectOrNull()
-          ?.get("canvas")
-          .asStringOrNull()
-      normalizeCanvasHostUrl(raw, conn.endpoint, isTlsConnection = conn.tls != null)
-    } catch (err: Throwable) {
-      Log.d("OpenClawGateway", "$method failed: ${err.message ?: err::class.java.simpleName}")
-      null
     }
   }
 

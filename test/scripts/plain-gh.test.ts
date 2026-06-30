@@ -4,7 +4,12 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { plainGhEnv, resolvePlainGhBin } from "../../scripts/lib/plain-gh.mjs";
+import {
+  execPlainGh,
+  plainGhEnv,
+  PLAIN_GH_SYSTEM_CANDIDATES,
+  resolvePlainGhBin,
+} from "../../scripts/lib/plain-gh.mjs";
 
 const tempDirs: string[] = [];
 
@@ -36,6 +41,21 @@ printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
   return ghPath;
 }
 
+function makeLargeFakeGh(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-large-"));
+  tempDirs.push(dir);
+  const ghPath = path.join(dir, "gh");
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const bytes = Number(process.env.PLAIN_GH_FAKE_BYTES ?? "0");
+process.stdout.write("x".repeat(bytes));
+`,
+  );
+  chmodSync(ghPath, 0o755);
+  return ghPath;
+}
+
 describe("plain gh helpers", () => {
   it("prefers OPENCLAW_GH_BIN over PATH shims", () => {
     const ghPath = makeFakeGh();
@@ -47,6 +67,16 @@ describe("plain gh helpers", () => {
         PATH: "",
       }),
     ).toBe(ghPath);
+  });
+
+  it("prefers package-manager gh paths over bin shims", () => {
+    const realGh = makeFakeGh();
+    const shimGh = makeFakeGh();
+
+    expect(resolvePlainGhBin({ PATH: shimGh }, [realGh, shimGh])).toBe(realGh);
+    expect(PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      PLAIN_GH_SYSTEM_CANDIDATES.indexOf("/opt/homebrew/bin/gh"),
+    );
   });
 
   it("normalizes color environment for JSON-safe gh output", () => {
@@ -99,10 +129,29 @@ describe("plain gh helpers", () => {
     expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
   });
 
+  it("captures large gh payloads by default", () => {
+    const ghPath = makeLargeFakeGh();
+    const bytes = 2 * 1024 * 1024;
+
+    const output = execPlainGh(["api", "large"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: ghPath,
+        PLAIN_GH_FAKE_BYTES: String(bytes),
+      },
+    });
+
+    expect(output).toHaveLength(bytes);
+  });
+
   it("keeps the shell resolver on external gh binaries", () => {
     const helper = readFileSync("scripts/lib/plain-gh.sh", "utf8");
 
     expect(helper).toContain("type -P gh");
     expect(helper).not.toContain("command -v gh");
+    expect(helper.indexOf("/opt/homebrew/opt/gh/bin/gh")).toBeLessThan(
+      helper.indexOf("/opt/homebrew/bin/gh"),
+    );
   });
 });

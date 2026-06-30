@@ -28,23 +28,31 @@ function readOptionValue(argv, index, optionName) {
 
 export function parseArgs(argv) {
   const args = { repo: "", sha: "", output: "", changelogOnly: false };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    args[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
       case "--repo":
-        args.repo = readOptionValue(argv, index, arg);
+        setOnce(arg, "repo", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--sha":
-        args.sha = readOptionValue(argv, index, arg);
+        setOnce(arg, "sha", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--output":
-        args.output = readOptionValue(argv, index, arg);
+        setOnce(arg, "output", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--changelog-only":
-        args.changelogOnly = true;
+        setOnce(arg, "changelogOnly", true);
         break;
       default:
         throw new Error(`Unknown option: ${arg}`);
@@ -98,13 +106,16 @@ function latestRun(runs) {
 
 function preferredCiRun(runs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
-  const failedScheduledRun = scheduledRuns.find(
-    (run) => run.status === "completed" && run.conclusion !== "success",
+  const latestScheduledRun = latestRun(scheduledRuns);
+  const failedScheduledRun = latestRun(
+    scheduledRuns.filter(
+      (run) =>
+        run.status === "completed" && !["success", "cancelled", "skipped"].includes(run.conclusion),
+    ),
   );
-  if (failedScheduledRun) {
+  if (failedScheduledRun && latestScheduledRun?.status !== "completed") {
     return failedScheduledRun;
   }
-  const latestScheduledRun = latestRun(scheduledRuns);
   if (latestScheduledRun?.status === "completed") {
     return latestScheduledRun;
   }

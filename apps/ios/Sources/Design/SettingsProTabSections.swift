@@ -119,7 +119,7 @@ extension SettingsProTab {
             self.gatewayActionButton(
                 title: "Diagnose",
                 icon: "cross.case",
-                color: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0),
+                color: OpenClawBrand.info,
                 isBusy: self.isRefreshingGateway)
             {
                 Task { await self.runDiagnostics() }
@@ -476,7 +476,7 @@ extension SettingsProTab {
                 self.gatewayActionButton(
                     title: "Run Diagnostics",
                     icon: "cross.case",
-                    color: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0),
+                    color: OpenClawBrand.info,
                     isBusy: self.isRefreshingGateway)
                 {
                     Task { await self.runDiagnostics() }
@@ -1040,7 +1040,7 @@ extension SettingsProTab {
 
     func settingsSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()

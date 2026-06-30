@@ -10,13 +10,16 @@ struct TalkProTab: View {
     @State private var showPermissionPrompt = false
     @State private var showTalkIssueDetails = false
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
     var openSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
         openSettings: @escaping () -> Void)
     {
         self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
     }
 
@@ -34,31 +37,14 @@ struct TalkProTab: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                CommandControlBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        self.header
-                        if let fallbackIssue = self.fallbackIssue {
-                            TalkRuntimeIssueBanner(
-                                issue: fallbackIssue,
-                                onOpenSettings: self.openSettings,
-                                onShowDetails: {
-                                    self.showTalkIssueDetails = true
-                                })
-                                .padding(.horizontal, OpenClawProMetric.pagePadding)
-                        }
-                        self.voiceHeroCard
-                        self.conversationCard
-                        self.voiceModeCard
-                        self.controlsCard
-                    }
-                    .padding(.top, 16)
-                    .padding(.bottom, 18)
+        Group {
+            if self.ownsNavigationStack {
+                NavigationStack {
+                    self.content
                 }
+            } else {
+                self.content
             }
-            .navigationBarHidden(true)
         }
         .sheet(isPresented: self.$showPermissionPrompt) {
             NavigationStack {
@@ -90,6 +76,33 @@ struct TalkProTab: View {
             }
         }
         .onAppear { self.alignPersistedTalkState() }
+    }
+
+    private var content: some View {
+        ZStack {
+            CommandControlBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    self.header
+                    if let fallbackIssue = self.fallbackIssue {
+                        TalkRuntimeIssueBanner(
+                            issue: fallbackIssue,
+                            onOpenSettings: self.openSettings,
+                            onShowDetails: {
+                                self.showTalkIssueDetails = true
+                            })
+                            .padding(.horizontal, OpenClawProMetric.pagePadding)
+                    }
+                    self.voiceHeroCard
+                    self.conversationCard
+                    self.voiceModeCard
+                    self.controlsCard
+                }
+                .padding(.top, 16)
+                .padding(.bottom, 18)
+            }
+        }
+        .navigationBarHidden(true)
     }
 
     private var header: some View {

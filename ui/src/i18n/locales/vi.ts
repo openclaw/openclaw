@@ -63,7 +63,6 @@ export const vi: TranslationMap = {
     docs: "Tài liệu",
     theme: "Giao diện",
     colorMode: "Chế độ màu",
-    colorModeOption: "Chế độ màu: {mode}",
     resources: "Tài nguyên",
     search: "Tìm kiếm",
     save: "Lưu",
@@ -1433,6 +1432,7 @@ export const vi: TranslationMap = {
     jaJP: "日本語 (Tiếng Nhật)",
     ko: "한국어 (Tiếng Hàn)",
     fr: "Français (Tiếng Pháp)",
+    hi: "हिन्दी (Tiếng Hindi)",
     ar: "العربية (Tiếng Ả Rập)",
     it: "Italiano (Tiếng Ý)",
     tr: "Türkçe (Tiếng Thổ Nhĩ Kỳ)",
@@ -1443,6 +1443,7 @@ export const vi: TranslationMap = {
     vi: "Tiếng Việt (Tiếng Việt)",
     nl: "Nederlands (Tiếng Hà Lan)",
     fa: "فارسی (Tiếng Ba Tư)",
+    ru: "Русский (Tiếng Nga)",
   },
   cron: {
     quickCreate: {

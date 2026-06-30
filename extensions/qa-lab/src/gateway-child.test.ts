@@ -1231,6 +1231,9 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
       "was not copied because it may contain credentials or auth tokens",
     );
+    await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
+      tempRoot,
+    );
   });
 
   it("rejects preserved gateway artifacts outside the repo root", async () => {

@@ -18,8 +18,11 @@ import {
   createChangedCheckPlan,
   createPnpmManagedCommand,
   createTargetedCoreLintCommand,
+  createTargetedExtensionLintCommand,
+  createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
+  shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
@@ -252,6 +255,24 @@ describe("scripts/changed-lanes", () => {
       "--",
       "--no-changes",
     ]);
+  });
+
+  it("prints changed check dry-run commands", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/check-changed.mjs", "--dry-run", "--", "extensions/lmstudio/src/api.ts"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("[check:changed:dry-run] lanes=extensions, extensionTests");
+    expect(result.stderr).toContain(
+      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/api.ts",
+    );
   });
 
   it("includes untracked worktree files in the default local diff", () => {
@@ -578,6 +599,16 @@ describe("scripts/changed-lanes", () => {
     expect(command).toBeNull();
   });
 
+  it("falls back to full extension lint for broad extension diffs", () => {
+    const targets = Array.from(
+      { length: 9 },
+      (_, index) => `extensions/discord/src/file-${index}.ts`,
+    );
+    const command = createTargetedExtensionLintCommand(targets, { PATH: "/usr/bin" });
+
+    expect(command).toBeNull();
+  });
+
   it("falls back to full core lint when a changed core target was deleted", () => {
     expect(
       createTargetedCoreLintCommand(
@@ -623,6 +654,50 @@ describe("scripts/changed-lanes", () => {
         "--tsconfig",
         "config/tsconfig/oxlint.core.json",
         "src/agents/auth-profiles/usage.ts",
+      ],
+      env: {
+        PATH: "/usr/bin",
+      },
+    });
+  });
+
+  it("targets small extension lint diffs", () => {
+    expect(
+      createTargetedExtensionLintCommand(
+        ["extensions/lmstudio/src/api.ts", "docs/help/testing.md"],
+        { PATH: "/usr/bin" },
+        { fileExists: () => true },
+      ),
+    ).toEqual({
+      name: "lint extension changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.extensions.json",
+        "extensions/lmstudio/src/api.ts",
+      ],
+      env: {
+        PATH: "/usr/bin",
+      },
+    });
+  });
+
+  it("targets small script lint diffs", () => {
+    expect(
+      createTargetedScriptLintCommand(
+        ["scripts/check-changed.mjs", "test/scripts/changed-lanes.test.ts"],
+        { PATH: "/usr/bin" },
+        { fileExists: () => true },
+      ),
+    ).toEqual({
+      name: "lint script changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/check-changed.mjs",
       ],
       env: {
         PATH: "/usr/bin",
@@ -795,9 +870,11 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {
-    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+    const result = detectChangedLanes(["extensions/lmstudio/src/api.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-    const lintCommand = plan.commands.find((command) => command.args[0] === "lint:extensions");
+    const lintCommand = plan.commands.find(
+      (command) => command.name === "lint extension changed file",
+    );
 
     expect(lintCommand?.env).toEqual({
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
@@ -839,7 +916,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes extension production changes to extension prod and extension test lanes", () => {
-    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+    const result = detectChangedLanes(["extensions/lmstudio/src/api.ts"]);
 
     expectLanes(result.lanes, {
       extensions: true,
@@ -1610,6 +1687,51 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it("checks native A2UI resources when the copied resource tree changes", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it("checks native A2UI resources when bundle inputs or generated outputs change", () => {
+    const result = detectChangedLanes([
+      "extensions/canvas/package.json",
+      "extensions/canvas/src/host/a2ui/.bundle.hash",
+      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+      "pnpm-lock.yaml",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {

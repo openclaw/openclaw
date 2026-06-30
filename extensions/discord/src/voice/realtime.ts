@@ -408,8 +408,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     | { message: string; suppressed: number; lastLoggedAt: number }
     | undefined;
   private readonly playerIdleHandler = () => {
+    const hadOutputAudio = this.isOutputAudioActive();
     this.resetOutputStream("player-idle");
-    this.completeExactSpeechResponse("player-idle");
+    if (hadOutputAudio) {
+      this.completeExactSpeechResponse("player-idle");
+    }
   };
 
   constructor(
@@ -779,9 +782,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.logOutputAudioStopped(reason);
+    this.clearOutputPlaybackWatchdog();
     this.outputStream = null;
     this.resetOutputAudioStats();
-    this.completeExactSpeechResponse(reason, { drain: false });
+    // The Opus resource can close without Discord emitting player idle. This
+    // close path releases queued exact speech, so clear the old watchdog before
+    // the next response owns exact-speech state.
+    this.completeExactSpeechResponse(reason);
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {

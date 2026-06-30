@@ -50,6 +50,11 @@ function isImportSpecifierContext(source, index) {
   );
 }
 
+function isRequireSpecifierContext(source, index) {
+  const prefix = source.slice(Math.max(0, index - 32), index);
+  return /\brequire\s*\(\s*$/u.test(prefix);
+}
+
 function isImportMetaUrlContext(source, quoteStart, quoteEnd) {
   const prefix = source.slice(Math.max(0, quoteStart - 32), quoteStart);
   if (!/\bnew\s+URL\s*\(\s*$/u.test(prefix)) {
@@ -115,6 +120,7 @@ function collectImportSpecifiers(source) {
     if (value.startsWith(".")) {
       const isDistDependency =
         isImportSpecifierContext(source, index) ||
+        isRequireSpecifierContext(source, index) ||
         (isImportMetaUrlContext(source, index, cursor) && hasJavaScriptFileExtension(value));
       if (isDistDependency) {
         specifiers.push(value);

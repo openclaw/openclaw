@@ -63,6 +63,7 @@ You will need to create a new application with a bot, add the bot to your server
 
     **General Permissions**
       - View Channels
+
     **Text Permissions**
       - Send Messages
       - Read Message History
@@ -78,7 +79,10 @@ You will need to create a new application with a bot, add the bot to your server
   <Step title="Enable Developer Mode and collect your IDs">
     Back in the Discord app, you need to enable Developer Mode so you can copy internal IDs.
 
-    1. Click **User Settings** (gear icon next to your avatar) → **Advanced** → toggle on **Developer Mode**
+    1. Click **User Settings** (gear icon next to your avatar) → Scroll to **Developer** in sidebar → toggle on **Developer Mode**
+
+        *(Note: On the Discord mobile app, Developer Mode is under **App Settings** → **Advanced**)*
+
     2. Right-click your **server icon** in the sidebar → **Copy Server ID**
     3. Right-click your **own avatar** → **Copy User ID**
 

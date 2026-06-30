@@ -649,7 +649,43 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
-    expectMockLineContains(runtime.log, "openclaw plugins update <plugin-id>");
+    expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
+  it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.10-beta.1",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.6.9",
+              gatewayVersion: "2026.6.10-beta.1",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.6.9",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- brave: 2026.6.9 (npm)");
+    expectMockLineContains(
+      runtime.log,
+      "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
+    );
     expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 

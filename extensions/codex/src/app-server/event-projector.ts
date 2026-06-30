@@ -53,6 +53,7 @@ import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transc
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -188,7 +189,6 @@ export class CodexAppServerEventProjector {
   private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
-  private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly nativeGeneratedMediaItemIds = new Set<string>();
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
@@ -412,6 +412,8 @@ export class CodexAppServerEventProjector {
       currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
+      didDeliverSourceReplyViaMessageTool:
+        toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
@@ -1028,6 +1030,9 @@ export class CodexAppServerEventProjector {
       this.recordNativeGeneratedMediaUrl({
         itemId,
         mediaUrl: saved.path,
+        // The typed savedPath may belong to a remote app-server host. Always
+        // prefer the copy persisted into this gateway's managed media root.
+        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn("codex app-server raw image generation result save failed", {
@@ -1037,13 +1042,19 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  private recordNativeGeneratedMediaUrl(params: { itemId: string; mediaUrl: string }): void {
-    if (this.nativeGeneratedMediaUrlsByItemId.has(params.itemId)) {
+  private recordNativeGeneratedMediaUrl(params: {
+    itemId: string;
+    mediaUrl: string;
+    replaceExisting?: boolean;
+  }): void {
+    if (
+      this.nativeGeneratedMediaUrlsByItemId.has(params.itemId) &&
+      params.replaceExisting !== true
+    ) {
       this.nativeGeneratedMediaItemIds.add(params.itemId);
       return;
     }
     this.nativeGeneratedMediaUrlsByItemId.set(params.itemId, params.mediaUrl);
-    this.nativeGeneratedMediaUrls.add(params.mediaUrl);
     this.nativeGeneratedMediaItemIds.add(params.itemId);
   }
 
@@ -1052,7 +1063,7 @@ export class CodexAppServerEventProjector {
       toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
     );
     if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
-      for (const mediaUrl of this.nativeGeneratedMediaUrls) {
+      for (const mediaUrl of this.nativeGeneratedMediaUrlsByItemId.values()) {
         mediaUrls.add(mediaUrl);
       }
     }
@@ -1827,7 +1838,14 @@ export class CodexAppServerEventProjector {
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
-    return (await readCodexMirroredSessionHistoryMessages(this.params.sessionFile)) ?? [];
+    return (
+      (await readCodexMirroredSessionHistoryMessages({
+        agentId: this.params.agentId,
+        sessionFile: this.params.sessionFile,
+        sessionId: this.params.sessionId,
+        sessionKey: this.params.sessionKey,
+      })) ?? []
+    );
   }
 
   private createAssistantMessage(text: string): AssistantMessage {

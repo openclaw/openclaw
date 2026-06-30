@@ -133,28 +133,45 @@ export function parseArgs(argv) {
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      options.outputDir = readOptionValue(argv, index, arg);
+      setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
-      options.outputDir = readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir");
+      setOnce(
+        "--output-dir",
+        "outputDir",
+        readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir"),
+      );
     } else if (arg === "--output-name") {
-      options.outputName = readOptionValue(argv, index, arg);
+      setOnce("--output-name", "outputName", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-name=")) {
-      options.outputName = readEqualsOptionValue(
-        arg.slice("--output-name=".length),
+      setOnce(
         "--output-name",
+        "outputName",
+        readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
       );
     } else if (arg === "--skip-build") {
-      options.skipBuild = true;
+      setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
-      options.sourceDir = readOptionValue(argv, index, arg);
+      setOnce("--source-dir", "sourceDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
-      options.sourceDir = readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir");
+      setOnce(
+        "--source-dir",
+        "sourceDir",
+        readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir"),
+      );
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }

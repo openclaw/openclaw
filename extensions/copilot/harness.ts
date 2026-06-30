@@ -3,6 +3,7 @@ import type { CopilotClient } from "@github/copilot-sdk";
 import {
   buildAgentHookContextChannelFields,
   compactWithSafetyTimeout,
+  getModelProviderRequestTransport,
   resolveCompactionTimeoutMs,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
@@ -15,7 +16,13 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { CopilotSessionConfig } from "./src/attempt.js";
-import { resolveCopilotAuth } from "./src/auth-bridge.js";
+import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
+import { createCopilotByokProxy } from "./src/byok-proxy.js";
+import {
+  isCopilotByokUnsupportedProviderError,
+  resolveCopilotProvider,
+  supportsCopilotByokProviderShape,
+} from "./src/provider-bridge.js";
 import type {
   ClientCreateOptions,
   CopilotClientPool,
@@ -52,7 +59,7 @@ interface TrackedSession {
   // replaces this entry via `onSessionEstablished`.
   compatKey: string;
   compactKey: string;
-  authMode: "gitHubToken" | "useLoggedInUser";
+  authMode: "gitHubToken" | "useLoggedInUser" | "byok";
   authProfileId?: string;
   authProfileVersion?: string;
 }
@@ -62,6 +69,14 @@ interface CopilotHistoryCompactResult {
   tokensRemoved: number;
   messagesRemoved: number;
   summaryContent?: string;
+  contextWindow?: {
+    tokenLimit: number;
+    currentTokens: number;
+    messagesLength: number;
+    systemTokens?: number;
+    conversationTokens?: number;
+    toolDefinitionsTokens?: number;
+  };
 }
 
 interface CopilotHistoryCompactSession {
@@ -80,7 +95,7 @@ export type CopilotSessionBinding = {
   sdkSessionId: string;
   compatKey: string;
   compactKey: string;
-  authMode: "gitHubToken" | "useLoggedInUser";
+  authMode: "gitHubToken" | "useLoggedInUser" | "byok";
   authProfileId?: string;
   authProfileVersion?: string;
   updatedAt: number;
@@ -111,9 +126,9 @@ type CopilotSessionAuth = Pick<
 >;
 
 function sessionAuthFields(auth: CopilotSessionAuth): CopilotSessionAuth {
-  return auth.authMode === "gitHubToken"
+  return auth.authMode === "gitHubToken" || auth.authMode === "byok"
     ? {
-        authMode: "gitHubToken",
+        authMode: auth.authMode,
         authProfileId: auth.authProfileId,
         authProfileVersion: auth.authProfileVersion,
       }
@@ -128,7 +143,7 @@ function sessionAuthMatches(stored: CopilotSessionAuth, current: CopilotSessionA
     return true;
   }
   return (
-    current.authMode === "gitHubToken" &&
+    current.authMode === stored.authMode &&
     stored.authProfileId === current.authProfileId &&
     stored.authProfileVersion === current.authProfileVersion
   );
@@ -146,8 +161,10 @@ function normalizeBinding(
     value.compatKey.trim() === "" ||
     typeof value.compactKey !== "string" ||
     value.compactKey.trim() === "" ||
-    (value.authMode !== "gitHubToken" && value.authMode !== "useLoggedInUser") ||
-    (value.authMode === "gitHubToken" &&
+    (value.authMode !== "gitHubToken" &&
+      value.authMode !== "byok" &&
+      value.authMode !== "useLoggedInUser") ||
+    ((value.authMode === "gitHubToken" || value.authMode === "byok") &&
       (typeof value.authProfileId !== "string" ||
         value.authProfileId.trim() === "" ||
         typeof value.authProfileVersion !== "string" ||
@@ -163,7 +180,7 @@ function normalizeBinding(
     compatKey: value.compatKey,
     compactKey: value.compactKey,
     authMode: value.authMode,
-    ...(value.authMode === "gitHubToken"
+    ...(value.authMode === "gitHubToken" || value.authMode === "byok"
       ? {
           authProfileId: value.authProfileId,
           authProfileVersion: value.authProfileVersion,
@@ -338,21 +355,88 @@ function computeSessionKey(
     copilotHome?: string;
     cwd?: string;
     modelId?: string;
-    model?: string | { api?: string; id?: string; provider?: string };
+    model?:
+      | {
+          api?: string;
+          id?: string;
+          provider?: string;
+          baseUrl?: string;
+          azureApiVersion?: string;
+          headers?: Record<string, string | null | undefined>;
+          authHeader?: boolean;
+          params?: Record<string, unknown>;
+          request?: {
+            auth?: { mode?: unknown };
+            proxy?: unknown;
+            tls?: unknown;
+            allowPrivateNetwork?: unknown;
+          };
+          contextTokens?: number;
+          contextWindow?: number;
+          maxTokens?: number;
+        }
+      | string;
+    runtimeModel?: {
+      api?: string;
+      id?: string;
+      provider?: string;
+      baseUrl?: string;
+      azureApiVersion?: string;
+      headers?: Record<string, string | null | undefined>;
+      authHeader?: boolean;
+      params?: Record<string, unknown>;
+      request?: {
+        auth?: { mode?: unknown };
+        proxy?: unknown;
+        tls?: unknown;
+        allowPrivateNetwork?: unknown;
+      };
+      contextTokens?: number;
+      contextWindow?: number;
+      maxTokens?: number;
+    };
     profileVersion?: string;
     resolvedApiKey?: string;
     sessionKey?: string;
     workspaceDir?: string;
   };
-  const modelObj: { api?: string; id?: string; provider?: string } =
+  const modelObj: {
+    api?: string;
+    id?: string;
+    provider?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
+    headers?: Record<string, string | null | undefined>;
+    authHeader?: boolean;
+    params?: Record<string, unknown>;
+    request?: {
+      auth?: { mode?: unknown };
+      proxy?: unknown;
+      tls?: unknown;
+      allowPrivateNetwork?: unknown;
+    };
+    contextTokens?: number;
+    contextWindow?: number;
+    maxTokens?: number;
+  } =
     p.model && typeof p.model === "object"
       ? p.model
+      : p.runtimeModel && typeof p.runtimeModel === "object"
+        ? p.runtimeModel
       : { id: typeof p.model === "string" ? p.model : undefined };
   const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
   const modelId =
     modelObj.id ??
     (typeof p.modelId === "string" ? p.modelId : undefined) ??
     (typeof p.model === "string" ? p.model : "");
+  const requestTransport =
+    p.model && typeof p.model === "object" ? getModelProviderRequestTransport(p.model) : undefined;
+  const requestAuthMode = readSessionString(
+    requestTransport?.auth?.mode ?? modelObj.request?.auth?.mode,
+  );
+  const azureApiVersion = readSessionString(
+    modelObj.azureApiVersion ?? modelObj.params?.azureApiVersion,
+  );
   // resolveCopilotAuth can throw when an explicit `auth.gitHubToken`
   // is supplied without profileId + profileVersion (the existing
   // pool-key safety invariant). That same error would surface
@@ -365,16 +449,63 @@ function computeSessionKey(
   let resolvedAgentId = "";
   let resolvedCopilotHome = "";
   try {
-    const resolved = resolveCopilotAuth({
-      agentId: typeof p.agentId === "string" ? p.agentId : readAgentIdFromSessionKey(p.sessionKey),
-      agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
-      workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
-      copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
-      auth: p.auth,
-      resolvedApiKey: typeof p.resolvedApiKey === "string" ? p.resolvedApiKey : undefined,
-      authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
-      profileVersion: typeof p.profileVersion === "string" ? p.profileVersion : undefined,
-    });
+    const resolved = !options.includeAuth
+      ? resolveCopilotAuth({
+          agentId:
+            typeof p.agentId === "string" ? p.agentId : readAgentIdFromSessionKey(p.sessionKey),
+          agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
+          workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
+          copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
+          auth: { useLoggedInUser: true },
+        })
+      : (() => {
+          const modelProvider = resolveCopilotProvider({
+            model: {
+              api: modelObj.api,
+              id: modelId,
+              provider,
+              baseUrl: modelObj.baseUrl,
+              azureApiVersion,
+              headers: modelObj.headers,
+              authHeader: modelObj.authHeader,
+              requestAuthMode,
+              requestProxy: requestTransport?.proxy ?? modelObj.request?.proxy,
+              requestTls: requestTransport?.tls ?? modelObj.request?.tls,
+              requestAllowPrivateNetwork:
+                requestTransport?.allowPrivateNetwork ?? modelObj.request?.allowPrivateNetwork,
+              contextTokens: modelObj.contextTokens,
+              contextWindow: modelObj.contextWindow,
+              maxTokens: modelObj.maxTokens,
+            },
+            resolvedApiKey: typeof p.resolvedApiKey === "string" ? p.resolvedApiKey : undefined,
+            authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
+          });
+          return modelProvider.mode === "byok"
+            ? createCopilotByokAuth({
+                agentId:
+                  typeof p.agentId === "string"
+                    ? p.agentId
+                    : readAgentIdFromSessionKey(p.sessionKey),
+                agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
+                workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
+                copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
+                authProfileId: modelProvider.authProfileId,
+                authProfileVersion: modelProvider.authProfileVersion,
+              })
+            : resolveCopilotAuth({
+                agentId:
+                  typeof p.agentId === "string"
+                    ? p.agentId
+                    : readAgentIdFromSessionKey(p.sessionKey),
+                agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
+                workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
+                copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
+                auth: p.auth,
+                resolvedApiKey: typeof p.resolvedApiKey === "string" ? p.resolvedApiKey : undefined,
+                authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
+                profileVersion: typeof p.profileVersion === "string" ? p.profileVersion : undefined,
+              });
+        })();
     resolvedAgentId = resolved.agentId;
     resolvedCopilotHome = resolved.copilotHome;
     authParts = [
@@ -382,6 +513,9 @@ function computeSessionKey(
       `auth.profileId=${resolved.authProfileId ?? ""}`,
       `auth.profileVersion=${resolved.authProfileVersion ?? ""}`,
     ];
+    if (!options.includeAuth) {
+      authParts = [];
+    }
   } catch {
     authParts = ["auth=unresolvable"];
   }
@@ -389,6 +523,9 @@ function computeSessionKey(
     `provider=${provider}`,
     `model=${modelId}`,
     ...(options.includeApi ? [`api=${modelObj.api ?? ""}`] : []),
+    ...(options.includeApi
+      ? [`baseUrlFingerprint=${fingerprintSessionValue(modelObj.baseUrl)}`]
+      : []),
     `cwd=${p.cwd ?? p.workspaceDir ?? ""}`,
     `agentId=${resolvedAgentId}`,
     `agentDir=${p.agentDir ?? ""}`,
@@ -397,6 +534,14 @@ function computeSessionKey(
     ...(options.includeAuth ? authParts : []),
   ];
   return parts.join("|");
+}
+
+function readSessionString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function fingerprintSessionValue(value: unknown): string {
+  return typeof value === "string" && value ? tokenFingerprint(value) : "";
 }
 
 function computeSessionCompatKey(params: CopilotSessionCompatParams): string {
@@ -523,10 +668,36 @@ export function createCopilotAgentHarness(
         return { supported: false, reason: "copilot is opt-in only" };
       }
       const provider = ctx.provider.trim().toLowerCase();
-      if (!COPILOT_PROVIDER_IDS.has(provider)) {
+      if (!provider) {
+        return { supported: false, reason: "provider is required" };
+      }
+      if (COPILOT_PROVIDER_IDS.has(provider)) {
+        return { supported: true, priority: 100 };
+      }
+      const providerOwnerPluginIds = ctx.providerOwnerPluginIds;
+      if (
+        ctx.providerOwnerStatus !== "unowned" ||
+        !providerOwnerPluginIds ||
+        providerOwnerPluginIds.length > 0
+      ) {
         return {
           supported: false,
           reason: `provider is not one of: ${[...COPILOT_PROVIDER_IDS].toSorted().join(", ")}`,
+        };
+      }
+      if (
+        !supportsCopilotByokProviderShape({
+          api: ctx.modelProvider?.api,
+          baseUrl: ctx.modelProvider?.baseUrl,
+          requestProxy: ctx.modelProvider?.request?.proxy,
+          requestTls: ctx.modelProvider?.request?.tls,
+          requestAllowPrivateNetwork: ctx.modelProvider?.request?.allowPrivateNetwork,
+        })
+      ) {
+        return {
+          supported: false,
+          reason:
+            "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
         };
       }
       return { supported: true, priority: 100 };
@@ -541,10 +712,21 @@ export function createCopilotAgentHarness(
         if (disposed) {
           throw new Error("[copilot] harness was disposed while starting an attempt");
         }
-        const poolAcquire = resolvePoolAcquire(params as never);
         const pool = await getPool();
         if (disposed) {
           throw new Error("[copilot] harness was disposed while starting an attempt");
+        }
+        let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
+        try {
+          poolAcquire = resolvePoolAcquire(params as never);
+        } catch (error) {
+          // Keep invalid forced BYOK model configuration on the normal attempt
+          // result path so callers receive `model_not_supported` instead of an
+          // uncaught harness rejection. Other auth/pool errors remain fatal.
+          if (isCopilotByokUnsupportedProviderError(error)) {
+            return runCopilotAttempt(params, { pool });
+          }
+          throw error;
         }
         const openclawSessionId =
           typeof params.sessionId === "string" ? params.sessionId : undefined;
@@ -603,10 +785,12 @@ export function createCopilotAgentHarness(
           pool,
           onSessionEstablished: openclawSessionId
             ? ({
+                compactionSessionConfig,
                 sdkSessionId,
                 pooledClient,
                 sessionConfig,
               }: {
+                compactionSessionConfig?: CopilotSessionConfig;
                 sdkSessionId: string;
                 pooledClient: PooledClient;
                 sessionConfig: CopilotSessionConfig;
@@ -618,7 +802,7 @@ export function createCopilotAgentHarness(
                   compatKey: currentCompatKey,
                   compactKey: currentCompactKey,
                   poolKey: pooledClient.key,
-                  sessionConfig,
+                  sessionConfig: compactionSessionConfig ?? sessionConfig,
                   ...sessionAuthFields(poolAcquire.auth),
                 });
                 registerStoredBinding(options?.sessionStore, openclawSessionId, {
@@ -760,8 +944,24 @@ export function createCopilotAgentHarness(
       const tracked = trackedSessions.get(openclawSessionId);
       const currentCompactKey = computeSessionCompactKey(params);
       const { resolvePoolAcquire } = await import("./src/attempt.js");
-      const resolvedPoolAcquire = resolvePoolAcquire(params as never);
-      const currentAuth = sessionAuthFields(resolvedPoolAcquire.auth);
+      let resolvedPoolAcquire: ReturnType<typeof resolvePoolAcquire> | undefined;
+      let currentAuth: CopilotSessionAuth | undefined;
+      try {
+        resolvedPoolAcquire = resolvePoolAcquire(params as never);
+      } catch (error) {
+        if (isCopilotByokUnsupportedProviderError(error)) {
+          return {
+            ok: false,
+            compacted: false,
+            reason: "missing_thread_binding",
+            failure: { reason: "missing_thread_binding" },
+          };
+        }
+        throw error;
+      }
+      if (!currentAuth) {
+        currentAuth = sessionAuthFields(resolvedPoolAcquire.auth);
+      }
       const compatibleTracked =
         tracked?.compactKey === currentCompactKey && sessionAuthMatches(tracked, currentAuth)
           ? tracked
@@ -777,19 +977,32 @@ export function createCopilotAgentHarness(
           failure: { reason: "missing_thread_binding" },
         };
       }
-      const poolAcquire = compatibleTracked
-        ? { key: compatibleTracked.poolKey, options: compatibleTracked.clientOptions }
-        : resolvedPoolAcquire;
+      const poolAcquire = {
+        key: compatibleTracked.poolKey,
+        options: compatibleTracked.clientOptions,
+      };
       let compactResult: CopilotHistoryCompactResult;
       let handle: PooledClient | undefined;
       let pool: CopilotClientPool | undefined;
       let activeSdkSession: CopilotHistoryCompactSession | undefined;
+      let cleanupByokProxy: (() => Promise<void>) | undefined;
       const hookContext = buildCopilotCompactionHookContext(params);
       try {
         throwIfAborted(params.abortSignal);
         pool = await getPool();
         handle = await pool.acquire(poolAcquire.key, poolAcquire.options);
         const client = handle.client;
+        const byokProxy =
+          compatibleTracked.authMode === "byok" && compatibleTracked.sessionConfig.provider
+            ? await createCopilotByokProxy({
+                mode: "byok",
+                provider: compatibleTracked.sessionConfig.provider,
+              })
+            : undefined;
+        cleanupByokProxy = byokProxy?.close;
+        const sessionConfig = byokProxy?.provider.provider
+          ? { ...compatibleTracked.sessionConfig, provider: byokProxy.provider.provider }
+          : compatibleTracked.sessionConfig;
         // Manual compaction resumes a distinct SDK session, bypassing the attempt event bridge.
         // Run the portable lifecycle hook here so both compaction paths stay observable.
         await runAgentHarnessBeforeCompactionHook({
@@ -804,13 +1017,13 @@ export function createCopilotAgentHarness(
               customInstructions: params.customInstructions,
               gitHubToken:
                 compatibleTracked?.clientOptions.gitHubToken ??
-                (resolvedPoolAcquire.auth.authMode === "gitHubToken"
+                (resolvedPoolAcquire?.auth.authMode === "gitHubToken"
                   ? resolvedPoolAcquire.auth.gitHubToken
                   : undefined),
               onSession: (session) => {
                 activeSdkSession = session;
               },
-              sessionConfig: compatibleTracked.sessionConfig,
+              sessionConfig,
               sdkSessionId: compatibleTracked.sdkSessionId,
             }),
           resolveCompactionTimeoutMs(
@@ -844,6 +1057,7 @@ export function createCopilotAgentHarness(
           },
         };
       } finally {
+        await cleanupByokProxy?.();
         if (pool && handle) {
           try {
             await pool.release(handle);
@@ -872,6 +1086,21 @@ export function createCopilotAgentHarness(
         ok: true,
         compacted,
         reason: compacted ? "copilot-sdk-history-compacted" : "already under target",
+        ...(compacted
+          ? {
+              result: {
+                summary: compactResult.summaryContent ?? "",
+                firstKeptEntryId: "",
+                tokensBefore:
+                  params.currentTokenCount ??
+                  (compactResult.contextWindow?.currentTokens ?? 0) + compactResult.tokensRemoved,
+                tokensAfter: compactResult.contextWindow?.currentTokens,
+                details: compactResult,
+                sessionId: params.sessionId,
+                sessionFile: params.sessionFile,
+              },
+            }
+          : {}),
       };
     },
 

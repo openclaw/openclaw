@@ -241,7 +241,3 @@ export function classifyUnresolvedAgentTurnShellToolPrompt(
   }
   return null;
 }
-
-export function hasUnresolvedAgentTurnShellToolPrompt(payload: UnknownRecord): boolean {
-  return classifyUnresolvedAgentTurnShellToolPrompt(payload) !== null;
-}

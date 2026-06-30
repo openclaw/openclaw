@@ -287,6 +287,9 @@ function syncAllControllers(): void {
 }
 
 export async function hydrateViewer(): Promise<void> {
+  // Rehydration replaces the current DOM card set; do not retain controllers
+  // from a previous render because they can keep stale DOM references alive.
+  controllers.length = 0;
   const cards = await Promise.all(
     getCards().map(async ({ host, payload }) => ({
       host,

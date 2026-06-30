@@ -150,6 +150,7 @@ jobs:
           git --version
 
       - name: Run Testbox
+        if: always()
         shell: bash
         run: |
           set -euo pipefail

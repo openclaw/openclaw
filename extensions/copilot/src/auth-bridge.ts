@@ -54,17 +54,44 @@ export const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
 export interface ResolvedCopilotAuth {
-  authMode: "useLoggedInUser" | "gitHubToken";
+  authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   /** Present only when authMode is "gitHubToken". */
   gitHubToken?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileId?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileVersion?: string;
   /** Absolute, normalized path. */
   copilotHome: string;
   /** Validated agent id used for path defaults and pool keying. */
   agentId: string;
+}
+
+export function createCopilotByokAuth(input: {
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  copilotHome?: string;
+  authProfileId?: string;
+  authProfileVersion?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: () => string;
+}): ResolvedCopilotAuth {
+  const base = resolveCopilotAuth({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+    copilotHome: input.copilotHome,
+    env: input.env,
+    homeDir: input.homeDir,
+    auth: { useLoggedInUser: true },
+  });
+  return {
+    ...base,
+    authMode: "byok",
+    authProfileId: input.authProfileId?.trim() || "byok:resolved",
+    authProfileVersion: input.authProfileVersion?.trim() || "byok:unfingerprinted",
+  };
 }
 
 export interface ResolveCopilotAuthInput {

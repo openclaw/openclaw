@@ -37,6 +37,7 @@ const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveProviderRefOwnership: typeof import("./providers.js").resolveProviderRefOwnership;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveCatalogHookProviderPluginIds: typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
@@ -520,6 +521,7 @@ describe("resolvePluginProviders", () => {
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
+      resolveProviderRefOwnership,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
       resolveExternalAuthProfileCompatFallbackPluginIds,
@@ -557,6 +559,32 @@ describe("resolvePluginProviders", () => {
     setOwningProviderManifestPlugins();
 
     expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+    expect(resolveProviderRefOwnership({ provider: "claude-cli" })).toEqual({
+      status: "owned",
+      pluginIds: ["anthropic"],
+    });
+  });
+
+  it("marks explicit provider refs with multiple owners as ambiguous", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "first-owner",
+        providerIds: [],
+        cliBackends: ["shared-cli"],
+        origin: "workspace",
+      }),
+      createManifestProviderPlugin({
+        id: "second-owner",
+        providerIds: [],
+        cliBackends: ["shared-cli"],
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(resolveProviderRefOwnership({ provider: "shared-cli" })).toEqual({
+      status: "ambiguous",
+      pluginIds: ["first-owner", "second-owner"],
+    });
   });
 
   it("maps explicit cli-backend model refs to owning plugin ids", () => {

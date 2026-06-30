@@ -22,8 +22,9 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
+  type MemorySessionSyncTarget,
   type MemorySource,
-  type MemorySyncProgressUpdate,
+  type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -283,6 +284,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionsDirty = false;
   protected override sessionsDirtyFiles = new Set<string>();
   protected override sessionPendingFiles = new Set<string>();
+  protected override sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   private indexIdentityDirty = false;
   protected override sessionDeltas = new Map<
     string,
@@ -291,6 +293,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
   private queuedSessionFiles = new Set<string>();
+  private queuedSessions = new Map<string, MemorySessionSyncTarget>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -989,18 +992,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }
 
-  async sync(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void> {
+  async sync(params?: MemorySyncParams): Promise<void> {
     if (this.closed) {
       return;
     }
     if (this.syncing) {
-      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionFiles);
+      if (hasTargetedSessionSyncParams(params)) {
+        return this.enqueueTargetedSessionSync(params);
       }
       return this.syncing;
     }
@@ -1013,28 +1011,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
+  private enqueueTargetedSessionSync(
+    targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
+  ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
         getQueuedSessionFiles: () => this.queuedSessionFiles,
+        getQueuedSessions: () => this.queuedSessions,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
         sync: async (params) => await this.sync(params),
       },
-      sessionFiles,
+      targets,
     );
   }
 
-  private async runSyncWithReadonlyRecovery(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void> {
+  private async runSyncWithReadonlyRecovery(params?: MemorySyncParams): Promise<void> {
     const getClosed = () => this.closed;
     const getDb = () => this.db;
     const setDb = (value: DatabaseSync) => {
@@ -1379,6 +1375,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       throw toLintErrorObject(closeError, "Non-Error thrown");
     }
   }
+}
+
+function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
+  return Boolean(
+    params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
+    params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+  );
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

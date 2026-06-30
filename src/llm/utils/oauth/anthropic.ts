@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { toErrorObject } from "../../../infra/errors.js";
 import {
   generateOAuthState,
   generatePKCE,
@@ -359,7 +360,7 @@ export async function loginAnthropic(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw toLintErrorObject(manualError, "Non-Error thrown");
+          throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
           const parsed = parseOAuthAuthorizationInput(manualInput);
@@ -462,17 +463,3 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     return credentials.access;
   },
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

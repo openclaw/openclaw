@@ -1,5 +1,6 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -354,7 +355,7 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
-      throw toLintErrorObject(waitError, "Non-Error thrown");
+      throw toErrorObject(waitError, "Non-Error thrown");
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -372,7 +373,7 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(toErrorObject(error, "Non-Error rejection"));
           }
         },
       );
@@ -432,18 +433,4 @@ export async function createChildAdapter(params: {
     kill,
     dispose,
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

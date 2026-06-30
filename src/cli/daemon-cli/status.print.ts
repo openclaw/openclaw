@@ -18,6 +18,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
+import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -327,9 +328,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const serviceEnv = service.command?.environment ?? process.env;
-    const container = Boolean(
-      resolveDaemonContainerContext(serviceEnv),
-    );
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
@@ -483,9 +482,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
         );
       }
-      defaultRuntime.log(
-        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      const updateCommands = drift.drifts.map((entry) =>
+        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
       );
+      if (updateCommands.length === 1) {
+        defaultRuntime.log(
+          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
+        );
+      } else {
+        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
+        for (const command of updateCommands) {
+          defaultRuntime.log(`- ${command}`);
+        }
+        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+      }
     } else {
       defaultRuntime.log(
         infoText(

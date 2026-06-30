@@ -88,13 +88,13 @@ describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", ()
     const fixture = await openChat(authStatusWithUsage);
     const { page } = fixture;
     try {
-      const pill = page.locator('[data-chat-provider-usage="true"]');
+      const composerControls = page.locator(".agent-chat__composer-controls").first();
+      const pill = composerControls.locator('[data-chat-provider-usage="true"]');
       await pill.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-with-pill.png") });
-      await page
-        .locator(".agent-chat__composer-controls")
-        .first()
-        .screenshot({ path: path.join(artifactDir, "02-composer-controls.png") });
+      await composerControls.screenshot({
+        path: path.join(artifactDir, "02-composer-controls.png"),
+      });
 
       const text = (await pill.textContent())?.replace(/\s+/g, " ").trim();
       expect(text).toContain("Usage");
