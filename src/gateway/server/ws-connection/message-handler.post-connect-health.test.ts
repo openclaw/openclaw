@@ -13,6 +13,7 @@ import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-toke
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import type { GatewayRequestHandlers } from "../../server-methods/shared-types.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 
 const {
@@ -188,6 +189,7 @@ function attachGatewayHarness(options: {
   close?: CloseGatewayConnection;
   isClosed?: () => boolean;
   setCloseCause?: SetCloseCause;
+  extraHandlers?: GatewayRequestHandlers;
 }) {
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
     cb?.();
@@ -230,7 +232,7 @@ function attachGatewayHarness(options: {
     getResolvedAuth: () => resolvedAuth,
     gatewayMethods: [],
     events: [],
-    extraHandlers: {},
+    extraHandlers: options.extraHandlers ?? {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
@@ -257,6 +259,7 @@ function attachGatewayHarness(options: {
   const sendMessage = onMessage;
   return {
     socketSend,
+    send,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
         JSON.stringify({
@@ -939,5 +942,69 @@ describe("resolvePinnedClientMetadata", () => {
       pinnedPlatform: undefined,
       pinnedDeviceFamily: "Linux",
     });
+  });
+});
+
+describe("attachGatewayWsMessageHandler response meta forwarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards handler meta (e.g. cached) onto the emitted res frame", async () => {
+    const client = createConnectedTestClient({ connId: "conn-meta-proof" });
+    // Mirrors the agent dedupe path: server-methods/agent.ts calls
+    // respond(cached.ok, cached.payload, cached.error, { cached: true, runId }).
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      opts.respond(true, { value: 1 }, undefined, { cached: true, runId: "run-meta-proof" });
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-meta-proof",
+      connectNonce: "nonce-meta-proof",
+      client,
+    });
+
+    harness.sendRequest("req-meta", "agent.wait");
+
+    let frame: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      frame = harness.send.mock.calls
+        .map((call) => call[0] as Record<string, unknown>)
+        .find((sent) => sent?.type === "res" && sent.id === "req-meta");
+      expect(frame).toBeDefined();
+    });
+
+    expect(frame).toMatchObject({
+      type: "res",
+      id: "req-meta",
+      ok: true,
+      payload: { value: 1 },
+      meta: { cached: true, runId: "run-meta-proof" },
+    });
+  });
+
+  it("omits meta on the res frame when the handler supplies none", async () => {
+    const client = createConnectedTestClient({ connId: "conn-no-meta" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      opts.respond(true, { value: 2 }, undefined);
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-no-meta",
+      connectNonce: "nonce-no-meta",
+      client,
+    });
+
+    harness.sendRequest("req-no-meta", "agent.wait");
+
+    let frame: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      frame = harness.send.mock.calls
+        .map((call) => call[0] as Record<string, unknown>)
+        .find((sent) => sent?.type === "res" && sent.id === "req-no-meta");
+      expect(frame).toBeDefined();
+    });
+
+    expect(frame).not.toHaveProperty("meta");
   });
 });
