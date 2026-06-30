@@ -5,20 +5,12 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
-import type { DoctorSessionSqliteIssue } from "./doctor-session-sqlite.js";
-
-export type DoctorSessionSqliteRestoreConflict = {
-  archivePath: string;
-  reason: string;
-  sourcePath: string;
-};
-
-export type DoctorSessionSqliteRestoreReport = {
-  conflicts: DoctorSessionSqliteRestoreConflict[];
-  manifestPaths: string[];
-  restoredFiles: string[];
-  skippedFiles: string[];
-};
+import type {
+  DoctorSessionSqliteIssue,
+  DoctorSessionSqliteRestoreConflict,
+  DoctorSessionSqliteRestoreReport,
+  SessionSqliteMigrationFailureIssue,
+} from "./doctor-session-sqlite-types.js";
 
 export type SessionSqliteMigrationMoveKind = "transcript" | "trajectory" | "unreferenced-jsonl";
 
@@ -66,19 +58,6 @@ export type SessionSqliteMigrationManifest = {
 export type ActiveSessionSqliteMigrationRun = {
   manifest: SessionSqliteMigrationManifest;
   manifestPath: string;
-};
-
-export type SessionSqliteMigrationFailureIssue = {
-  body: string;
-  bodyPath?: string;
-  github?: {
-    fallbackUrl?: string;
-    message?: string;
-    status: "created" | "failed" | "skipped";
-    url?: string;
-  };
-  title: string;
-  url: string;
 };
 
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";

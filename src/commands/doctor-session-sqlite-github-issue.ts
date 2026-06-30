@@ -1,6 +1,6 @@
 /** Creates GitHub issues for sanitized session SQLite recovery reports. */
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import type { SessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-migration-run.js";
+import type { SessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-types.js";
 
 export type SessionSqliteGithubIssueCreateResult =
   | { ok: true; url: string }
