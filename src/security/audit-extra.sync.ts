@@ -595,6 +595,44 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
+function isConfigOwnedEnvRef(
+  value: string,
+  configSnapshot: ConfigFileSnapshot | null | undefined,
+): boolean {
+  const varName = value.trim().slice(2, -1).trim();
+  if (!varName) {
+    return false;
+  }
+  const parsedEnv =
+    configSnapshot?.parsed && typeof configSnapshot.parsed === "object"
+      ? (configSnapshot.parsed as Record<string, unknown>).env
+      : undefined;
+  if (!parsedEnv || typeof parsedEnv !== "object") {
+    return false;
+  }
+  const parsedEnvRecord = parsedEnv as Record<string, unknown>;
+  const vars = parsedEnvRecord.vars;
+  if (vars && typeof vars === "object") {
+    for (const key of Object.keys(vars)) {
+      if (key.trim().toUpperCase() === varName.toUpperCase()) {
+        return true;
+      }
+    }
+  }
+  for (const [key, val] of Object.entries(parsedEnvRecord)) {
+    if (key === "vars" || key === "shellEnv") {
+      continue;
+    }
+    if (typeof val !== "string") {
+      continue;
+    }
+    if (key.trim().toUpperCase() === varName.toUpperCase()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function collectSecretsInConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
@@ -606,7 +644,10 @@ export function collectSecretsInConfigFindings(
     normalizeOptionalString(getParsedConfigString(configSnapshot, "gateway.auth.password")) ??
     normalizeOptionalString(sourceConfig?.gateway?.auth?.password) ??
     password;
-  if (password && !looksLikeEnvRef(sourcePassword)) {
+  const passwordIsEnvRef = looksLikeEnvRef(sourcePassword);
+  const passwordIsConfigOwnedEnvRef =
+    passwordIsEnvRef && isConfigOwnedEnvRef(sourcePassword, configSnapshot);
+  if (password && (!passwordIsEnvRef || passwordIsConfigOwnedEnvRef)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -623,7 +664,14 @@ export function collectSecretsInConfigFindings(
     normalizeOptionalString(getParsedConfigString(configSnapshot, "hooks.token")) ??
     normalizeOptionalString(sourceConfig?.hooks?.token) ??
     hooksToken;
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(sourceHooksToken)) {
+  const hooksTokenIsEnvRef = looksLikeEnvRef(sourceHooksToken);
+  const hooksTokenIsConfigOwnedEnvRef =
+    hooksTokenIsEnvRef && isConfigOwnedEnvRef(sourceHooksToken, configSnapshot);
+  if (
+    cfg.hooks?.enabled === true &&
+    hooksToken &&
+    (!hooksTokenIsEnvRef || hooksTokenIsConfigOwnedEnvRef)
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
