@@ -849,6 +849,28 @@ function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: un
   stdin.write(`${JSON.stringify(response)}\n`);
 }
 
+export function buildClaudeLiveCanUseToolResponse(params: {
+  requestId: string;
+  toolInput: Record<string, unknown>;
+  allowed: boolean;
+  denyMessage: string;
+}): Record<string, unknown> {
+  return {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: params.requestId,
+      response: params.allowed
+        ? { updatedInput: params.toolInput }
+        : {
+            behavior: "deny",
+            decisionClassification: "user_reject",
+            message: params.denyMessage,
+          },
+    },
+  };
+}
+
 function handleClaudeLiveControlRequest(
   session: ClaudeLiveSession,
   turn: ClaudeLiveTurn,
@@ -865,25 +887,18 @@ function handleClaudeLiveControlRequest(
   if (!requestId) {
     return;
   }
-  const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  const rawInput = request.input;
+  const toolInput = isRecord(rawInput) ? rawInput : {};
   const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
-  writeClaudeLiveControlResponse(session, {
-    type: "control_response",
-    response: {
-      subtype: "success",
-      request_id: requestId,
-      response: allowed
-        ? {
-            behavior: "allow",
-            ...(toolUseId ? { toolUseID: toolUseId } : {}),
-          }
-        : {
-            behavior: "deny",
-            decisionClassification: "user_reject",
-            message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
-          },
-    },
-  });
+  writeClaudeLiveControlResponse(
+    session,
+    buildClaudeLiveCanUseToolResponse({
+      requestId,
+      toolInput,
+      allowed,
+      denyMessage: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
+    }),
+  );
 }
 
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
