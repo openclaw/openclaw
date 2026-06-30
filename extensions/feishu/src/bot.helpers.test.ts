@@ -5,6 +5,7 @@ import { parseMessageContent } from "./bot-content.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
+  formatMentionNameForAgentContext,
   resolveBroadcastAgents,
   toMessageResourceType,
 } from "./bot.js";
@@ -132,5 +133,29 @@ describe("buildBroadcastSessionKey", () => {
     expect(buildBroadcastSessionKey("custom:key:format", "main", "susan")).toBe(
       "custom:key:format",
     );
+  });
+});
+
+describe("formatMentionNameForAgentContext", () => {
+  it("truncates long mention names on a code-point boundary", () => {
+    // 76 ASCII chars + 🎉 (2 surrogate units) + "B" x 3 = 81 chars total.
+    // MAX_MENTION_CONTEXT_NAME_LENGTH is 80, so this triggers truncation.
+    // truncateUtf16Safe at 77 safely skips the emoji that straddles 76-77.
+    const name = "A".repeat(76) + "🎉BBB";
+    const result = formatMentionNameForAgentContext(name);
+    const parsed = JSON.parse(result);
+    expect(parsed).toMatch(/\.\.\.$/u); // ends with "..." (truncated)
+    // Verify no dangling surrogates
+    expect(parsed).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
+  it("keeps short mention names unchanged", () => {
+    const result = formatMentionNameForAgentContext("Bob");
+    expect(JSON.parse(result)).toBe("Bob");
+  });
+
+  it("escapes special characters and normalizes whitespace", () => {
+    const result = formatMentionNameForAgentContext('Alice"]\nBob');
+    expect(JSON.parse(result)).toBe('Alice" Bob');
   });
 });
