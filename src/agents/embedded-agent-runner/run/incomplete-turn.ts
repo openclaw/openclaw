@@ -521,6 +521,15 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
 }
 
+/** Returns whether a silent-error assistant turn (stopReason="error",
+ * zero visible output, no tool calls) should be retried by resubmitting
+ * the same prompt to the model.  This is a terminal-model-failure retry,
+ * not a transcript replay: no tool results are re-executed, so per-attempt
+ * {@link resolveAttemptReplayMetadata}.hadPotentialSideEffects derived
+ * from static tool definitions does not gate eligibility.  Concrete
+ * per-attempt terminal state ({@link hasAttemptTerminalState}) still
+ * blocks the retry because actual tool calls, delivery, or spawns
+ * would have already produced visible effects. */
 export function shouldRetrySilentErrorAssistantTurn(params: {
   attempt: Pick<
     EmbeddedRunAttemptResult,
@@ -535,17 +544,17 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "toolTrustedLocalMedia"
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
-    | "replayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
+  // Only block retry when the current attempt already produced concrete
+  // tool-sourced terminal state — not when static tool definitions happen
+  // to be playback-unsafe.  A model call that returned zero output with
+  // stopReason="error" produced no side effects by definition.
   if (hasAttemptTerminalState(params.attempt)) {
-    return false;
-  }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
     return false;
   }
 
