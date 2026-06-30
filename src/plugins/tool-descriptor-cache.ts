@@ -186,21 +186,35 @@ function isToolAvailabilitySignal(value: { readonly kind?: unknown }): boolean {
   }
 }
 
-function isToolAvailabilityExpression(value: unknown): value is ToolAvailabilityExpression {
+function isToolAvailabilityExpression(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): value is ToolAvailabilityExpression {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (seen.has(value)) {
     return false;
   }
   if ("kind" in value) {
     return isToolAvailabilitySignal(value);
   }
+  seen.add(value);
   if ("allOf" in value) {
     const entries = (value as { allOf?: unknown }).allOf;
-    return Array.isArray(entries) && entries.every(isToolAvailabilityExpression);
+    const valid =
+      Array.isArray(entries) && entries.every((entry) => isToolAvailabilityExpression(entry, seen));
+    seen.delete(value);
+    return valid;
   }
   if ("anyOf" in value) {
     const entries = (value as { anyOf?: unknown }).anyOf;
-    return Array.isArray(entries) && entries.every(isToolAvailabilityExpression);
+    const valid =
+      Array.isArray(entries) && entries.every((entry) => isToolAvailabilityExpression(entry, seen));
+    seen.delete(value);
+    return valid;
   }
+  seen.delete(value);
   return false;
 }
 

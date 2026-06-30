@@ -253,6 +253,34 @@ describe("capturePluginToolDescriptor", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it("ignores cyclic non-contract availability groups during capture", () => {
+    const logger = { warn: vi.fn() };
+    const availability: { anyOf: unknown[] } = { anyOf: [] };
+    availability.anyOf.push(availability);
+    const tool = {
+      name: "cyclic_tool",
+      label: "Cyclic tool",
+      description: "Cyclic tool description",
+      parameters: { type: "object" },
+      availability,
+      async execute() {
+        return { content: [], details: undefined };
+      },
+    } satisfies AnyAgentTool & {
+      availability: { anyOf: unknown[] };
+    };
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+      logger,
+    });
+
+    expect(captured.descriptor.availability).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("ignores malformed non-contract availability signal fields during capture", () => {
     const logger = { warn: vi.fn() };
     const tool = {
