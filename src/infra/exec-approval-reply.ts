@@ -376,9 +376,15 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    if (params.ask === "always") {
+      lines.push(
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      );
+    } else {
+      lines.push(
+        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
+      );
+    }
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);
