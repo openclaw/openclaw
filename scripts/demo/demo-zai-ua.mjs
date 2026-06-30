@@ -60,7 +60,12 @@ server.listen(PORT, async () => {
     console.log(`   Status: ${r3.status}`);
     if (r3.status === 429) { passed++; console.log("   ✓"); }
 
-    console.log(`\n✓ ${passed}/3 passed — openclaw User-Agent probe header fixes the 429.`);
+    if (passed === 3) {
+      console.log(`\n✓ ${passed}/3 passed — openclaw User-Agent probe header fixes the 429.`);
+    } else {
+      console.error(`\n✗ ${passed}/3 passed — unexpected results.`);
+      process.exitCode = 1;
+    }
   } finally {
     server.close();
   }
