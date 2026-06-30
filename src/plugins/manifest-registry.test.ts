@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
@@ -99,6 +100,21 @@ function createPluginCandidate(params: {
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
   };
+}
+
+function createMsteamsClawHubInstallRecord(
+  installPath: string,
+  overrides: Partial<PluginInstallRecord> = {},
+): PluginInstallRecord {
+  const record: PluginInstallRecord = {
+    source: "clawhub",
+    spec: "clawhub:@openclaw/msteams",
+    installPath,
+    clawhubUrl: "https://clawhub.ai",
+    clawhubPackage: "@openclaw/msteams",
+    clawhubChannel: "official",
+  };
+  return { ...record, ...overrides };
 }
 
 function loadRegistry(candidates: PluginCandidate[]) {
@@ -719,6 +735,72 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
   });
 
+  it("marks official npm-only ClawHub channel installs as trusted official installs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: createMsteamsClawHubInstallRecord(dir, { clawhubPackage: undefined }),
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "community ClawHub channel",
+      record: (dir: string) =>
+        createMsteamsClawHubInstallRecord(dir, { clawhubChannel: "community" }),
+    },
+    {
+      name: "private ClawHub channel",
+      record: (dir: string) =>
+        createMsteamsClawHubInstallRecord(dir, { clawhubChannel: "private" }),
+    },
+    {
+      name: "custom ClawHub URL",
+      record: (dir: string) =>
+        createMsteamsClawHubInstallRecord(dir, { clawhubUrl: "https://example.invalid" }),
+    },
+    {
+      name: "mismatched ClawHub package",
+      record: (dir: string) =>
+        createMsteamsClawHubInstallRecord(dir, {
+          spec: "clawhub:@openclaw/line",
+          clawhubPackage: "@openclaw/line",
+        }),
+    },
+  ])("does not trust npm-only official ClawHub installs from $name", ({ record }) => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: record(dir),
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
   it("marks official diagnostics-otel config paths trusted when the install record matches", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
@@ -798,6 +880,25 @@ describe("loadPluginManifestRegistry", () => {
           idHint: "diagnostics-prometheus",
           rootDir: dir,
           packageName: "@openclaw/diagnostics-prometheus",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("does not trust unrecorded npm-only official ClawHub channel globals", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {},
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
           origin: "global",
         }),
       ],

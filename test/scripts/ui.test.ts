@@ -244,8 +244,10 @@ describe("scripts/ui windows spawn behavior", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
-        expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
+        const readReadyFile = () =>
+          fs.existsSync(readyFile) ? fs.readFileSync(readyFile, "utf8") : "";
+        await waitFor(() => readReadyFile() === "install", "UI runner readiness");
+        expect(readReadyFile()).toBe("install");
         wrapper.kill(signal);
 
         const exit = await waitForExit(wrapper);
