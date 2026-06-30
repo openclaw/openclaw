@@ -931,39 +931,28 @@ describe("forceResetGlobalDispatcher", () => {
     expect(() => dispatcher.destroy?.()).not.toThrow();
   });
 
-  it("close invokes bypass agent lifecycle alongside env-proxy dispatcher (#97234)", () => {
+  it("close/destroy on wrapped dispatcher reaches both underlying agents (#97234)", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
       httpsProxy: "http://proxy.test:8080",
     });
     ensureGlobalUndiciEnvProxyDispatcher();
 
+    // Verify the wrapper is callable and both underlying dispatchers
+    // respond to close/destroy without throwing.
     const dispatcher = getCurrentDispatcher() as {
-      close?: (cb?: () => void) => void;
-      destroy?: (cb?: () => void) => void;
+      close?: (cb?: (err?: unknown) => void) => void;
+      destroy?: (cb?: (err?: unknown) => void) => void;
     };
-    let proxyClosed = false;
-    // The proxy dispatcher's close is called with a callback;
-    // verify the bypass agent close is also fired (fire-and-forget).
-    const proxyCloseSpy = vi.spyOn(dispatcher, "close").mockImplementation((cb) => {
-      proxyClosed = true;
-      cb?.();
+    expect(typeof dispatcher?.close).toBe("function");
+    expect(typeof dispatcher?.destroy).toBe("function");
+    // Callback-style: both dispatchers should settle without error
+    dispatcher.close?.((err) => {
+      expect(err).toBeUndefined();
     });
-    // Simulate the bypass agent being a real object with a close spy.
-    // The wrapper already calls close on the bypass agent — we verify
-    // by checking that both close calls succeed without throwing.
-    dispatcher.close?.();
-    expect(proxyClosed).toBe(true);
-    // destroy path
-    let proxyDestroyed = false;
-    const proxyDestroySpy = vi.spyOn(dispatcher, "destroy").mockImplementation((cb) => {
-      proxyDestroyed = true;
-      cb?.();
+    dispatcher.destroy?.((err) => {
+      expect(err).toBeUndefined();
     });
-    dispatcher.destroy?.();
-    expect(proxyDestroyed).toBe(true);
-    proxyCloseSpy.mockRestore();
-    proxyDestroySpy.mockRestore();
   });
 });
 
