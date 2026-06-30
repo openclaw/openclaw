@@ -1072,7 +1072,15 @@ describe("openrouter provider hooks", () => {
       },
     );
 
-    for (const thinkingLevel of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+    for (const thinkingLevel of [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ] as const) {
       const wrapped = provider.wrapStreamFn?.({
         provider: "openrouter",
         modelId: "openrouter/deepseek/deepseek-v4-pro",
@@ -1097,6 +1105,7 @@ describe("openrouter provider hooks", () => {
       "low",
       "medium",
       "high",
+      "xhigh",
       "xhigh",
       "xhigh",
     ]);

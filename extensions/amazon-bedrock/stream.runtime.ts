@@ -654,6 +654,7 @@ function mapThinkingLevelToEffort(
     case "xhigh":
       return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
+    case "ultra":
       return supportsNativeMaxEffort(model) ? "max" : "high";
     default:
       return "high";
@@ -1065,10 +1066,14 @@ function buildAdditionalModelRequestFields(
             high: 16384,
             xhigh: 16384, // Claude doesn't support xhigh, clamp to high
             max: 16384,
+            ultra: 16384,
           };
 
-          // Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-          const level = options.reasoning === "xhigh" ? "high" : options.reasoning;
+          // Custom budgets override defaults (xhigh/ultra not in ThinkingBudgets, use high)
+          const level =
+            options.reasoning === "xhigh" || options.reasoning === "ultra"
+              ? "high"
+              : options.reasoning;
           const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
 
           return {

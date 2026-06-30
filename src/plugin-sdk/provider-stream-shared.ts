@@ -10,10 +10,7 @@ import {
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
 import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
-import {
-  normalizeOpenAIReasoningEffortMap,
-  resolveOpenAIReasoningEffortForModel,
-} from "../agents/openai-reasoning-effort.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
@@ -326,48 +323,6 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
       }
     });
   };
-}
-
-/**
- * Applies model-aware `ultra` normalization after the generic OpenAI thinking wrapper.
- * Literal `ultra` is emitted only when explicit model metadata advertises it.
- */
-export function createOpenAIUltraReasoningEffortWrapper(
-  baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  if (thinkingLevel !== "ultra") {
-    return underlying;
-  }
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payload) => {
-      const effort =
-        model.api === "openai-codex-responses"
-          ? "max"
-          : resolveOpenAIReasoningEffortForModel({
-              model,
-              effort: "ultra",
-              fallbackMap: resolveOpenAIReasoningEffortMap(
-                {
-                  provider: typeof model.provider === "string" ? model.provider : null,
-                  id: typeof model.id === "string" ? model.id : null,
-                  compat: model.compat,
-                },
-                normalizeOpenAIReasoningEffortMap(model.thinkingLevelMap),
-              ),
-            });
-      if (!effort) {
-        return;
-      }
-      const reasoning = toRecord(payload.reasoning);
-      if (reasoning && "effort" in reasoning) {
-        reasoning.effort = effort;
-      }
-      if ("reasoning_effort" in payload) {
-        payload.reasoning_effort = effort;
-      }
-    });
 }
 
 function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {

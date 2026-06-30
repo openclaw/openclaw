@@ -11,7 +11,6 @@ import {
   resolveGoogleGemini3ThinkingLevel,
   sanitizeGoogleThinkingPayload,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
-  createOpenAIUltraReasoningEffortWrapper,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
@@ -391,48 +390,6 @@ describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
     void wrapped(lmstudioBinaryModel, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning_effort).toBe("high");
-  });
-});
-
-describe("createOpenAIUltraReasoningEffortWrapper", () => {
-  it.each([
-    {
-      name: "uses xhigh when max is not advertised",
-      model: lmstudioBinaryModel,
-      expected: "xhigh",
-    },
-    {
-      name: "prefers explicitly advertised max",
-      model: {
-        ...lmstudioBinaryModel,
-        compat: { supportedReasoningEfforts: ["high", "xhigh", "max"] },
-      } as unknown as Model<"openai-completions">,
-      expected: "max",
-    },
-    {
-      name: "allows literal ultra only when explicitly advertised",
-      model: {
-        ...lmstudioBinaryModel,
-        compat: { supportedReasoningEfforts: ["high", "ultra"] },
-      } as unknown as Model<"openai-completions">,
-      expected: "ultra",
-    },
-    {
-      name: "always maps direct ChatGPT Codex ultra to max",
-      model: {
-        ...lmstudioBinaryModel,
-        api: "openai-codex-responses",
-        provider: "openai",
-        id: "gpt-5.5-codex",
-      } as unknown as Model<"openai-codex-responses">,
-      expected: "max",
-    },
-  ])("$name", ({ model, expected }) => {
-    const { baseStreamFn, payloads } = createPayloadCapture("ultra");
-    const wrapped = createOpenAIUltraReasoningEffortWrapper(baseStreamFn, "ultra");
-    void wrapped(model, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning_effort).toBe(expected);
   });
 });
 

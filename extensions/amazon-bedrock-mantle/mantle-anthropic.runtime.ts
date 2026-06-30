@@ -49,12 +49,12 @@ function resolveMantleReasoning(
   }
   const reasoning = options?.reasoning ?? (isClaudeMythosPreviewModel(model) ? "high" : undefined);
   if (!isClaudeMythosPreviewModel(model)) {
-    return reasoning;
+    return reasoning === "ultra" ? "max" : reasoning;
   }
   if (reasoning === "minimal") {
     return "low";
   }
-  return reasoning === "xhigh" || reasoning === "max" ? "high" : reasoning;
+  return reasoning === "xhigh" || reasoning === "max" || reasoning === "ultra" ? "high" : reasoning;
 }
 
 function mergeHeaders(
@@ -100,6 +100,7 @@ function adjustMaxTokensForThinking(
     high: 16384,
     xhigh: 16384,
     max: 16384,
+    ultra: 16384,
   } as const;
   const budgets = { ...defaultBudgets, ...customBudgets };
   const minOutputTokens = 1024;

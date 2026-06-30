@@ -598,6 +598,7 @@ function clampGoogleThinkingLevelForTransport(
     case "ultra":
       return "high";
   }
+  return "high";
 }
 
 export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
