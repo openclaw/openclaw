@@ -37,24 +37,31 @@ function sidebarSessionPickerHtml(opts: { sidebarOpen?: boolean; workspaceRail?:
   const optionButtons = Array.from({ length: 18 }, (_, index) => {
     const sessionKey = `dashboard-session-${index + 1}`;
     const selected = index === 0;
+    const label = `Session ${index + 1}`;
+    const meta = `workspace · gpt-5.5 · 2026-06-13 20:${String(index).padStart(2, "0")}`;
+    const accessibleLabel = `${label}, ${meta}${selected ? ", active" : ""}`;
     return `
-      <button
-        class="chat-session-picker__option${selected ? " chat-session-picker__option--selected" : ""}"
-        data-chat-session-picker-option="true"
-        data-session-key="${sessionKey}"
-        role="option"
-        aria-selected="${selected ? "true" : "false"}"
-        title="Session ${index + 1}"
-        type="button"
+      <div
+        class="chat-session-picker__option-row${selected ? " chat-session-picker__option-row--selected" : ""}"
+        role="listitem"
+        aria-label="${accessibleLabel}"
       >
-        <span class="chat-session-picker__option-main">
-          <span class="chat-session-picker__option-label">Session ${index + 1}</span>
-          <span class="chat-session-picker__option-meta">workspace · gpt-5.5 · 2026-06-13 20:${String(
-            index,
-          ).padStart(2, "0")}</span>
-        </span>
-        ${selected ? `<span class="chat-session-picker__option-check" aria-hidden="true">${iconSvg()}</span>` : ""}
-      </button>
+        <button
+          class="chat-session-picker__option${selected ? " chat-session-picker__option--selected" : ""}"
+          data-chat-session-picker-option="true"
+          data-session-key="${sessionKey}"
+          aria-current="${selected ? "page" : "false"}"
+          title="${accessibleLabel}"
+          aria-label="Switch to session: ${accessibleLabel}"
+          type="button"
+        >
+          <span class="chat-session-picker__option-main">
+            <span class="chat-session-picker__option-label">${label}</span>
+            <span class="chat-session-picker__option-meta">${meta}</span>
+          </span>
+          ${selected ? `<span class="chat-session-picker__option-check" aria-hidden="true">${iconSvg()}</span>` : ""}
+        </button>
+      </div>
     `;
   }).join("");
   const workspaceRail = opts.workspaceRail
@@ -149,7 +156,7 @@ function sidebarSessionPickerHtml(opts: { sidebarOpen?: boolean; workspaceRail?:
                             ${iconSvg()}
                           </button>
                         </div>
-                        <div class="chat-session-picker__list" role="listbox">
+                        <div class="chat-session-picker__list" role="list">
                           ${optionButtons}
                         </div>
                         <div class="chat-session-picker__footer">
@@ -304,6 +311,24 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
       const targetOption = page.locator(
         '[data-chat-session-picker-option="true"][data-session-key="dashboard-session-12"]',
       );
+
+      const firstOptionSemantics = await page.evaluate(() => {
+        const pickerList = document.querySelector(".chat-session-picker__list");
+        const row = document.querySelector(".chat-session-picker__option-row");
+        const option = document.querySelector('[data-chat-session-picker-option="true"]');
+        return {
+          listRole: pickerList?.getAttribute("role"),
+          rowRole: row?.getAttribute("role"),
+          optionRole: option?.getAttribute("role"),
+          optionAriaSelected: option?.getAttribute("aria-selected"),
+        };
+      });
+      expect(firstOptionSemantics).toEqual({
+        listRole: "list",
+        rowRole: "listitem",
+        optionRole: null,
+        optionAriaSelected: null,
+      });
 
       const inputHit = await input.evaluate((node) => {
         const rect = (node as HTMLElement).getBoundingClientRect();

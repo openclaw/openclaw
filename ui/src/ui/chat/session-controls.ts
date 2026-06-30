@@ -760,8 +760,6 @@ function renderChatSessionPickerPopover(
                     : ""}"
                   data-chat-session-picker-option="true"
                   data-session-key=${row.key}
-                  role="option"
-                  aria-selected=${selected ? "true" : "false"}
                   aria-current=${selected ? "page" : "false"}
                   title=${accessibleLabel}
                   aria-label=${`${t("chat.selectors.switchSession")}: ${accessibleLabel}`}

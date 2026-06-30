@@ -3819,7 +3819,7 @@ describe("chat session controls", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("announces session picker titles, timestamps, and active state", () => {
+  it("announces session picker titles with list/listitem/button semantics", () => {
     const { state } = createChatHeaderState();
     state.sessionKey = "agent:main:main";
     state.settings.sessionKey = state.sessionKey;
@@ -3837,6 +3837,8 @@ describe("chat session controls", () => {
 
     render(renderChatSessionSelect(state), container);
 
+    const list = container.querySelector<HTMLElement>(".chat-session-picker__list");
+    const row = container.querySelector<HTMLElement>(".chat-session-picker__option-row");
     const option = container.querySelector<HTMLButtonElement>(
       'button[data-chat-session-picker-option="true"]',
     );
@@ -3846,6 +3848,11 @@ describe("chat session controls", () => {
     const meta = container.querySelector<HTMLElement>(".chat-session-picker__option-meta");
 
     expect(container.textContent).toContain("Mixing session notes");
+    expect(list?.getAttribute("role")).toBe("list");
+    expect(row?.getAttribute("role")).toBe("listitem");
+    expect(row?.getAttribute("aria-label")).toContain("Mixing session notes");
+    expect(option?.getAttribute("role")).toBeNull();
+    expect(option?.getAttribute("aria-selected")).toBeNull();
     expect(option?.getAttribute("aria-current")).toBe("page");
     expect(option?.getAttribute("aria-label")).toContain("Switch to session");
     expect(option?.getAttribute("aria-label")).toContain("Mixing session notes");
