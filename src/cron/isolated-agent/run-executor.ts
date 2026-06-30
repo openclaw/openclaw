@@ -13,6 +13,7 @@ import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-pl
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
+import { listWebSearchProviders } from "../../../web-search/runtime.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
@@ -174,9 +175,24 @@ function resolveCliRuntimeToolsAllow(
   if (toolsAllowIsDefault) {
     return undefined;
   }
-  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+  const resolved = toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
     ? undefined
     : toolsAllow;
+  // Warn when web_search is requested but no search provider is enabled (#97654)
+  if (resolved?.includes("web_search")) {
+    try {
+      const providers = listWebSearchProviders();
+      if (providers.length === 0) {
+        console.warn(
+          "[openclaw] cron job requests web_search but no web search provider plugin is enabled. " +
+            "Enable one with: openclaw plugins enable <provider>",
+        );
+      }
+    } catch {
+      // Best-effort diagnostic; must not block cron execution
+    }
+  }
+  return resolved;
 }
 
 /** Result envelope returned after an isolated cron prompt completes. */
