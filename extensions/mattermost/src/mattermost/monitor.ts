@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -182,9 +183,12 @@ export async function backfillMattermostThreadHistoryForMonitor(params: {
   if (threadsBackfilledThisSession.has(backfillKey)) {
     return;
   }
+  const hasPriorBackfillForThread = [...threadsBackfilledThisSession].some((key) =>
+    key.startsWith(`${historyKey}:`),
+  );
 
   const existing = channelHistories.get(historyKey);
-  if (existing && existing.length > 0) {
+  if (existing && existing.length > 0 && !hasPriorBackfillForThread) {
     threadsBackfilledThisSession.add(backfillKey);
     return;
   }
@@ -960,8 +964,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
   // Per-(historyKey, agent-session) backfill tracking.
-  // Compound key binds the thread key to the current agent session id
-  // (baseSessionKey), which rotates on /new or session reset.  This way
+  // Compound key binds the thread key to the current stored agent session id,
+  // which rotates on /new or session reset.  This way
   // session reset gets its own first-sighting backfill, and marking
   // non-empty first sightings prevents normal post-turn empty windows
   // from re-triggering an unnecessary server fetch (kernel.ts:577 clears
@@ -1547,6 +1551,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
         const historyKey = kind === "direct" ? null : sessionKey;
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        });
+        const currentAgentSessionId =
+          normalizeOptionalString(
+            getSessionEntry({ storePath, sessionKey: route.sessionKey })?.sessionId,
+          ) ?? route.sessionKey;
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =
@@ -1639,17 +1650,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // backfill thread history from the Mattermost server when the local
         // in-memory window is genuinely cold for the current agent session.
         //
-        // Compound key (historyKey + baseSessionKey): historyKey alone is
-        // stable across /new for the same thread channel, but baseSessionKey
-        // (route.sessionKey) rotates on agent session reset.  Binding both
-        // ensures session reset gets its own first-sighting backfill instead
-        // of being blocked by a stale monitor-lifetime marker.
+        // Compound key (historyKey + currentAgentSessionId): historyKey alone is
+        // stable across /new for the same thread channel, while route.sessionKey
+        // is also stable. The stored session id rotates on /new, so binding to
+        // it gives reset its own first-sighting backfill instead of being
+        // blocked by a stale monitor-lifetime marker.
         //
-        // Active-thread guard: if the window is already populated (normal
-        // active session), we mark the compound key anyway so the kernel
-        // clearing pending history after a successful turn does not make the
-        // next follow-up falsely see a cold window and trigger an unnecessary
-        // server fetch.
+        // Active-thread guard: if a thread is first seen with a populated
+        // window, mark that session so the kernel clearing pending history
+        // after a successful turn does not make same-session follow-ups fetch.
         //
         // Best-effort — never blocks inbound dispatch.
         await backfillMattermostThreadHistoryForMonitor({
@@ -1657,7 +1666,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           post,
           threadRootId,
           historyKey,
-          baseSessionKey,
+          baseSessionKey: currentAgentSessionId,
           historyLimit,
           channelHistories,
           threadsBackfilledThisSession,
@@ -1772,10 +1781,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 normalizeEntry: normalizeMattermostAllowEntry,
               })
             : null;
-
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
 
         const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
         logVerboseMessage(

@@ -1014,7 +1014,7 @@ describe("processMattermostReplayGuardedPost", () => {
 
 describe("backfillMattermostThreadHistoryForMonitor", () => {
   const historyKey = "mattermost:thread:root-1";
-  const baseSessionKey = "agent:main:mattermost:default:channel-1";
+  const sessionBackfillKey = "session-before-reset";
 
   function createPost(
     params: Partial<MattermostPost> & Pick<MattermostPost, "id">,
@@ -1068,7 +1068,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       post: currentPost,
       threadRootId: "root-1",
       historyKey,
-      baseSessionKey,
+      baseSessionKey: sessionBackfillKey,
       historyLimit: 2,
       channelHistories: harness.channelHistories,
       threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
@@ -1091,7 +1091,9 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
         messageId: "old-3",
       },
     ]);
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${baseSessionKey}`)).toBe(true);
+    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${sessionBackfillKey}`)).toBe(
+      true,
+    );
   });
 
   it("marks populated windows so same-session follow-ups do not refetch after history clears", async () => {
@@ -1105,7 +1107,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       post: createPost({ id: "current-1" }),
       threadRootId: "root-1",
       historyKey,
-      baseSessionKey,
+      baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
       threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
@@ -1118,7 +1120,7 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       post: createPost({ id: "current-2" }),
       threadRootId: "root-1",
       historyKey,
-      baseSessionKey,
+      baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
       threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
@@ -1127,10 +1129,12 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
     });
 
     expect(harness.fetchThreadPosts).not.toHaveBeenCalled();
-    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${baseSessionKey}`)).toBe(true);
+    expect(harness.threadsBackfilledThisSession.has(`${historyKey}:${sessionBackfillKey}`)).toBe(
+      true,
+    );
   });
 
-  it("allows the same thread to backfill again after the agent session key rotates", async () => {
+  it("allows the same thread to backfill again after the stored session id rotates", async () => {
     const harness = createBackfillHarness();
     harness.fetchThreadPosts
       .mockResolvedValueOnce([
@@ -1145,20 +1149,22 @@ describe("backfillMattermostThreadHistoryForMonitor", () => {
       post: createPost({ id: "current-1" }),
       threadRootId: "root-1",
       historyKey,
-      baseSessionKey,
+      baseSessionKey: sessionBackfillKey,
       historyLimit: 5,
       channelHistories: harness.channelHistories,
       threadsBackfilledThisSession: harness.threadsBackfilledThisSession,
       fetchThreadPosts: harness.fetchThreadPosts,
       resolveUserInfo: harness.resolveUserInfo,
     });
-    harness.channelHistories.set(historyKey, []);
+    harness.channelHistories.set(historyKey, [
+      { sender: "@member-1", body: "stale before reset", timestamp: 1, messageId: "old-1" },
+    ]);
     await backfillMattermostThreadHistoryForMonitor({
       client: harness.client,
       post: createPost({ id: "current-2" }),
       threadRootId: "root-1",
       historyKey,
-      baseSessionKey: `${baseSessionKey}:reset`,
+      baseSessionKey: "session-after-reset",
       historyLimit: 5,
       channelHistories: harness.channelHistories,
       threadsBackfilledThisSession: harness.threadsBackfilledThisSession,

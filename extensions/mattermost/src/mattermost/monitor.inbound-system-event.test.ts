@@ -84,6 +84,7 @@ const mockState = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
   fetchMattermostThreadPosts: vi.fn(),
+  getSessionEntry: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   resolveChannelInfo: vi.fn(),
@@ -123,6 +124,16 @@ vi.mock("./monitor-resources.js", () => ({
 vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
 }));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return {
+    ...actual,
+    getSessionEntry: mockState.getSessionEntry,
+  };
+});
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -408,6 +419,7 @@ describe("mattermost inbound user posts", () => {
     mockState.resolveMattermostMedia.mockResolvedValue([]);
     mockState.resolveUserInfo.mockResolvedValue({ id: "user-1", username: "alice" });
     mockState.fetchMattermostThreadPosts.mockResolvedValue([]);
+    mockState.getSessionEntry.mockReturnValue(undefined);
     mockState.dispatchReplyFromConfig.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
@@ -466,11 +478,18 @@ describe("mattermost inbound user posts", () => {
   it("backfills cold Mattermost thread history once per agent session through the monitor path", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
-    let baseSessionKey = "mattermost:default:channel:chan-1";
+    const routeSessionKey = "mattermost:default:channel:chan-1";
+    let storedSessionId = "session-before-restart";
     mockState.abortController = undefined;
     mockState.runtimeCore = createRuntimeCore(testConfig, {
-      mainSessionKey: () => baseSessionKey,
-      sessionKey: () => baseSessionKey,
+      mainSessionKey: routeSessionKey,
+      sessionKey: routeSessionKey,
+    });
+    mockState.getSessionEntry.mockImplementation((params: { sessionKey?: string }) => {
+      if (params.sessionKey !== routeSessionKey) {
+        return undefined;
+      }
+      return { sessionId: storedSessionId };
     });
     mockState.dispatchReplyFromConfig.mockImplementation(async () => {
       if (mockState.dispatchReplyFromConfig.mock.calls.length >= 3) {
@@ -550,6 +569,10 @@ describe("mattermost inbound user posts", () => {
       expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     });
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(1);
+    expect(mockState.getSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-test-sessions.json",
+      sessionKey: routeSessionKey,
+    });
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenLastCalledWith(
       expect.anything(),
       "root-1",
@@ -565,7 +588,7 @@ describe("mattermost inbound user posts", () => {
     });
     expect(mockState.fetchMattermostThreadPosts).toHaveBeenCalledTimes(1);
 
-    baseSessionKey = "mattermost:default:channel:chan-1:new-session";
+    storedSessionId = "session-after-slash-new";
     await emitThreadPost("child-3", "after slash new");
     await vi.waitFor(() => {
       expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(3);
