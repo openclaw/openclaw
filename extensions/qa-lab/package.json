@@ -17,7 +17,7 @@
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
     "@openclaw/crabline": "0.1.6",
-    "openclaw": "2026.5.28"
+    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.6.11"
