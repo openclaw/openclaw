@@ -10,7 +10,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isReservedCommandName } from "../../plugins/command-registration.js";
-import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import {
+  hasRegisteredPluginCommandInvocation,
+  matchPluginCommand,
+  executePluginCommand,
+} from "../../plugins/commands.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -133,6 +137,9 @@ export const handlePluginCommand: CommandHandler = async (
   // Try to match a plugin command
   const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
   if (!match) {
+    if (hasRegisteredPluginCommandInvocation(command.commandBodyNormalized)) {
+      return null;
+    }
     const manifestReservation = resolveManifestRuntimeSlashCommandReservation({
       commandBodyNormalized: command.commandBodyNormalized,
       cfg,

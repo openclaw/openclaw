@@ -6,9 +6,11 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const matchPluginCommandMock = vi.hoisted(() => vi.fn());
 const executePluginCommandMock = vi.hoisted(() => vi.fn());
+const hasRegisteredPluginCommandInvocationMock = vi.hoisted(() => vi.fn());
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/commands.js", () => ({
+  hasRegisteredPluginCommandInvocation: hasRegisteredPluginCommandInvocationMock,
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
 }));
@@ -63,6 +65,7 @@ function mockDevicePairRuntimeSlashPlugin() {
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hasRegisteredPluginCommandInvocationMock.mockReturnValue(false);
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
   });
 
@@ -308,6 +311,23 @@ describe("handlePluginCommand", () => {
             "status-shadow": { enabled: true },
           },
         },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(executePluginCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fail closed when a registered runtime command declines the message", async () => {
+    matchPluginCommandMock.mockReturnValue(null);
+    hasRegisteredPluginCommandInvocationMock.mockReturnValue(true);
+    mockDevicePairRuntimeSlashPlugin();
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/pair unexpected-args", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
       } as OpenClawConfig),
       true,
     );
