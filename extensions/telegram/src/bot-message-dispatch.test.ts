@@ -688,12 +688,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("preserves the legacy global block default when Telegram streaming is implicit", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Block streamed answer" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Block streamed answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({
@@ -2086,6 +2084,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Streaming previews are useful because they show progress.",
     );
     expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps partial answers visible while suppressing preamble progress when tool progress is hidden", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "preamble-1",
+          progressText: "Let me find the skill file.",
+        });
+        await replyOptions?.onPartialReply?.({
+          text: "The reply is ready.",
+          delta: "The reply is ready.",
+        });
+        await dispatcherOptions.deliver({ text: "The reply is ready." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+    });
+
+    expect(answerDraftStream.update.mock.calls.map(([text]) => text)).toEqual([
+      "The reply is ready.",
+      "The reply is ready.",
+    ]);
+    expect(
+      answerDraftStream.updatePreview.mock.calls.some(([preview]) =>
+        preview.text.includes("Let me find"),
+      ),
+    ).toBe(false);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

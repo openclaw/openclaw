@@ -2989,6 +2989,7 @@ export async function dispatchReplyFromConfig(
     const canForwardItemEvents =
       Boolean(params.replyOptions?.onItemEvent) &&
       shouldForwardProgressCallback(itemEventForwardingOptions);
+    const canCaptureItemEvents = Boolean(params.replyOptions?.onItemEvent);
     const canForwardSuppressedSourceItemEvents =
       suppressAutomaticSourceDelivery &&
       allowSuppressedSourceProgressCallbacks &&
@@ -3004,15 +3005,17 @@ export async function dispatchReplyFromConfig(
           },
         })
       : undefined;
-    const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
-    // Item-event presence gates CLI commentary classification downstream, so
-    // the handler exists exactly when verbose buffers it or a channel consumes it.
+    const canConsumeItemEvents =
+      deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureItemEvents;
+    // Item-event presence also gates CLI commentary classification downstream.
+    // Keep a capture-only handler when progress display is hidden so pre-tool
+    // commentary stays out of the assistant answer stream without rendering.
     const onItemEvent = canConsumeItemEvents
       ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
           if (isDispatchOperationAborted()) {
             return;
           }
-          if (!forwardItemEvent) {
+          if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
             // The wrapped forwarder marks progress itself when present.
             markProgress();
           }

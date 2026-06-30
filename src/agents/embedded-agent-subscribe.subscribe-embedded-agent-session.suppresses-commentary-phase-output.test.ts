@@ -70,4 +70,33 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toStrictEqual([]);
   });
+
+  it("suppresses unphased assistant text that terminates in tool use", () => {
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      onPartialReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const toolUseMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Let me find the skill file." }],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: toolUseMessage });
+    emit({
+      type: "message_update",
+      message: toolUseMessage,
+      assistantMessageEvent: { type: "text_delta", delta: "Let me find the skill file." },
+    });
+    emit({ type: "message_end", message: toolUseMessage });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toStrictEqual([]);
+  });
 });
