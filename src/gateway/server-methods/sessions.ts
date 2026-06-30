@@ -1275,6 +1275,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     );
   },
   "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    const rawRecord =
+      params && typeof params === "object" && !Array.isArray(params) ? params : null;
+    const adoptDashboard =
+      rawRecord !== null && "__adoptDashboard" in rawRecord && rawRecord.__adoptDashboard === true;
+    if (adoptDashboard) {
+      delete rawRecord.__adoptDashboard;
+    }
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
@@ -1418,7 +1425,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const hasCreateIntent = Boolean(
       p.label ?? p.model ?? p.task ?? p.message ?? p.parentSessionKey ?? p.emitCommandHooks,
     );
-    if (!requestedKey && !hasCreateIntent) {
+    if (adoptDashboard && !requestedKey && !hasCreateIntent) {
       const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
       const existingKey = findActiveDashboardSessionKey(store, agentId);
       if (existingKey) {
