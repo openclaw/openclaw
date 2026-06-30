@@ -164,6 +164,21 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("rejects malformed t.me-looking URLs with unexpected colons", () => {
+    // "https://t.me/foo:bar:9" — greedy colon regex extracts
+    // chatId="https://t.me/foo:bar", which is not a valid t.me lookup
+    // target (handle "foo:bar" contains an extra colon). The tightened
+    // guard must reject this.
+    expect(parseTelegramTarget("https://t.me/foo:bar:9")).toEqual({
+      chatId: "https://t.me/foo:bar:9",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("t.me/foo:bar:9")).toEqual({
+      chatId: "t.me/foo:bar:9",
+      chatType: "unknown",
+    });
+  });
+
   it("regression: chatId:topic:N still works", () => {
     expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
