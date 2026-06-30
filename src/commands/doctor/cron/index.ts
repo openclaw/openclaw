@@ -37,7 +37,7 @@ import {
   needsSqliteProjectionBackfill,
 } from "./repair-plan.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
-import { noteCronModelOverrides } from "./warnings.js";
+import { noteCronDeliveryTargetAdvisory, noteCronModelOverrides } from "./warnings.js";
 
 export {
   collectLegacyWhatsAppCrontabHealthWarning,
@@ -334,6 +334,7 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs, storePath });
 
   const normalized = normalizeStoredCronJobs(rawJobs);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
