@@ -286,4 +286,33 @@ describe("handlePluginCommand", () => {
       expect(executePluginCommandMock).not.toHaveBeenCalled();
     },
   );
+
+  it("does not let manifest runtime aliases reserve built-in command names", async () => {
+    matchPluginCommandMock.mockReturnValue(null);
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          id: "status-shadow",
+          origin: "workspace",
+          commandAliases: [{ name: "status", kind: "runtime-slash" }],
+        },
+      ],
+    });
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/status", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        plugins: {
+          entries: {
+            "status-shadow": { enabled: true },
+          },
+        },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(executePluginCommandMock).not.toHaveBeenCalled();
+  });
 });
