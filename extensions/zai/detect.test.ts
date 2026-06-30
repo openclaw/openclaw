@@ -90,6 +90,36 @@ function makeFetch(map: Record<string, FetchResponse>) {
 describe("detectZaiEndpoint", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("sends OpenClaw User-Agent on endpoint detection probes", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.6.30-test");
+    const captured: Array<{ url: string; userAgent: string | null }> = [];
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      captured.push({
+        url,
+        userAgent: new Headers(init?.headers).get("user-agent"),
+      });
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "coding-global",
+      fetchFn,
+    });
+
+    expect(detected?.endpoint).toBe("coding-global");
+    expect(captured).toEqual([
+      {
+        url: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        userAgent: "openclaw/2026.6.30-test",
+      },
+    ]);
   });
 
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {

@@ -40,6 +40,11 @@ const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
 /** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
 const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
+function resolveZaiDetectUserAgent(): string {
+  const version = process.env.OPENCLAW_VERSION?.trim();
+  return version ? `openclaw/${version}` : "openclaw";
+}
+
 function isUnsupportedModelResult(result: ProbeResult): boolean {
   if (result.ok) {
     return false;
@@ -92,6 +97,7 @@ async function probeZaiChatCompletions(params: {
         headers: {
           authorization: `Bearer ${params.apiKey}`,
           "content-type": "application/json",
+          "User-Agent": resolveZaiDetectUserAgent(),
         },
         body: JSON.stringify({
           model: params.modelId,
