@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 const PORT = 19999;
 const PATH = "/v1/embeddings";
 
-let receivedRequests = [];
+const receivedRequests = [];
 
 const server = createServer((req, res) => {
   const timestamp = new Date().toISOString();
@@ -27,10 +27,10 @@ const server = createServer((req, res) => {
       headers: {
         "content-type": req.headers["content-type"],
         authorization: req.headers["authorization"]
-          ? `${req.headers["authorization"].substring(0, 15)}...`
+          ? `${req.headers["authorization"].slice(0, 15)}...`
           : "(none)",
       },
-      bodyPreview: body.substring(0, 200),
+      bodyPreview: body.slice(0, 200),
     };
     receivedRequests.push(entry);
     console.log(`[${timestamp}] ${req.method} ${req.url}`);
