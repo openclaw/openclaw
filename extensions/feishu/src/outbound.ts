@@ -27,6 +27,7 @@ import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
@@ -292,11 +293,7 @@ function buildFeishuPayloadCard(params: {
         },
       ];
 
-  const identityTitle = params.identity
-    ? params.identity.emoji
-      ? `${params.identity.emoji} ${params.identity.name ?? ""}`.trim()
-      : (params.identity.name ?? "")
-    : "";
+  const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
   const title = presentation?.title ?? identityTitle;
   const template = resolveFeishuCardTemplate(
     presentation?.tone === "danger"
@@ -616,9 +613,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (useCard) {
         const header = identity
           ? {
-              title: identity.emoji
-                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
-                : (identity.name ?? ""),
+              title: resolveFeishuIdentityHeaderTitle(identity),
               template: "blue" as const,
             }
           : undefined;

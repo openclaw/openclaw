@@ -145,18 +145,21 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runner registration budget
 
-OpenClaw's current GitHub runner-registration bucket allows 3,000 self-hosted
-runner registrations per 5 minutes. The limit is shared by all Blacksmith runner
-registrations in the `openclaw` organization, so adding another Blacksmith
-installation does not add a new bucket.
+OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
+runner registrations per 5 minutes in `ghx api rate_limit`. Re-check
+`actions_runner_registration` before each tuning pass because GitHub can change
+this bucket. The limit is shared by all Blacksmith runner registrations in the
+`openclaw` organization, so adding another Blacksmith installation does not add
+a new bucket.
 
 Treat Blacksmith labels as the scarce resource for burst control. Jobs that
 only route, notify, summarize, select shards, or run short CodeQL scans should
 stay on GitHub-hosted runners unless they have measured Blacksmith-specific
 needs. Any new Blacksmith matrix, larger `max-parallel`, or high-frequency
 workflow must show its worst-case registration count and keep the org-level
-target below 2,000 registrations per 5 minutes, leaving headroom for concurrent
-repositories and retried jobs.
+target below about 60% of the live bucket. With the current 10,000-registration
+bucket, that means a 6,000-registration operating target, leaving headroom for
+concurrent repositories, retries, and burst overlap.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -651,7 +654,16 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test"
 ```
 
-Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
+Read the final JSON summary. The useful fields are `provider`, `leaseId`,
+`syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. For delegated
+Blacksmith Testbox runs, the Crabbox wrapper exit code and JSON summary are the
+command result. The linked GitHub Actions run owns hydration and keepalive; it
+can finish as `cancelled` when the Testbox is stopped externally after the SSH
+command has already returned. Treat that as a cleanup/status artifact unless
+the wrapper `exitCode` is non-zero or the command output shows a failed test.
+One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically;
+if a run is interrupted or cleanup is unclear, inspect live boxes and stop only
+the boxes you created:
 
 ```bash
 blacksmith testbox list --all

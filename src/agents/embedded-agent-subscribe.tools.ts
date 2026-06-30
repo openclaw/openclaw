@@ -23,13 +23,26 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { readToolResultDetails, readToolResultStatus } from "./tool-result-error.js";
+import {
+  isToolResultError,
+  readToolResultDetails,
+  readToolResultStatus,
+} from "./tool-result-error.js";
 
-export { isToolResultError } from "./tool-result-error.js";
+export { isToolResultError };
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
 const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
+const OPAQUE_STRUCTURED_RESULT_FIELDS = new Set(["encrypted_content", "encrypted_stdout"]);
+const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "x-auth-token",
+]);
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -267,21 +280,134 @@ export function sanitizeToolResult(result: unknown): unknown {
   return out;
 }
 
+function redactInlineDataUriValue(value: string): string {
+  const trimmed = value.trimStart();
+  if (!trimmed.toLowerCase().startsWith("data:")) {
+    return value;
+  }
+  return `[inline data URI: ${value.length} chars]`;
+}
+
+function carriesBinaryData(record: Record<string, unknown>): boolean {
+  const type = normalizeOptionalLowercaseString(record.type);
+  if (type === "audio" || type === "image" || type === "base64") {
+    return true;
+  }
+  const mediaType = normalizeOptionalLowercaseString(record.media_type ?? record.mimeType);
+  return (
+    mediaType?.startsWith("image/") === true ||
+    mediaType?.startsWith("audio/") === true ||
+    mediaType?.startsWith("video/") === true ||
+    mediaType === "application/pdf"
+  );
+}
+
+function sanitizeStructuredToolResultValue(
+  value: unknown,
+  key = "",
+  parentCarriesBinaryData = false,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
+      return "***";
+    }
+    if (key === "blob" || (key === "data" && parentCarriesBinaryData)) {
+      return `[binary omitted: ${value.length} chars]`;
+    }
+    // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
+    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
+      return `[opaque data omitted: ${value.length} chars]`;
+    }
+    return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    // Keep the owning key so arrays of credentials inherit the same redaction policy.
+    return value.map((item) =>
+      sanitizeStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const hasBinaryData = carriesBinaryData(record);
+  return Object.fromEntries(
+    Object.entries(record).map(([childKey, child]) => [
+      childKey,
+      sanitizeStructuredToolResultValue(child, childKey, hasBinaryData, seen),
+    ]),
+  );
+}
+
+function stringifyStructuredToolResultContent(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+  const type = readStringValue(record.type);
+  if (type === "text" || type === "image" || type === "image_url" || type === "audio") {
+    return undefined;
+  }
+  try {
+    const serialized = JSON.stringify(sanitizeStructuredToolResultValue(record));
+    const redacted = serialized ? redactToolPayloadText(serialized) : serialized;
+    return redacted && redacted !== "{}" ? redacted : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveToolResultContentBlocks(result: object): unknown[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  const record = result as Record<string, unknown>;
+  // Typed provider blocks own their `content`; only untyped tool-result envelopes unwrap it.
+  if (readStringValue(record.type)) {
+    return [record];
+  }
+  if (Array.isArray(record.content)) {
+    return record.content;
+  }
+  if (record.content && typeof record.content === "object") {
+    return [record.content];
+  }
+  return [record];
+}
+
 export function extractToolResultText(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const record = result as Record<string, unknown>;
-  const texts = collectTextContentBlocks(record.content)
+  const content = resolveToolResultContentBlocks(result);
+  const texts = collectTextContentBlocks(content)
     .map((item) => {
       const trimmed = item.trim();
       return trimmed ? trimmed : undefined;
     })
     .filter((value): value is string => Boolean(value));
-  if (texts.length === 0) {
+  if (texts.length > 0) {
+    return truncateToolText(texts.join("\n"));
+  }
+  const structuredTexts: string[] = [];
+  for (const item of content) {
+    const structured = stringifyStructuredToolResultContent(item);
+    if (structured) {
+      structuredTexts.push(structured);
+    }
+  }
+  if (structuredTexts.length === 0) {
     return undefined;
   }
-  return texts.join("\n");
+  return truncateToolText(structuredTexts.join("\n"));
 }
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
@@ -725,6 +851,10 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   const fromRootStatus = extractErrorField(record);
   if (fromRootStatus) {
     return fromRootStatus;
+  }
+  const status = readToolResultStatus(result);
+  if (status && !isToolResultError(result)) {
+    return undefined;
   }
   return text ? normalizeToolErrorText(text) : undefined;
 }

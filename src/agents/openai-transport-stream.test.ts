@@ -5075,6 +5075,122 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("replays update_plan-style empty non-image Responses tool results as no output", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_plan",
+            toolName: "update_plan",
+            content: [],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+    };
+
+    expect(params.input?.find((item) => item.type === "function_call_output")).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_plan",
+      output: "(no output)",
+    });
+  });
+
+  it("preserves image-bearing Responses tool results as image input parts", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_shot",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; output?: unknown }>;
+    };
+
+    expect(params.input?.find((item) => item.type === "function_call_output")?.output).toEqual([
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: "data:image/png;base64,aW1n",
+      },
+    ]);
+  });
+
   it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {
     const sharedToolItemPrefix = "iVec" + "A".repeat(160);
     const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
@@ -9350,7 +9466,7 @@ describe("openai transport stream", () => {
     expect(output.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
-  it("strips content-only reasoning tags from OpenAI-compatible visible text", async () => {
+  it("strips content-only closed reasoning tags from OpenAI-compatible visible text", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
 
@@ -9381,6 +9497,41 @@ describe("openai transport stream", () => {
     expect(output.content).toContainEqual({
       type: "text",
       text: "Before  after",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("keeps content-only unclosed mid-answer reasoning-looking tags visible", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-content-only-unclosed-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Before <think>literal tag text after",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Before <think>literal tag text after",
     });
     expect(output.content.some((block) => block.type === "thinking")).toBe(false);
   });

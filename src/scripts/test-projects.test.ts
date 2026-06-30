@@ -917,6 +917,12 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.runtime-config.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status.scan.shared.test.ts"],
