@@ -213,6 +213,60 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("does not report SQLite markers as missing transcript files", async () => {
+    const store = createLegacyStore();
+    fs.rmSync(store.transcriptPath);
+    fs.rmSync(store.trajectoryPath);
+    fs.writeFileSync(
+      store.storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            channel: "cli",
+            chatType: "direct",
+            sessionFile: `sqlite:main:session-1:${store.storePath}`,
+            sessionId: "session-1",
+            sessionStartedAt: 1000,
+            updatedAt: 2000,
+          },
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const validation = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "validate",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 1,
+      importedTranscriptEvents: 0,
+      issues: 0,
+      sqliteEntries: 1,
+    });
+    expect(validation.totals).toMatchObject({
+      issues: 0,
+      validatedEntries: 1,
+      validatedTranscriptEvents: 0,
+    });
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry.sessionFile,
+    ).toContain("sqlite:main:session-1:");
+  });
+
   it("validates missing SQLite rows without creating the agent database", async () => {
     const store = createLegacyStore();
 
