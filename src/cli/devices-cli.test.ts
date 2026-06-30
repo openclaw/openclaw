@@ -534,7 +534,7 @@ describe("devices cli approve", () => {
     expectGatewayCall(3, { method: "node.list" });
     expectGatewayCall(4, { method: "device.pair.list" });
     const errorOutput = readRuntimeErrorOutput();
-    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).toContain("Node reapproval pending for Colin's S25");
     expect(errorOutput).toContain("openclaw nodes approve node-req-1");
     expect(errorOutput).toContain(
@@ -590,7 +590,7 @@ describe("devices cli approve", () => {
     expectGatewayCall(3, { method: "node.list" });
     expectGatewayCall(4, { method: "device.pair.list" });
     const errorOutput = readRuntimeErrorOutput();
-    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-unrelated");
     expect(errorOutput).not.toContain("openclaw nodes approve");
   });
@@ -634,7 +634,7 @@ describe("devices cli approve", () => {
     expectGatewayCall(2, { method: "node.list" });
     expectGatewayCall(3, { method: "device.pair.list" });
     const errorOutput = readRuntimeErrorOutput();
-    expect(errorOutput).toContain("unknown requestId");
+    expect(errorOutput).toContain("No pending device request matches");
     expect(errorOutput).not.toContain("node-req-display-name");
     expect(errorOutput).not.toContain("openclaw nodes approve");
   });
@@ -1368,7 +1368,7 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 
-  it("keeps unknown requestId behavior when neither the original nor replacement request remains pending", async () => {
+  it("explains how to recover when neither the original nor replacement request remains pending", async () => {
     rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-new)");
     rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-new)");
     listDevicePairing
@@ -1406,9 +1406,29 @@ describe("devices cli local fallback", () => {
 
     await runDevicesApprove(["req-old"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("unknown requestId");
+    const errorOutput = stripAnsi(readRuntimeErrorOutput());
+    expect(errorOutput).toContain("No pending device request matches req-old");
+    expect(errorOutput).toContain("openclaw devices list");
+    expect(errorOutput).not.toContain("unknown requestId");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(approveDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("surfaces owner-credential guidance when the device can't approve its own upgrade", async () => {
+    // Explicit --url disables the loopback local fallback, so the scope-upgrade
+    // denial propagates as the authorization error the user must resolve. The
+    // first rejection is consumed by the pre-approve context lookup, the second
+    // by the approve call itself.
+    rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-remote)");
+    rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-remote)");
+
+    await runDevicesApprove(["req-remote", "--url", "wss://gateway.example.com/ws"]);
+
+    const errorOutput = stripAnsi(readRuntimeErrorOutput());
+    expect(errorOutput).toContain("can't approve its own scope upgrade");
+    expect(errorOutput).toContain("--token");
+    expect(errorOutput).toContain("Control UI");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
@@ -1445,14 +1465,16 @@ describe("devices cli local fallback", () => {
     expect(readRuntimeOutput()).not.toContain(fallbackNotice);
   });
 
-  it("keeps unknown requestId behavior instead of approving a different local request", async () => {
+  it("explains recovery instead of approving a different local request", async () => {
     rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
     rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
 
     await runDevicesApprove(["req-default"]);
 
     expect(approveDevicePairing).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("unknown requestId");
+    const errorOutput = stripAnsi(readRuntimeErrorOutput());
+    expect(errorOutput).toContain("No pending device request matches req-default");
+    expect(errorOutput).toContain("openclaw devices list");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
