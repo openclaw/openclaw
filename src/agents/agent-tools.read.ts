@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import ignore from "ignore";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -37,7 +38,18 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import {
+  createEditTool,
+  createFindTool,
+  createGrepTool,
+  createLsTool,
+  createReadTool,
+  createWriteTool,
+  type FindOperations,
+  type GrepOperations,
+  type GrepSearchMatch,
+  type LsOperations,
+} from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -861,6 +873,27 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
+/** Create a sandbox-backed grep tool using bridge reads instead of host ripgrep. */
+export function createSandboxedGrepTool(params: SandboxToolParams) {
+  return createGrepTool(params.root, {
+    operations: createSandboxGrepOperations(params),
+  }) as unknown as AnyAgentTool;
+}
+
+/** Create a sandbox-backed find tool using bridge directory traversal. */
+export function createSandboxedFindTool(params: SandboxToolParams) {
+  return createFindTool(params.root, {
+    operations: createSandboxFindOperations(params),
+  }) as unknown as AnyAgentTool;
+}
+
+/** Create a sandbox-backed ls tool using bridge directory listing. */
+export function createSandboxedLsTool(params: SandboxToolParams) {
+  return createLsTool(params.root, {
+    operations: createSandboxLsOperations(params),
+  }) as unknown as AnyAgentTool;
+}
+
 /** Create a host workspace write tool using guarded filesystem operations. */
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
@@ -957,6 +990,320 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
   } as const;
+}
+
+function createSandboxLsOperations(params: SandboxToolParams): LsOperations {
+  return {
+    exists: async (absolutePath: string) =>
+      (await params.bridge.stat({ filePath: absolutePath, cwd: params.root })) !== null,
+    stat: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+      return { isDirectory: () => stat.type === "directory" };
+    },
+    readdir: (absolutePath: string) =>
+      params.bridge.readdir({ filePath: absolutePath, cwd: params.root }),
+  };
+}
+
+function createSandboxFindOperations(params: SandboxToolParams): FindOperations {
+  return {
+    exists: async (absolutePath: string) =>
+      (await params.bridge.stat({ filePath: absolutePath, cwd: params.root })) !== null,
+    glob: async (pattern, cwd, options) => {
+      const matcher = createGlobMatcher(pattern);
+      const files = await collectSandboxFiles(params, cwd, {
+        ignore: options.ignore,
+        limit: Number.MAX_SAFE_INTEGER,
+      });
+      return files
+        .filter((file) => matcher(file.relativePath))
+        .slice(0, options.limit)
+        .map((file) => file.absolutePath);
+    },
+  };
+}
+
+function createSandboxGrepOperations(params: SandboxToolParams): GrepOperations {
+  return {
+    isDirectory: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+      return stat.type === "directory";
+    },
+    readFile: async (absolutePath: string) => {
+      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+      return buffer.toString("utf8");
+    },
+    search: async (pattern, absolutePath, options) => {
+      const fileMatcher = options.glob ? createGlobMatcher(options.glob) : () => true;
+      const contentMatcher = createContentMatcher(pattern, {
+        ignoreCase: options.ignoreCase,
+        literal: options.literal,
+      });
+      const stat = await params.bridge.stat({
+        filePath: absolutePath,
+        cwd: params.root,
+        signal: options.signal,
+      });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+      const files =
+        stat.type === "directory"
+          ? await collectSandboxFiles(params, absolutePath, {
+              ignore: ["**/node_modules/**", "**/.git/**"],
+              limit: Number.MAX_SAFE_INTEGER,
+              signal: options.signal,
+            })
+          : stat.type === "file"
+            ? [{ absolutePath, relativePath: path.basename(absolutePath) }]
+            : [];
+      const matches: GrepSearchMatch[] = [];
+      for (const file of files) {
+        if (options.signal?.aborted || matches.length >= options.limit) {
+          break;
+        }
+        if (!fileMatcher(file.relativePath)) {
+          continue;
+        }
+        let text: string;
+        try {
+          const buffer = await params.bridge.readFile({
+            filePath: file.absolutePath,
+            cwd: params.root,
+            signal: options.signal,
+          });
+          text = buffer.toString("utf8");
+        } catch {
+          continue;
+        }
+        const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+        for (let index = 0; index < lines.length; index++) {
+          if (matches.length >= options.limit) {
+            break;
+          }
+          const lineText = lines[index] ?? "";
+          if (contentMatcher(lineText)) {
+            matches.push({
+              filePath: file.absolutePath,
+              lineNumber: index + 1,
+              lineText,
+            });
+          }
+        }
+      }
+      return matches;
+    },
+  };
+}
+
+type SandboxFileEntry = {
+  absolutePath: string;
+  relativePath: string;
+};
+
+type SandboxIgnoreMatcher = ReturnType<typeof ignore>;
+
+async function collectSandboxFiles(
+  params: SandboxToolParams,
+  startPath: string,
+  options: { ignore?: string[]; limit: number; signal?: AbortSignal },
+): Promise<SandboxFileEntry[]> {
+  const results: SandboxFileEntry[] = [];
+  const ignoreMatcher = ignore();
+  const startStat = await params.bridge.stat({
+    filePath: startPath,
+    cwd: params.root,
+    signal: options.signal,
+  });
+  if (!startStat) {
+    return results;
+  }
+  if (startStat.type === "file") {
+    return [{ absolutePath: startPath, relativePath: path.basename(startPath) }];
+  }
+  if (startStat.type !== "directory") {
+    return results;
+  }
+
+  const visit = async (absolutePath: string, relativePath: string): Promise<void> => {
+    if (options.signal?.aborted || results.length >= options.limit) {
+      return;
+    }
+    const stat = await params.bridge.stat({
+      filePath: absolutePath,
+      cwd: params.root,
+      signal: options.signal,
+    });
+    if (!stat) {
+      return;
+    }
+    if (stat.type === "file") {
+      if (shouldIgnoreDiscoveryPath(relativePath, options.ignore, ignoreMatcher)) {
+        return;
+      }
+      results.push({ absolutePath, relativePath });
+      return;
+    }
+    if (
+      stat.type !== "directory" ||
+      shouldIgnoreDiscoveryPath(relativePath, options.ignore, ignoreMatcher)
+    ) {
+      return;
+    }
+    await addSandboxGitignoreRules(params, absolutePath, relativePath, ignoreMatcher, options);
+    const entries = await params.bridge.readdir({
+      filePath: absolutePath,
+      cwd: params.root,
+      signal: options.signal,
+    });
+    for (const entry of entries.toSorted((a, b) => a.localeCompare(b))) {
+      const nextRelative = relativePath ? path.posix.join(relativePath, entry) : entry;
+      await visit(path.join(absolutePath, entry), nextRelative);
+      if (results.length >= options.limit) {
+        break;
+      }
+    }
+  };
+
+  await visit(startPath, "");
+  return results;
+}
+
+async function addSandboxGitignoreRules(
+  params: SandboxToolParams,
+  absolutePath: string,
+  relativePath: string,
+  ignoreMatcher: SandboxIgnoreMatcher,
+  options: { signal?: AbortSignal },
+): Promise<void> {
+  let buffer: Buffer;
+  try {
+    buffer = await params.bridge.readFile({
+      filePath: path.join(absolutePath, ".gitignore"),
+      cwd: params.root,
+      signal: options.signal,
+    });
+  } catch {
+    return;
+  }
+  const prefix = relativePath ? `${relativePath}/` : "";
+  const patterns = buffer
+    .toString("utf8")
+    .split(/\r?\n/)
+    .map((line) => prefixIgnorePattern(line, prefix))
+    .filter((line): line is string => Boolean(line));
+  if (patterns.length > 0) {
+    ignoreMatcher.add(patterns);
+  }
+}
+
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) {
+    return null;
+  }
+
+  let pattern = line;
+  let negated = false;
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
+  }
+  if (pattern.startsWith("/")) {
+    pattern = pattern.slice(1);
+  }
+
+  const slashQualified = pattern.replace(/\/+$/u, "").includes("/");
+  // Slashless nested .gitignore rules match any descendant below that file.
+  // Direct prefixing would make them slash-qualified and miss deeper files.
+  const prefixed =
+    prefix && !slashQualified ? `${prefix}**/${pattern}` : prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+function shouldIgnoreDiscoveryPath(
+  relativePath: string,
+  ignorePatterns?: string[],
+  ignoreMatcher?: SandboxIgnoreMatcher,
+): boolean {
+  if (!relativePath) {
+    return false;
+  }
+  const parts = relativePath.split("/");
+  if (parts.includes(".git") || parts.includes("node_modules")) {
+    return true;
+  }
+  if (ignoreMatcher?.ignores(relativePath)) {
+    return true;
+  }
+  if (!ignorePatterns || ignorePatterns.length === 0) {
+    return false;
+  }
+  return ignorePatterns.some((pattern) => createGlobMatcher(pattern)(relativePath));
+}
+
+function createGlobMatcher(pattern: string): (relativePath: string) => boolean {
+  const normalizedPattern = pattern.replace(/\\/g, "/");
+  const regex = globToRegExp(normalizedPattern);
+  const matchBasename = !normalizedPattern.includes("/");
+  return (relativePath: string) => {
+    const normalizedPath = relativePath.replace(/\\/g, "/");
+    return regex.test(matchBasename ? path.posix.basename(normalizedPath) : normalizedPath);
+  };
+}
+
+function globToRegExp(pattern: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (char === "*" && next === "*") {
+      const after = pattern[index + 2];
+      if (after === "/") {
+        source += "(?:.*\\/)?";
+        index += 2;
+      } else {
+        source += ".*";
+        index++;
+      }
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegExp(char);
+  }
+  source += "$";
+  return new RegExp(source);
+}
+
+function createContentMatcher(
+  pattern: string,
+  options: { ignoreCase?: boolean; literal?: boolean },
+): (line: string) => boolean {
+  if (options.literal) {
+    const needle = options.ignoreCase ? pattern.toLowerCase() : pattern;
+    return (line) => (options.ignoreCase ? line.toLowerCase() : line).includes(needle);
+  }
+  const regex = new RegExp(pattern, options.ignoreCase ? "i" : undefined);
+  return (line) => regex.test(line);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {

@@ -11,7 +11,12 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import {
+  expectReadWriteEditTools,
+  expectTool,
+  getTextContent,
+} from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -204,6 +209,27 @@ describe("workspace path resolution", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
+
+  it.each([
+    ["grep", { pattern: "secret" }],
+    ["find", { pattern: "*.txt" }],
+    ["ls", {}],
+  ] as const)(
+    "rejects %s absolute paths outside workspace when workspaceOnly is enabled",
+    async (toolName, params) => {
+      await withTempDir("openclaw-ws-", async (workspaceDir) => {
+        await withTempDir("openclaw-outside-", async (outsideDir) => {
+          const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+          const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+          const tool = expectTool(tools, toolName);
+
+          await expect(
+            tool.execute(`ws-${toolName}-outside`, { ...params, path: outsideDir }),
+          ).rejects.toThrow(/Path escapes sandbox root/i);
+        });
+      });
+    },
+  );
 
   it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
     if (process.platform === "win32") {
@@ -487,6 +513,131 @@ describe("sandboxed workspace paths", () => {
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");
+      });
+    });
+  });
+
+  it("uses sandbox bridge operations for grep/find/ls", async () => {
+    await withTempDir("openclaw-sandbox-discovery-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-discovery-", async (workspaceDir) => {
+        await fs.writeFile(path.join(sandboxDir, "sandbox-only.txt"), "sandbox needle", "utf8");
+        await fs.writeFile(path.join(workspaceDir, "host-only.txt"), "host needle", "utf8");
+        const hostBridge = createHostSandboxFsBridge(sandboxDir);
+        const calls = { readFile: 0, readdir: 0, stat: 0 };
+        const bridge: SandboxFsBridge = {
+          ...hostBridge,
+          readFile: async (params) => {
+            calls.readFile++;
+            return hostBridge.readFile(params);
+          },
+          readdir: async (params) => {
+            calls.readdir++;
+            return hostBridge.readdir(params);
+          },
+          stat: async (params) => {
+            calls.stat++;
+            return hostBridge.stat(params);
+          },
+        };
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceAccess: "rw" as const,
+          fsBridge: bridge,
+          tools: { allow: [], deny: [] },
+        });
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+
+        const grepResult = await expectTool(tools, "grep").execute("sbx-grep", {
+          pattern: "needle",
+          literal: true,
+        });
+        expect(getTextContent(grepResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(grepResult)).not.toContain("host-only.txt");
+
+        const findResult = await expectTool(tools, "find").execute("sbx-find", {
+          pattern: "*.txt",
+        });
+        expect(getTextContent(findResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(findResult)).not.toContain("host-only.txt");
+
+        const lsResult = await expectTool(tools, "ls").execute("sbx-ls", {});
+        expect(getTextContent(lsResult)).toContain("sandbox-only.txt");
+        expect(getTextContent(lsResult)).not.toContain("host-only.txt");
+        expect(calls.readFile).toBeGreaterThan(0);
+        expect(calls.readdir).toBeGreaterThan(0);
+        expect(calls.stat).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  it("honors sandbox .gitignore rules for grep and find discovery", async () => {
+    await withTempDir("openclaw-sandbox-gitignore-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-gitignore-", async (workspaceDir) => {
+        await fs.mkdir(path.join(sandboxDir, "nested"), { recursive: true });
+        await fs.mkdir(path.join(sandboxDir, "nested", "deeper"), { recursive: true });
+        await fs.mkdir(path.join(sandboxDir, "other"), { recursive: true });
+        await fs.writeFile(
+          path.join(sandboxDir, ".gitignore"),
+          ["ignored.txt", "nested/*.log", "!nested/keep.log"].join("\n"),
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "nested", ".gitignore"), "local.txt\n", "utf8");
+        await fs.writeFile(path.join(sandboxDir, "visible.txt"), "visible needle", "utf8");
+        await fs.writeFile(path.join(sandboxDir, "ignored.txt"), "ignored needle", "utf8");
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "ignored.log"),
+          "nested ignored needle",
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "nested", "keep.log"), "kept needle", "utf8");
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "local.txt"),
+          "nested local needle",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(sandboxDir, "nested", "deeper", "local.txt"),
+          "nested deeper local needle",
+          "utf8",
+        );
+        await fs.writeFile(path.join(sandboxDir, "other", "local.txt"), "other needle", "utf8");
+
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceAccess: "rw" as const,
+          fsBridge: createHostSandboxFsBridge(sandboxDir),
+          tools: { allow: [], deny: [] },
+        });
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+
+        const findText = getTextContent(
+          await expectTool(tools, "find").execute("sbx-find-gitignore", {
+            pattern: "**/*",
+          }),
+        );
+        expect(findText).toContain("visible.txt");
+        expect(findText).toContain("nested/keep.log");
+        expect(findText).toContain("other/local.txt");
+        expect(findText).not.toContain("ignored.txt");
+        expect(findText).not.toContain("nested/ignored.log");
+        expect(findText).not.toContain("nested/local.txt");
+        expect(findText).not.toContain("nested/deeper/local.txt");
+
+        const grepText = getTextContent(
+          await expectTool(tools, "grep").execute("sbx-grep-gitignore", {
+            pattern: "needle",
+            literal: true,
+          }),
+        );
+        expect(grepText).toContain("visible.txt");
+        expect(grepText).toContain("nested/keep.log");
+        expect(grepText).toContain("other/local.txt");
+        expect(grepText).not.toContain("ignored.txt");
+        expect(grepText).not.toContain("nested/ignored.log");
+        expect(grepText).not.toContain("nested/local.txt");
+        expect(grepText).not.toContain("nested/deeper/local.txt");
       });
     });
   });

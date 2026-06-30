@@ -208,6 +208,30 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("allows group fs denies to cover discovery tools", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { denyTools: ["grep", "find", "ls"] },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            tools: { denyTools: ["group:fs"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
+    );
+  });
+
   it("allows scoped sandbox container requirements that match top-level policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -6344,7 +6368,18 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = {
       ...cfgWithPolicy(),
       tools: {
-        deny: ["exec", "process", "code_execution", "read", "write", "edit", "apply_patch"],
+        deny: [
+          "exec",
+          "process",
+          "code_execution",
+          "read",
+          "write",
+          "edit",
+          "apply_patch",
+          "grep",
+          "find",
+          "ls",
+        ],
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");

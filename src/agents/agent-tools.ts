@@ -46,6 +46,9 @@ import {
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
   createSandboxedEditTool,
+  createSandboxedFindTool,
+  createSandboxedGrepTool,
+  createSandboxedLsTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
   getToolParamsRecord,
@@ -780,6 +783,34 @@ export function createOpenClawCodingTools(options?: {
         continue;
       }
       if (tool.name === "bash" || tool.name === execToolName) {
+        continue;
+      }
+      if (tool.name === "grep" || tool.name === "find" || tool.name === "ls") {
+        const discoveryTool = sandboxRoot
+          ? tool.name === "grep"
+            ? createSandboxedGrepTool({ root: sandboxRoot, bridge: sandboxFsBridge! })
+            : tool.name === "find"
+              ? createSandboxedFindTool({ root: sandboxRoot, bridge: sandboxFsBridge! })
+              : createSandboxedLsTool({ root: sandboxRoot, bridge: sandboxFsBridge! })
+          : tool;
+        base.push(
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                discoveryTool,
+                sandboxRoot ? sandboxRoot : codingRoot,
+                sandboxRoot
+                  ? {
+                      additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                      containerWorkdir: sandbox.containerWorkdir,
+                      pathParamKeys: ["path"],
+                    }
+                  : {
+                      additionalRoots: skillReadRoots,
+                      pathParamKeys: ["path"],
+                    },
+              )
+            : discoveryTool,
+        );
         continue;
       }
       if (tool.name === "write") {

@@ -13,7 +13,7 @@ export function getTextContent(result?: { content?: TextResultBlock[] }) {
   return textBlock?.text ?? "";
 }
 
-function expectTool<T extends { name: string }>(tools: T[], name: string): T {
+export function expectTool<T extends { name: string }>(tools: T[], name: string): T {
   const tool = tools.find((entry) => entry.name === name);
   if (!tool) {
     throw new Error(`expected tool "${name}" in [${tools.map((entry) => entry.name).join(", ")}]`);
