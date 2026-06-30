@@ -24,7 +24,7 @@ import {
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
@@ -343,13 +343,24 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
   };
 }
 
-function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
+/**
+ * Matches a tool against a server's include/exclude filter.
+ *
+ * Patterns are tested against BOTH the raw server tool name (`query`) and the
+ * OpenClaw-namespaced form (`<server>__query`). `openclaw mcp probe` surfaces the
+ * namespaced names, so operators routinely copy those into `mcp tools --include`;
+ * matching either form keeps that intuitive workflow working instead of silently
+ * dropping every tool. See the candidate names built at the filter call site.
+ */
+function shouldExposeMcpTool(selection: McpToolSelection, toolNames: readonly string[]): boolean {
   const include = selection.include ?? [];
   const exclude = selection.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, toolName))) {
+  const matchesAny = (patterns: readonly string[]): boolean =>
+    patterns.some((pattern) => toolNames.some((name) => globMatches(pattern, name)));
+  if (include.length > 0 && !matchesAny(include)) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, toolName));
+  return !matchesAny(exclude);
 }
 
 function sanitizeMcpMetadataText(value: string | undefined): string | undefined {
@@ -711,9 +722,30 @@ export function createSessionMcpRuntime(params: {
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
-                const exposedTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, tool.name.trim()),
-                );
+                const exposedTools = listedTools.filter((tool) => {
+                  const rawToolName = tool.name.trim();
+                  return shouldExposeMcpTool(selection, [
+                    rawToolName,
+                    `${safeServerName}${TOOL_NAME_SEPARATOR}${rawToolName}`,
+                  ]);
+                });
+                if (
+                  selection.include &&
+                  selection.include.length > 0 &&
+                  listedTools.length > 0 &&
+                  exposedTools.length === 0
+                ) {
+                  // A non-empty include that matches nothing is almost always a
+                  // name-form mistake (namespaced vs raw). Warn instead of
+                  // silently hiding the whole server from the agent.
+                  const sampleRaw = listedTools[0]?.name?.trim() ?? "<tool>";
+                  logWarn(
+                    `bundle-mcp: server "${serverName}": toolFilter include matched 0 of ` +
+                      `${listedTools.length} advertised tool(s); the server will expose no tools. ` +
+                      `Filter names are matched against the raw server tool name (e.g. "${sampleRaw}") ` +
+                      `or the namespaced "${safeServerName}${TOOL_NAME_SEPARATOR}${sampleRaw}" form.`,
+                  );
+                }
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
