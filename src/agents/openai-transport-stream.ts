@@ -3883,6 +3883,29 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   return true;
 }
 
+function applyZaiOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  modelReasoning: boolean;
+  payload: Record<string, unknown>;
+  requestedEffort: OpenAIReasoningEffort;
+  reasoningEffortMap: Record<string, string> | undefined;
+}): boolean {
+  // GLM-4.5+ (including GLM-5.2) expects `thinking: {"type": "enabled" | "disabled"}`
+  // and an optional top-level `reasoning_effort`. The legacy `enable_thinking: boolean`
+  // field is no longer honored, so reasoning mode was silently dropped. See #97772.
+  if (!params.modelReasoning || params.compatThinkingFormat !== "zai") {
+    return false;
+  }
+  const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
+  params.payload.thinking = { type: enabled ? "enabled" : "disabled" };
+  if (enabled) {
+    const mapped =
+      params.reasoningEffortMap?.[params.requestedEffort] ?? params.requestedEffort;
+    params.payload.reasoning_effort = mapped;
+  }
+  return true;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -4427,6 +4450,13 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
+  const handledZaiThinkingFormat = applyZaiOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    modelReasoning: model.reasoning,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+    reasoningEffortMap: compat.reasoningEffortMap,
+  });
   applyTogetherOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4446,6 +4476,7 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
+    !handledZaiThinkingFormat &&
     !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
