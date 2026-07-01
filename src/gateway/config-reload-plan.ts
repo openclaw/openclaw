@@ -229,12 +229,15 @@ function listReloadRules(): ReloadRule[] {
 }
 
 function matchRule(path: string): ReloadRule | null {
+  let bestRule: ReloadRule | null = null;
   for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
-      return rule;
+      if (!bestRule || rule.prefix.length > bestRule.prefix.length) {
+        bestRule = rule;
+      }
     }
   }
-  return null;
+  return bestRule;
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {

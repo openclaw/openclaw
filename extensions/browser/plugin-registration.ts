@@ -145,7 +145,10 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
 }
 
 /** Browser plugin reload policy. */
-export const browserPluginReload = { restartPrefixes: ["browser"] };
+export const browserPluginReload = {
+  restartPrefixes: ["browser"],
+  hotPrefixes: ["browser.profiles"],
+};
 
 /** Node-host command descriptors exposed by the Browser plugin. */
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
