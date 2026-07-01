@@ -1,7 +1,14 @@
 // Control UI tests cover build chat items behavior.
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
+import {
+  buildCachedChatItems,
+  buildChatItems,
+  getExpandedToolCards,
+  resetChatThreadState,
+  syncToolCardExpansionState,
+  type BuildChatItemsProps,
+} from "./chat-thread.ts";
 
 const SENDER_METADATA_BLOCK =
   'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
@@ -1195,6 +1202,56 @@ describe("buildChatItems", () => {
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
+  });
+});
+
+describe("tool expansion state", () => {
+  it("expands already-visible tool cards when auto-expand turns on", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-1",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-1",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-1",
+                name: "browser.open",
+                arguments: { url: "https://example.com" },
+              },
+            ],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+
+    syncToolCardExpansionState("main", [group], false);
+    expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBe(false);
+
+    syncToolCardExpansionState("main", [group], true);
+    expect(getExpandedToolCards("main").get("assistant-1:toolcard:0")).toBe(true);
+  });
+});
+
+describe("thread item cache", () => {
+  it("reuses transcript items when thread inputs keep the same references", () => {
+    resetChatThreadState();
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: BuildChatItemsProps["streamSegments"] = [];
+    const queue: NonNullable<BuildChatItemsProps["queue"]> = [];
+    const input = createProps({ messages, toolMessages, streamSegments, queue });
+
+    const first = buildCachedChatItems(input);
+    expect(buildCachedChatItems({ ...input })).toBe(first);
+    expect(buildCachedChatItems({ ...input, messages: [...messages] })).not.toBe(first);
   });
 });
 

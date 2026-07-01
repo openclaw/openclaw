@@ -37,8 +37,16 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
+import {
+  buildCachedChatItems,
+  coalesceStreamRuns,
+  deletedChatItemsSignature,
+  getExpandedToolCards,
+  resetChatThreadState,
+  stableBooleanMapSignature,
+  syncToolCardExpansionState,
+} from "./chat-thread.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { renderContextNotice } from "./context-notice.ts";
@@ -49,7 +57,6 @@ import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
-  type StreamGroupPart,
 } from "./grouped-render.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";
@@ -71,7 +78,6 @@ import {
   renderCompactionIndicator,
   renderFallbackIndicator,
 } from "./status-indicators.ts";
-import { getExpandedToolCards, syncToolCardExpansionState } from "./tool-expansion-state.ts";
 import "../../components/resizable-divider.ts";
 
 function getPinnedMessageSummary(message: unknown): string {
@@ -586,13 +592,6 @@ function createChatEphemeralState(): ChatEphemeralState {
 
 const vs = createChatEphemeralState();
 
-type CachedChatItems = {
-  input: BuildChatItemsProps | null;
-  items: ReturnType<typeof buildChatItems>;
-};
-
-const chatItemsBySession = new Map<string, CachedChatItems>();
-
 function composerDraftKey(props: Pick<ChatProps, "currentAgentId" | "sessionKey">): string {
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
@@ -645,88 +644,6 @@ function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
-function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
-  return (
-    previous.sessionKey === next.sessionKey &&
-    previous.messages === next.messages &&
-    previous.toolMessages === next.toolMessages &&
-    previous.streamSegments === next.streamSegments &&
-    previous.stream === next.stream &&
-    previous.streamStartedAt === next.streamStartedAt &&
-    previous.queue === next.queue &&
-    previous.showToolCalls === next.showToolCalls &&
-    previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
-  );
-}
-
-function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof buildChatItems> {
-  const cached = getOrCreateSessionCacheValue(chatItemsBySession, input.sessionKey, () => ({
-    input: null,
-    items: [],
-  }));
-  if (cached.input && sameChatItemsInput(cached.input, input)) {
-    return cached.items;
-  }
-  const items = buildChatItems(input);
-  cached.input = input;
-  cached.items = items;
-  return items;
-}
-
-type RenderChatItem = ReturnType<typeof buildChatItems>[number];
-type StreamRunRenderItem = { kind: "stream-run"; key: string; parts: StreamGroupPart[] };
-
-// Fold each contiguous run of in-flight stream/reading-indicator items into a
-// single group so segmented replies render under one assistant avatar instead
-// of one bubble per segment (#63956). Any message/group/divider breaks the run,
-// so interleaved tool calls keep their own groups.
-function coalesceStreamRuns(
-  items: ReturnType<typeof buildChatItems>,
-): Array<RenderChatItem | StreamRunRenderItem> {
-  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
-  let run: StreamGroupPart[] = [];
-  const flush = () => {
-    const [first] = run;
-    if (first) {
-      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
-      run = [];
-    }
-  };
-  for (const item of items) {
-    if (item.kind === "stream" || item.kind === "reading-indicator") {
-      run.push(item);
-      continue;
-    }
-    flush();
-    result.push(item);
-  }
-  flush();
-  return result;
-}
-
-function deletedChatItemsSignature(
-  deleted: DeletedMessages,
-  chatItems: ReturnType<typeof buildChatItems>,
-): string {
-  const deletedKeys = chatItems
-    .map((item) => item.key)
-    .filter((key) => deleted.has(key))
-    .toSorted();
-  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
-}
-
-function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string {
-  if (values.size === 0) {
-    return "";
-  }
-  return Array.from(values)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value ? "1" : "0"}`)
-    .join("\u0000");
-}
-
 /**
  * Reset chat view ephemeral state when navigating away.
  * Clears search/slash UI that should not survive navigation.
@@ -739,7 +656,7 @@ export function resetChatViewState() {
     cancelAnimationFrame(vs.historyRenderAnchorFrame);
   }
   Object.assign(vs, createChatEphemeralState());
-  chatItemsBySession.clear();
+  resetChatThreadState();
 }
 
 function resolveChatHistoryRenderCap(messageCount: number): number {

@@ -138,9 +138,15 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("./build-chat-items.ts", () => ({
-  buildChatItems: buildChatItemsMock,
-}));
+vi.mock("./chat-thread.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-thread.ts")>();
+  return {
+    ...actual,
+    buildCachedChatItems: buildChatItemsMock,
+    getExpandedToolCards: () => new Map<string, boolean>(),
+    syncToolCardExpansionState: () => undefined,
+  };
+});
 
 vi.mock("./grouped-render.ts", () => ({
   getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
@@ -160,11 +166,6 @@ vi.mock("./grouped-render.ts", () => ({
     }
     return group;
   },
-}));
-
-vi.mock("./tool-expansion-state.ts", () => ({
-  getExpandedToolCards: () => new Map<string, boolean>(),
-  syncToolCardExpansionState: () => undefined,
 }));
 
 vi.mock("../../lib/agents/tools-effective.ts", () => ({
@@ -1168,44 +1169,6 @@ afterEach(() => {
 });
 
 describe("chat transcript rendering cache", () => {
-  it("does not rebuild transcript items for draft-only rerenders", () => {
-    const messages = [{ role: "assistant", content: "ready" }];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const queue: ChatQueueItem[] = [];
-
-    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "" });
-    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "h" });
-    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "hello" });
-
-    expect(buildChatItemsMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not rerender transcript groups for draft-only rerenders", () => {
-    const messages = [{ role: "assistant", content: "ready" }];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const queue: ChatQueueItem[] = [];
-    const container = document.createElement("div");
-
-    render(
-      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue })),
-      container,
-    );
-    render(
-      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue, draft: "h" })),
-      container,
-    );
-    render(
-      renderChat(
-        createChatProps({ messages, toolMessages, streamSegments, queue, draft: "hello" }),
-      ),
-      container,
-    );
-
-    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
-  });
-
   it("rerenders transcript groups when assistant attachment availability changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];

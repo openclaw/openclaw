@@ -1,4 +1,4 @@
-// Control UI chat module implements build chat items behavior.
+// Control UI chat module owns Chat thread item derivation and thread-local caches.
 import type {
   ChatItem,
   MessageGroup,
@@ -22,12 +22,14 @@ import {
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
+  isToolResultMessage,
   normalizeMessage,
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
@@ -43,6 +45,30 @@ export type BuildChatItemsProps = {
   searchQuery?: string;
   historyRenderLimit?: number;
 };
+
+type CachedChatItems = {
+  input: BuildChatItemsProps | null;
+  items: ReturnType<typeof buildChatItems>;
+};
+
+export type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+export type StreamRunRenderItem = {
+  kind: "stream-run";
+  key: string;
+  parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
+};
+
+const chatItemsBySession = new Map<string, CachedChatItems>();
+const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
+const initializedToolCardsBySession = new Map<string, Set<string>>();
+const lastAutoExpandPrefBySession = new Map<string, boolean>();
+
+export function resetChatThreadState(): void {
+  chatItemsBySession.clear();
+  expandedToolCardsBySession.clear();
+  initializedToolCardsBySession.clear();
+  lastAutoExpandPrefBySession.clear();
+}
 
 function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -906,6 +932,147 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   return annotateToolTurnOutcome(
     groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items))),
   );
+}
+
+function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+  return (
+    previous.sessionKey === next.sessionKey &&
+    previous.messages === next.messages &&
+    previous.toolMessages === next.toolMessages &&
+    previous.streamSegments === next.streamSegments &&
+    previous.stream === next.stream &&
+    previous.streamStartedAt === next.streamStartedAt &&
+    previous.queue === next.queue &&
+    previous.showToolCalls === next.showToolCalls &&
+    previous.searchOpen === next.searchOpen &&
+    previous.searchQuery === next.searchQuery &&
+    previous.historyRenderLimit === next.historyRenderLimit
+  );
+}
+
+export function buildCachedChatItems(
+  input: BuildChatItemsProps,
+): ReturnType<typeof buildChatItems> {
+  const cached = getOrCreateSessionCacheValue(chatItemsBySession, input.sessionKey, () => ({
+    input: null,
+    items: [],
+  }));
+  if (cached.input && sameChatItemsInput(cached.input, input)) {
+    return cached.items;
+  }
+  const items = buildChatItems(input);
+  cached.input = input;
+  cached.items = items;
+  return items;
+}
+
+export function coalesceStreamRuns(
+  items: ReturnType<typeof buildChatItems>,
+): Array<RenderChatItem | StreamRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
+  let run: StreamRunRenderItem["parts"] = [];
+  // Contiguous in-flight stream and reading-indicator items render under one
+  // assistant avatar; messages, groups, and dividers intentionally break the run.
+  const flush = () => {
+    const [first] = run;
+    if (first) {
+      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      run = [];
+    }
+  };
+  for (const item of items) {
+    if (item.kind === "stream" || item.kind === "reading-indicator") {
+      run.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
+  return result;
+}
+
+export function deletedChatItemsSignature(
+  deleted: { has: (key: string) => boolean },
+  chatItems: ReturnType<typeof buildChatItems>,
+): string {
+  const deletedKeys = chatItems
+    .map((item) => item.key)
+    .filter((key) => deleted.has(key))
+    .toSorted();
+  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
+}
+
+export function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string {
+  if (values.size === 0) {
+    return "";
+  }
+  return Array.from(values)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value ? "1" : "0"}`)
+    .join("\u0000");
+}
+
+export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
+  return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+}
+
+function getInitializedToolCards(sessionKey: string): Set<string> {
+  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
+}
+
+export function syncToolCardExpansionState(
+  sessionKey: string,
+  items: Array<ChatItem | MessageGroup>,
+  autoExpandToolCalls: boolean,
+): void {
+  const expanded = getExpandedToolCards(sessionKey);
+  const initialized = getInitializedToolCards(sessionKey);
+  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const currentToolCardIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const entry of item.messages) {
+      const cards = extractToolCardsCached(entry.message, entry.key);
+      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
+        currentToolCardIds.add(disclosureId);
+        if (initialized.has(disclosureId)) {
+          continue;
+        }
+        expanded.set(disclosureId, autoExpandToolCalls);
+        initialized.add(disclosureId);
+      }
+      const messageRecord = entry.message as Record<string, unknown>;
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
+      const normalizedRole = normalizeRoleForGrouping(role);
+      const isToolMessage =
+        isToolResultMessage(entry.message) ||
+        normalizedRole === "tool" ||
+        role.toLowerCase() === "toolresult" ||
+        role.toLowerCase() === "tool_result" ||
+        typeof messageRecord.toolCallId === "string" ||
+        typeof messageRecord.tool_call_id === "string";
+      if (!isToolMessage) {
+        continue;
+      }
+      const disclosureId = `toolmsg:${entry.key}`;
+      currentToolCardIds.add(disclosureId);
+      if (initialized.has(disclosureId)) {
+        continue;
+      }
+      expanded.set(disclosureId, autoExpandToolCalls);
+      initialized.add(disclosureId);
+    }
+  }
+  if (autoExpandToolCalls && !previousAutoExpand) {
+    for (const toolCardId of currentToolCardIds) {
+      expanded.set(toolCardId, true);
+    }
+  }
+  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
 }
 
 function messageKey(message: unknown, index: number): string {
