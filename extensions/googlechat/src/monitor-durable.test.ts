@@ -17,6 +17,19 @@ describe("resolveGoogleChatDurableReplyOptions", () => {
     });
   });
 
+  it("prevents durable final delivery from falling back to stale context reply metadata", () => {
+    expect(
+      resolveGoogleChatDurableReplyOptions({
+        payload: { text: "hello" },
+        infoKind: "final",
+        spaceId: "spaces/AAA",
+      }),
+    ).toEqual({
+      to: "spaces/AAA",
+      replyToId: null,
+    });
+  });
+
   it("keeps typing preview delivery on the legacy edit path", () => {
     expect(
       resolveGoogleChatDurableReplyOptions({

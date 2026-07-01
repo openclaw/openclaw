@@ -431,6 +431,7 @@ async function processMessageWithPipeline(params: {
               config,
               statusSink,
               typingMessageName,
+              typingMessageThreadName: replyThreadName,
             });
             // Only use typing message for first delivery
             typingMessageName = undefined;

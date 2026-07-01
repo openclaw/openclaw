@@ -3,7 +3,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
 export type GoogleChatDurableReplyOptions = {
   to: string;
-  replyToId?: string;
+  replyToId?: string | null;
   threadId?: string;
 };
 
@@ -17,8 +17,15 @@ export function resolveGoogleChatDurableReplyOptions(params: {
     return false;
   }
   const threadId = params.payload.replyToId?.trim() || undefined;
+  if (!threadId) {
+    return {
+      to: params.spaceId,
+      replyToId: null,
+    };
+  }
   return {
     to: params.spaceId,
-    ...(threadId ? { replyToId: threadId, threadId } : {}),
+    replyToId: threadId,
+    threadId,
   };
 }
