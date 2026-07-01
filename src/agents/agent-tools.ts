@@ -45,6 +45,7 @@ import {
   createSandboxedWriteTool,
   getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
+  wrapToolRejectRelativeWorkspaceEscape,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
@@ -778,7 +779,15 @@ export function createOpenClawCodingTools(options?: {
           continue;
         }
         const wrapped = createHostWorkspaceWriteTool(codingRoot, { workspaceOnly });
-        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
+        // workspaceOnly: full containment (rejects absolute + `..` escapes).
+        // Default (host) path: still reject relative `..` escapes so a model cannot
+        // climb out of the workspace via a relative path; absolute / `~` writes stay
+        // allowed (documented trusted-operator "write anywhere" behaviour).
+        base.push(
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuard(wrapped, codingRoot)
+            : wrapToolRejectRelativeWorkspaceEscape(wrapped, codingRoot),
+        );
         continue;
       }
       if (tool.name === "edit") {
@@ -786,7 +795,11 @@ export function createOpenClawCodingTools(options?: {
           continue;
         }
         const wrapped = createHostWorkspaceEditTool(codingRoot, { workspaceOnly });
-        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
+        base.push(
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuard(wrapped, codingRoot)
+            : wrapToolRejectRelativeWorkspaceEscape(wrapped, codingRoot),
+        );
         continue;
       }
       base.push(tool);
