@@ -1477,6 +1477,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Structured Health Checks
   - H2: Check Selection
   - H2: Post-upgrade mode
+  - H2: Session SQLite migration
   - H2: macOS: launchctl env overrides
   - H2: Related
 
@@ -3757,7 +3758,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Insecure or dangerous flags summary
   - H2: Reverse proxy configuration
   - H2: HSTS and origin notes
-  - H2: Local session logs live on disk
+  - H2: Local session history lives on disk
   - H2: Node execution (system.run)
   - H2: Dynamic skills (watcher / remote nodes)
   - H2: The threat model
@@ -4856,6 +4857,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Migration / compatibility
   - H2: Open questions
   - H2: Acceptance criteria
+
+## plan/path3-sqlite-session-artifact-family.md
+
+- Route: /plan/path3-sqlite-session-artifact-family
+- Headings:
+  - H1: Path 3 SQLite Session Artifact Family
+  - H2: Authoritative family
+  - H2: Non-family artifacts after the flip
+  - H2: Patch points
+  - H2: Focused tests
 
 ## plan/ui-channels.md
 
@@ -8172,6 +8183,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Example
   - H2: Related
 
+## reference/path3-live-sqlite-e2e-harness.md
+
+- Route: /reference/path3-live-sqlite-e2e-harness
+- Headings:
+  - H2: Command shape
+  - H2: Isolated built-CLI proof
+  - H2: Preflight
+  - H2: Agent-driven scenario
+  - H2: Per-step assertions
+  - H2: Evidence artifact
+  - H2: Safety rules
+  - H2: Passing result
+
 ## reference/prompt-caching.md
 
 - Route: /reference/prompt-caching
@@ -8267,8 +8291,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Cron sessions and run logs
   - H2: Session keys (sessionKey)
   - H2: Session ids (sessionId)
-  - H2: Session store schema (sessions.json)
-  - H2: Transcript structure (.jsonl)
+  - H2: Session store schema
+  - H2: Transcript event structure
   - H2: Context windows vs tracked tokens
   - H2: Compaction: what it is
   - H2: Compaction chunk boundaries and tool pairing

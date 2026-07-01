@@ -182,7 +182,7 @@ describe("sessionsCommand", () => {
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "agent:child:main": {
         sessionId: "child-session",
         updatedAt: Date.now() - 10 * 60_000,

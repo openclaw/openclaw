@@ -196,7 +196,7 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
