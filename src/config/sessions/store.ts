@@ -24,11 +24,7 @@ import {
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import {
-  resolveExplicitSessionFilePath,
-  resolveSessionFilePath,
-  resolveStorePath,
-} from "./paths.js";
+import { resolveExplicitSessionFilePath, resolveSessionFilePath } from "./paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
