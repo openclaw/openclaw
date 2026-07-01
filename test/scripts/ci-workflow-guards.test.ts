@@ -45,6 +45,14 @@ function readTrackedText(relativePath: string): string {
   return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
 }
 
+function readDistRuntimeArtifactRoots(): string[] {
+  return JSON.parse(
+    execFileSync(process.execPath, ["scripts/dist-runtime-build-artifact.mjs", "print-roots"], {
+      encoding: "utf8",
+    }),
+  );
+}
+
 function readAndroidCompileSdk(relativePath: string): number {
   const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
@@ -550,6 +558,7 @@ describe("ci workflow guards", () => {
 
   it("packs runtime artifacts with package-root runtime resources", () => {
     const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const packStep = buildArtifactSteps.find(
       (step) => step.name === "Pack built runtime artifacts",
@@ -559,12 +568,19 @@ describe("ci workflow guards", () => {
     );
 
     expect(packStep.run).toBe(
-      "tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt openclaw.mjs package.json docs/reference/templates src/agents/templates dist dist-runtime",
+      "node scripts/dist-runtime-build-artifact.mjs pack-and-smoke --archive dist-runtime-build.tar.zst",
     );
-    expect(packStep.run).toContain("docs/reference/templates");
-    expect(packStep.run).toContain("src/agents/templates");
-    expect(packStep.run).toContain("dist");
-    expect(packStep.run).toContain("dist-runtime");
+    expect(source).not.toContain(
+      "tar --posix -cf dist-runtime-build.tar.zst --use-compress-program",
+    );
+    expect(readDistRuntimeArtifactRoots()).toEqual([
+      "openclaw.mjs",
+      "package.json",
+      "docs/reference/templates",
+      "src/agents/templates",
+      "dist",
+      "dist-runtime",
+    ]);
     expect(uploadStep.with).toMatchObject({
       name: "dist-runtime-build",
       path: "dist-runtime-build.tar.zst",
