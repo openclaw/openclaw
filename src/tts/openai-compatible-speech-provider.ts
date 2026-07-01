@@ -139,6 +139,7 @@ function readSpeechOverrides(overrides: SpeechProviderOverrides | undefined): {
   model?: string;
   voice?: string;
   speed?: number;
+  responseFormat?: string;
 } {
   if (!overrides) {
     return {};
@@ -147,6 +148,7 @@ function readSpeechOverrides(overrides: SpeechProviderOverrides | undefined): {
     model: trimToUndefined(overrides.model ?? overrides.modelId),
     voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
     speed: asFiniteNumber(overrides.speed),
+    responseFormat: trimToUndefined(overrides.responseFormat ?? overrides.response_format),
   };
 }
 
@@ -292,6 +294,9 @@ export function createOpenAiCompatibleSpeechProvider<
     defaultModel: options.defaultModel,
     models: [...options.models],
     voices: [...options.voices],
+    // Honors the OpenAI `{ voice, speed, response_format }` request fields, so
+    // the gateway `/v1/audio/speech` endpoint may advertise and route it.
+    openAiSpeechCompatible: true,
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
     parseDirectiveToken: (ctx) => parseDirectiveToken(ctx, providerConfigKey),
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
@@ -354,7 +359,14 @@ export function createOpenAiCompatibleSpeechProvider<
       }
 
       const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
-      const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
+      // Per-request `response_format` overrides take effect when this provider
+      // supports the format; otherwise fall back to config/default so the
+      // produced bytes always match the reported output format.
+      const overrideResponseFormat = overrides.responseFormat?.toLowerCase();
+      const responseFormat =
+        overrideResponseFormat && options.responseFormats.includes(overrideResponseFormat)
+          ? overrideResponseFormat
+          : (config.responseFormat ?? options.defaultResponseFormat);
       const speed = overrides.speed ?? config.speed;
       const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl,

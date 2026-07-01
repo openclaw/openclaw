@@ -3424,6 +3424,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent-first model contract
   - H2: Enabling the endpoint
   - H2: Disabling the endpoint
+  - H2: Enabling audio speech
   - H2: Session behavior
   - H2: Why this surface matters
   - H2: Model list and agent routing
@@ -9677,6 +9678,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Field reference
   - H2: Agent tool
   - H2: Gateway RPC
+  - H2: OpenAI-compatible HTTP endpoint
   - H2: Service links
   - H2: Related
 
