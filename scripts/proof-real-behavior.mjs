@@ -56,7 +56,6 @@ async function readGoogleOauthTokenResponsePayload(response) {
   });
   const text = decodeGoogleOauthTokenResponseBody(
     Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-    response.headers.get("content-encoding"),
   );
   if (!text.trim()) {
     return undefined;
@@ -68,27 +67,32 @@ async function readGoogleOauthTokenResponsePayload(response) {
   }
 }
 
-function decodeGoogleOauthTokenResponseBody(bytes, contentEncoding) {
-  const shouldGunzip =
-    (bytes[0] === 0x1f && bytes[1] === 0x8b) ||
-    (contentEncoding ?? "")
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .includes("gzip");
+function decodeGoogleOauthTokenResponseBody(bytes) {
+  // Only gunzip when the payload starts with gzip magic bytes.
+  // content-encoding header alone is not reliable because Node.js fetch
+  // auto-decompresses gzip bodies and may leave the header intact.
+  const shouldGunzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
 
   if (shouldGunzip) {
-    let decoded;
     try {
-      decoded = gunzipSync(bytes);
-    } catch {
+      // bounded gunzip: maxOutputLength prevents OOM from a small compressed
+      // payload that inflates to a huge buffer, without relying on the gzip
+      // trailer ISIZE field (which is modulo 2^32 and trivially bypassed).
+      const decoded = gunzipSync(bytes, { maxOutputLength: MAX_DECODED_TOKEN_BODY_BYTES });
+      return decoded.toString("utf8");
+    } catch (err) {
+      // zlib throws ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED when the decompressed
+      // output exceeds maxOutputLength — surface a clear error instead of
+      // returning raw binary as UTF-8.
+      if (err?.code === "ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED") {
+        throw new Error(
+          `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
+          { cause: err },
+        );
+      }
+      // Malformed/truncated gzip: fall back to raw bytes
       return bytes.toString("utf8");
     }
-    if (decoded.length > MAX_DECODED_TOKEN_BODY_BYTES) {
-      throw new Error(
-        `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
-      );
-    }
-    return decoded.toString("utf8");
   }
   return bytes.toString("utf8");
 }
