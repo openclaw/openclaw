@@ -200,4 +200,28 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
 
     expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
+
+  it("emits before_agent_reply phase for cron without registered hook (#93530)", async () => {
+    // #93530: no before_agent_reply hook registered → old code skipped the
+    // entire phase emission block, so the pre-execution watchdog never cleared
+    // its timeout and falsely aborted the run after 60s.
+    // New code: always emits the phase so the watchdog can clear; the hook is
+    // still only invoked when registered.
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const onExecutionPhase = vi.fn();
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      jobId: "cron-job-no-hook",
+      onExecutionPhase,
+    });
+
+    expect(onExecutionPhase).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "before_agent_reply" }),
+    );
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
 });
