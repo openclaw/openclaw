@@ -21,6 +21,7 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
@@ -73,6 +74,7 @@ type GatewayStatusSummary = {
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
+  controlUiLinks?: { httpUrl: string; wsUrl: string };
   probeNote?: string;
   version?: string | null;
 };
@@ -431,6 +433,16 @@ async function resolveGatewayStatusSummary(params: {
   const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
   const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
+  const controlUiLinks =
+    params.daemonCfg.gateway?.controlUi?.enabled === false
+      ? undefined
+      : await resolveAdvertisedControlUiLinks({
+          port: daemonPort,
+          bind: bindMode,
+          customBindHost,
+          basePath: params.daemonCfg.gateway?.controlUi?.basePath,
+          tlsEnabled,
+        });
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
@@ -449,6 +461,7 @@ async function resolveGatewayStatusSummary(params: {
       port: daemonPort,
       portSource,
       probeUrl,
+      ...(controlUiLinks ? { controlUiLinks } : {}),
       ...(probeNote ? { probeNote } : {}),
     },
     daemonPort,
