@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -33,6 +34,7 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThreadPosts,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
@@ -141,6 +143,96 @@ export type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   webSocketFactory?: MattermostWebSocketFactory;
 };
+
+type MattermostThreadBackfillFetcher = (
+  client: MattermostClient,
+  rootPostId: string,
+  signal?: AbortSignal,
+) => Promise<MattermostPost[]>;
+
+type MattermostThreadBackfillUserResolver = (
+  userId: string,
+) => Promise<MattermostUser | null | undefined>;
+
+export async function backfillMattermostThreadHistoryForMonitor(params: {
+  client: MattermostClient;
+  post: MattermostPost;
+  threadRootId: string | undefined;
+  historyKey: string | null;
+  baseSessionKey: string;
+  historyLimit: number;
+  channelHistories: Map<string, HistoryEntry[]>;
+  threadsBackfilledThisSession: Set<string>;
+  fetchThreadPosts?: MattermostThreadBackfillFetcher;
+  resolveUserInfo: MattermostThreadBackfillUserResolver;
+  timeoutMs?: number;
+}): Promise<void> {
+  const {
+    client,
+    post,
+    threadRootId,
+    historyKey,
+    baseSessionKey,
+    historyLimit,
+    channelHistories,
+    threadsBackfilledThisSession,
+    fetchThreadPosts = fetchMattermostThreadPosts,
+    resolveUserInfo,
+    timeoutMs = 10_000,
+  } = params;
+  if (!threadRootId || !historyKey || historyLimit <= 0) {
+    return;
+  }
+
+  const backfillKey = `${historyKey}:${baseSessionKey}`;
+  if (threadsBackfilledThisSession.has(backfillKey)) {
+    return;
+  }
+  const hasPriorBackfillForThread = [...threadsBackfilledThisSession].some((key) =>
+    key.startsWith(`${historyKey}:`),
+  );
+
+  const existing = channelHistories.get(historyKey);
+  if (existing && existing.length > 0 && !hasPriorBackfillForThread) {
+    threadsBackfilledThisSession.add(backfillKey);
+    return;
+  }
+
+  try {
+    const abort = new AbortController();
+    const timeoutId = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      const threadPosts = await fetchThreadPosts(client, threadRootId, abort.signal);
+      threadsBackfilledThisSession.add(backfillKey);
+      if (threadPosts.length === 0) {
+        return;
+      }
+
+      // Filter current post before trimming so the history window is fully
+      // utilized even when the triggering post is among the newest entries.
+      const others = threadPosts.filter((p) => p.id !== post.id);
+      const windowed = others.slice(-historyLimit);
+      const entries: HistoryEntry[] = [];
+      for (const p of windowed) {
+        const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+        const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
+        entries.push({
+          sender,
+          body: p.message || "[attachment]",
+          timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+          messageId: p.id ?? undefined,
+        });
+      }
+      if (entries.length > 0) {
+        channelHistories.set(historyKey, entries);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch {
+    // Best-effort: server fetch failure or timeout should not block inbound dispatch.
+  }
+}
 
 export function shouldUpdateMattermostDraftToolProgress(
   account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
@@ -869,6 +961,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Per-(historyKey, agent-session) backfill tracking.
+  // Compound key binds the thread key to the current stored agent session id,
+  // which rotates on /new or session reset.  This way
+  // session reset gets its own first-sighting backfill, and marking
+  // non-empty first sightings prevents normal post-turn empty windows
+  // from re-triggering an unnecessary server fetch (kernel.ts:577 clears
+  // pending group history after a successful dispatch).
+  const threadsBackfilledThisSession = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1455,6 +1555,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
         const historyKey = kind === "direct" ? null : sessionKey;
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        });
+        const currentAgentSessionId =
+          normalizeOptionalString(getSessionEntry({ storePath, sessionKey })?.sessionId) ??
+          sessionKey;
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =
@@ -1552,6 +1658,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
         // bodies before model invocation. The guard above ensures this fallback is a bot mention.
         const bodyForAgent = bodyText || rawText.trim();
+
+        // ── Thread history backfill: seed in-memory history from server ──
+        // After all admission gates pass (onchar / mention / empty-body drop),
+        // backfill thread history from the Mattermost server when the local
+        // in-memory window is genuinely cold for the current agent session.
+        //
+        // Compound key (historyKey + currentAgentSessionId): historyKey alone is
+        // stable across /new for the same thread channel, while route.sessionKey
+        // is also stable. The stored session id rotates on /new, so binding to
+        // it gives reset its own first-sighting backfill instead of being
+        // blocked by a stale monitor-lifetime marker.
+        //
+        // Active-thread guard: if a thread is first seen with a populated
+        // window, mark that session so the kernel clearing pending history
+        // after a successful turn does not make same-session follow-ups fetch.
+        //
+        // Best-effort — never blocks inbound dispatch.
+        await backfillMattermostThreadHistoryForMonitor({
+          client,
+          post,
+          threadRootId,
+          historyKey,
+          baseSessionKey: currentAgentSessionId,
+          historyLimit,
+          channelHistories,
+          threadsBackfilledThisSession,
+          resolveUserInfo,
+        });
 
         core.channel.activity.record({
           channel: "mattermost",
@@ -1661,10 +1795,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 normalizeEntry: normalizeMattermostAllowEntry,
               })
             : null;
-
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
 
         const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
         logVerboseMessage(

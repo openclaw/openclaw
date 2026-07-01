@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 import {
   createMattermostClient,
   createMattermostPost,
+  fetchMattermostThreadPosts,
   normalizeMattermostBaseUrl,
   readMattermostError,
   updateMattermostPost,
@@ -562,5 +563,63 @@ describe("updateMattermostPost", () => {
     expect(body.id).toBe("post1");
     expect(body.message).toBeUndefined();
     expect(body.props).toEqual({ attachments: [] });
+  });
+});
+
+describe("fetchMattermostThreadPosts", () => {
+  const mockThreadPosts: Record<string, unknown> = {
+    post1: {
+      id: "post1",
+      user_id: "user1",
+      message: "hello thread root",
+      create_at: 1718000000000,
+      channel_id: "chan1",
+    },
+    post2: {
+      id: "post2",
+      user_id: "user2",
+      message: "thread reply one",
+      create_at: 1718000001000,
+      channel_id: "chan1",
+      root_id: "post1",
+    },
+    post3: {
+      id: "post3",
+      user_id: "user1",
+      message: "thread reply two",
+      create_at: 1718000002000,
+      channel_id: "chan1",
+      root_id: "post1",
+    },
+  };
+
+  it("returns posts in order from thread endpoint", async () => {
+    const { client, calls } = createTestClient({
+      body: { order: ["post1", "post2", "post3"], posts: mockThreadPosts },
+    });
+    const posts = await fetchMattermostThreadPosts(client, "post1");
+    expect(posts).toHaveLength(3);
+    expect(posts[0].id).toBe("post1");
+    expect(posts[1].id).toBe("post2");
+    expect(posts[2].id).toBe("post3");
+    expect(posts[0].message).toBe("hello thread root");
+    expect(calls[0].url).toBe("http://localhost:8065/api/v4/posts/post1/thread");
+  });
+
+  it("returns empty array when order is empty", async () => {
+    const { client } = createTestClient({
+      body: { order: [], posts: mockThreadPosts },
+    });
+    const posts = await fetchMattermostThreadPosts(client, "post1");
+    expect(posts).toHaveLength(0);
+  });
+
+  it("filters out posts not present in the posts map", async () => {
+    const { client } = createTestClient({
+      body: { order: ["post1", "post99", "post2"], posts: mockThreadPosts },
+    });
+    const posts = await fetchMattermostThreadPosts(client, "post1");
+    expect(posts).toHaveLength(2);
+    expect(posts.map((p) => p.id)).toEqual(["post1", "post2"]);
   });
 });

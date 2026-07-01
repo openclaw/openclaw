@@ -658,6 +658,18 @@ export async function deleteMattermostPost(
   });
 }
 
+export async function fetchMattermostThreadPosts(
+  client: MattermostClient,
+  postId: string,
+  signal?: AbortSignal,
+): Promise<MattermostPost[]> {
+  const data = await client.request<{
+    order: string[];
+    posts: Record<string, MattermostPost>;
+  }>(`/posts/${postId}/thread`, signal ? { signal } : undefined);
+  return (data.order ?? []).map((pid) => data.posts?.[pid]).filter(Boolean);
+}
+
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {
