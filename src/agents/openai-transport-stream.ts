@@ -3882,6 +3882,27 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   return true;
 }
 
+function applyZaiOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  modelReasoning: boolean;
+  payload: Record<string, unknown>;
+  requestedEffort: OpenAIReasoningEffort;
+  resolvedEffort?: string;
+  thinkingLevelMap?: Record<string, string>;
+}): boolean {
+  if (!params.modelReasoning || params.compatThinkingFormat !== "zai") {
+    return false;
+  }
+  params.payload.thinking = {
+    type: isOpenAICompletionsThinkingEnabled(params.requestedEffort) ? "enabled" : "disabled",
+  };
+  if (params.resolvedEffort) {
+    params.payload.reasoning_effort =
+      params.thinkingLevelMap?.[params.resolvedEffort] ?? params.resolvedEffort;
+  }
+  return true;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -4431,6 +4452,14 @@ export function buildOpenAICompletionsParams(
     modelReasoning: model.reasoning,
     payload: params,
     requestedEffort: completionsReasoningEffort,
+  });
+  applyZaiOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    modelReasoning: model.reasoning,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+    resolvedEffort: resolvedCompletionsReasoningEffort,
+    thinkingLevelMap: model.thinkingLevelMap as Record<string, string> | undefined,
   });
   if (
     compat.thinkingFormat === "openrouter" &&
