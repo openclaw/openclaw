@@ -3,7 +3,6 @@ import SwiftUI
 struct TalkProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
-    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
         TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
@@ -85,7 +84,7 @@ struct TalkProTab: View {
         ZStack {
             CommandControlBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     self.header
                     if let fallbackIssue = self.fallbackIssue {
                         TalkRuntimeIssueBanner(
@@ -97,8 +96,6 @@ struct TalkProTab: View {
                             .padding(.horizontal, OpenClawProMetric.pagePadding)
                     }
                     self.voiceHeroCard
-                    self.conversationCard
-                    self.voiceModeCard
                     self.controlsCard
                 }
                 .padding(.top, 16)
@@ -109,54 +106,30 @@ struct TalkProTab: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 11) {
+        OpenClawAdaptiveHeaderRow(
+            title: "Talk",
+            subtitle: self.headerSubtitle,
+            titleFont: .system(size: 30, weight: .bold),
+            subtitleFont: .caption.weight(.medium),
+            subtitleLineLimit: 1)
+        {
             if let headerLeadingAction {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             }
-            OpenClawProMark(size: 31, shadowRadius: 9)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Talk")
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
-                Text(self.headerSubtitle)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            self.statusChip
+        } accessory: {
+            EmptyView()
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var statusChip: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(self.state.color)
-                .frame(width: 7, height: 7)
-            Text(self.state.chipText)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(self.state.color)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            Capsule(style: .continuous)
-                .fill(self.state.color.opacity(0.11))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(self.state.color.opacity(0.22), lineWidth: 1)
-                }
-        }
-    }
-
     private var voiceHeroCard: some View {
-        CommandPanel(tint: self.state.color, isProminent: true, padding: 16) {
-            VStack(alignment: .center, spacing: 16) {
+        CommandPanel(isProminent: true, padding: 16) {
+            VStack(alignment: .center, spacing: 14) {
                 TalkProOrb(
                     mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel),
                     color: self.state.color,
                     systemImage: self.state.icon)
-                    .frame(height: 188)
+                    .frame(height: 132)
                     .accessibilityHidden(true)
 
                 VStack(spacing: 5) {
@@ -172,72 +145,12 @@ struct TalkProTab: View {
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(self.state.primaryButtonFill)
-                                .shadow(color: self.state.primaryButtonFill.opacity(0.22), radius: 18, y: 8)
-                        }
                 }
-                .buttonStyle(.plain)
+                .buttonBorderShape(.capsule)
+                .openClawGlassButton(prominent: true, tint: self.state.primaryButtonFill)
                 .disabled(self.state.primaryAction == .waiting)
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    private var conversationCard: some View {
-        CommandPanel(padding: 0) {
-            VStack(spacing: 0) {
-                self.cardHeader(title: "Conversation", value: self.state.chipText, color: self.state.color)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 11)
-                    .padding(.bottom, 3)
-                self.infoRow(icon: "person.crop.circle.fill", title: "Agent", value: self.appModel.chatAgentName)
-                Divider().padding(.leading, 54)
-                self.infoRow(
-                    icon: "bubble.left.and.text.bubble.right.fill",
-                    title: "Session",
-                    value: self.appModel.chatSessionKey)
-                Divider().padding(.leading, 54)
-                self.infoRow(icon: self.state.icon, title: "Runtime", value: self.appModel.talkMode.statusText)
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    private var voiceModeCard: some View {
-        CommandPanel(padding: 0) {
-            VStack(spacing: 0) {
-                self.cardHeader(
-                    title: "Voice mode",
-                    value: "Settings ›",
-                    color: OpenClawBrand.accent,
-                    action: self.openVoiceSettings)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 11)
-                    .padding(.bottom, 3)
-                self.infoRow(
-                    icon: "waveform",
-                    title: "Configured",
-                    value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                Divider().padding(.leading, 54)
-                self.infoRow(
-                    icon: "waveform",
-                    title: "Active now",
-                    value: self.activeModeText)
-                Divider().padding(.leading, 54)
-                self.infoRow(icon: "antenna.radiowaves.left.and.right", title: "Transport", value: self.transportText)
-                if let issueText = self.talkIssueText {
-                    Divider().padding(.leading, 54)
-                    self.infoRow(icon: "exclamationmark.triangle.fill", title: "Last issue", value: issueText)
-                }
-                Divider().padding(.leading, 54)
-                self.infoRow(icon: "key.fill", title: "Permission", value: self.permissionText)
-                Divider().padding(.leading, 54)
-                self.infoRow(icon: "globe", title: "Speech language", value: self.speechLocaleText)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -246,10 +159,6 @@ struct TalkProTab: View {
     private var controlsCard: some View {
         CommandPanel(padding: 0) {
             VStack(spacing: 0) {
-                self.cardHeader(title: "Controls", value: nil, color: .secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 11)
-                    .padding(.bottom, 3)
                 self.controlToggleRow("Speakerphone", isOn: self.talkSpeakerphoneBinding)
                 Divider().padding(.leading, 14)
                 self.controlToggleRow("Background listening", isOn: self.$talkBackgroundEnabled)
@@ -291,55 +200,6 @@ struct TalkProTab: View {
             }
     }
 
-    private func cardHeader(
-        title: String,
-        value: String?,
-        color: Color,
-        action: (() -> Void)? = nil) -> some View
-    {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.bold))
-            Spacer(minLength: 8)
-            if let value {
-                if let action {
-                    Button(value, action: action)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(color)
-                } else {
-                    Text(value)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(color)
-                }
-            }
-        }
-    }
-
-    private func infoRow(icon: String, title: String, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(self.state.color)
-                .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.state.color.opacity(0.11))
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "—" : value)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-
     private var gatewayConnected: Bool {
         !self.appModel.isAppleReviewDemoModeEnabled &&
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
@@ -370,41 +230,6 @@ struct TalkProTab: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !subtitle.isEmpty { return subtitle }
         return "Routes voice to \(self.appModel.chatAgentName)."
-    }
-
-    private var transportText: String {
-        let provider = self.appModel.talkMode.gatewayTalkProviderLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let transport = self.appModel.talkMode.gatewayTalkTransportLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if provider.isEmpty || provider == "Not loaded" { return transport.isEmpty ? "Not loaded" : transport }
-        if transport.isEmpty || transport == "Not loaded" { return provider }
-        return "\(provider) • \(transport)"
-    }
-
-    private var activeModeText: String {
-        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
-        if subtitle.isEmpty { return title }
-        return "\(title) • \(subtitle)"
-    }
-
-    private var talkIssueText: String? {
-        let text = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
-    }
-
-    private var permissionText: String {
-        if let failure = self.appModel.talkMode.gatewayTalkPermissionState.failureMessage {
-            return failure
-        }
-        return self.appModel.talkMode.gatewayTalkPermissionState.statusLabel
-    }
-
-    private var speechLocaleText: String {
-        if self.talkSpeechLocale == TalkSpeechLocale.automaticID { return "Automatic" }
-        return self.talkSpeechLocale
     }
 
     private func alignPersistedTalkState() {
@@ -579,7 +404,7 @@ struct TalkProState: Equatable {
             return OpenClawBrand.warn
         default:
             if !self.isConfigLoaded { return OpenClawBrand.warn }
-            return self.isEnabled ? OpenClawBrand.ok : OpenClawBrand.accentHot
+            return self.isEnabled ? OpenClawBrand.ok : .secondary
         }
     }
 
@@ -677,13 +502,13 @@ private struct TalkProOrb: View {
                 }
                 Circle()
                     .fill(self.color.opacity(0.13))
-                    .frame(width: 128, height: 128)
+                    .frame(width: 104, height: 104)
                     .overlay {
                         Circle()
                             .strokeBorder(self.color.opacity(0.30), lineWidth: 1)
                     }
-                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 18)
-                    .frame(width: 116, height: 52)
+                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 12)
+                    .frame(width: 92, height: 44)
                     .opacity(self.showsWaveform ? 1 : 0)
                 Image(systemName: self.systemImage)
                     .font(.system(size: 34, weight: .bold))
