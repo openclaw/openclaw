@@ -26,6 +26,7 @@ import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
+  mergeLegacyJsonProfilesIntoStore,
   mergeOAuthFileIntoStore,
 } from "./persisted.js";
 import {
@@ -795,8 +796,9 @@ function loadAuthProfileStoreForAgent(
   };
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
+  const mergedLegacyJson = mergeLegacyJsonProfilesIntoStore(store, agentDir);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite = !readOnly && !forceReadOnly && mergedOAuth;
+  const shouldWrite = !readOnly && !forceReadOnly && (mergedOAuth || mergedLegacyJson);
   if (shouldWrite) {
     saveAuthProfileStore(store, agentDir);
   }
