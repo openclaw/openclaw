@@ -54,6 +54,36 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
+  it("reports shipped diagnostics OTel grpc configs as doctor-repairable legacy config", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        diagnostics: {
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4317",
+            protocol: "grpc",
+          },
+        },
+      });
+
+      const preflight = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+
+      expect(preflight.snapshot.valid).toBe(false);
+      expect(preflight.snapshot.legacyIssues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "diagnostics.otel.protocol",
+            message: expect.stringContaining("openclaw doctor --fix"),
+          }),
+        ]),
+      );
+    });
+  });
+
   it("restores invalid config from last-known-good only during repair preflight", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {

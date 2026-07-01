@@ -54,6 +54,23 @@ describe("config validation allowed-values metadata", () => {
     expect(issue.allowedValuesHiddenCount).toBe(0);
   });
 
+  it("reports the supported diagnostics OTel protocol when grpc is configured", () => {
+    const result = validateConfigObjectRaw({
+      diagnostics: {
+        otel: {
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "diagnostics.otel.protocol");
+      expect(issue.allowedValues).toEqual(["http/protobuf"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
   it("includes boolean variants for boolean-or-enum unions", () => {
     const issue = testing.mapZodIssueToConfigIssue({
       code: "custom",

@@ -1223,6 +1223,75 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
   });
 });
 
+describe("legacy diagnostics OTel protocol migrate", () => {
+  it("removes unsupported grpc protocol and disables enabled telemetry", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+      "Disabled diagnostics.otel.enabled because legacy grpc configs with OTLP signals cannot export telemetry; re-enable it after choosing an OTLP/HTTP collector.",
+    ]);
+  });
+
+  it("keeps enabled stdout-only logs when removing grpc protocol", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+    ]);
+  });
+
+  it("only removes grpc protocol when telemetry was already disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: false,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+    ]);
+  });
+});
+
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {
