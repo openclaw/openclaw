@@ -18,7 +18,7 @@ struct GatewayProblemBanner: View {
             detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
             primaryActionTitle: self.primaryActionTitle,
             onPrimaryAction: self.onPrimaryAction,
-            secondaryActionTitle: self.onShowDetails == nil ? nil : "Details",
+            secondaryActionTitle: "Details",
             onSecondaryAction: self.onShowDetails)
     }
 

@@ -14,9 +14,9 @@ struct TalkRuntimeIssueBanner: View {
             ownerLabel: self.issue.fallbackBannerOwnerLabel,
             tint: self.tint,
             detail: .accent(self.issue.displayMessage),
-            primaryActionTitle: self.onOpenSettings == nil ? nil : "Open Settings",
+            primaryActionTitle: "Open Settings",
             onPrimaryAction: self.onOpenSettings,
-            secondaryActionTitle: self.onShowDetails == nil ? nil : "Details",
+            secondaryActionTitle: "Details",
             onSecondaryAction: self.onShowDetails)
     }
 
