@@ -373,11 +373,8 @@ struct TalkProTab: View {
     }
 
     private var transportText: String {
-        let provider = self.appModel.talkMode.gatewayTalkProviderLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let transport = self.appModel.talkMode.gatewayTalkTransportLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if provider.isEmpty || provider == "Not loaded" { return transport.isEmpty ? "Not loaded" : transport }
-        if transport.isEmpty || transport == "Not loaded" { return provider }
-        return "\(provider) • \(transport)"
+        return transport.isEmpty ? "Not loaded" : transport
     }
 
     private var activeModeText: String {
