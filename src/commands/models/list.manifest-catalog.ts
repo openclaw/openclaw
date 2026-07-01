@@ -4,7 +4,10 @@ import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/mod
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type {
+  PluginManifestRecord,
+  PluginManifestRegistry,
+} from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   getPluginRecord,
@@ -14,6 +17,14 @@ import {
 } from "../../plugins/plugin-registry.js";
 
 type ManifestCatalogRowsForListMode = "static-authoritative" | "supplemental";
+
+function readManifestCatalogPluginId(plugin: PluginManifestRecord): string | undefined {
+  try {
+    return typeof plugin.id === "string" ? plugin.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function loadManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
@@ -31,7 +42,10 @@ function loadManifestCatalogRowsForPluginIds(params: {
   const registry = pluginIdSet
     ? {
         ...params.registry,
-        plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
+        plugins: params.registry.plugins.filter((plugin) => {
+          const pluginId = readManifestCatalogPluginId(plugin);
+          return pluginId !== undefined && pluginIdSet.has(pluginId);
+        }),
       }
     : params.registry;
   const plan = planManifestModelCatalogRows({
