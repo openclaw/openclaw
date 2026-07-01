@@ -313,6 +313,7 @@ async function runGatewayStatus(
     timeout: string;
     json?: boolean;
     port?: unknown;
+    url?: string;
     ssh?: string;
     sshAuto?: boolean;
     sshIdentity?: string;
@@ -418,6 +419,53 @@ describe("gateway-status command", () => {
         code: "windows_firewall_local_rules_ignored",
         details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
       }),
+    );
+  });
+
+  it("skips local Windows firewall diagnostics for remote Gateway mode", async () => {
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "remote",
+        bind: "lan",
+        remote: { url: "wss://remote.example:18789", token: "rtok" },
+        auth: { token: "ltok" },
+      },
+    } as never);
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings: Array<{ code?: string }>;
+    };
+    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
+      false,
+    );
+  });
+
+  it("skips local Windows firewall diagnostics for explicit Gateway URLs", async () => {
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "ltok" },
+      },
+    } as never);
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+
+    await runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      url: "wss://remote.example:18789",
+    });
+
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings: Array<{ code?: string }>;
+    };
+    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
+      false,
     );
   });
 

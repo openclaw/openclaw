@@ -140,12 +140,16 @@ export async function gatewayStatusCommand(
         ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
         : null,
   });
-  const windowsFirewall = await inspectWindowsGatewayFirewall({
-    bind: cfg.gateway?.bind,
-    port: remotePort,
-    platform: process.platform,
-  });
-  if (windowsFirewall.applies && windowsFirewall.severity === "warning") {
+  const shouldInspectLocalGatewayFirewall =
+    !hasExplicitUrl && (portOverride !== undefined || cfg.gateway?.mode !== "remote");
+  const windowsFirewall = shouldInspectLocalGatewayFirewall
+    ? await inspectWindowsGatewayFirewall({
+        bind: cfg.gateway?.bind,
+        port: remotePort,
+        platform: process.platform,
+      })
+    : undefined;
+  if (windowsFirewall?.applies && windowsFirewall.severity === "warning") {
     warnings.push({
       code: windowsFirewall.code,
       message: windowsFirewall.message,
