@@ -1,5 +1,5 @@
 // E2E tests for run-reply-agent execution and generated session artifacts.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -255,6 +255,110 @@ function createMinimalRun(params?: {
     },
   };
 }
+
+describe("runReplyAgent pre-run maintenance ordering", () => {
+  it("starts memory flush before preflight compaction with real maintenance helpers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-runreplyagent-maintenance-order-"));
+    const previousDiagnostics = process.env.OPENCLAW_DIAGNOSTICS;
+    const previousTimelinePath = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+    const previousRunId = process.env.OPENCLAW_DIAGNOSTICS_RUN_ID;
+    try {
+      const timelinePath = join(root, "timeline.jsonl");
+      await writeFile(timelinePath, "", "utf8");
+      process.env.OPENCLAW_DIAGNOSTICS = "timeline";
+      process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+      process.env.OPENCLAW_DIAGNOSTICS_RUN_ID = "runreplyagent-maintenance-order";
+
+      const workspaceDir = join(root, "workspace");
+      await mkdir(join(workspaceDir, "memory"), { recursive: true });
+      const sessionFile = join(root, "session.jsonl");
+      await writeFile(
+        sessionFile,
+        `${JSON.stringify({ role: "user", content: "prior message", timestamp: Date.now() })}\n`,
+        "utf8",
+      );
+      const storePath = join(root, "sessions.json");
+      const sessionEntry: SessionEntry = {
+        sessionId: "maintenance-order-session",
+        sessionFile,
+        totalTokens: 100,
+        totalTokensFresh: true,
+        compactionCount: 0,
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { main: sessionEntry };
+      await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "12345",
+          AccountId: "default",
+          ChatType: "dm",
+          MessageSid: "msg-maintenance-order",
+        },
+        runOverrides: {
+          sessionId: sessionEntry.sessionId,
+          sessionFile,
+          workspaceDir,
+          messageProvider: "telegram",
+          config: {
+            plugins: { enabled: false },
+            agents: {
+              defaults: {
+                compaction: {
+                  memoryFlush: {
+                    enabled: true,
+                    softThresholdTokens: 4_000,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      await run();
+
+      const events = (await readFile(timelinePath, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; name?: string });
+      const phaseStarts = events
+        .filter((event) => event.type === "span.start")
+        .map((event) => event.name);
+
+      expect(phaseStarts.indexOf("reply.memory_flush")).toBeGreaterThanOrEqual(0);
+      expect(phaseStarts.indexOf("reply.preflight_compaction")).toBeGreaterThanOrEqual(0);
+      expect(phaseStarts.indexOf("reply.memory_flush")).toBeLessThan(
+        phaseStarts.indexOf("reply.preflight_compaction"),
+      );
+    } finally {
+      if (previousDiagnostics === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS = previousDiagnostics;
+      }
+      if (previousTimelinePath === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
+      }
+      if (previousRunId === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS_RUN_ID;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS_RUN_ID = previousRunId;
+      }
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
 
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {

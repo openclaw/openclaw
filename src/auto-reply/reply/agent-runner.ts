@@ -1574,31 +1574,10 @@ export async function runReplyAgent(params: {
     });
     return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
   };
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
-
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
     activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
@@ -1663,6 +1642,27 @@ export async function runReplyAgent(params: {
         );
       }
     }
+
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+      runPreflightCompactionIfNeeded({
+        cfg,
+        followupRun,
+        promptForEstimate: followupRun.prompt,
+        defaultModel,
+        agentCfgContextTokens,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        runtimePolicySessionKey,
+        storePath,
+        isHeartbeat,
+        replyOperation,
+        onCompactionNotice: sendDirectCompactionNotice,
+      }),
+    );
+    preflightCompactionApplied =
+      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     runFollowupTurn = createFollowupRunner({
       opts,
