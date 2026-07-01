@@ -40,12 +40,17 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
     try {
       // Use Promise.race with runExec to implement timeout
-      await Promise.race([
-        runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("timeout")), 3000);
-        }),
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          runExec(path, ["--version"], { timeoutMs: 3000 }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("timeout")), 3000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       return true;
     } catch {
       return false;
