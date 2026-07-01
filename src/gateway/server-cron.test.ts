@@ -621,7 +621,12 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       const event = runCronChangedMock.mock.calls
-        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
         .find((hookEvent) => hookEvent.action === "finished");
       const summary = typeof event?.summary === "string" ? event.summary : "";
       expect(summary).toContain("[redacted-url]");
@@ -714,7 +719,12 @@ describe("buildGatewayCronService", () => {
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
 
       const event = runCronChangedMock.mock.calls
-        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
         .find((hookEvent) => hookEvent.action === "finished");
       expect(event?.summary).toBe(summary);
     } finally {
