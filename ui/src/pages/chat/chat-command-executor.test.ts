@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
@@ -7,9 +8,8 @@ import {
   createModelCatalog,
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
-} from "../chat-model.test-helpers.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { executeSlashCommand as executeSlashCommandImpl } from "./slash-command-executor.ts";
+} from "../../ui/chat-model.test-helpers.ts";
+import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
 function createSessionCapability(client: GatewayBrowserClient): SessionCapability {
   const request = client.request.bind(client);

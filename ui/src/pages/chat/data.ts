@@ -30,7 +30,6 @@ import {
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
-import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";
 import {
   controlUiNowMs,
@@ -45,6 +44,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { executeSlashCommand } from "./chat-command-executor.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   persistStoredChatComposerQueue,

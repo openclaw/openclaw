@@ -3,7 +3,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
-import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -12,6 +11,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./data.ts";
 import { createChatSessionsLoadOverrides } from "./session-scope.ts";
 
@@ -28,8 +28,8 @@ vi.mock("./last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
-vi.mock("../../ui/chat/slash-command-executor.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../ui/chat/slash-command-executor.ts")>();
+vi.mock("./chat-command-executor.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-command-executor.ts")>();
   return {
     ...actual,
     executeSlashCommand: (...args: Parameters<ExecuteSlashCommand>) => {
