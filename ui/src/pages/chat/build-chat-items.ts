@@ -25,8 +25,8 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { messageMatchesSearchQuery } from "../../lib/chat/search-match.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatQueueItem } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -103,6 +103,15 @@ function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   } catch {
     return null;
   }
+}
+
+function messageMatchesSearchQuery(message: unknown, query: string): boolean {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
+  return text.includes(normalizedQuery);
 }
 
 function extractChatMessagePreview(toolMessage: unknown): {

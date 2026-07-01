@@ -26,6 +26,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
@@ -52,7 +53,6 @@ import {
 } from "./grouped-render.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";
-import { getPinnedMessageSummary } from "./pinned-summary.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
@@ -74,6 +74,10 @@ import {
 import { getExpandedToolCards, syncToolCardExpansionState } from "./tool-expansion-state.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../components/resizable-divider.ts";
+
+function getPinnedMessageSummary(message: unknown): string {
+  return extractTextCached(message) ?? "";
+}
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
