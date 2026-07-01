@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+import { OPENCLAW_RESPAWN_PARENT_PID } from "./process/child-process-bridge.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
@@ -257,9 +258,11 @@ describe("runCliRespawnPlan", () => {
       ["/repo/openclaw/dist/entry.js", "status"],
       {
         stdio: "inherit",
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached:
-          process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        env: {
+          OPENCLAW_NODE_OPTIONS_READY: "1",
+          [OPENCLAW_RESPAWN_PARENT_PID]: String(process.pid),
+        },
+        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(

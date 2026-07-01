@@ -128,6 +128,19 @@ function isProcessAlive(pid: number | undefined): boolean {
   }
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error("timed out waiting for condition");
+}
+
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
   delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -901,6 +914,59 @@ describe("openclaw launcher", () => {
           code: 1,
           signal: null,
         });
+        expect(isProcessAlive(launcher.pid)).toBe(false);
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "terminates source-checkout compile-cache respawn children after parent SIGKILL",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(
+            childInfoPath,
+          )}, JSON.stringify({ pid: process.pid, ppid: process.ppid }) + "\\n");`,
+          'process.title = "openclaw-launcher-parent-death-test-child";',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = await waitForJsonFile<{ pid: number; ppid: number }>(childInfoPath, 5000);
+        respawnChildPid = childInfo.pid;
+        expect(childInfo.ppid).toBe(launcher.pid);
+
+        launcher.kill("SIGKILL");
+
+        await waitUntil(
+          () => !isProcessAlive(launcher.pid) && !isProcessAlive(respawnChildPid),
+          5000,
+        );
         expect(isProcessAlive(launcher.pid)).toBe(false);
         expect(isProcessAlive(respawnChildPid)).toBe(false);
       } finally {

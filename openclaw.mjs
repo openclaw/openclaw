@@ -106,11 +106,52 @@ const respawnSignals =
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
 const respawnSignalHardExitGraceMs = 1_000;
+const respawnParentPidEnv = "OPENCLAW_RESPAWN_PARENT_PID";
+const respawnParentDeathGuardIntervalMs = 250;
+
+const installRespawnParentDeathGuard = () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const parentPid = Number(process.env[respawnParentPidEnv]);
+  delete process.env[respawnParentPidEnv];
+  if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === process.pid) {
+    return;
+  }
+  let detached = false;
+  let timer = null;
+  const detach = () => {
+    detached = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  const terminateIfOrphaned = () => {
+    if (detached || process.ppid === parentPid) {
+      return;
+    }
+    detach();
+    process.exit(1);
+  };
+  timer = setInterval(terminateIfOrphaned, respawnParentDeathGuardIntervalMs);
+  timer.unref?.();
+  terminateIfOrphaned();
+};
+
+installRespawnParentDeathGuard();
 
 const runRespawnedChild = (command, args, env) => {
+  const childEnv =
+    process.platform === "win32"
+      ? env
+      : {
+          ...env,
+          [respawnParentPidEnv]: String(process.pid),
+        };
   const child = spawn(command, args, {
     stdio: "inherit",
-    env,
+    env: childEnv,
   });
   const listeners = new Map();
   // This intentionally overlaps with src/entry.compile-cache.ts; keep the
