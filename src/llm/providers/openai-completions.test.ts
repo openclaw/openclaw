@@ -1,6 +1,6 @@
 // OpenAI completions tests cover chat completion stream adaptation.
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 
@@ -15,7 +15,10 @@ type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>
   choices?: OpenAICompatibleChoice[];
 };
 
-const mockChunksRef: { chunks: OpenAICompatibleChatCompletionChunk[] } = { chunks: [] };
+const mockChunksRef: {
+  chunks: OpenAICompatibleChatCompletionChunk[];
+  stream?: AsyncIterable<OpenAICompatibleChatCompletionChunk>;
+} = { chunks: [] };
 const mockOpenAIOptionsRef: { options: unknown[] } = { options: [] };
 
 vi.mock("openai", () => {
@@ -28,6 +31,12 @@ vi.mock("openai", () => {
       completions: {
         create: () => ({
           withResponse: async () => {
+            if (mockChunksRef.stream) {
+              return {
+                data: mockChunksRef.stream,
+                response: { status: 200, headers: new Headers() },
+              };
+            }
             async function* generate() {
               for (const chunk of mockChunksRef.chunks) {
                 yield chunk;
@@ -46,6 +55,11 @@ vi.mock("openai", () => {
 });
 
 import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+
+beforeEach(() => {
+  mockChunksRef.chunks = [];
+  mockChunksRef.stream = undefined;
+});
 
 const model = {
   id: "gpt-5.5",
@@ -122,6 +136,18 @@ function makeFinishChunk(
   };
 }
 
+function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompletionChunk> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          return new Promise<IteratorResult<OpenAICompatibleChatCompletionChunk>>(() => {});
+        },
+      };
+    },
+  };
+}
+
 describe("OpenAI-compatible completions params", () => {
   it("configures the OpenAI SDK client with guarded fetch", async () => {
     mockOpenAIOptionsRef.options = [];
@@ -141,6 +167,32 @@ describe("OpenAI-compatible completions params", () => {
     expect((mockOpenAIOptionsRef.options[0] as { fetch?: unknown }).fetch).toEqual(
       expect.any(Function),
     );
+  });
+
+  it("fails when streaming headers arrive but no first SSE event follows", async () => {
+    vi.useFakeTimers();
+    try {
+      mockChunksRef.stream = createNeverYieldingStream();
+
+      const stream = streamOpenAICompletions(model, context, {
+        apiKey: "sk-test",
+        firstEventTimeoutMs: 5,
+      });
+      const resultPromise = stream.result();
+
+      await vi.advanceTimersByTimeAsync(5);
+      const result = await resultPromise;
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toMatch(
+        /completions HTTP stream opened but did not deliver a first SSE event within 5ms/,
+      );
+      expect(result.errorMessage).toContain("provider=openai");
+      expect(result.errorMessage).toContain("api=openai-completions");
+      expect(result.errorMessage).toContain("model=gpt-5.5");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips unreadable schemas while preserving healthy official OpenAI tools", async () => {

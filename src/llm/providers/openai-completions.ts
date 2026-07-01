@@ -18,6 +18,7 @@ import {
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
 import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
+import { withFirstStreamEventTimeout } from "../../agents/stream-first-event-timeout.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -363,7 +364,16 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      for await (const chunk of openaiStream) {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        timeoutMs: options?.firstEventTimeoutMs ?? 0,
+        stage: "completions",
+        hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+      });
+
+      for await (const chunk of guardedOpenaiStream) {
         if (!chunk || typeof chunk !== "object") {
           continue;
         }

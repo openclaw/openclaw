@@ -1,6 +1,7 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import OpenAI from "openai";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -151,7 +152,20 @@ describe("openai transport stream", () => {
         model,
         { firstEventTimeoutMs: 1 },
       ),
-    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+    ).rejects.toThrow(/did not deliver a first SSE event within 1ms after streaming headers/);
+  });
+
+  it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
+    const model = createDeepSeekCompletionsModel();
+    await expect(
+      testing.processOpenAICompletionsStream(
+        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
+        createAssistantOutput(model),
+        model,
+        { push: vi.fn() },
+        { firstEventTimeoutMs: 1 },
+      ),
+    ).rejects.toThrow(/did not deliver a first SSE event within 1ms after streaming headers/);
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {

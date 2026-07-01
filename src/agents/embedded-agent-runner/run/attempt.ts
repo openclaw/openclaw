@@ -488,7 +488,11 @@ import {
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstEventTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
@@ -3155,6 +3159,24 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+      const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
+        cfg: params.config,
+        runTimeoutMs: resolvedRunTimeoutMs,
+        modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+        model: {
+          baseUrl: params.model.baseUrl,
+          id: params.modelId,
+          provider: params.provider,
+        },
+      });
+      if (firstEventTimeoutMs > 0) {
+        const baseStreamFn = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) =>
+          baseStreamFn(model, context, {
+            ...options,
+            firstEventTimeoutMs: options?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+          });
       }
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
