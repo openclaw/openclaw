@@ -692,6 +692,267 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Shell App");
   });
 
+  it("falls back to body HTML when readability returns only the page title", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Sample Page</title></head><body><main><p>Body marker 82685 content.</p></main></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Body marker 82685 content.");
+    expect(details.text).not.toContain("Sample Page\nBody marker");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("falls back to body HTML when markdown readability returns only the page title heading", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "# Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Sample Page</title></head><body><main><p>Markdown heading body marker 82685 content.</p></main></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/markdown-title-body" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Markdown heading body marker 82685 content.");
+    expect(details.text).not.toBe("# Sample Page");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("ignores fake body tags in raw-text elements and comments", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html><html><head><title>Sample Page</title>",
+              '<script>document.write("<body>Fake script body</body>")</script>',
+              '<style>body::before { content: "<body>Fake style body</body>"; }</style>',
+              "</head><!-- <body>Fake comment body</body> -->",
+              "<body><main><p>Real body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-fake-tags" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real body marker 82685 content.");
+    expect(details.text).not.toContain("Fake script body");
+    expect(details.text).not.toContain("Fake style body");
+    expect(details.text).not.toContain("Fake comment body");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("ignores fake body tags in legacy raw-text containers with malformed end tags", async () => {
+    for (const tagName of ["iframe", "xmp", "noembed", "noframes"] as const) {
+      extractReadableContentMock.mockResolvedValue({
+        text: "Sample Page",
+        title: "Sample Page",
+        extractor: "readability",
+      });
+      installMockFetch(
+        (input: RequestInfo | URL) =>
+          Promise.resolve(
+            htmlResponse(
+              [
+                "<!doctype html><html><head><title>Sample Page</title>",
+                `<${tagName}><body>Fake ${tagName} body</body></${tagName} data-malformed="true">`,
+                `</head><body><main><p>Real ${tagName} body marker 82685 content.</p></main></body></html>`,
+              ].join(""),
+              resolveRequestUrl(input),
+            ),
+          ) as Promise<Response>,
+      );
+
+      const tool = createFetchTool({
+        firecrawl: { enabled: false },
+      });
+      const result = await executeFetch(tool, { url: `https://example.com/body-${tagName}` });
+      const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+      expect(details.extractor).toBe("raw-html");
+      expect(details.text).toContain(`Real ${tagName} body marker 82685 content.`);
+      expect(details.text).not.toContain(`Fake ${tagName} body`);
+      expect(details.title).toContain("Sample Page");
+    }
+  });
+
+  it("ignores fake body tags inside inert templates", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html><html><head><title>Sample Page</title>",
+              "<template><body>Fake template head body</body></template></head>",
+              "<body><main><template><body>Fake template body body</body></template>",
+              "<p>Real template-safe body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-template" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real template-safe body marker 82685 content.");
+    expect(details.text).not.toContain("Fake template head body");
+    expect(details.text).not.toContain("Fake template body body");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("ignores fake body tags after nested inert templates", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html><html><head><title>Sample Page</title>",
+              "<template><template></template><body>Fake nested template body</body></template></head>",
+              "<body><main><p>Real nested-template body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-nested-template" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real nested-template body marker 82685 content.");
+    expect(details.text).not.toContain("Fake nested template body");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("ignores fake body tags in raw-text content inside inert templates", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            [
+              "<!doctype html><html><head><title>Sample Page</title>",
+              '<template><script>document.write("</template><body>Fake template script body</body>")</script></template></head>',
+              "<body><main><p>Real template raw-text body marker 82685 content.</p></main></body></html>",
+            ].join(""),
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/body-template-script" });
+    const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.text).toContain("Real template raw-text body marker 82685 content.");
+    expect(details.text).not.toContain("Fake template script body");
+    expect(details.title).toContain("Sample Page");
+  });
+
+  it("tries provider fallback before body HTML when readability returns only the page title", async () => {
+    extractReadableContentMock.mockResolvedValue({
+      text: "Sample Page",
+      title: "Sample Page",
+      extractor: "readability",
+    });
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          htmlResponse(
+            "<!doctype html><html><head><title>Sample Page</title></head><body><main><p>Body marker 82685 content.</p></main></body></html>",
+            resolveRequestUrl(input),
+          ),
+        ) as Promise<Response>,
+    );
+    const providerExecute = vi.fn(async () => ({
+      extractor: "test-fetch",
+      text: "provider fallback body",
+    }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "test-fetch", label: "Test Fetch" },
+      definition: {
+        description: "test provider",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+
+    const tool = createProviderFallbackTool();
+    const result = await executeFetch(tool, { url: "https://example.com/body" });
+    const details = result?.details as { extractor?: string; text?: string };
+
+    expect(details.extractor).toBe("test-fetch");
+    expect(details.text).toContain("provider fallback body");
+    expect(providerExecute).toHaveBeenCalledOnce();
+  });
+
   it("uses the provider fallback when direct fetch fails", async () => {
     installMockFetch((_input: RequestInfo | URL) => {
       return Promise.resolve({

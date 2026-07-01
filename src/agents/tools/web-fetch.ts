@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
@@ -17,7 +18,6 @@ import { wrapExternalContent, wrapWebContent } from "../../security/external-con
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
-import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
@@ -31,6 +31,7 @@ import {
   extractBasicHtmlContent,
   htmlToMarkdown,
   markdownToText,
+  normalizeWhitespace,
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
@@ -196,6 +197,211 @@ function formatWebFetchErrorDetail(params: {
   }
   const truncated = truncateText(text.trim(), maxChars);
   return truncated.text;
+}
+
+function normalizeComparableWebFetchText(value: string | undefined): string {
+  return normalizeWhitespace(markdownToText(value ?? "")).toLowerCase();
+}
+
+function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean {
+  const title = normalizeComparableWebFetchText(params.title);
+  return title.length > 0 && normalizeComparableWebFetchText(params.text) === title;
+}
+
+const BODY_TAG_RAW_TEXT_CONTAINERS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
+
+const BODY_TAG_INERT_CONTAINERS = new Set(["template"]);
+
+type HtmlTagRead = {
+  tagName: string;
+  closing: boolean;
+  end: number;
+};
+
+function findHtmlTagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let index = start + 1; index < html.length; index += 1) {
+    const char = html[index];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function readHtmlTag(html: string, start: number): HtmlTagRead | null {
+  const end = findHtmlTagEnd(html, start);
+  if (end < 0) {
+    return null;
+  }
+  let inner = html.slice(start + 1, end).trimStart();
+  const closing = inner.startsWith("/");
+  if (closing) {
+    inner = inner.slice(1).trimStart();
+  }
+  const name = inner.match(/^([A-Za-z][\w:-]*)\b/);
+  if (!name) {
+    return null;
+  }
+  return {
+    tagName: name[1].toLowerCase(),
+    closing,
+    end,
+  };
+}
+
+function findRawTextElementEnd(html: string, tagName: string, from: number): number {
+  const closeMatch = new RegExp(`</\\s*${tagName}\\b[^>]*>`, "i").exec(html.slice(from));
+  return closeMatch ? from + closeMatch.index + closeMatch[0].length : html.length;
+}
+
+function findNestedElementEnd(html: string, tagName: string, from: number): number {
+  let depth = 1;
+  let cursor = from;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return html.length;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (tag.closing) {
+      if (tag.tagName === tagName) {
+        depth -= 1;
+        if (depth === 0) {
+          return tag.end + 1;
+        }
+      }
+      cursor = tag.end + 1;
+      continue;
+    }
+    if (tag.tagName === tagName) {
+      depth += 1;
+      cursor = tag.end + 1;
+      continue;
+    }
+    if (
+      BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) ||
+      BODY_TAG_INERT_CONTAINERS.has(tag.tagName)
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
+      continue;
+    }
+    cursor = tag.end + 1;
+  }
+  return html.length;
+}
+
+function skipHtmlContainer(html: string, tagName: string, from: number): number {
+  return BODY_TAG_INERT_CONTAINERS.has(tagName)
+    ? findNestedElementEnd(html, tagName, from)
+    : findRawTextElementEnd(html, tagName, from);
+}
+
+function skipHtmlComment(html: string, start: number): number {
+  const end = html.indexOf("-->", start + 4);
+  return end < 0 ? html.length : end + 3;
+}
+
+function findDocumentBodyClose(html: string, from: number): number {
+  let cursor = from;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return html.length;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (tag.closing && tag.tagName === "body") {
+      return tagStart;
+    }
+    if (
+      !tag.closing &&
+      (BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) || BODY_TAG_INERT_CONTAINERS.has(tag.tagName))
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
+      continue;
+    }
+    cursor = tag.end + 1;
+  }
+  return html.length;
+}
+
+function extractHtmlBody(html: string): string | undefined {
+  let cursor = 0;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return undefined;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (!tag.closing && tag.tagName === "body") {
+      const bodyStart = tag.end + 1;
+      return html.slice(bodyStart, findDocumentBodyClose(html, bodyStart));
+    }
+    if (
+      !tag.closing &&
+      (BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) || BODY_TAG_INERT_CONTAINERS.has(tag.tagName))
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
+      continue;
+    }
+    cursor = tag.end + 1;
+  }
+  return undefined;
+}
+
+async function extractBasicHtmlBodyContent(params: {
+  html: string;
+  extractMode: ExtractMode;
+}): Promise<{ text: string; title?: string } | null> {
+  const bodyHtml = extractHtmlBody(params.html);
+  if (bodyHtml === undefined) {
+    return await extractBasicHtmlContent(params);
+  }
+  return await extractBasicHtmlContent({ html: bodyHtml, extractMode: params.extractMode });
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
@@ -606,7 +812,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           extractMode: params.extractMode,
           config: params.config,
         });
-        if (readable?.text) {
+        const readableTitleOnly = readable?.text ? hasOnlyReadableTitle(readable) : false;
+        if (readable?.text && !readableTitleOnly) {
           text = readable.text;
           title = readable.title;
           extractor = readable.extractor;
@@ -625,13 +832,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           if (payload) {
             return payload;
           }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
+          const basic = readableTitleOnly
+            ? await extractBasicHtmlBodyContent({
+                html: body,
+                extractMode: params.extractMode,
+              })
+            : await extractBasicHtmlContent({
+                html: body,
+                extractMode: params.extractMode,
+              });
           if (basic?.text) {
             text = basic.text;
-            title = basic.title;
+            title = basic.title ?? readable?.title;
             extractor = "raw-html";
           } else {
             const providerLabel =
