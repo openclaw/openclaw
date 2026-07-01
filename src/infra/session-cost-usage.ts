@@ -75,10 +75,10 @@ export type {
 } from "./session-cost-usage.types.js";
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
+// DeepSeek V4 zero provider totals are now recomputed, so a warm cache from a
+// pre-change build would otherwise keep reporting the old complete-$0 totals.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1153,6 +1153,16 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const DEEPSEEK_V4_ZERO_COST_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+function isDeepSeekV4ZeroCostPlaceholder(entry: Pick<ParsedTranscriptEntry, "provider" | "model">) {
+  return (
+    entry.provider?.toLowerCase() === "deepseek" &&
+    entry.model !== undefined &&
+    DEEPSEEK_V4_ZERO_COST_MODEL_IDS.has(entry.model.toLowerCase())
+  );
+}
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1251,6 +1261,7 @@ async function scanTranscriptFile(params: {
         provider: entry.provider,
         model: entry.model,
       });
+      const usageHasTokens = computeUsageTokenTotals(entry.usage).totalTokens > 0;
       if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
         // When tiered pricing is configured, always recompute to override
         // the flat-rate cost that the transport layer wrote into the transcript.
@@ -1259,9 +1270,20 @@ async function scanTranscriptFile(params: {
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
+        isModelPricingKnown(cost) &&
+        entry.costTotal === 0 &&
+        usageHasTokens &&
+        isDeepSeekV4ZeroCostPlaceholder(entry)
+      ) {
+        // DeepSeek V4 currently writes usage.cost.total=0 despite token usage.
+        // Keep this explicit so authoritative zero bills from providers such as
+        // OpenRouter are not replaced by local estimates.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (
         !isModelPricingKnown(cost) &&
         (entry.costTotal === undefined || entry.costTotal === 0) &&
-        computeUsageTokenTotals(entry.usage).totalTokens > 0
+        usageHasTokens
       ) {
         // Pricing for this model is unknown: it has no positive per-token rate and no
         // trustworthy recorded cost. The transport either recorded nothing or a
