@@ -1313,6 +1313,8 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    commentaryToggle: "الاحتفاظ بالتعليق بعد الإجابة النهائية",
+    commentaryLabel: "التعليق",
     autoScrollMode: "وضع التمرير التلقائي",
     autoScrollAlways: "دائمًا",
     autoScrollNearBottom: "قرب الأسفل",
@@ -1424,6 +1426,7 @@ export const ar: TranslationMap = {
     jaJP: "日本語 (اليابانية)",
     ko: "한국어 (الكورية)",
     fr: "Français (الفرنسية)",
+    hi: "الهندية (Hindi)",
     ar: "العربية",
     it: "Italiano (الإيطالية)",
     tr: "Türkçe (التركية)",
@@ -1434,6 +1437,7 @@ export const ar: TranslationMap = {
     vi: "Tiếng Việt (الفيتنامية)",
     nl: "Nederlands (الهولندية)",
     fa: "فارسی (الفارسية)",
+    ru: "الروسية (Russian)",
   },
   cron: {
     quickCreate: {

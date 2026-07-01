@@ -1,6 +1,7 @@
 // Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
 import {
+  sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
@@ -762,6 +763,23 @@ describe("stripToolCallXmlTags", () => {
       "Checking.  Done.",
     );
   });
+
+  it("strips antml:invoke/parameter tool call XML from visible content", () => {
+    const input =
+      'before <antml:invoke name="exec"><antml:parameter name="command">ls</antml:parameter></antml:invoke> after';
+    expect(stripToolCallXmlTags(input)).toBe("before  after");
+  });
+
+  it("strips antml:invoke with function_call payload", () => {
+    const input =
+      'prefix <antml:invoke name="exec"><function_call>test</function_call></antml:invoke> suffix';
+    expect(stripToolCallXmlTags(input)).toBe("prefix  suffix");
+  });
+
+  it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
+    const input = 'keep <invoke name="something">content</invoke> keep';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+  });
 });
 
 describe("stripMinimaxToolCallXml", () => {
@@ -873,9 +891,24 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
-  it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
+  it("hides mid-answer unclosed reasoning tags on the raw delivery path", () => {
     expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
       "Visible prefix",
+    );
+  });
+
+  it("still hides mid-answer closed reasoning tags", () => {
+    const text = "Visible prefix <think>private reasoning</think> visible suffix";
+
+    expect(sanitizeAssistantVisibleText(text)).toBe("Visible prefix  visible suffix");
+  });
+
+  it("keeps unclosed literal reasoning-looking tags in final-answer prose", () => {
+    expect(
+      sanitizeAssistantFinalAnswerText("<think>hidden</think>Use <think> literally here"),
+    ).toBe("Use <think> literally here");
+    expect(sanitizeAssistantFinalAnswerText("Before <think>literal tag text after")).toBe(
+      "Before <think>literal tag text after",
     );
   });
 });

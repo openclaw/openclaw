@@ -98,7 +98,10 @@ import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.j
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -1275,6 +1278,8 @@ function convertResponsesMessages(
         .filter((item) => item.type === "text")
         .map((item) => item.text)
         .join("\n");
+      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
+      const hasText = sanitizedTextResult.trim().length > 0;
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -1283,9 +1288,7 @@ function convertResponsesMessages(
         output:
           hasImages && model.input.includes("image")
             ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
+                ...(hasText ? [{ type: "input_text", text: sanitizedTextResult }] : []),
                 ...msg.content
                   .filter((item) => item.type === "image")
                   .map((item) => ({
@@ -1294,7 +1297,10 @@ function convertResponsesMessages(
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
+            : sanitizeNonEmptyTransportPayloadText(
+                textResult,
+                hasImages ? "(see attached image)" : "(no output)",
+              ),
       });
     }
     msgIndex += 1;
@@ -2801,15 +2807,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: options?.signal,
           emitReasoning,
         });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2976,7 +2976,6 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    output.stopReason = "toolUse";
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
@@ -3246,6 +3245,8 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+  // Tool-call recovery is executable only after an explicit provider terminal.
+  // EOF alone can mean transport truncation, even when the recovered call parses.
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
   }

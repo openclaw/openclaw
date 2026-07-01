@@ -9,6 +9,7 @@ import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
+import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,8 +21,10 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+  collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
+  noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
     ref:
@@ -52,6 +55,8 @@ const mocks = vi.hoisted(() => ({
   getHealthCheck: vi.fn(),
   registerHealthCheck: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
+  detectLegacyStateMigrations: vi.fn(),
+  runLegacyStateMigrations: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
@@ -132,13 +137,25 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
 }));
 
+vi.mock("../commands/doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
+  runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
 vi.mock("../commands/doctor-auth.js", () => ({
+  collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
+}));
+
+vi.mock("../commands/doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemorySearchHealth: mocks.noteMemorySearchHealth,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -319,9 +336,13 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairLegacyOAuthProfileIds.mockImplementation(async (cfg: unknown) => cfg);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear();
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
+    mocks.collectAuthProfileHealthFindings.mockClear();
+    mocks.collectAuthProfileHealthFindings.mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
+    mocks.noteMemorySearchHealth.mockClear();
+    mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
     mocks.resolveSecretInputRef.mockClear();
@@ -379,6 +400,10 @@ describe("doctor health contributions", () => {
     mocks.registerHealthCheck.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
+    mocks.detectLegacyStateMigrations.mockReset();
+    mocks.detectLegacyStateMigrations.mockResolvedValue({ preview: [], warnings: [] });
+    mocks.runLegacyStateMigrations.mockReset();
+    mocks.runLegacyStateMigrations.mockResolvedValue({ changes: [], warnings: [] });
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
     mocks.detectLegacyClawdBrowserProfileResidue.mockReturnValue(null);
     mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset();
@@ -921,6 +946,28 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("passes the active config into legacy state migration", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const cfg = { session: { store: "/tmp/shared-sessions.json" } };
+    const detected = { preview: ["legacy sessions"], warnings: [] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+    const ctx = {
+      cfg,
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
+      detected,
+      config: cfg,
+      recoverCorruptTargetStore: false,
+    });
+  });
+
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-health");
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
@@ -973,6 +1020,32 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("registers auth profile health as an opt-in structured check", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const [check] = contribution.healthChecks;
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/auth-profiles"]);
+    expect(check).toMatchObject({
+      id: "core/doctor/auth-profiles",
+      kind: "core",
+      defaultEnabled: false,
+    });
+    if (!check || !("detect" in check)) {
+      throw new Error("expected split auth profile health check");
+    }
+
+    await check.detect({
+      mode: "lint",
+      cfg: { auth: { profiles: {} } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.collectAuthProfileHealthFindings).toHaveBeenCalledWith({
+      cfg: { auth: { profiles: {} } },
+      allowKeychainPrompt: false,
+    });
+  });
+
   it("forwards skipped Gateway health to daemon repair", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-daemon");
     const ctx = {
@@ -1013,8 +1086,106 @@ describe("doctor health contributions", () => {
     }
     expect(contributionIds).toContain("core/doctor/sandbox/registry-files");
     expect(contributionIds).toContain("core/doctor/gateway-services/extra");
+    expect(contributionIds).toContain("core/doctor/state-integrity");
     expect(contributionIds).toContain("core/doctor/config-audit-scrub");
+    expect(contributionIds).toContain("core/doctor/session-transcripts");
+    expect(contributionIds).toContain("core/doctor/session-snapshots");
+    expect(contributionIds).toContain("core/doctor/plugin-registry");
+    expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps state integrity opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const stateIntegrityCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/state-integrity",
+    );
+    expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
+    expect(stateIntegrityCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [stateIntegrityCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/state-integrity"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+  });
+
+  it("collects memory-search notes as structured findings", async () => {
+    const contribution = requireDoctorContribution("doctor:memory-search");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
+      opts.noteFn(
+        [
+          'Memory search provider is set to "openai" but no API key was found.',
+          "Semantic recall will not work without a valid API key.",
+          "Fix (pick one):",
+          "- Set OPENAI_API_KEY in your environment",
+        ].join("\n"),
+        "Memory search",
+      );
+    });
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      cfg: {},
+    });
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
+    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+    expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        includeWorkspaceMemoryHealth: false,
+        skipQmdBinaryProbe: true,
+        skipAuthProfileResolution: true,
+        gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+        noteFn: expect.any(Function),
+      }),
+    );
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/memory-search",
+        severity: "warning",
+        path: "agents.defaults.memorySearch.provider",
+        message: 'Memory search provider is set to "openai" but no API key was found.',
+        fixHint: expect.stringContaining("OPENAI_API_KEY"),
+      }),
+    ]);
+  });
+
+  it("does not report disabled memory search as a lint warning", async () => {
+    const contribution = requireDoctorContribution("doctor:memory-search");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
+      opts.noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    });
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      cfg: {},
+    });
+
+    expect(findings).toEqual([]);
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

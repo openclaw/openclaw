@@ -45,6 +45,7 @@ import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
@@ -1925,7 +1926,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         host: machineName,
-        os: `${os.type()} ${os.release()}`,
+        os: resolveRuntimeOsLabel(),
         arch: os.arch(),
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
@@ -2576,6 +2577,7 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      let contextEngineAssemblySucceeded = false;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -2870,11 +2872,10 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
         runtimeHandle: getProviderRuntimeHandle(),
       });
-      if (providerTextTransforms) {
+      if (providerTextTransforms?.input?.length) {
         activeSession.agent.streamFn = wrapStreamFnTextTransforms({
           streamFn: activeSession.agent.streamFn,
           input: providerTextTransforms.input,
-          output: providerTextTransforms.output,
           transformSystemPrompt: false,
         });
       }
@@ -3099,6 +3100,15 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Tool-call repair can replace structured arguments from fragmented deltas.
+      // Restore provider-masked text afterward so executable args stay canonical.
+      if (providerTextTransforms?.output?.length) {
+        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
+          streamFn: activeSession.agent.streamFn,
+          output: providerTextTransforms.output,
+        });
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -3129,7 +3139,11 @@ export async function runEmbeddedAttempt(
         trigger: params.trigger,
         runTimeoutMs: resolvedRunTimeoutMs,
         modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-        model: params.model as { baseUrl?: string },
+        model: {
+          baseUrl: params.model.baseUrl,
+          id: params.modelId,
+          provider: params.provider,
+        },
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
@@ -3329,6 +3343,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            contextEngineAssemblySucceeded = true;
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
                 preassemblyContextEngineMessagesForPrecheck;
@@ -3566,6 +3581,7 @@ export async function runEmbeddedAttempt(
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
+          streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,
           onBlockReplyFlush,
@@ -4596,24 +4612,37 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
-          const preemptiveCompaction = skipPromptSubmission
-            ? null
-            : shouldPreemptivelyCompactBeforePrompt({
-                messages: hookMessagesForCurrentPrompt,
-                ...(unwindowedLlmBoundaryMessagesForPrecheck
-                  ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-                  : {}),
-                systemPrompt: systemPromptForHook,
-                prompt: llmBoundaryPromptForPrecheck,
-                contextTokenBudget,
-                reserveTokens,
-                toolResultMaxChars: promptToolResultMaxChars,
-                llmBoundaryTokenPressure: {
-                  estimatedPromptTokens: llmBoundaryTokenPressure,
-                  source: "llm_boundary_normalized_prompt",
-                  renderedChars: llmBoundaryPromptForPrecheck.length,
-                },
-              });
+          let preemptiveCompaction = null;
+          const shouldSkipPrecheck =
+            skipPromptSubmission ||
+            (contextEngineAssemblySucceeded &&
+              activeContextEngine?.info.ownsCompaction &&
+              contextEnginePromptAuthority !== "preassembly_may_overflow");
+
+          if (shouldSkipPrecheck && !skipPromptSubmission) {
+            log.info(
+              `[context-overflow-precheck] skipped: context engine "${activeContextEngine!.info.id}" owns compaction`,
+            );
+          }
+
+          if (!shouldSkipPrecheck) {
+            preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+              messages: hookMessagesForCurrentPrompt,
+              ...(unwindowedLlmBoundaryMessagesForPrecheck
+                ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
+                : {}),
+              systemPrompt: systemPromptForHook,
+              prompt: llmBoundaryPromptForPrecheck,
+              contextTokenBudget,
+              reserveTokens,
+              toolResultMaxChars: promptToolResultMaxChars,
+              llmBoundaryTokenPressure: {
+                estimatedPromptTokens: llmBoundaryTokenPressure,
+                source: "llm_boundary_normalized_prompt",
+                renderedChars: llmBoundaryPromptForPrecheck.length,
+              },
+            });
+          }
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({
               result: preemptiveCompaction,
@@ -5105,6 +5134,12 @@ export async function runEmbeddedAttempt(
             } catch (entryErr) {
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
             }
+          }
+
+          if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
+            // Context-engine afterTurn hooks may reconcile against the jsonl, so
+            // materialize the active turn before finalization reads from disk.
+            flushSessionManagerFile(activeSessionManager);
           }
         });
 

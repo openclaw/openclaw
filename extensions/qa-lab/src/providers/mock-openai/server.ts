@@ -1498,6 +1498,16 @@ function buildAssistantText(
   }
   if (
     toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
+  }
+  if (
+    toolOutput &&
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
   ) {
     return [
@@ -1511,16 +1521,6 @@ function buildAssistantText(
       "Follow-up:",
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
-      return `FAKE_PLUGIN_OK ${targetTool}`;
-    }
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -2615,7 +2615,7 @@ async function buildResponsesPayload(
   if (/memory tools check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "project codename ORBIT-9",
+        query: "hidden project codename",
         maxResults: 3,
       });
     }

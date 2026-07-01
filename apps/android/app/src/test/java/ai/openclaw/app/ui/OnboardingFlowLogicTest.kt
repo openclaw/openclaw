@@ -203,6 +203,136 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayDetailPreservesRetryablePairingGuidance() {
+    assertEquals(
+      "Gateway approval is in progress. OpenClaw will retry automatically.",
+      recoveryGatewayDetail(
+        ready = false,
+        remoteAddress = null,
+        statusText = "Connected (node offline)",
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = "wait_then_retry",
+            pauseReconnect = false,
+            retryable = true,
+          ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayDetailPrefersAuthProblemOverStaleAddressWhenNotReady() {
+    assertEquals(
+      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+      recoveryGatewayDetail(
+        ready = false,
+        remoteAddress = "wss://gateway.example.test",
+        statusText = "Connected (node offline)",
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "AUTH_DEVICE_TOKEN_MISMATCH",
+            message = "authentication needed",
+            reason = null,
+            requestId = null,
+            recommendedNextStep = "update_auth_credentials",
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayDetailPrefersAuthProblemWhileNodeApprovalIsLoading() {
+    assertEquals(
+      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+      recoveryGatewayDetail(
+        ready = false,
+        remoteAddress = "wss://gateway.example.test",
+        statusText = "Connected (node offline)",
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "AUTH_DEVICE_TOKEN_MISMATCH",
+            message = "authentication needed",
+            reason = null,
+            requestId = null,
+            recommendedNextStep = "update_auth_credentials",
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
+    val cases =
+      listOf(
+        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
+        "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+        "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
+        "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
+        "DEVICE_IDENTITY_REQUIRED" to "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
+      )
+
+    cases.forEach { (code, expected) ->
+      assertEquals(
+        expected,
+        recoveryGatewayAuthDetail(
+          GatewayConnectionProblem(
+            code = code,
+            message = "authentication needed",
+            reason = null,
+            requestId = null,
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
+    assertEquals(
+      "Gateway authentication is not configured. Edit this connection and try again.",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "UNKNOWN",
+          message = "authentication needed",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = "update_auth_configuration",
+          pauseReconnect = true,
+          retryable = false,
+        ),
+      ),
+    )
+    assertEquals(
+      "gateway says no",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "UNKNOWN",
+          message = "gateway says no",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun showsFinishingStateWhileGatewayConnectionSettles() {
     assertEquals(
       GatewayRecoveryUiState.Finishing,

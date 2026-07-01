@@ -534,6 +534,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
+    config: ctx.cfg,
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -1033,6 +1034,66 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
   }
 }
 
+function memorySearchNoteToFinding(message: string): HealthFinding | null {
+  const lines = message.split("\n");
+  const firstLine = (lines[0] ?? message).trim();
+  if (firstLine === "Memory search is explicitly disabled (enabled: false).") {
+    return null;
+  }
+  const fixHint = lines
+    .slice(1)
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+  return {
+    checkId: "core/doctor/memory-search",
+    severity: "warning",
+    message: firstLine,
+    path: inferMemorySearchFindingPath(firstLine),
+    ...(fixHint ? { fixHint } : {}),
+  };
+}
+
+function inferMemorySearchFindingPath(message: string): string {
+  if (message.includes("No active memory plugin")) {
+    return "plugins.slots.memory";
+  }
+  if (message.includes("QMD memory backend")) {
+    return "memory.backend";
+  }
+  if (message.includes("OpenAI-compatible embeddings endpoint")) {
+    return "agents.defaults.memorySearch.remote.baseUrl";
+  }
+  if (message.includes("OpenAI-compatible embedding model")) {
+    return "agents.defaults.memorySearch.model";
+  }
+  return "agents.defaults.memorySearch.provider";
+}
+
+async function collectMemorySearchHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
+  const notes: string[] = [];
+  await noteMemorySearchHealth(ctx.cfg, {
+    includeWorkspaceMemoryHealth: false,
+    skipQmdBinaryProbe: true,
+    skipAuthProfileResolution: true,
+    gatewayMemoryProbe: {
+      checked: false,
+      ready: false,
+      skipped: true,
+    },
+    noteFn: (message) => {
+      notes.push(String(message));
+    },
+  });
+  return notes.flatMap((message) => {
+    const finding = memorySearchNoteToFinding(message);
+    return finding ? [finding] : [];
+  });
+}
+
 async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
   await noteDevicePairingHealth({
@@ -1221,6 +1282,19 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
+      healthChecks: {
+        id: "core/doctor/auth-profiles",
+        kind: "core",
+        description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectAuthProfileHealthFindings } = await import("../commands/doctor-auth.js");
+          return collectAuthProfileHealthFindings({
+            cfg: ctx.cfg,
+            allowKeychainPrompt: false,
+          });
+        },
+      },
       run: runAuthProfileHealth,
     }),
     createDoctorHealthContribution({
@@ -1260,11 +1334,85 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthChecks: {
+        id: "core/doctor/configured-plugin-installs",
+        description: "Configured plugin install records and package payloads are repairable.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          return (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToRepairEffect,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          const effects = (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor configured plugin install repair owns package mutation",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthChecks: {
+        id: "core/doctor/plugin-registry",
+        description: "Plugin registry migration, stale shadow, and peer-link issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToHealthFinding } =
+            await import("../commands/doctor-plugin-registry.js");
+          return (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToRepairEffect } =
+            await import("../commands/doctor-plugin-registry.js");
+          const effects = (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor plugin registry contribution owns registry repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
@@ -1281,6 +1429,36 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
+      healthChecks: {
+        id: "core/doctor/state-integrity",
+        description: "State directory, config permission, and runtime state issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToHealthFinding } =
+            await import("../commands/doctor-state-integrity.js");
+          return detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToRepairEffect } =
+            await import("../commands/doctor-state-integrity.js");
+          const effects = detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor state integrity contribution owns state repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
@@ -1298,11 +1476,71 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+      healthChecks: {
+        id: "core/doctor/session-transcripts",
+        description: "Legacy or branchy session transcript files are represented as findings.",
+        async detect() {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToHealthFinding,
+          );
+        },
+        async repair(ctx) {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
+            await import("../commands/doctor-session-transcripts.js");
+          const effects = (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToRepairEffect,
+          );
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor session transcript contribution owns transcript rewrites",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
       label: "Session snapshots",
+      healthChecks: {
+        id: "core/doctor/session-snapshots",
+        description: "Stale cached session snapshot paths are represented as findings.",
+        async detect(ctx) {
+          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
+            await import("../commands/doctor-session-snapshots.js");
+          return (
+            await detectSessionSnapshotHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(sessionSnapshotIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToRepairEffect } =
+            await import("../commands/doctor-session-snapshots.js");
+          const effects = (
+            await detectSessionSnapshotHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(sessionSnapshotIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor session snapshot contribution owns snapshot rewrites",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runSessionSnapshotsHealth,
     }),
     createDoctorHealthContribution({
@@ -1469,6 +1707,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-health",
       label: "Gateway health",
+      healthCheckIds: ["core/doctor/gateway-health"],
       run: runGatewayHealthChecks,
     }),
     createDoctorHealthContribution({
@@ -1479,6 +1718,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      healthChecks: {
+        description: "Memory search provider and backend readiness are captured as findings.",
+        defaultEnabled: false,
+        detect: collectMemorySearchHealthFindings,
+      },
       run: runMemorySearchHealthContribution,
     }),
     createDoctorHealthContribution({
@@ -1489,6 +1733,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-daemon",
       label: "Gateway daemon",
+      healthCheckIds: ["core/doctor/gateway-daemon"],
       run: runGatewayDaemonHealth,
     }),
     createDoctorHealthContribution({

@@ -1331,6 +1331,8 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
+    commentaryToggle: "حفظ توضیحات پس از پاسخ نهایی",
+    commentaryLabel: "توضیحات",
     autoScrollMode: "حالت پیمایش خودکار",
     autoScrollAlways: "همیشه",
     autoScrollNearBottom: "نزدیک پایین",
@@ -1443,6 +1445,7 @@ export const fa: TranslationMap = {
     jaJP: "日本語 (ژاپنی)",
     ko: "한국어 (کره‌ای)",
     fr: "Français (فرانسوی)",
+    hi: "हिन्दी (هندی)",
     ar: "العربية (عربی)",
     it: "Italiano (ایتالیایی)",
     tr: "Türkçe (ترکی)",
@@ -1453,6 +1456,7 @@ export const fa: TranslationMap = {
     vi: "Tiếng Việt (ویتنامی)",
     nl: "Nederlands (هلندی)",
     fa: "فارسی",
+    ru: "Русский (روسی)",
   },
   cron: {
     quickCreate: {

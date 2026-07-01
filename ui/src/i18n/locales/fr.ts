@@ -1344,6 +1344,8 @@ export const fr: TranslationMap = {
     settings: "Paramètres de chat",
     thinkingToggle: "Afficher/masquer la sortie de réflexion/travail de l’assistant",
     toolCallsToggle: "Afficher/masquer les appels d’outil et les résultats d’outil",
+    commentaryToggle: "Conserver le commentaire après la réponse finale",
+    commentaryLabel: "Commentaire",
     autoScrollMode: "Mode de défilement automatique",
     autoScrollAlways: "Toujours",
     autoScrollNearBottom: "Près du bas",
@@ -1456,6 +1458,7 @@ export const fr: TranslationMap = {
     jaJP: "日本語 (japonais)",
     ko: "한국어 (coréen)",
     fr: "Français (français)",
+    hi: "हिन्दी (hindi)",
     ar: "العربية (arabe)",
     it: "Italiano (italien)",
     tr: "Türkçe (turc)",
@@ -1466,6 +1469,7 @@ export const fr: TranslationMap = {
     vi: "Tiếng Việt (vietnamien)",
     nl: "Nederlands (néerlandais)",
     fa: "فارسی (persan)",
+    ru: "Русский (russe)",
   },
   cron: {
     quickCreate: {

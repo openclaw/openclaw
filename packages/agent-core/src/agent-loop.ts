@@ -80,6 +80,14 @@ function resolveAssistantMessageUpdate(
   return currentMessage;
 }
 
+function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason === "toolUse") {
+    return message;
+  }
+  const content = message.content.filter((item) => item.type !== "toolCall");
+  return content.length === message.content.length ? message : { ...message, content };
+}
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -342,12 +350,12 @@ async function runLoop(
         return;
       }
 
-      // Check for tool calls
+      // Only completed toolUse turns dispatch; length/stop can carry partial stream blocks.
       const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
       const toolResults: ToolResultMessage[] = [];
       hasMoreToolCalls = false;
-      if (toolCalls.length > 0) {
+      if (message.stopReason === "toolUse" && toolCalls.length > 0) {
         const executedToolBatch = await executeToolCalls(
           currentContext,
           message,
@@ -508,7 +516,7 @@ async function streamAssistantResponse(
 
       case "done":
       case "error": {
-        const finalMessage = await response.result();
+        const finalMessage = removeNonExecutableToolCalls(await response.result());
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -523,7 +531,7 @@ async function streamAssistantResponse(
     }
   }
 
-  const finalMessage = await response.result();
+  const finalMessage = removeNonExecutableToolCalls(await response.result());
   if (addedPartial) {
     context.messages[context.messages.length - 1] = finalMessage;
   } else {

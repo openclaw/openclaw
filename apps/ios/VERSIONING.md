@@ -129,6 +129,37 @@ pnpm ios:version:pin -- --version 2026.4.10
 
 This keeps the TestFlight version stable while review is in flight.
 
+## Release SHA tracking
+
+Successful App Store Connect uploads create a non-tag Git ref that records the
+source commit for the uploaded store build:
+
+```text
+refs/openclaw/mobile-releases/ios/<CFBundleShortVersionString>-<CFBundleVersion>
+```
+
+Example:
+
+```text
+refs/openclaw/mobile-releases/ios/2026.6.10-8
+```
+
+These refs are intentionally outside `refs/tags/*` and `refs/heads/*`. They do
+not appear on GitHub release or tag pages, and they do not participate in the
+core OpenClaw release machinery.
+
+`pnpm ios:release:upload` checks the ref before archive/upload work and records
+it only after `upload_to_testflight` succeeds. Existing refs are immutable: the
+same ref at the same SHA is accepted, while the same ref at a different SHA
+fails.
+
+Useful direct commands:
+
+```bash
+pnpm mobile:release:preflight -- --platform ios --version 2026.6.10 --build 8
+pnpm mobile:release:resolve -- --platform ios --version 2026.6.10 --build 8
+```
+
 ## New release promotion workflow
 
 When you want the next production iOS release to align with the current gateway release:
