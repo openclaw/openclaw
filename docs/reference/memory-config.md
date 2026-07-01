@@ -575,7 +575,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | `limits.maxResults`       | `number` | `6`     | Max search results         |
     | `limits.maxSnippetChars`  | `number` | --      | Clamp snippet length       |
     | `limits.maxInjectedChars` | `number` | --      | Clamp total injected chars |
-    | `limits.timeoutMs`        | `number` | `4000`  | Search timeout             |
+    | `limits.timeoutMs`        | `number` | `4000`  | QMD command timeout during QMD-backed search, including `memory_search`; setup, sync, builtin fallback, and supplemental work keep the default tool deadline |
   </Accordion>
   <Accordion title="Scope">
     Controls which sessions can receive QMD search results. Same schema as [`session.sendPolicy`](/gateway/config-agents#session):

@@ -264,7 +264,9 @@ does not run QMD vector status probes or embedding maintenance, and leaves
 semantic readiness checks to `vsearch` or `query` setups.
 
 **Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
-Set to `120000` for slower hardware.
+Set to `120000` for slower hardware. This limit also applies to QMD's own search
+commands during agent `memory_search` calls; setup, sync, builtin fallback, and
+supplemental corpus work keep their own shorter deadlines.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows direct and channel sessions.
