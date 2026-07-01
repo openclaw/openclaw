@@ -30,7 +30,7 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
-    static func plistContents(bundlePath: String) -> String {
+    static func plistContents(bundlePath: String, environment: [String: String]? = nil) -> String {
         """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -50,6 +50,7 @@ enum LaunchAgentManager {
           <dict>
             <key>PATH</key>
             <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            \(Self.profileEnvironmentEntries(environment: environment))
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -58,6 +59,21 @@ enum LaunchAgentManager {
         </dict>
         </plist>
         """
+    }
+
+    /// Preserves non-empty `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and
+    /// `OPENCLAW_PROFILE` from the current process so the login-launched GUI
+    /// instance uses the same profile the user enabled autostart from.
+    private static func profileEnvironmentEntries(environment: [String: String]? = nil) -> String {
+        let keys = ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "OPENCLAW_PROFILE"]
+        let env = environment ?? ProcessInfo.processInfo.environment
+        var entries = ""
+        for key in keys {
+            guard let value = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { continue }
+            entries += "            <key>\(key)</key>\n            <string>\(value)</string>\n"
+        }
+        return entries
     }
 
     @discardableResult

@@ -61,4 +61,34 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
     }
+
+    @Test func `plist contents preserves profile environment variables`() throws {
+        let env = [
+            "OPENCLAW_CONFIG_PATH": "/tmp/test-openclaw.json",
+            "OPENCLAW_STATE_DIR": "/tmp/test-state",
+            "OPENCLAW_PROFILE": "work",
+        ]
+        let xml = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app", environment: env)
+        let data = try #require(xml.data(using: .utf8))
+        let root = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let envDict = try #require(root["EnvironmentVariables"] as? [String: String])
+
+        #expect(envDict["OPENCLAW_CONFIG_PATH"] == "/tmp/test-openclaw.json")
+        #expect(envDict["OPENCLAW_STATE_DIR"] == "/tmp/test-state")
+        #expect(envDict["OPENCLAW_PROFILE"] == "work")
+        #expect(envDict["PATH"] != nil)
+    }
+
+    @Test func `plist contents omits empty profile environment variables`() throws {
+        let env: [String: String] = [:]
+        let xml = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app", environment: env)
+        let data = try #require(xml.data(using: .utf8))
+        let root = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let envDict = try #require(root["EnvironmentVariables"] as? [String: String])
+
+        #expect(envDict["OPENCLAW_CONFIG_PATH"] == nil)
+        #expect(envDict["OPENCLAW_STATE_DIR"] == nil)
+        #expect(envDict["OPENCLAW_PROFILE"] == nil)
+        #expect(envDict["PATH"] != nil)
+    }
 }
