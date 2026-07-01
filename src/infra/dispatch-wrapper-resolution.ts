@@ -284,7 +284,11 @@ function unwrapFlockInvocation(argv: string[]): string[] | null {
     adjustCommandIndex: (commandIndex, currentArgv) => {
       // The first non-option token is the lock target; only the next token can be
       // the wrapped executable. Shell-string and fd-only forms stay blocked.
-      const wrappedCommandIndex = commandIndex + 1;
+      let wrappedCommandIndex = commandIndex + 1;
+      // Skip past `--` separator between lock target and command.
+      if (currentArgv[wrappedCommandIndex]?.trim() === "--") {
+        wrappedCommandIndex += 1;
+      }
       const wrappedCommand = currentArgv[wrappedCommandIndex]?.trim() ?? "";
       return wrappedCommand && (!wrappedCommand.startsWith("-") || wrappedCommand === "-")
         ? wrappedCommandIndex
@@ -349,19 +353,20 @@ function unwrapScriptInvocation(
       return "invalid";
     },
     adjustCommandIndex: (commandIndex, currentArgv) => {
-      let sawTranscript = false;
-      for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
-        const token = currentArgv[idx]?.trim() ?? "";
-        if (!token) {
-          continue;
-        }
-        if (!sawTranscript) {
-          sawTranscript = true;
-          continue;
-        }
-        return idx;
+      // When -- separator was consumed, there is no transcript file —
+      // all remaining tokens are the command.
+      if (currentArgv[commandIndex - 1] === "--") {
+        return commandIndex < currentArgv.length ? commandIndex : null;
       }
-      return null;
+      // Transcript form: first remaining token is the transcript file,
+      // second is the command. Transcript-only invocations stay blocked.
+      let remaining = 0;
+      for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
+        if (currentArgv[idx]?.trim()) {
+          remaining += 1;
+        }
+      }
+      return remaining >= 2 ? commandIndex + 1 : null;
     },
   });
 }
