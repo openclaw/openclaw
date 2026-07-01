@@ -272,7 +272,7 @@ function parseJsonRows(value: unknown): unknown[] {
   return value && typeof value === "object" ? [value] : [];
 }
 
-function parseJsonPayload(stdout: string): unknown | null {
+function parseJsonPayload(stdout: string): unknown {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return null;
@@ -286,7 +286,13 @@ function parseJsonPayload(stdout: string): unknown | null {
 
 function stringField(row: Record<string, unknown>, key: string): string {
   const value = row[key];
-  return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).trim();
+  }
+  return "";
 }
 
 function normalizeProfileName(value: string): string {
