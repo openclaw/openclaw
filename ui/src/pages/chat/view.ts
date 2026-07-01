@@ -24,10 +24,10 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
-import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,

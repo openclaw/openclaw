@@ -111,25 +111,29 @@ vi.mock("./chat-avatar.ts", () => ({
   },
 }));
 
-vi.mock("../../ui/tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
-    name,
-    label:
-      {
-        sessions_spawn: "Sub-agent",
-        skill_workshop: "Skill Workshop",
-        web_search: "Web Search",
-      }[name] ?? name,
-    icon: "zap",
-    detail:
-      args && typeof args === "object" && "detail" in args
-        ? String((args as { detail: unknown }).detail)
-        : args && typeof args === "object" && name === "skill_workshop" && "action" in args
-          ? String((args as { action: unknown }).action)
-        : undefined,
-  }),
-}));
+vi.mock("../../lib/chat/tool-display.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/chat/tool-display.ts")>();
+  return {
+    ...actual,
+    formatToolDetail: () => undefined,
+    resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
+      name,
+      label:
+        {
+          sessions_spawn: "Sub-agent",
+          skill_workshop: "Skill Workshop",
+          web_search: "Web Search",
+        }[name] ?? name,
+      icon: "zap",
+      detail:
+        args && typeof args === "object" && "detail" in args
+          ? String((args as { detail: unknown }).detail)
+          : args && typeof args === "object" && name === "skill_workshop" && "action" in args
+            ? String((args as { action: unknown }).action)
+          : undefined,
+    }),
+  };
+});
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 

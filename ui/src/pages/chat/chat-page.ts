@@ -32,6 +32,7 @@ import { t } from "../../i18n/index.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/tools-effective.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -57,7 +58,6 @@ import {
   type ToolStreamEntry,
 } from "../../ui/app-tool-stream.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
-import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";

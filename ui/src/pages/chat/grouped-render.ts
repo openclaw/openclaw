@@ -7,12 +7,12 @@ import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
-import { resolveToolDisplay } from "../../ui/tool-display.ts";
 import type {
   ChatItem,
   MessageContentItem,

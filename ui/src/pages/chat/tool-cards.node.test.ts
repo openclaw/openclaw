@@ -7,7 +7,7 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../tool-display.ts", () => ({
+vi.mock("../../lib/chat/tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name }: { name: string }) => ({
     name,
@@ -447,5 +447,40 @@ with Example Deck
 
       expect(card?.preview, testCase.name).toBeUndefined();
     }
+  });
+});
+
+describe("tool-card canvas URLs", () => {
+  async function loadResolver() {
+    return vi.importActual<typeof import("../../lib/chat/tool-display.ts")>(
+      "../../lib/chat/tool-display.ts",
+    );
+  }
+
+  it("accepts hosted canvas paths and scopes them through the canvas capability host", async () => {
+    const { resolveCanvasIframeUrl } = await loadResolver();
+
+    expect(resolveCanvasIframeUrl("/__openclaw__/canvas/documents/cv_demo/index.html")).toBe(
+      "/__openclaw__/canvas/documents/cv_demo/index.html",
+    );
+    expect(
+      resolveCanvasIframeUrl(
+        "/__openclaw__/canvas/documents/cv_demo/index.html",
+        "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+      ),
+    ).toBe(
+      "http://127.0.0.1:19003/__openclaw__/cap/cap_123/__openclaw__/canvas/documents/cv_demo/index.html",
+    );
+  });
+
+  it("rejects unsafe canvas frame URLs unless external embeds are explicitly enabled", async () => {
+    const { resolveCanvasIframeUrl } = await loadResolver();
+
+    expect(resolveCanvasIframeUrl("/not-canvas/snake.html")).toBeUndefined();
+    expect(resolveCanvasIframeUrl("https://example.com/evil.html")).toBeUndefined();
+    expect(resolveCanvasIframeUrl("file:///tmp/snake.html")).toBeUndefined();
+    expect(resolveCanvasIframeUrl("https://example.com/embed.html?x=1#y", undefined, true)).toBe(
+      "https://example.com/embed.html?x=1#y",
+    );
   });
 });

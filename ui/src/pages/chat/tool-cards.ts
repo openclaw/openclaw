@@ -6,9 +6,13 @@ import { icons } from "../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveCanvasIframeUrl } from "../../ui/canvas-url.ts";
-import { resolveEmbedSandbox, type EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
-import { formatToolDetail, resolveToolDisplay } from "../../ui/tool-display.ts";
+import {
+  formatToolDetail,
+  resolveCanvasIframeUrl,
+  resolveEmbedSandbox,
+  resolveToolDisplay,
+  type EmbedSandboxMode,
+} from "../../lib/chat/tool-display.ts";
 import type { ToolCard } from "./chat-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { extractTextCached } from "./message-extract.ts";
@@ -18,10 +22,6 @@ import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
-
-function resolveCanvasPreviewSandbox(preview: ToolPreview): string {
-  return resolveEmbedSandbox(preview.kind === "canvas" ? "scripts" : "scripts");
-}
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
   if (typeof message.messageId === "string" && message.messageId.trim()) {
@@ -466,10 +466,7 @@ export function renderToolPreview(
             options?.allowExternalEmbedUrls ?? false,
           ),
           height: preview.preferredHeight,
-          sandbox:
-            preview.kind === "canvas"
-              ? resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts")
-              : resolveCanvasPreviewSandbox(preview),
+          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts"),
         })}
       </div>
     </div>
