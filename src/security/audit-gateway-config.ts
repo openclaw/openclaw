@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { resolveWebFetchProxySourceConflict } from "../gateway/web-fetch-proxy-source-conflict.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
@@ -135,6 +136,17 @@ export function collectGatewayConfigFindings(
       title: tokenConflict.title,
       detail: tokenConflict.detail,
       remediation: tokenConflict.remediation,
+    });
+  }
+
+  const proxyConflict = resolveWebFetchProxySourceConflict({ cfg: sourceConfig, env });
+  if (proxyConflict) {
+    findings.push({
+      checkId: proxyConflict.checkId,
+      severity: "warn",
+      title: proxyConflict.title,
+      detail: proxyConflict.detail,
+      remediation: proxyConflict.remediation,
     });
   }
 
