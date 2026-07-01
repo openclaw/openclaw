@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
@@ -17,6 +18,7 @@ import {
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
+import { createMcpOAuthClientProvider } from "./mcp-oauth.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
@@ -245,6 +247,238 @@ async function waitForPredicate(
     });
   }
   throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function createOAuthStreamableHttpRuntimeHarness(
+  params: {
+    enableListChanged?: boolean;
+    rejectFreshToolCalls?: boolean;
+  } = {},
+): Promise<{
+  runtime: SessionMcpRuntime;
+  provider: ReturnType<typeof createMcpOAuthClientProvider>;
+  serverName: string;
+  freshSessionId: string;
+  expireAccessToken: () => void;
+  sendListChanged: () => void;
+  waitForSse: () => Promise<void>;
+  counts: () => { initializeCount: number; tokenRefreshCount: number };
+  close: () => Promise<void>;
+}> {
+  const staleSessionId = "stale-session";
+  const freshSessionId = "fresh-session";
+  let validAccessToken = "initial-access";
+  let tokenRefreshCount = 0;
+  let initializeCount = 0;
+  let sseResponse: http.ServerResponse | undefined;
+
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      if (req.url === "/token") {
+        const tokenParams = new URLSearchParams(body);
+        if (
+          req.method !== "POST" ||
+          tokenParams.get("grant_type") !== "refresh_token" ||
+          tokenParams.get("refresh_token") !== "refresh-token"
+        ) {
+          res.writeHead(400).end("bad token request");
+          return;
+        }
+        tokenRefreshCount += 1;
+        validAccessToken = "refreshed-access";
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            access_token: "refreshed-access",
+            refresh_token: "refresh-token",
+            token_type: "Bearer",
+          }),
+        );
+        return;
+      }
+
+      if (req.url !== "/mcp") {
+        res.writeHead(404).end();
+        return;
+      }
+      if (req.method === "DELETE") {
+        res.writeHead(202).end();
+        return;
+      }
+
+      const authorization = req.headers.authorization ?? "";
+      const mcpSessionId = String(req.headers["mcp-session-id"] ?? "");
+      const staleRefreshedSession =
+        mcpSessionId === staleSessionId && validAccessToken === "refreshed-access";
+      if (authorization !== `Bearer ${validAccessToken}` || staleRefreshedSession) {
+        res
+          .writeHead(401, { "www-authenticate": 'Bearer error="invalid_token"' })
+          .end("invalid token");
+        return;
+      }
+
+      if (req.method === "GET") {
+        if (!params.enableListChanged) {
+          res.writeHead(405).end();
+          return;
+        }
+        res.writeHead(200, {
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+          "content-type": "text/event-stream",
+        });
+        sseResponse = res;
+        return;
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405).end();
+        return;
+      }
+
+      const message = JSON.parse(body) as { id?: unknown; method?: string };
+      res.setHeader("content-type", "application/json");
+      if (message.method === "initialize") {
+        initializeCount += 1;
+        res.setHeader("mcp-session-id", initializeCount === 1 ? staleSessionId : freshSessionId);
+        res.writeHead(200).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2025-03-26",
+              capabilities: { tools: params.enableListChanged ? { listChanged: true } : {} },
+              serverInfo: { name: "oauth-session-refresh", version: "1.0.0" },
+            },
+          }),
+        );
+        return;
+      }
+      if (message.method === "notifications/initialized") {
+        res.writeHead(202).end();
+        return;
+      }
+      if (message.method === "tools/list") {
+        res.writeHead(200).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              tools: [
+                {
+                  name: "probe",
+                  description: "probe",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            },
+          }),
+        );
+        return;
+      }
+      if (message.method === "tools/call") {
+        if (params.rejectFreshToolCalls && mcpSessionId === freshSessionId) {
+          res
+            .writeHead(401, { "www-authenticate": 'Bearer error="invalid_token"' })
+            .end("fresh session rejected");
+          return;
+        }
+        res.writeHead(200).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              content: [{ type: "text", text: `ok:${mcpSessionId}` }],
+            },
+          }),
+        );
+        return;
+      }
+      res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const addr = server.address() as { port: number };
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const serverName = "oauthRemote";
+  const serverUrl = `${baseUrl}/mcp`;
+  const provider = createMcpOAuthClientProvider({ serverName, serverUrl });
+  await provider.saveDiscoveryState?.({
+    authorizationServerUrl: `${baseUrl}/auth`,
+    authorizationServerMetadata: {
+      issuer: `${baseUrl}/auth`,
+      authorization_endpoint: `${baseUrl}/authorize`,
+      token_endpoint: `${baseUrl}/token`,
+      response_types_supported: ["code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      token_endpoint_auth_methods_supported: ["none"],
+    },
+  });
+  await provider.saveClientInformation?.({
+    client_id: "client-id",
+    token_endpoint_auth_method: "none",
+  });
+  await provider.saveTokens({
+    access_token: "initial-access",
+    refresh_token: "refresh-token",
+    token_type: "Bearer",
+  });
+
+  const runtime = createSessionMcpRuntime({
+    sessionId: `session-oauth-refresh-reconnect-${params.rejectFreshToolCalls ? "reject" : "ok"}`,
+    sessionKey: `agent:test:session-oauth-refresh-reconnect-${params.rejectFreshToolCalls ? "reject" : "ok"}`,
+    workspaceDir: "/workspace",
+    cfg: {
+      mcp: {
+        servers: {
+          [serverName]: {
+            url: serverUrl,
+            transport: "streamable-http",
+            auth: "oauth",
+          },
+        },
+      },
+    },
+  });
+
+  return {
+    runtime,
+    provider,
+    serverName,
+    freshSessionId,
+    expireAccessToken() {
+      validAccessToken = "refreshed-access";
+    },
+    sendListChanged() {
+      sseResponse?.write(
+        `event: message\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/tools/list_changed",
+        })}\n\n`,
+      );
+    },
+    async waitForSse() {
+      await waitForPredicate(
+        () => Boolean(sseResponse),
+        "streamable HTTP SSE connection",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+    },
+    counts() {
+      return { initializeCount, tokenRefreshCount };
+    },
+    async close() {
+      await runtime.dispose();
+      sseResponse?.end();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
 }
 
 function makeRuntime(
@@ -2056,6 +2290,116 @@ process.stdin.on("end", () => {
       }
     },
   );
+
+  it("recreates streamable-http OAuth sessions when catalog refresh rejects a refreshed bearer on the old MCP session", async () => {
+    await withTempHome(
+      async () => {
+        const harness = await createOAuthStreamableHttpRuntimeHarness({
+          enableListChanged: true,
+        });
+        try {
+          const catalog = await harness.runtime.getCatalog();
+          expect(catalog.tools).toHaveLength(1);
+          expect(harness.counts().tokenRefreshCount).toBe(0);
+          await harness.waitForSse();
+
+          harness.expireAccessToken();
+          harness.sendListChanged();
+          await waitForPredicate(
+            () => harness.runtime.peekCatalog() === null,
+            "OAuth MCP catalog invalidation",
+            LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+          );
+
+          const refreshedCatalog = await harness.runtime.getCatalog();
+          expect(refreshedCatalog.tools).toHaveLength(1);
+          expect(harness.counts()).toMatchObject({ initializeCount: 2, tokenRefreshCount: 1 });
+
+          const result = await harness.runtime.callTool(harness.serverName, "probe", {});
+          expect(result.content).toEqual([{ type: "text", text: `ok:${harness.freshSessionId}` }]);
+          await expect(harness.provider.tokens()).resolves.toMatchObject({
+            access_token: "refreshed-access",
+            refresh_token: "refresh-token",
+          });
+        } finally {
+          await harness.close();
+        }
+      },
+      {
+        prefix: "bundle-mcp-oauth-refresh-catalog-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("recreates streamable-http OAuth sessions when tool calls reject a refreshed bearer on the old MCP session", async () => {
+    await withTempHome(
+      async () => {
+        const harness = await createOAuthStreamableHttpRuntimeHarness();
+        try {
+          const catalog = await harness.runtime.getCatalog();
+          expect(catalog.tools).toHaveLength(1);
+
+          harness.expireAccessToken();
+          const result = await harness.runtime.callTool(harness.serverName, "probe", {});
+
+          expect(result.content).toEqual([{ type: "text", text: `ok:${harness.freshSessionId}` }]);
+          expect(harness.counts().initializeCount).toBe(2);
+          expect(harness.counts().tokenRefreshCount).toBeGreaterThanOrEqual(1);
+          expect(harness.counts().tokenRefreshCount).toBeLessThanOrEqual(2);
+        } finally {
+          await harness.close();
+        }
+      },
+      {
+        prefix: "bundle-mcp-oauth-refresh-tool-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("preserves MCP failure backoff when OAuth session recreate does not recover tool calls", async () => {
+    await withTempHome(
+      async () => {
+        const harness = await createOAuthStreamableHttpRuntimeHarness({
+          rejectFreshToolCalls: true,
+        });
+        try {
+          const catalog = await harness.runtime.getCatalog();
+          expect(catalog.tools).toHaveLength(1);
+
+          harness.expireAccessToken();
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            await expect(harness.runtime.callTool(harness.serverName, "probe", {})).rejects.toThrow(
+              /Streamable HTTP error: (Server returned 401 after successful authentication|Error POSTing to endpoint)/,
+            );
+          }
+          await expect(harness.runtime.callTool(harness.serverName, "probe", {})).rejects.toThrow(
+            'bundle-mcp server "oauthRemote" is paused after repeated tool failures',
+          );
+          expect(harness.counts().tokenRefreshCount).toBeGreaterThanOrEqual(1);
+        } finally {
+          await harness.close();
+        }
+      },
+      {
+        prefix: "bundle-mcp-oauth-refresh-backoff-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
 
   it(
     "parallelizes MCP server catalog loading across multiple slow servers",
