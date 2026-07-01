@@ -37,14 +37,10 @@ The [`@microsoft/teams.cli`](https://www.npmjs.com/package/@microsoft/teams.cli)
 **1. Install and log in**
 
 ```bash
-npm install -g @microsoft/teams.cli@preview
+npm install -g @microsoft/teams.cli
 teams login
 teams status   # verify you're logged in and see your tenant info
 ```
-
-<Note>
-The Teams CLI is currently in preview. Commands and flags may change between releases.
-</Note>
 
 **2. Start a tunnel** (Teams can't reach localhost)
 
