@@ -19,12 +19,34 @@ struct GatewayEndpoint {
     let mode: String
 }
 
+enum OpenClawMacCLIPaths {
+    private static func envPath(_ key: String) -> String? {
+        guard let raw = getenv(key) else { return nil }
+        let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private static func fileURL(path: String, isDirectory: Bool = false) -> URL {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath, isDirectory: isDirectory)
+    }
+
+    static var stateDirURL: URL {
+        if let raw = self.envPath("OPENCLAW_STATE_DIR") {
+            return self.fileURL(path: raw, isDirectory: true)
+        }
+        return FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw", isDirectory: true)
+    }
+
+    static var configURL: URL {
+        if let raw = self.envPath("OPENCLAW_CONFIG_PATH") {
+            return self.fileURL(path: raw)
+        }
+        return self.stateDirURL.appendingPathComponent("openclaw.json")
+    }
+}
+
 func loadGatewayConfig() -> GatewayConfig {
-    let home = FileManager().homeDirectoryForCurrentUser
-    let candidates = [
-        home.appendingPathComponent(".openclaw/openclaw.json"),
-    ]
-    let url = candidates.first { FileManager().isReadableFile(atPath: $0.path) } ?? candidates[0]
+    let url = OpenClawMacCLIPaths.configURL
     guard let data = try? Data(contentsOf: url) else { return GatewayConfig() }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return GatewayConfig()

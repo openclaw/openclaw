@@ -100,6 +100,59 @@ struct ConfigureRemoteCommandTests {
         }
     }
 
+    @Test @MainActor func `configure remote writes config under state dir when config path is unset`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-state-\(UUID().uuidString)", isDirectory: true)
+        let configURL = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let output = try configureRemote(.init(
+                directUrl: "ws://192.168.0.202:18789",
+                token: "state-token")) // pragma: allowlist secret
+
+            #expect(output.configPath == configURL.path)
+            let data = try Data(contentsOf: configURL)
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let gateway = try #require(root["gateway"] as? [String: Any])
+            let remote = try #require(gateway["remote"] as? [String: Any])
+            #expect(gateway["mode"] as? String == "remote")
+            #expect(remote["transport"] as? String == "direct")
+            #expect(remote["url"] as? String == "ws://192.168.0.202:18789")
+            #expect(remote["token"] as? String == "state-token") // pragma: allowlist secret
+        }
+    }
+
+    @Test @MainActor func `configure ssh remote writes config under state dir when config path is unset`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-ssh-state-\(UUID().uuidString)", isDirectory: true)
+        let configURL = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withIsolatedState(env: [
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let output = try configureRemote(.init(
+                sshTarget: "alice@gateway.example",
+                localPort: 19089,
+                remotePort: 18789))
+
+            #expect(output.configPath == configURL.path)
+            let data = try Data(contentsOf: configURL)
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let gateway = try #require(root["gateway"] as? [String: Any])
+            let remote = try #require(gateway["remote"] as? [String: Any])
+            #expect(gateway["mode"] as? String == "remote")
+            #expect(gateway["port"] as? Int == 19089)
+            #expect(remote["transport"] as? String == "ssh")
+            #expect(remote["sshTarget"] as? String == "alice@gateway.example")
+        }
+    }
+
     @Test func `configure remote rejects invalid explicit ports`() throws {
         #expect(throws: Error.self) {
             _ = try ConfigureRemoteOptions.parse(["--ssh-target", "alice@gateway.example", "--remote-port", "99999"])
