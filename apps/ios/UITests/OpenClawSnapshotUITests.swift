@@ -105,7 +105,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(self.app?.switches["Speakerphone"].exists == true)
         XCTAssertFalse(self.app?.switches["Background listening"].exists == true)
 
-        if speakerphone.value as? String == "Off" {
+        let originalValue = speakerphone.value as? String
+        defer {
+            if speakerphone.value as? String != originalValue {
+                speakerphone.tap()
+            }
+        }
+        if originalValue == "Off" {
             speakerphone.tap()
         }
         XCTAssertEqual(speakerphone.value as? String, "On")
