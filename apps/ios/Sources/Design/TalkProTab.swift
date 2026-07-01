@@ -12,15 +12,18 @@ struct TalkProTab: View {
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     var openSettings: () -> Void
+    var openVoiceSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
-        openSettings: @escaping () -> Void)
+        openSettings: @escaping () -> Void,
+        openVoiceSettings: (() -> Void)? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
+        self.openVoiceSettings = openVoiceSettings ?? openSettings
     }
 
     private var state: TalkProState {
@@ -71,7 +74,7 @@ struct TalkProTab: View {
             if let fallbackIssue = self.fallbackIssue {
                 TalkRuntimeIssueDetailsSheet(
                     issue: fallbackIssue,
-                    onOpenSettings: self.openSettings)
+                    onOpenSettings: self.openVoiceSettings)
                     .openClawSheetChrome()
             }
         }
@@ -87,7 +90,7 @@ struct TalkProTab: View {
                     if let fallbackIssue = self.fallbackIssue {
                         TalkRuntimeIssueBanner(
                             issue: fallbackIssue,
-                            onOpenSettings: self.openSettings,
+                            onOpenSettings: self.openVoiceSettings,
                             onShowDetails: {
                                 self.showTalkIssueDetails = true
                             })
@@ -212,7 +215,7 @@ struct TalkProTab: View {
                     title: "Voice mode",
                     value: "Settings ›",
                     color: OpenClawBrand.accent,
-                    action: self.openSettings)
+                    action: self.openVoiceSettings)
                     .padding(.horizontal, 12)
                     .padding(.top, 11)
                     .padding(.bottom, 3)
@@ -251,7 +254,7 @@ struct TalkProTab: View {
                 Divider().padding(.leading, 14)
                 self.controlToggleRow("Background listening", isOn: self.$talkBackgroundEnabled)
                 Divider().padding(.leading, 14)
-                Button(action: self.openSettings) {
+                Button(action: self.openVoiceSettings) {
                     HStack {
                         Label("Voice & Talk settings", systemImage: "slider.horizontal.3")
                         Spacer()
@@ -437,7 +440,7 @@ struct TalkProTab: View {
             self.stopTalk()
             self.showPermissionPrompt = true
         case .openSettings:
-            self.openSettings()
+            self.openPrimarySettings()
         case .waiting:
             break
         }
@@ -453,6 +456,14 @@ struct TalkProTab: View {
     private func stopTalk() {
         self.talkEnabled = false
         self.appModel.setTalkEnabled(false)
+    }
+
+    private func openPrimarySettings() {
+        if self.gatewayConnected {
+            self.openVoiceSettings()
+        } else {
+            self.openSettings()
+        }
     }
 }
 

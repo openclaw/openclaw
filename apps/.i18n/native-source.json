@@ -8875,7 +8875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 61,
+      "line": 64,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -8883,7 +8883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 115,
+      "line": 118,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Talk",
       "surface": "apple",
@@ -8891,7 +8891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 191,
+      "line": 194,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Conversation",
       "surface": "apple",
@@ -8899,7 +8899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 195,
+      "line": 198,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Agent",
       "surface": "apple",
@@ -8907,7 +8907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 199,
+      "line": 202,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Session",
       "surface": "apple",
@@ -8915,7 +8915,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 202,
+      "line": 205,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Runtime",
       "surface": "apple",
@@ -8923,7 +8923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 212,
+      "line": 215,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice mode",
       "surface": "apple",
@@ -8931,7 +8931,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 221,
+      "line": 224,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Configured",
       "surface": "apple",
@@ -8939,7 +8939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 226,
+      "line": 229,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Active now",
       "surface": "apple",
@@ -8947,7 +8947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 229,
+      "line": 232,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Transport",
       "surface": "apple",
@@ -8955,7 +8955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 232,
+      "line": 235,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Last issue",
       "surface": "apple",
@@ -8963,7 +8963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 235,
+      "line": 238,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Permission",
       "surface": "apple",
@@ -8971,7 +8971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 237,
+      "line": 240,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Speech language",
       "surface": "apple",
@@ -8979,7 +8979,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 246,
+      "line": 249,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Controls",
       "surface": "apple",
@@ -8987,7 +8987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 250,
+      "line": 253,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -8995,7 +8995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 252,
+      "line": 255,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Background listening",
       "surface": "apple",
@@ -9003,7 +9003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 256,
+      "line": 259,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice & Talk settings",
       "surface": "apple",
@@ -9011,7 +9011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 494,
+      "line": 505,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -9019,7 +9019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 496,
+      "line": 507,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Requesting approval",
       "surface": "apple",
@@ -9027,7 +9027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 498,
+      "line": 509,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -9035,7 +9035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 500,
+      "line": 511,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice API key missing",
       "surface": "apple",
@@ -9043,7 +9043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 502,
+      "line": 513,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice config failed",
       "surface": "apple",
@@ -9051,7 +9051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 520,
+      "line": 531,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Needs approval",
       "surface": "apple",
@@ -9059,7 +9059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 522,
+      "line": 533,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Pending",
       "surface": "apple",
@@ -9067,7 +9067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 524,
+      "line": 535,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "API key",
       "surface": "apple",
@@ -9075,7 +9075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 526,
+      "line": 537,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Config",
       "surface": "apple",
@@ -9083,7 +9083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 592,
+      "line": 603,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Start Talk",
       "surface": "apple",
@@ -9091,7 +9091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 593,
+      "line": 604,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Stop Talk",
       "surface": "apple",
@@ -9099,7 +9099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 594,
+      "line": 605,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Enable Talk",
       "surface": "apple",
@@ -9107,7 +9107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 595,
+      "line": 606,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Open Gateway Settings",
       "surface": "apple",
@@ -9115,7 +9115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 595,
+      "line": 606,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Open Voice Settings",
       "surface": "apple",
@@ -9123,7 +9123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 596,
+      "line": 607,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Demo Mode Only",
       "surface": "apple",
@@ -9131,7 +9131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 596,
+      "line": 607,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Waiting for Approval",
       "surface": "apple",
@@ -10387,7 +10387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 160,
+      "line": 162,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Talk",
       "surface": "apple",
@@ -10395,7 +10395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 172,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Control",
       "surface": "apple",
@@ -10403,7 +10403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 179,
+      "line": 181,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agent",
       "surface": "apple",
@@ -10411,7 +10411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 186,
+      "line": 188,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Settings",
       "surface": "apple",
@@ -10419,7 +10419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 284,
+      "line": 286,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -10427,7 +10427,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 313,
+      "line": 315,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
       "surface": "apple",
@@ -10435,7 +10435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 318,
+      "line": 320,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Online",
       "surface": "apple",
@@ -10443,7 +10443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 320,
+      "line": 322,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -10451,7 +10451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 322,
+      "line": 324,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -10459,7 +10459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 324,
+      "line": 326,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Offline",
       "surface": "apple",
@@ -10467,7 +10467,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 576,
+      "line": 579,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -10475,7 +10475,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 648,
+      "line": 651,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -10483,7 +10483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 888,
+      "line": 891,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -10491,7 +10491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 888,
+      "line": 891,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -10499,7 +10499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 924,
+      "line": 927,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -10507,7 +10507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 924,
+      "line": 927,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
