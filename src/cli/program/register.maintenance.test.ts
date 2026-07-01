@@ -103,6 +103,31 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("maps --dry-run to a preview repair run", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--dry-run"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(false);
+  });
+
+  it("maps --diff to dry-run preview with diffs", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--diff", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(true);
+    expect(options.json).toBe(true);
+  });
+
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
 
