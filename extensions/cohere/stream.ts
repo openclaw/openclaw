@@ -1,8 +1,7 @@
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 
 function patchCoherePayload(payload: Record<string, unknown>): void {
-  // Cohere's Compatibility API uses developer, not system, for instructions.
   if (Array.isArray(payload.messages)) {
     payload.messages = payload.messages.map((message) =>
       message &&
@@ -13,13 +12,10 @@ function patchCoherePayload(payload: Record<string, unknown>): void {
     );
   }
 
-  // Cohere lets tool-capable models choose a tool when tool_choice is omitted.
   delete payload.tool_choice;
 }
 
-export function createCohereCompletionsWrapper(
-  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
-): ProviderWrapStreamFnContext["streamFn"] {
+export function createCohereCompletionsWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) =>
     patchCoherePayload(payload),
   );

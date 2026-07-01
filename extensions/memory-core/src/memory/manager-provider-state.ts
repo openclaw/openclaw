@@ -110,6 +110,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
   settings: ResolvedMemorySearchConfig;
 }): {
   provider: string;
+  actualProvider?: string;
   model: string;
   remote: ResolvedMemorySearchConfig["remote"];
   inputType: ResolvedMemorySearchConfig["inputType"];
@@ -121,6 +122,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
 } {
   return {
     provider: params.settings.provider,
+    actualProvider: params.settings.actualProvider,
     model: params.settings.model,
     remote: params.settings.remote,
     inputType: params.settings.inputType,

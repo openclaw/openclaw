@@ -262,6 +262,93 @@ describe("memory search config", () => {
     expectDefaultRemoteBatch(resolved);
   });
 
+  it("resolves openai provider with api:ollama through generic resolution and routes create() to the correct adapter", async () => {
+    // When the "openai" provider has an explicit api field pointing to a
+    // different adapter, generic resolution should route to that adapter
+    // instead of short-circuiting on the direct "openai" match.
+    // This also verifies actualProvider is set for runtime adapter lookup.
+    registerMemoryEmbeddingProvider({
+      id: "ollama",
+      defaultModel: "nomic-embed-text",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    const cfg = asConfig({
+      models: {
+        providers: {
+          openai: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    // Config-level: model should come from ollama adapter, not openai
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.actualProvider).toBe("ollama");
+    expect(resolved?.model).toBe("nomic-embed-text");
+    expectDefaultRemoteBatch(resolved);
+  });
+
+  it("falls back to direct adapter when generic resolution has no matching adapter", () => {
+    // Provider "openai" with a custom baseUrl routes to "openai-compatible"
+    // via generic resolution, but since no "openai-compatible" adapter is
+    // registered, the direct openai adapter is used as fallback.
+    const cfg = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.actualProvider).toBeUndefined();
+    expect(resolved?.model).toBe("text-embedding-3-small");
+  });
+
+  it("does not set actualProvider when direct provider has no api or baseUrl hints", () => {
+    // When the "openai" provider has no api or baseUrl configured, the
+    // direct adapter is used directly and actualProvider is not set.
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.actualProvider).toBeUndefined();
+    expect(resolved?.model).toBe("text-embedding-3-small");
+  });
+
   it("resolves sync config without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({

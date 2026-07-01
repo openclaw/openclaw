@@ -31,7 +31,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function webhookRequestBody() {
-  const request = requireRecord(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0], "webhook request");
+  const request = requireRecord(
+    (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[0]?.[0],
+    "webhook request",
+  );
   const init = requireRecord(request.init, "webhook request init");
   return JSON.parse(String(init.body));
 }

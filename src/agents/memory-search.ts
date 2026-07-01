@@ -20,6 +20,7 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "../plugins/embedding-provider-config.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -32,6 +33,7 @@ export type ResolvedMemorySearchConfig = {
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
+  actualProvider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -178,22 +180,33 @@ function normalizeSources(
 function getConfiguredMemoryEmbeddingProvider(
   providerId: string,
   cfg: OpenClawConfig,
-): ReturnType<typeof getMemoryEmbeddingProvider> {
+): { adapter: ReturnType<typeof getMemoryEmbeddingProvider>; resolvedId?: string } {
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
-    return directAdapter;
+    const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
+    if (providerConfig?.baseUrl?.trim() || providerConfig?.api?.trim()) {
+      const resolvedId = resolveConfiguredGenericEmbeddingProviderId(providerId, cfg);
+      if (resolvedId && resolvedId !== normalizeProviderId(providerId)) {
+        const resolvedAdapter = getMemoryEmbeddingProvider(resolvedId);
+        if (resolvedAdapter) {
+          return { adapter: resolvedAdapter, resolvedId };
+        }
+      }
+    }
+    return { adapter: directAdapter };
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
   if (!ownerApi) {
-    return undefined;
+    return { adapter: undefined };
   }
   const normalizedProvider = normalizeProviderId(providerId);
   const normalizedOwner = normalizeProviderId(ownerApi);
   if (!normalizedOwner || normalizedOwner === normalizedProvider) {
-    return undefined;
+    return { adapter: undefined };
   }
-  return getMemoryEmbeddingProvider(normalizedOwner);
+  const adapter = getMemoryEmbeddingProvider(normalizedOwner);
+  return { adapter, resolvedId: adapter ? normalizedOwner : undefined };
 }
 
 function mergeConfig(
@@ -210,13 +223,14 @@ function mergeConfig(
     rawProvider?.trim() === "auto"
       ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
       : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
-  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const primary = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const primaryAdapter = primary.adapter;
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
     fallback && fallback !== "none"
-      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg).adapter
       : undefined;
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
@@ -373,6 +387,7 @@ function mergeConfig(
     extraPaths,
     multimodal,
     provider,
+    actualProvider: primary.resolvedId,
     remote,
     experimental: {
       sessionMemory,
@@ -467,7 +482,7 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg).adapter;
   // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
   // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
