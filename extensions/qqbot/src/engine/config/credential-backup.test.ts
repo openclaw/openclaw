@@ -48,6 +48,19 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function legacyCredentialBackupFile(accountId: string): string {
+  return path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "qqbot",
+    "data",
+    `credential-backup-${accountId}.json`,
+  );
+}
+
+function legacySingleCredentialBackupFile(): string {
+  return path.join(process.env.OPENCLAW_STATE_DIR!, "qqbot", "data", "credential-backup.json");
+}
+
 function readCredentialRows(stateDir: string): CredentialBackup[] {
   const store = createPluginStateSyncKeyedStoreForTests<CredentialBackup>("qqbot", {
     namespace: "credential-backups",
@@ -79,7 +92,6 @@ describe("engine/config/credential-backup", () => {
   });
 
   it("round-trips a credential snapshot through SQLite without writing JSON", async () => {
-    const { getCredentialBackupFile } = await import("../utils/data-paths.js");
     const { loadCredentialBackup, saveCredentialBackup } = await import("./credential-backup.js");
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
 
@@ -91,7 +103,7 @@ describe("engine/config/credential-backup", () => {
       appId: "app-1",
       clientSecret: "secret-1",
     });
-    expect(fs.existsSync(getCredentialBackupFile("default"))).toBe(false);
+    expect(fs.existsSync(legacyCredentialBackupFile("default"))).toBe(false);
     expect(readCredentialRows(stateDir)).toHaveLength(1);
   });
 
@@ -113,9 +125,9 @@ describe("engine/config/credential-backup", () => {
   });
 
   it("does not import state-dir legacy JSON backups during runtime reads", async () => {
-    const { getCredentialBackupFile } = await import("../utils/data-paths.js");
     const { loadCredentialBackup } = await import("./credential-backup.js");
-    writeJson(getCredentialBackupFile("default"), {
+    const legacyFile = legacyCredentialBackupFile("default");
+    writeJson(legacyFile, {
       accountId: "default",
       appId: "app-old",
       clientSecret: "secret-old",
@@ -123,13 +135,13 @@ describe("engine/config/credential-backup", () => {
     });
 
     expect(loadCredentialBackup("default")).toBeNull();
-    expect(fs.existsSync(getCredentialBackupFile("default"))).toBe(true);
+    expect(fs.existsSync(legacyFile)).toBe(true);
   });
 
   it("does not import legacy single-file backups during runtime reads", async () => {
-    const { getLegacyCredentialBackupFile } = await import("../utils/data-paths.js");
     const { loadCredentialBackup } = await import("./credential-backup.js");
-    writeJson(getLegacyCredentialBackupFile(), {
+    const legacyFile = legacySingleCredentialBackupFile();
+    writeJson(legacyFile, {
       accountId: "other-acct",
       appId: "app-old",
       clientSecret: "secret-old",
@@ -137,7 +149,7 @@ describe("engine/config/credential-backup", () => {
     });
 
     expect(loadCredentialBackup("default")).toBeNull();
-    expect(fs.existsSync(getLegacyCredentialBackupFile())).toBe(true);
+    expect(fs.existsSync(legacyFile)).toBe(true);
   });
 
   it("ignores empty appId/clientSecret on save", async () => {
