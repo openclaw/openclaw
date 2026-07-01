@@ -1480,6 +1480,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS: launchctl env overrides
   - H2: Related
 
+## cli/durable.md
+
+- Route: /cli/durable
+- Headings:
+  - H2: Usage
+  - H2: Commands
+  - H2: Enablement And Storage
+  - H2: Environment Variables
+  - H2: Retention And Privacy
+  - H2: Related
+
 ## cli/flows.md
 
 - Route: /cli/flows
@@ -3575,6 +3586,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Common event families
   - H3: Node helper methods
   - H3: Task ledger RPCs
+  - H3: Durable coordination RPCs
   - H3: Operator helper methods
   - H3: models.list views
   - H2: Exec approvals
@@ -8630,6 +8642,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Implementation Plan
   - H2: Acceptance Tests
   - H2: Open Questions
+
+## specs/durable-runtime-foundation-pr-proof-2026-07-01.md
+
+- Route: /specs/durable-runtime-foundation-pr-proof-2026-07-01
+- Headings:
+  - H1: Durable Runtime Foundation PR Proof - 2026-07-01
+  - H2: Scope
+  - H2: Review Boundary
+  - H2: Validation Checklist
+  - H2: Known Follow-Ups
 
 ## start/bootstrapping.md
 
