@@ -83,7 +83,7 @@ Notes:
   extra approval scopes:
   - commandless request: `operator.pairing`
   - non-exec command request: `operator.pairing` + `operator.write`
-  - `system.run` / `system.run.prepare` / `system.which` request:
+  - `system.run` / `system.run.prepare` / `system.which` / `system.execApprovals.get` / `system.execApprovals.set` request:
     `operator.pairing` + `operator.admin`
 
 <Warning>
