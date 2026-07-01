@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">OpenClaw Node</string>
+    <string name="app_name">OpenClaw-nod</string>
     <string name="gateway_connection">Gatewayanslutning</string>
     <string name="connect_gateway">Anslut gateway</string>
     <string name="disconnect">Koppla från</string>
