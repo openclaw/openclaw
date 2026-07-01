@@ -160,15 +160,26 @@ function resolveProfileRuntimeAlias(params: {
   }
   const provider = normalizeProviderId(params.provider);
   const profileProvider = normalizeProviderId(profile.provider);
-  if (!provider || !profileProvider) {
+  if (!provider || !profileProvider || profileProvider === provider) {
     return undefined;
   }
+
+  // CLI runtime auth profiles are intentionally stored under their runtime provider
+  // id (for example google-gemini-cli). Treat a setup/runtime backend binding as
+  // sufficient compatibility even when the canonical provider no longer registers
+  // that runtime provider by default.
+  const runtimeAlias = resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime: profileProvider,
+  })?.runtime;
+  if (runtimeAlias) {
+    return runtimeAlias;
+  }
+
   const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
   const profileAuthKey = resolveProviderIdForAuth(profileProvider, { config: params.cfg });
   if (providerAuthKey !== profileAuthKey) {
-    return undefined;
-  }
-  if (profileProvider === provider) {
     return undefined;
   }
   return resolveCliRuntimeModelBackendBinding({
@@ -176,6 +187,22 @@ function resolveProfileRuntimeAlias(params: {
     provider,
     runtime: profileProvider,
   })?.runtime;
+}
+
+function listRuntimeOrderKeysForProvider(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+}): string[] {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return [];
+  }
+  return listCliRuntimeModelBackendBindings({
+    config: params.cfg,
+    includeSetupRegistry: params.cfg !== undefined,
+  })
+    .filter((binding) => binding.provider === provider)
+    .map((binding) => binding.runtime);
 }
 
 function resolveCliRuntimeFromAuthProfile(params: {
@@ -199,31 +226,36 @@ function resolveCliRuntimeFromAuthProfile(params: {
   const orderedProfileIds = [
     ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
     ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
+    ...listRuntimeOrderKeysForProvider({ cfg: params.cfg, provider }).flatMap(
+      (runtime) => params.cfg?.auth?.order?.[runtime] ?? [],
+    ),
   ];
   for (const profileId of orderedProfileIds) {
-    const profile = params.cfg.auth.profiles[profileId];
-    if (!profile?.provider) {
-      continue;
+    const runtimeAlias = resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
+    if (runtimeAlias) {
+      return runtimeAlias;
     }
-    const profileAuthKey = resolveProviderIdForAuth(profile.provider, { config: params.cfg });
-    if (profileAuthKey !== providerAuthKey) {
-      continue;
-    }
-    return resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
   }
 
-  const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
-    .filter(([, profile]) => {
+  const directProfileIds = Object.entries(params.cfg.auth.profiles)
+    .filter(([, profile]) => normalizeProviderId(profile?.provider ?? "") === provider)
+    .map(([profileId]) => profileId);
+  if (directProfileIds.length > 0) {
+    return undefined;
+  }
+
+  const compatibleRuntimeProfileIds = Object.entries(params.cfg.auth.profiles)
+    .filter(([profileId, profile]) => {
       if (!profile?.provider) {
         return false;
       }
-      return resolveProviderIdForAuth(profile.provider, { config: params.cfg }) === providerAuthKey;
+      return resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId }) !== undefined;
     })
     .map(([profileId]) => profileId);
-  if (compatibleProfileIds.length !== 1) {
+  if (compatibleRuntimeProfileIds.length !== 1) {
     return undefined;
   }
-  const [profileId] = compatibleProfileIds;
+  const [profileId] = compatibleRuntimeProfileIds;
   return profileId
     ? resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId })
     : undefined;
