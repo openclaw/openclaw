@@ -1330,6 +1330,11 @@ function resolveConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
+  const resolvedFallbackMaxTokens =
+    configuredModel?.maxTokens ??
+    providerConfig?.maxTokens ??
+    providerConfig?.models?.[0]?.maxTokens ??
+    staticCatalogModel?.maxTokens;
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -1365,12 +1370,9 @@ function resolveConfiguredFallbackModel(params: {
             providerConfig?.contextTokens ??
             providerConfig?.models?.[0]?.contextTokens ??
             staticCatalogModel?.contextTokens,
-          maxTokens:
-            configuredModel?.maxTokens ??
-            providerConfig?.maxTokens ??
-            providerConfig?.models?.[0]?.maxTokens ??
-            staticCatalogModel?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+          ...(resolvedFallbackMaxTokens !== undefined
+            ? { maxTokens: resolvedFallbackMaxTokens }
+            : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,

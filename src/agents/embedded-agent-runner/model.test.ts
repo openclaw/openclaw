@@ -1243,6 +1243,36 @@ describe("resolveModel", () => {
     });
   });
 
+  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/98295.
+    // A custom provider row without maxTokens must not synthesize an
+    // unrelated output cap from DEFAULT_CONTEXT_TOKENS. Leaving maxTokens
+    // undefined lets the transport omit `max_completion_tokens` entirely.
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+    const cfg = {
+      models: {
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomimimo.com/v1",
+            models: [
+              {
+                id: "mimo-v2.5-pro",
+                name: "mimo-v2.5-pro",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi", "mimo-v2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.id).toBe("mimo-v2.5-pro");
+    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(model.maxTokens).toBeUndefined();
+  });
+
   it("inherits bundled static transport for configured provider fallback models", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "deepseek",
