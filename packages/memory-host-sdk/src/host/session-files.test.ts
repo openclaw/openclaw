@@ -779,15 +779,12 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
+  it("keeps cron-run deleted archives opaque when record metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const jsonlLines = [
       JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[cron:job-1 Codex Sessions Sync] Run internal sync.",
-        },
+        type: "session-meta",
+        data: { sessionKey: "agent:main:cron:job-1:run:run-1" },
       }),
       JSON.stringify({
         type: "message",
@@ -801,6 +798,52 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("");
     expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
+  });
+
+  it("preserves non-cron content in archives when a user message starts with [cron:", async () => {
+    // Human-typed text matching `[cron:...]` must not wipe the archive index.
+    // The individual `[cron:` message is dropped by sanitizeSessionText, but
+    // other messages in the archive remain searchable via memory_search.
+    const archivePath = path.join(tmpDir, "human-cron-like.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Please remember: my preferred vendor is Acme Robotics.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Got it, I'll remember Acme Robotics." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] why did my digest job fail last night?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Also my budget is 5000 USD for this quarter.",
+        },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    // The `[cron:` message itself is dropped but surrounding content is preserved.
+    expect(entry.content).toBe(
+      "User: Please remember: my preferred vendor is Acme Robotics.\n" +
+        "Assistant: Got it, I'll remember Acme Robotics.\n" +
+        "User: Also my budget is 5000 USD for this quarter.",
+    );
+    expect(entry.lineMap).toStrictEqual([1, 2, 4]);
+    expect(entry.generatedByCronRun).toBeUndefined();
   });
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
