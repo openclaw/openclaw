@@ -931,12 +931,13 @@ describe("buildSessionEntry", () => {
         message: { role: "user", content: "[cron:daily-digest] why did my digest job fail?" },
       }),
     ];
-    const filePath = path.join(tmpDir, "mid-transcript-cron-pattern.jsonl");
+    const filePath = path.join(
+      tmpDir,
+      "mid-transcript-cron-pattern.jsonl.reset.2026-04-05T12-00-00.000Z",
+    );
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = requireSessionEntry(
-      await buildSessionEntry(filePath, { isUsageCountedArchive: true }),
-    );
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
     // Content from BEFORE the cron-pattern message must survive
     expect(entry.content).toContain("Acme");
     expect(entry.content).toContain("budget is 5000");
