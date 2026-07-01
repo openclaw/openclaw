@@ -8,8 +8,10 @@ import {
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 import { resolveWebAccountId } from "./active-listener.js";
+import { readWebAuthExistsForDecision } from "./auth-store.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import { createWaSocket, waitForWaConnection } from "./session.js";
 
 type WhatsAppDirectoryAccount = WhatsAppAccountConfig & { accountId: string };
 
@@ -43,23 +45,17 @@ export async function listWhatsAppDirectoryGroupsFromConfig(params: DirectoryCon
   });
 }
 
-export async function listWhatsAppDirectoryGroupsLive(
+type GroupFetchSocket = {
+  groupFetchAllParticipating(): Promise<
+    Record<string, { id: string; subject?: string } | undefined>
+  >;
+};
+
+async function fetchLiveGroups(
+  sock: GroupFetchSocket,
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const accountId = resolveWebAccountId({ cfg: params.cfg, accountId: params.accountId });
-  const controller = getRegisteredWhatsAppConnectionController(accountId);
-  const sock = controller?.getCurrentSock() ?? null;
-
-  if (!sock) {
-    return listWhatsAppDirectoryGroupsFromConfig(params);
-  }
-
-  let groups: Record<string, { id: string; subject?: string } | undefined>;
-  try {
-    groups = (await sock.groupFetchAllParticipating()) ?? {};
-  } catch {
-    return listWhatsAppDirectoryGroupsFromConfig(params);
-  }
+  const groups = (await sock.groupFetchAllParticipating()) ?? {};
 
   const query = params.query?.toLowerCase() ?? "";
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
@@ -84,4 +80,56 @@ export async function listWhatsAppDirectoryGroupsLive(
   }
 
   return entries;
+}
+
+export async function listWhatsAppDirectoryGroupsLive(
+  params: DirectoryConfigParams,
+): Promise<ChannelDirectoryEntry[]> {
+  const accountId = resolveWebAccountId({ cfg: params.cfg, accountId: params.accountId });
+  const controller = getRegisteredWhatsAppConnectionController(accountId);
+  const controllerSock = controller?.getCurrentSock() ?? null;
+
+  // Process-local socket (gateway process).
+  if (controllerSock) {
+    try {
+      return await fetchLiveGroups(controllerSock, params);
+    } catch {
+      return listWhatsAppDirectoryGroupsFromConfig(params);
+    }
+  }
+
+  // Standalone path for CLI consumers: open a temporary socket using stored
+  // auth credentials, fetch groups, then close. Without this the standalone
+  // `openclaw directory groups list --channel whatsapp` CLI only sees
+  // config-backed groups because no gateway process-local controller exists.
+  const account = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const authDir = account.authDir;
+  if (!authDir) {
+    return listWhatsAppDirectoryGroupsFromConfig(params);
+  }
+
+  const authState = await readWebAuthExistsForDecision(authDir);
+  if (!("exists" in authState) || !authState.exists) {
+    return listWhatsAppDirectoryGroupsFromConfig(params);
+  }
+
+  let standaloneSock: Awaited<ReturnType<typeof createWaSocket>> | undefined;
+  try {
+    standaloneSock = await createWaSocket(false, false, { authDir });
+    await waitForWaConnection(standaloneSock, { timeoutMs: 30_000 });
+    return await fetchLiveGroups(standaloneSock, params);
+  } catch {
+    return listWhatsAppDirectoryGroupsFromConfig(params);
+  } finally {
+    if (standaloneSock) {
+      try {
+        standaloneSock.end?.(new Error("OpenClaw WhatsApp standalone directory socket close"));
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
 }

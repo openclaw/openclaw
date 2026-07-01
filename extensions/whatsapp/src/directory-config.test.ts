@@ -16,12 +16,26 @@ vi.mock("./active-listener.js", () => ({
   resolveWebAccountId: vi.fn().mockReturnValue("default"),
 }));
 
+vi.mock("./auth-store.js", () => ({
+  readWebAuthExistsForDecision: vi.fn(),
+}));
+
+vi.mock("./session.js", () => ({
+  createWaSocket: vi.fn(),
+  waitForWaConnection: vi.fn(),
+}));
+
+import { readWebAuthExistsForDecision } from "./auth-store.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import { createWaSocket, waitForWaConnection } from "./session.js";
 
 const mockGetCurrentSock = vi.fn();
 
 beforeEach(() => {
   vi.mocked(getRegisteredWhatsAppConnectionController).mockReset();
+  vi.mocked(readWebAuthExistsForDecision).mockReset();
+  vi.mocked(createWaSocket).mockReset();
+  vi.mocked(waitForWaConnection).mockReset();
   mockGetCurrentSock.mockReset();
 });
 
@@ -89,32 +103,21 @@ describe("whatsapp directory groups live", () => {
     });
   }
 
-  it("falls back to config when no socket is available", async () => {
-    mockController(null);
+  function mockStandaloneAuth(exists: boolean) {
+    vi.mocked(readWebAuthExistsForDecision).mockResolvedValue(
+      exists ? { outcome: "stable", exists: true } : { outcome: "stable", exists: false },
+    );
+  }
 
-    const cfg = {
-      channels: {
-        whatsapp: {
-          authDir: "/tmp/wa-auth",
-          groups: {
-            "120363111111111111@g.us": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+  function mockStandaloneSocket(groupMap: Record<string, { id: string; subject?: string }>) {
+    vi.mocked(createWaSocket).mockResolvedValue({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue(groupMap),
+      end: vi.fn(),
+    } as never);
+    vi.mocked(waitForWaConnection).mockResolvedValue(undefined);
+  }
 
-    await expect(
-      listWhatsAppDirectoryGroupsLive({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
-  });
-
-  it("returns groups fetched live from the Baileys socket", async () => {
+  it("fetches groups from the process-local controller socket", async () => {
     mockController({
       groupFetchAllParticipating: vi.fn().mockResolvedValue({
         "120363111111111111@g.us": {
@@ -142,6 +145,118 @@ describe("whatsapp directory groups live", () => {
       { kind: "group", id: "120363111111111111@g.us", name: "Family Chat" },
       { kind: "group", id: "120363222222222222@g.us", name: "Work Group" },
     ]);
+  });
+
+  it("falls back to config when no controller and auth is not linked", async () => {
+    mockController(null);
+    mockStandaloneAuth(false);
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "/tmp/wa-auth",
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("falls back to config when no authDir is configured", async () => {
+    mockController(null);
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("returns groups fetched from a standalone socket (no controller)", async () => {
+    mockController(null);
+    mockStandaloneAuth(true);
+    mockStandaloneSocket({
+      "120363111111111111@g.us": {
+        id: "120363111111111111@g.us",
+        subject: "Family Chat",
+      },
+      "120363222222222222@g.us": {
+        id: "120363222222222222@g.us",
+        subject: "Work Group",
+      },
+    });
+
+    const cfg = {
+      channels: { whatsapp: { authDir: "/tmp/wa-auth" } },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([
+      { kind: "group", id: "120363111111111111@g.us", name: "Family Chat" },
+      { kind: "group", id: "120363222222222222@g.us", name: "Work Group" },
+    ]);
+
+    expect(createWaSocket).toHaveBeenCalledWith(false, false, { authDir: "/tmp/wa-auth" });
+    expect(waitForWaConnection).toHaveBeenCalled();
+  });
+
+  it("falls back to config when standalone socket creation fails", async () => {
+    mockController(null);
+    mockStandaloneAuth(true);
+    vi.mocked(createWaSocket).mockRejectedValue(new Error("connection refused"));
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "/tmp/wa-auth",
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
   });
 
   it("filters live results by group name/subject", async () => {
@@ -239,7 +354,7 @@ describe("whatsapp directory groups live", () => {
     expect(result[1].id).toBe("120363222222222222@g.us");
   });
 
-  it("falls back to config when socket throws", async () => {
+  it("falls back to config when controller socket throws", async () => {
     mockController({
       groupFetchAllParticipating: vi.fn().mockRejectedValue(new Error("network error")),
     });
