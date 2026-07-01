@@ -137,6 +137,35 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("falls back to steering when completion direct returns handoff pending", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      reason: "completion_handoff_pending" as const,
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("steered");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        reason: "completion_handoff_pending",
+      },
+      { phase: "steer-fallback", delivered: true, path: "steered" },
+    ]);
+  });
+
   it("returns direct failure when completion fallback steering cannot deliver", async () => {
     const steer = vi.fn(async () => ({ status: "none" }) as const);
     const direct = vi.fn(async () => ({
