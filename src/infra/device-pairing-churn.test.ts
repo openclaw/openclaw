@@ -167,6 +167,34 @@ describe("device pairing requestId churn", () => {
     expect(approved?.status).toBe("approved");
   });
 
+  test("keeps the requestId when operator.admin covers a pairing reconnect", async () => {
+    const baseDir = await makeDevicePairingDir();
+
+    const adminRequest = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    const pairingReconnect = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      baseDir,
+    );
+
+    expect(pairingReconnect.created).toBe(false);
+    expect(pairingReconnect.request.requestId).toBe(adminRequest.request.requestId);
+    expect(pairingReconnect.request.scopes).toEqual(["operator.admin"]);
+  });
+
   test("supports cron-first progressive operator escalation from read to pairing to admin", async () => {
     const baseDir = await makeDevicePairingDir();
 

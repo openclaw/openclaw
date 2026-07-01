@@ -374,10 +374,24 @@ function incomingApprovalCoveredByExisting(
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
     return false;
   }
-  return (
-    isStringSubset(resolveRequestedRoles(incoming), resolveRequestedRoles(existing)) &&
-    isStringSubset(resolveRequestedScopes(incoming), resolveRequestedScopes(existing))
-  );
+  const incomingRoles = resolveRequestedRoles(incoming);
+  if (!isStringSubset(incomingRoles, resolveRequestedRoles(existing))) {
+    return false;
+  }
+  const existingScopes = resolveRequestedScopes(existing);
+  for (const scope of resolveRequestedScopes(incoming)) {
+    const covered = incomingRoles.some((role) =>
+      roleScopesAllow({
+        role,
+        requestedScopes: [scope],
+        allowedScopes: existingScopes,
+      }),
+    );
+    if (!covered) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function refreshPendingDevicePairingRequest(
