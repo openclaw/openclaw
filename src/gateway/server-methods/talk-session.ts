@@ -364,6 +364,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           config: runtimeConfig,
           configuredProviderId: transcriptionConfig.provider,
           providerConfigs: transcriptionConfig.providers,
+          requestedProviderIds: transcriptionConfig.requestedProviderIds,
           defaultModel: transcriptionConfig.model,
         });
         const session = createTalkTranscriptionRelaySession({

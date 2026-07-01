@@ -712,6 +712,112 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["openai"]);
   });
 
+  it("loads a requested provider missing from an active realtime transcription registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.realtimeTranscriptionProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime Transcription",
+        isConfigured: () => true,
+        createSession: () => ({
+          connect: async () => {},
+          sendAudio() {},
+          close() {},
+          isConnected: () => true,
+        }),
+      },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeTranscriptionProviders.push({
+      pluginId: "xai",
+      pluginName: "xAI",
+      source: "test",
+      provider: {
+        id: "xai",
+        label: "xAI Realtime Transcription",
+        isConfigured: () => true,
+        createSession: () => ({
+          connect: async () => {},
+          sendAudio() {},
+          close() {},
+          isConnected: () => true,
+        }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { realtimeTranscriptionProviders: ["openai"] },
+        },
+        { id: "xai", origin: "bundled", contracts: { realtimeTranscriptionProviders: ["xai"] } },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "realtimeTranscriptionProviders",
+      requestedProviderIds: ["xai"],
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai", "xai"]);
+    expectActiveRegistryLookup(["xai"]);
+  });
+
+  it("does not partially scope mixed realtime transcription alias requests", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeTranscriptionProviders.push(
+      {
+        pluginId: "openai",
+        pluginName: "OpenAI",
+        source: "test",
+        provider: {
+          id: "openai",
+          aliases: ["openai-realtime"],
+          label: "OpenAI Realtime Transcription",
+        },
+      } as never,
+      {
+        pluginId: "xai",
+        pluginName: "xAI",
+        source: "test",
+        provider: {
+          id: "xai",
+          label: "xAI Realtime Transcription",
+        },
+      } as never,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { realtimeTranscriptionProviders: ["openai"] },
+        },
+        { id: "xai", origin: "bundled", contracts: { realtimeTranscriptionProviders: ["xai"] } },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "realtimeTranscriptionProviders",
+      requestedProviderIds: ["openai-realtime", "xai"],
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai", "xai"]);
+    expectActiveRegistryLookup(["openai", "xai"]);
+  });
+
   it.each([
     {
       key: "realtimeTranscriptionProviders" as const,

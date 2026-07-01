@@ -21,25 +21,31 @@ export function normalizeRealtimeTranscriptionProviderId(
 
 function resolveRealtimeTranscriptionProviderEntries(
   cfg?: OpenClawConfig,
+  options?: { requestedProviderIds?: Iterable<string> },
 ): RealtimeTranscriptionProviderPlugin[] {
   return resolvePluginCapabilityProviders({
     key: "realtimeTranscriptionProviders",
     cfg,
+    requestedProviderIds: options?.requestedProviderIds,
   });
 }
 
-function buildProviderMaps(cfg?: OpenClawConfig): {
+function buildProviderMaps(
+  cfg?: OpenClawConfig,
+  options?: { requestedProviderIds?: Iterable<string> },
+): {
   canonical: Map<string, RealtimeTranscriptionProviderPlugin>;
   aliases: Map<string, RealtimeTranscriptionProviderPlugin>;
 } {
-  return buildCapabilityProviderMaps(resolveRealtimeTranscriptionProviderEntries(cfg));
+  return buildCapabilityProviderMaps(resolveRealtimeTranscriptionProviderEntries(cfg, options));
 }
 
 /** Lists canonical realtime transcription providers for the active config. */
 export function listRealtimeTranscriptionProviders(
   cfg?: OpenClawConfig,
+  options?: { requestedProviderIds?: Iterable<string> },
 ): RealtimeTranscriptionProviderPlugin[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
+  return [...buildProviderMaps(cfg, options).canonical.values()];
 }
 
 /** Resolves a realtime transcription provider by id or alias. */

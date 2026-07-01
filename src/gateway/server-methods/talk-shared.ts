@@ -27,6 +27,8 @@ import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
 
+const VOICE_CALL_PLUGIN_ENTRY_IDS = ["voice-call", "@openclaw/voice-call"] as const;
+
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
@@ -83,12 +85,22 @@ function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
 } {
   const plugins = getRecord(config.plugins);
   const entries = getRecord(plugins?.entries);
-  const voiceCall = getRecord(entries?.["voice-call"]);
-  const pluginConfig = getRecord(voiceCall?.config);
-  const section = getRecord(pluginConfig?.[sectionName]);
-  const providersRaw = getRecord(section?.providers);
   const providers: Record<string, TConfig> = {};
-  if (providersRaw) {
+  let provider: string | undefined;
+  const entryIds =
+    sectionName === "streaming" ? VOICE_CALL_PLUGIN_ENTRY_IDS : (["voice-call"] as const);
+  for (const entryId of entryIds) {
+    const voiceCall = getRecord(entries?.[entryId]);
+    const pluginConfig = getRecord(voiceCall?.config);
+    const section = getRecord(pluginConfig?.[sectionName]);
+    if (!section) {
+      continue;
+    }
+    provider = normalizeOptionalString(section.provider) ?? provider;
+    const providersRaw = getRecord(section.providers);
+    if (!providersRaw) {
+      continue;
+    }
     for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
       const record = getRecord(providerConfig);
       if (record) {
@@ -97,7 +109,7 @@ function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
     }
   }
   return {
-    provider: normalizeOptionalString(section?.provider),
+    provider,
     providers: Object.keys(providers).length > 0 ? providers : undefined,
   };
 }
@@ -114,6 +126,55 @@ export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   providers?: Record<string, RealtimeTranscriptionProviderConfig>;
 } {
   return getVoiceCallProviderConfig(config, "streaming");
+}
+
+function collectTalkTranscriptionProviderIds(
+  config: OpenClawConfig,
+  requestedProvider?: string,
+): string[] {
+  const streamingConfig = getVoiceCallStreamingConfig(config);
+  const requested = new Set<string>();
+  const explicitProvider = normalizeOptionalString(requestedProvider);
+  if (explicitProvider) {
+    requested.add(explicitProvider);
+  }
+  if (streamingConfig.provider) {
+    requested.add(streamingConfig.provider);
+  }
+  for (const providerId of Object.keys(streamingConfig.providers ?? {})) {
+    const normalized = normalizeOptionalString(providerId);
+    if (normalized) {
+      requested.add(normalized);
+    }
+  }
+  return [...requested];
+}
+
+export function listTalkTranscriptionProviders(config: OpenClawConfig) {
+  const providers = listRealtimeTranscriptionProviders(config);
+  const merged = new Map<string, RealtimeProviderWithConfig<RealtimeTranscriptionProviderConfig>>();
+  const addProvider = (
+    provider: RealtimeProviderWithConfig<RealtimeTranscriptionProviderConfig>,
+  ) => {
+    if (!merged.has(provider.id)) {
+      merged.set(provider.id, provider);
+    }
+  };
+  for (const provider of providers) {
+    addProvider(provider);
+  }
+  for (const providerId of collectTalkTranscriptionProviderIds(config)) {
+    if ([...merged.values()].some((provider) => providerMatchesId(provider, providerId))) {
+      continue;
+    }
+    const provider = listRealtimeTranscriptionProviders(config, {
+      requestedProviderIds: [providerId],
+    }).find((entry) => providerMatchesId(entry, providerId));
+    if (provider) {
+      addProvider(provider);
+    }
+  }
+  return [...merged.values()];
 }
 
 type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {
@@ -207,15 +268,17 @@ export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedPr
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
+  const requestedProviderIds = collectTalkTranscriptionProviderIds(config, requestedProvider);
   const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
     provider,
     providerConfigs,
-    providers: listRealtimeTranscriptionProviders(config),
+    providers: listRealtimeTranscriptionProviders(config, { requestedProviderIds }),
   });
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
+    requestedProviderIds,
     model: voiceModelDefault?.model,
   };
 }
@@ -232,9 +295,12 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   config: OpenClawConfig;
   configuredProviderId?: string;
   providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>;
+  requestedProviderIds?: Iterable<string>;
   defaultModel?: string;
 }) {
-  const providers = listRealtimeTranscriptionProviders(params.config);
+  const providers = listRealtimeTranscriptionProviders(params.config, {
+    requestedProviderIds: params.requestedProviderIds,
+  });
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
   // An explicit provider is authoritative; automatic selection is stable by
   // provider order so the same config picks the same transcription backend.

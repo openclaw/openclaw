@@ -383,6 +383,27 @@ function nonEmptyRequestedProviders(requested: Set<string> | undefined): Set<str
   return requested && requested.size > 0 ? requested : undefined;
 }
 
+function collectExplicitRequestedProviderIds(values: Iterable<string> | undefined): Set<string> {
+  const requested = new Set<string>();
+  for (const value of values ?? []) {
+    addStringValue(requested, value);
+  }
+  return requested;
+}
+
+function mergeRequestedProviderIds(
+  left: Set<string> | undefined,
+  right: Set<string> | undefined,
+): Set<string> | undefined {
+  if (!left || left.size === 0) {
+    return nonEmptyRequestedProviders(right);
+  }
+  if (!right || right.size === 0) {
+    return nonEmptyRequestedProviders(new Set(left));
+  }
+  return new Set([...left, ...right]);
+}
+
 function shouldScopeCapabilityLoadToRequestedProviders(
   key: CapabilityProviderRegistryKey,
 ): boolean {
@@ -455,6 +476,9 @@ function resolveRequestedCapabilityPluginIds(params: {
       cfg: params.cfg,
       providerId,
     });
+    if (resolution.runtimePluginIds.length === 0) {
+      return undefined;
+    }
     for (const pluginId of resolution.runtimePluginIds) {
       runtimePluginIds.add(pluginId);
     }
@@ -587,6 +611,7 @@ function resolveCachedCapabilityProviderEntries<K extends CapabilityProviderRegi
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
+  requestedProviderIds?: Iterable<string>;
 }): CapabilityProviderForKey<K>[] {
   if (shouldSkipCapabilityResolution(params)) {
     return [];
@@ -594,14 +619,20 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 
   const activeRegistry = getLoadedRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
+  const explicitRequestedProviders = nonEmptyRequestedProviders(
+    collectExplicitRequestedProviderIds(params.requestedProviderIds),
+  );
   const missingRequestedProviders =
     activeProviders.length > 0
       ? nonEmptyRequestedProviders(
-          collectRequestedCapabilityProviderIds({
-            key: params.key,
-            cfg: params.cfg,
-            includeVoiceModel: true,
-          }),
+          mergeRequestedProviderIds(
+            explicitRequestedProviders,
+            collectRequestedCapabilityProviderIds({
+              key: params.key,
+              cfg: params.cfg,
+              includeVoiceModel: true,
+            }),
+          ),
         )
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
@@ -619,7 +650,10 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     missingRequestedProviders ??
     (activeProviders.length === 0
       ? nonEmptyRequestedProviders(
-          collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+          mergeRequestedProviderIds(
+            explicitRequestedProviders,
+            collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+          ),
         )
       : undefined);
   const requestedProviderLoadScope =

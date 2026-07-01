@@ -32,7 +32,6 @@ import type {
   TalkRealtimeConfig,
 } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
-import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -57,6 +56,7 @@ import {
   buildTalkRealtimeConfig,
   configuredOrFalse,
   getVoiceCallStreamingConfig,
+  listTalkTranscriptionProviders,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -237,7 +237,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
     },
     transcription: {
       ...(streamingConfig.provider ? { activeProvider: streamingConfig.provider } : {}),
-      providers: listRealtimeTranscriptionProviders(config).map((provider) => {
+      providers: listTalkTranscriptionProviders(config).map((provider) => {
         const rawConfig = streamingConfig.providers?.[provider.id] ?? {};
         const providerConfig = provider.resolveConfig?.({ cfg: config, rawConfig }) ?? rawConfig;
         const entry: Record<string, unknown> = {
