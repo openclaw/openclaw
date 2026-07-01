@@ -42,6 +42,7 @@ export type NativeI18nEntry = {
 type Candidate = Omit<NativeI18nEntry, "id">;
 type NativeTranslationArtifact = {
   entries: Array<{ id: string; source: string; translated: string }>;
+  glossaryHash: string;
   locale: string;
   version: 1;
 };
@@ -923,8 +924,15 @@ export async function syncNativeLocale(
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
+  const glossary = options.glossary ?? (await loadGlossary(locale));
+  const glossaryHash = createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
   let previousRaw = "";
-  let previous: NativeTranslationArtifact = { entries: [], locale, version: 1 };
+  let previous: NativeTranslationArtifact = {
+    entries: [],
+    glossaryHash: "",
+    locale,
+    version: 1,
+  };
   try {
     previousRaw = await readFile(artifactPath, "utf8");
     previous = JSON.parse(previousRaw) as NativeTranslationArtifact;
@@ -932,10 +940,13 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const glossaryChanged = previous.glossaryHash !== glossaryHash;
   const pending = entries
     .filter((entry) => {
       const current = previousById.get(entry.id);
-      return !current || current.source !== entry.source || !current.translated.trim();
+      return (
+        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
+      );
     })
     .map((entry) => ({
       id: entry.id,
@@ -943,15 +954,12 @@ export async function syncNativeLocale(
       sourcePath: entry.path,
     }));
   const translated = pending.length
-    ? await (options.translate ?? translateNativeEntries)(
-        pending,
-        locale,
-        options.glossary ?? (await loadGlossary(locale)),
-      )
+    ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
     : new Map<string, string>();
   const artifact: NativeTranslationArtifact = {
     version: 1,
     locale,
+    glossaryHash,
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,

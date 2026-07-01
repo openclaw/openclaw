@@ -193,6 +193,23 @@ describe("native app i18n inventory", () => {
       expect(second).toEqual({ changed: false, translated: 0 });
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
+
+      const refreshed = await syncNativeLocale("sv", entries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, `refreshed:${entry.source}`])),
+      });
+
+      expect(refreshed).toEqual({ changed: true, translated: 4 });
+      const refreshedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+        glossaryHash: string;
+      };
+      expect(refreshedArtifact.glossaryHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(
+        refreshedArtifact.entries.every((entry) => entry.translated.startsWith("refreshed:")),
+      ).toBe(true);
     } finally {
       cleanupTempDirs(tempDirs);
     }
