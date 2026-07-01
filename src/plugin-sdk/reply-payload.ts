@@ -50,6 +50,8 @@ export type ReasoningReplyPayload = {
   text?: string;
   /** Explicit reasoning flag from upstream payload producers. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
 };
 
 /** Derived sendability facts for text/media outbound payload delivery. */

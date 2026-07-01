@@ -2829,6 +2829,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel mapping
   - H3: Runtime behavior
   - H3: Tool-progress preview updates
+  - H3: Commentary progress lane
   - H2: Related
 
 ## concepts/system-prompt.md
