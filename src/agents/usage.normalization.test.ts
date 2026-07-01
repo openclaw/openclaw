@@ -127,6 +127,26 @@ describe("normalizeUsage", () => {
     ).toBe(1_550);
   });
 
+  it("normalizes MiniMax prompt_cache_hit_tokens (prompt_tokens includes cache)", () => {
+    // MiniMax reports prompt_tokens (total, including cached) and
+    // prompt_cache_hit_tokens (cache portion) separately.
+    // normalizeUsage should subtract cache hits from input to avoid
+    // double-counting in derivePromptTokens and enable accurate cost tracking.
+    const usage = normalizeUsage({
+      prompt_tokens: 52_000,
+      completion_tokens: 1_500,
+      total_tokens: 53_500,
+      prompt_cache_hit_tokens: 30_000,
+    });
+    expect(usage).toEqual({
+      input: 22_000,
+      output: 1_500,
+      cacheRead: 30_000,
+      cacheWrite: undefined,
+      total: 53_500,
+    });
+  });
+
   it("prefers explicit prompt token overrides", () => {
     expect(
       deriveSessionTotalTokens({
