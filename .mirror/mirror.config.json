@@ -26,6 +26,10 @@
       [
         "  scan:\n    name: Scan iOS dead code\n    needs: scope\n    if: ${{ needs.scope.outputs.should-scan == 'true' }}\n    runs-on: tenki-standard-medium-4c-8g\n",
         "  scan:\n    name: Scan iOS dead code\n    needs: scope\n    if: ${{ github.repository == 'openclaw/openclaw' && needs.scope.outputs.should-scan == 'true' }}\n    runs-on: tenki-standard-medium-4c-8g\n"
+      ],
+      [
+        "            shrinkwrap)\n              pnpm deps:shrinkwrap:check\n              ;;\n",
+        "            shrinkwrap)\n              if [ \"$GITHUB_REPOSITORY\" != \"openclaw/openclaw\" ]; then\n                echo \"Skipping shrinkwrap check on fork mirror.\"\n                exit 0\n              fi\n              pnpm deps:shrinkwrap:check\n              ;;\n"
       ]
     ],
     "gate_jobs": [

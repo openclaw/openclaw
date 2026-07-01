@@ -1152,6 +1152,10 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             shrinkwrap)
+              if [ "$GITHUB_REPOSITORY" != "openclaw/openclaw" ]; then
+                echo "Skipping shrinkwrap check on fork mirror."
+                exit 0
+              fi
               pnpm deps:shrinkwrap:check
               ;;
             bundled-channel-config-metadata)
