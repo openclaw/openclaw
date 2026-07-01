@@ -8,6 +8,7 @@ import {
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
+  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -30,6 +31,20 @@ interface SessionData {
   hasLeafControl: boolean;
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  warning?: string;
+}
+
+const BACKEND_DELEGATED_WARNING =
+  "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
+
+function isBackendDelegatedSession(entries: AgentSessionEntry[]): boolean {
+  if (entries.length === 0) {
+    return false;
+  }
+  const messages = entries.filter(
+    (entry): entry is SessionMessageEntry => entry.type === "message",
+  );
+  return messages.length > 0 && messages.every((entry) => entry.message.role === "user");
 }
 
 type SessionExportJsonlWarning = {
@@ -301,6 +316,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   });
 
   // 4. Prepare session data
+  const backendWarning = isBackendDelegatedSession(entries) ? BACKEND_DELEGATED_WARNING : undefined;
   const sessionData: SessionData = {
     header,
     entries,
@@ -312,6 +328,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       description: t.description,
       parameters: t.parameters,
     })),
+    warning: backendWarning,
   };
 
   // 5. Generate HTML
@@ -349,6 +366,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       `📄 File: ${displayPath}`,
       `📊 Entries: ${entries.length}`,
       ...warnings.map(formatSessionExportWarning),
+      ...(backendWarning ? [`⚠️ ${backendWarning}`] : []),
       `🧠 System prompt: ${systemPrompt.length.toLocaleString()} chars`,
       `🔧 Tools: ${tools.length}`,
     ].join("\n"),
