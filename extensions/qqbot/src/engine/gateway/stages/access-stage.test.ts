@@ -48,6 +48,20 @@ function buildEvent(senderId: string): QueuedMessage {
   };
 }
 
+function buildTypedEvent(type: QueuedMessage["type"]): QueuedMessage {
+  return {
+    type,
+    senderId: "user-openid",
+    senderName: "User",
+    content: "hi",
+    messageId: `m-${type}`,
+    timestamp: "0",
+    ...(type === "group" ? { groupOpenid: "GROUP_OPENID" } : {}),
+    ...(type === "guild" ? { channelId: "CHANNEL_ID", guildId: "GUILD_ID" } : {}),
+    ...(type === "dm" ? { guildId: "DM_GUILD_ID" } : {}),
+  };
+}
+
 function buildRuntime(
   resolve: GatewayPluginRuntime["channel"]["routing"]["resolveAgentRoute"],
 ): GatewayPluginRuntime {
@@ -165,5 +179,57 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     expect(seenCfgs.has(cfgA)).toBe(true);
     expect(seenCfgs.has(cfgB)).toBe(true);
     expect(seenCfgs.has(cfgC)).toBe(true);
+  });
+
+  it("classifies inbound route targets from QQ Bot event type", async () => {
+    const account = buildAccount();
+    const routedPeers: Array<{ kind: string; id: string }> = [];
+    const runtime = buildRuntime((params) => {
+      routedPeers.push(params.peer);
+      return {
+        sessionKey: `agent:main:qqbot:${params.peer.kind}:${params.peer.id}`,
+        accountId: params.accountId,
+      };
+    });
+    const deps = buildDeps({}, runtime, account);
+
+    const cases = [
+      {
+        event: buildTypedEvent("group"),
+        isGroupChat: true,
+        peer: { kind: "group", id: "GROUP_OPENID" },
+        qualifiedTarget: "qqbot:group:GROUP_OPENID",
+      },
+      {
+        event: buildTypedEvent("guild"),
+        isGroupChat: true,
+        peer: { kind: "group", id: "CHANNEL_ID" },
+        qualifiedTarget: "qqbot:channel:CHANNEL_ID",
+      },
+      {
+        event: buildTypedEvent("c2c"),
+        isGroupChat: false,
+        peer: { kind: "direct", id: "user-openid" },
+        qualifiedTarget: "qqbot:c2c:user-openid",
+      },
+      {
+        event: buildTypedEvent("dm"),
+        isGroupChat: false,
+        peer: { kind: "direct", id: "user-openid" },
+        qualifiedTarget: "qqbot:dm:DM_GUILD_ID",
+      },
+    ] as const;
+
+    for (const expected of cases) {
+      const result = await runAccessStage(expected.event, deps);
+      expect(result.kind).toBe("allow");
+      if (result.kind === "allow") {
+        expect(result.isGroupChat).toBe(expected.isGroupChat);
+        expect(result.peerId).toBe(expected.peer.id);
+        expect(result.qualifiedTarget).toBe(expected.qualifiedTarget);
+      }
+    }
+
+    expect(routedPeers).toEqual(cases.map((item) => item.peer));
   });
 });

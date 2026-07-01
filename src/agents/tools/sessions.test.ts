@@ -56,6 +56,11 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
   threadId,
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
+const normalizeQqbotTarget: NonNullable<ChannelMessagingAdapter["normalizeTarget"]> = (target) => {
+  const id = target.replace(/^qqbot:/i, "");
+  return /^(c2c|group|channel):/.test(id) ? `qqbot:${id}` : undefined;
+};
+
 type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
 >;
@@ -180,6 +185,29 @@ const installRegistry = async () => {
           messaging: {
             resolveSessionConversation: resolveSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "qqbot",
+        source: "test",
+        plugin: {
+          id: "qqbot",
+          meta: {
+            id: "qqbot",
+            label: "QQ Bot",
+            selectionLabel: "QQ Bot",
+            docsPath: "/channels/qqbot",
+            blurb: "QQ Bot test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group", "channel"] },
+          messaging: {
+            normalizeTarget: normalizeQqbotTarget,
           },
           config: {
             listAccountIds: () => ["default"],
@@ -539,6 +567,33 @@ describe("resolveAnnounceTarget", () => {
       accountId: "workspace",
       threadId: "1710000000.000100",
     });
+  });
+
+  it("hydrates QQ Bot announce delivery from stored group route metadata", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+          deliveryContext: {
+            channel: "qqbot",
+            to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+            accountId: "qq-main",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+      displayKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+    });
+    expect(target).toEqual({
+      channel: "qqbot",
+      to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      accountId: "qq-main",
+      threadId: undefined,
+    });
+    expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 });
 

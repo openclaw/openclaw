@@ -102,11 +102,41 @@ function makeInboundRuntime(
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown>; record?: Record<string, unknown> };
+      )) as {
+        ctxPayload: { SessionKey?: string };
+        record?: Record<string, unknown>;
+        recordInboundSession: (params: Record<string, unknown>) => Promise<unknown>;
+        routeSessionKey: string;
+        runDispatch: () => Promise<unknown>;
+        storePath: string;
+      };
       onTurn?.(turn as Record<string, unknown>);
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+        trackSessionMetaTask: turn.record?.trackSessionMetaTask,
+      });
       return { dispatchResult: await turn.runDispatch() };
     }),
   };
+}
+
+function latestRecordInboundSessionCall(runtime: GatewayPluginRuntime): Record<string, unknown> {
+  const mock = runtime.channel.session.recordInboundSession as ReturnType<typeof vi.fn>;
+  const call = mock.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("expected recordInboundSession call");
+  }
+  const [arg] = call;
+  if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
+    throw new Error("expected recordInboundSession object argument");
+  }
+  return arg as Record<string, unknown>;
 }
 
 function makeRuntime(params: {
@@ -833,8 +863,8 @@ describe("dispatchOutbound", () => {
           },
           isGroupChat: true,
           peerId: "channel-2001",
-          qualifiedTarget: "qqbot:guild:channel-2001",
-          route: { sessionKey: "agent:main:qqbot:guild:channel-2001", accountId: "qq-main" },
+          qualifiedTarget: "qqbot:channel:channel-2001",
+          route: { sessionKey: "agent:main:qqbot:group:channel-2001", accountId: "qq-main" },
         }),
         { runtime, cfg: {}, account },
       );
@@ -844,11 +874,103 @@ describe("dispatchOutbound", () => {
       expect(record).toBeDefined();
       expect(record?.updateLastRoute).toBeDefined();
       expect(record?.updateLastRoute).toEqual({
-        sessionKey: "agent:main:qqbot:guild:channel-2001",
+        sessionKey: "agent:main:qqbot:group:channel-2001",
         channel: "qqbot",
-        to: "qqbot:guild:channel-2001",
+        to: "qqbot:channel:channel-2001",
         accountId: "qq-main",
       });
+    });
+
+    it("passes group and guild route updates to the session recorder only for shared QQ turns", async () => {
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "group",
+            senderId: "user-openid",
+            messageId: "msg-group",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            groupOpenid: "group-1001",
+          },
+          isGroupChat: true,
+          peerId: "group-1001",
+          qualifiedTarget: "qqbot:group:group-1001",
+          route: { sessionKey: "agent:main:qqbot:group:group-1001", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+      expect(latestRecordInboundSessionCall(runtime).updateLastRoute).toEqual({
+        sessionKey: "agent:main:qqbot:group:group-1001",
+        channel: "qqbot",
+        to: "qqbot:group:group-1001",
+        accountId: "qq-main",
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "guild",
+            senderId: "user-openid",
+            messageId: "msg-guild",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            channelId: "channel-2001",
+          },
+          isGroupChat: true,
+          peerId: "channel-2001",
+          qualifiedTarget: "qqbot:channel:channel-2001",
+          route: { sessionKey: "agent:main:qqbot:group:channel-2001", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+      expect(latestRecordInboundSessionCall(runtime).updateLastRoute).toEqual({
+        sessionKey: "agent:main:qqbot:group:channel-2001",
+        channel: "qqbot",
+        to: "qqbot:channel:channel-2001",
+        accountId: "qq-main",
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "c2c",
+            senderId: "user-openid",
+            messageId: "msg-c2c",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+          },
+          isGroupChat: false,
+          peerId: "user-openid",
+          qualifiedTarget: "qqbot:c2c:user-openid",
+          route: { sessionKey: "agent:main:qqbot:c2c:user-openid", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+      expect(latestRecordInboundSessionCall(runtime).updateLastRoute).toBeUndefined();
+
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: "dm",
+            senderId: "user-openid",
+            messageId: "msg-dm",
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+          },
+          isGroupChat: false,
+          peerId: "user-openid",
+          qualifiedTarget: "qqbot:dm:user-openid",
+          route: { sessionKey: "agent:main:qqbot:dm:user-openid", accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+      expect(latestRecordInboundSessionCall(runtime).updateLastRoute).toBeUndefined();
     });
 
     it("excludes updateLastRoute from record for c2c inbound", async () => {
