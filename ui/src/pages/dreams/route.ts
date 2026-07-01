@@ -5,11 +5,11 @@ import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
-  resolveChatAgentFilterId,
-  resolveChatAgentFilterOptions,
-} from "../../ui/chat/session-controls.ts";
+  resolveSessionAgentFilterId,
+  resolveSessionAgentFilterOptions,
+} from "../../lib/sessions/session-options.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadConfig, openConfigFile } from "../config/data.ts";
 import {
   backfillDreamDiary,
@@ -110,12 +110,12 @@ function renderDreamsPage(state: AppViewState) {
   const dreamingOn =
     state.dreamingStatus?.enabled ?? resolveConfiguredDreaming(configValue).enabled;
   const selectedAgentId =
-    state.selectedAgentId ?? resolveChatAgentFilterId(state, state.sessionKey);
-  const agentOptions = resolveChatAgentFilterOptions(state);
+    state.selectedAgentId ?? resolveSessionAgentFilterId(state, state.sessionKey);
+  const agentOptions = resolveSessionAgentFilterOptions(state);
   const loading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const refreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const syncSelectedAgent = () => {
-    const agentId = state.selectedAgentId ?? resolveChatAgentFilterId(state, state.sessionKey);
+    const agentId = state.selectedAgentId ?? resolveSessionAgentFilterId(state, state.sessionKey);
     state.selectedAgentId = agentId;
     return agentId;
   };

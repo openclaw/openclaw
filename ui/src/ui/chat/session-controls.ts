@@ -11,10 +11,9 @@ import {
   collectQuotaWindowsFromAuthStatus,
   formatQuotaReset,
 } from "../../lib/provider-quota-summary.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import {
-  getVisibleSessionRows,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionCapability,
@@ -23,12 +22,19 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canArchiveSessionRow,
-  isSessionKeyTiedToAgent,
-  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import {
+  rememberSessionAgentRows,
+  resolvePreferredSessionForAgent,
+  resolveSessionAgentFilterId,
+  resolveSessionAgentFilterOptions,
+  resolveSessionOptionGroups,
+  type SessionAgentFilterOption,
+  type SessionOptionGroup,
+} from "../../lib/sessions/session-options.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -102,9 +108,9 @@ export function renderChatSessionSelect(
     surface?: ChatSessionSelectSurface;
   } = {},
 ) {
-  rememberChatAgentSessionRows(state, state.sessionsResult);
+  rememberSessionAgentRows(state, state.sessionsResult);
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
-  const agentOptions = resolveChatAgentFilterOptions(state);
+  const agentOptions = resolveSessionAgentFilterOptions(state);
   const hasAgentSelect = agentOptions.length > 1;
   const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const modelSelect = renderChatModelSelect(state);
@@ -986,12 +992,12 @@ export function renderChatQuotaPill(state: AppViewState, onNavigate?: (routeId: 
 function renderChatAgentSelect(
   state: AppViewState,
   onSwitchSession: ChatSessionSwitchHandler,
-  options = resolveChatAgentFilterOptions(state),
+  options = resolveSessionAgentFilterOptions(state),
 ) {
   if (options.length <= 1) {
     return "";
   }
-  const activeAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const activeAgentId = resolveSessionAgentFilterId(state, state.sessionKey);
   const selectedLabel = options.find((entry) => entry.id === activeAgentId)?.label ?? activeAgentId;
   return html`
     <label class="field chat-controls__session chat-controls__agent">
@@ -1748,313 +1754,4 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
     state.chatThinkingLevel = normalizedPrev ?? null;
     setChatError(state, `Failed to set thinking level: ${String(err)}`);
   }
-}
-
-type SessionOptionEntry = {
-  key: string;
-  label: string;
-  scopeLabel: string;
-  title: string;
-};
-
-export type SessionOptionGroup = {
-  id: string;
-  label: string;
-  options: SessionOptionEntry[];
-};
-
-type ChatAgentFilterOption = {
-  id: string;
-  label: string;
-};
-
-export function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
-}
-
-function resolvePreferredSessionCandidateAgentId(
-  row: SessionsListResult["sessions"][number],
-  defaultAgentId: string,
-): string | null {
-  if (row.kind === "global" || row.kind === "unknown" || isCronSessionKey(row.key)) {
-    return null;
-  }
-  if (isSubagentSessionKey(row.key) || row.spawnedBy) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(row.key);
-  return normalizeAgentId(parsed?.agentId ?? defaultAgentId);
-}
-
-function rememberChatAgentSessionRows(
-  state: AppViewState,
-  sessions: SessionsListResult | null,
-): void {
-  if (!sessions) {
-    return;
-  }
-  const rows = sessions.sessions;
-  const refreshedAgentId = normalizeOptionalString(state.sessionsResultAgentId);
-  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const grouped = new Map<string, SessionsListResult["sessions"]>();
-  for (const row of rows) {
-    const agentId = resolvePreferredSessionCandidateAgentId(row, defaultAgentId);
-    if (!agentId) {
-      continue;
-    }
-    grouped.set(agentId, [...(grouped.get(agentId) ?? []), row]);
-  }
-  if (grouped.size === 0 && !refreshedAgentId) {
-    return;
-  }
-  state.chatAgentSessionRowsByAgent ??= {};
-  if (refreshedAgentId) {
-    state.chatAgentSessionRowsByAgent[refreshedAgentId] = grouped.get(refreshedAgentId) ?? [];
-  }
-  for (const [agentId, agentRows] of grouped) {
-    state.chatAgentSessionRowsByAgent[agentId] = agentRows;
-  }
-}
-
-function rowsForPreferredAgentSession(
-  state: AppViewState,
-  normalizedAgentId: string,
-  defaultAgentId: string,
-): SessionsListResult["sessions"] {
-  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
-  for (const row of state.chatAgentSessionRowsByAgent?.[normalizedAgentId] ?? []) {
-    byKey.set(row.key, row);
-  }
-  for (const row of state.sessionsResult?.sessions ?? []) {
-    if (resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId) {
-      byKey.set(row.key, row);
-    }
-  }
-  return [...byKey.values()];
-}
-
-export function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
-  const normalizedAgentId = normalizeAgentId(agentId);
-  if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
-    return state.sessionKey;
-  }
-  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const eligible = rowsForPreferredAgentSession(state, normalizedAgentId, defaultAgentId)
-    .filter((row) => {
-      if (!isSessionKeyTiedToAgent(row.key, normalizedAgentId, defaultAgentId)) {
-        return false;
-      }
-      return resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId;
-    })
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  if (eligible[0]?.key) {
-    return eligible[0].key;
-  }
-  return buildAgentMainSessionKey({ agentId: normalizedAgentId });
-}
-
-export function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
-  const seen = new Set<string>();
-  const options: ChatAgentFilterOption[] = [];
-  const add = (agentId: string) => {
-    const normalized = normalizeAgentId(agentId);
-    if (seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    options.push({
-      id: normalized,
-      label: resolveAgentGroupLabel(state, normalized),
-    });
-  };
-
-  add(resolveChatAgentFilterId(state, state.sessionKey));
-  add(state.agentsList?.defaultId ?? "main");
-  for (const agent of state.agentsList?.agents ?? []) {
-    add(agent.id);
-  }
-  for (const row of state.sessionsResult?.sessions ?? []) {
-    const parsed = parseAgentSessionKey(row.key);
-    if (parsed) {
-      add(parsed.agentId);
-    }
-  }
-
-  return options;
-}
-
-export function resolveSessionOptionGroups(
-  state: AppViewState,
-  sessionKey: string,
-  sessions: SessionsListResult | null,
-): SessionOptionGroup[] {
-  const rows = sessions?.sessions ?? [];
-  const hideCron = state.sessionsHideCron ?? true;
-  const activeAgentId = resolveChatAgentFilterId(state, sessionKey);
-  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
-  for (const row of rows) {
-    byKey.set(row.key, row);
-  }
-
-  const seenKeys = new Set<string>();
-  const groups = new Map<string, SessionOptionGroup>();
-  const ensureGroup = (groupId: string, label: string): SessionOptionGroup => {
-    const existing = groups.get(groupId);
-    if (existing) {
-      return existing;
-    }
-    const created: SessionOptionGroup = {
-      id: groupId,
-      label,
-      options: [],
-    };
-    groups.set(groupId, created);
-    return created;
-  };
-
-  const addOption = (key: string) => {
-    if (!key || seenKeys.has(key)) {
-      return;
-    }
-    seenKeys.add(key);
-    const row = byKey.get(key);
-    const parsed = parseAgentSessionKey(key);
-    const group = parsed
-      ? ensureGroup(
-          `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
-          resolveAgentGroupLabel(state, parsed.agentId),
-        )
-      : ensureGroup("other", "Other Sessions");
-    const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    group.options.push({
-      key,
-      label: resolveSessionScopedOptionLabel(key, row, parsed?.rest),
-      scopeLabel,
-      title: key,
-    });
-  };
-
-  for (const row of getVisibleSessionRows(sessions, {
-    currentSessionKey: sessionKey,
-    agentId: activeAgentId,
-    defaultAgentId,
-    filterByAgent: true,
-    hideCron,
-  })) {
-    addOption(row.key);
-  }
-  if (byKey.has(sessionKey)) {
-    addOption(sessionKey);
-  } else if (sessionKey) {
-    addOption(sessionKey);
-  }
-
-  for (const group of groups.values()) {
-    const counts = new Map<string, number>();
-    for (const option of group.options) {
-      counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
-    }
-    for (const option of group.options) {
-      if ((counts.get(option.label) ?? 0) > 1 && option.scopeLabel !== option.label) {
-        option.label = `${option.label} · ${option.scopeLabel}`;
-      }
-    }
-  }
-
-  const allOptions = Array.from(groups.values()).flatMap((group) =>
-    group.options.map((option) => ({ groupLabel: group.label, option })),
-  );
-  const labels = new Map(allOptions.map(({ option }) => [option, option.label]));
-  const countAssignedLabels = () => {
-    const counts = new Map<string, number>();
-    for (const { option } of allOptions) {
-      const label = labels.get(option) ?? option.label;
-      counts.set(label, (counts.get(label) ?? 0) + 1);
-    }
-    return counts;
-  };
-  const labelIncludesScopeLabel = (label: string, scopeLabel: string) => {
-    const trimmedScope = scopeLabel.trim();
-    if (!trimmedScope) {
-      return false;
-    }
-    return (
-      label === trimmedScope ||
-      label.endsWith(` · ${trimmedScope}`) ||
-      label.endsWith(` / ${trimmedScope}`)
-    );
-  };
-
-  const globalCounts = countAssignedLabels();
-  for (const { groupLabel, option } of allOptions) {
-    const currentLabel = labels.get(option) ?? option.label;
-    if ((globalCounts.get(currentLabel) ?? 0) <= 1) {
-      continue;
-    }
-    const scopedPrefix = `${groupLabel} / `;
-    if (currentLabel.startsWith(scopedPrefix)) {
-      continue;
-    }
-    // Keep the agent visible once the native select collapses to a single chosen label.
-    labels.set(option, `${groupLabel} / ${currentLabel}`);
-  }
-
-  const scopedCounts = countAssignedLabels();
-  for (const { option } of allOptions) {
-    const currentLabel = labels.get(option) ?? option.label;
-    if ((scopedCounts.get(currentLabel) ?? 0) <= 1) {
-      continue;
-    }
-    if (labelIncludesScopeLabel(currentLabel, option.scopeLabel)) {
-      continue;
-    }
-    labels.set(option, `${currentLabel} · ${option.scopeLabel}`);
-  }
-
-  const finalCounts = countAssignedLabels();
-  for (const { option } of allOptions) {
-    const currentLabel = labels.get(option) ?? option.label;
-    if ((finalCounts.get(currentLabel) ?? 0) <= 1) {
-      continue;
-    }
-    // Fall back to the full key only when every friendlier disambiguator still collides.
-    labels.set(option, `${currentLabel} · ${option.key}`);
-  }
-
-  for (const { option } of allOptions) {
-    option.label = labels.get(option) ?? option.label;
-  }
-
-  return Array.from(groups.values());
-}
-
-function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(agentIdRaw);
-  const agent = (state.agentsList?.agents ?? []).find(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalized,
-  );
-  const name =
-    normalizeOptionalString(agent?.identity?.name) ?? normalizeOptionalString(agent?.name) ?? "";
-  return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;
-}
-
-function resolveSessionScopedOptionLabel(
-  key: string,
-  row?: SessionsListResult["sessions"][number],
-  rest?: string,
-) {
-  const base = normalizeOptionalString(rest) ?? key;
-  if (!row) {
-    return base;
-  }
-
-  const label = normalizeOptionalString(row.label) ?? "";
-  const displayName = normalizeOptionalString(row.displayName) ?? "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
-    return resolveSessionDisplayName(key, row);
-  }
-
-  return base;
 }
