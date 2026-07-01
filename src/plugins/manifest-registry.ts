@@ -39,6 +39,7 @@ import {
   type PluginManifestCapabilityProviderMetadata,
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
+  type PluginManifestComputerUseProviderMetadata,
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelCatalog,
@@ -169,6 +170,7 @@ export type PluginManifestContractListKey =
   | "externalAuthProviders"
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
+  | "computerUseProviders"
   | "transcriptSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
@@ -259,6 +261,7 @@ export type PluginManifestRecord = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  computerUseProviderMetadata?: Record<string, PluginManifestComputerUseProviderMetadata>;
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
@@ -370,6 +373,7 @@ function mergeManifestContracts(
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
+    "computerUseProviders",
     "transcriptSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
@@ -557,6 +561,7 @@ function buildRecord(params: {
       officialCatalogManifest?.contracts,
     ),
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
+    computerUseProviderMetadata: params.manifest.computerUseProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,

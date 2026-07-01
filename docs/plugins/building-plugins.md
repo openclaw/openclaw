@@ -106,6 +106,11 @@ local proof.
     eagerly loading every plugin runtime. Set `activation.onStartup`
     intentionally. This example starts on Gateway startup.
 
+    Computer Use providers use the same manifest-first pattern: declare provider
+    ids in `contracts.computerUseProviders`, then add
+    `computerUseProviderMetadata` when the macOS app needs cheap host-binding
+    facts before runtime loads.
+
     Host-trusted plugin surfaces are also manifest-gated and require explicit
     enablement for installed plugins. If an installed plugin registers
     `api.registerAgentToolResultMiddleware(...)`, declare each target runtime in

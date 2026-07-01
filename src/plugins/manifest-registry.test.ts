@@ -1864,6 +1864,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       contracts: {
         mediaUnderstandingProviders: ["openai"],
+        computerUseProviders: ["cua"],
         imageGenerationProviders: ["openai"],
         tools: ["image_generate", "memory_get"],
       },
@@ -1920,6 +1921,18 @@ describe("loadPluginManifestRegistry", () => {
               textExtraction: "ignored",
             },
           },
+        },
+      },
+      computerUseProviderMetadata: {
+        cua: {
+          platform: "darwin",
+          hostProtocol: "cua-driver-daemon-v1",
+          permissions: ["accessibility", "screen-recording", "camera"],
+          mcpServerName: "cua-driver",
+          ignored: true,
+        },
+        empty: {
+          platform: "linux",
         },
       },
       toolMetadata: {
@@ -1999,6 +2012,14 @@ describe("loadPluginManifestRegistry", () => {
             image: false,
           },
         },
+      },
+    });
+    expect(registry.plugins[0]?.computerUseProviderMetadata).toEqual({
+      cua: {
+        platform: "darwin",
+        hostProtocol: "cua-driver-daemon-v1",
+        permissions: ["accessibility", "screen-recording"],
+        mcpServerName: "cua-driver",
       },
     });
     expect(registry.plugins[0]?.toolMetadata).toEqual({

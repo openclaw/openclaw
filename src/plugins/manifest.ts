@@ -390,6 +390,8 @@ export type PluginManifest = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  /** Cheap Computer Use host metadata without importing plugin runtime. */
+  computerUseProviderMetadata?: Record<string, PluginManifestComputerUseProviderMetadata>;
   /** Cheap image-generation provider auth metadata without importing plugin runtime. */
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap video-generation provider auth metadata without importing plugin runtime. */
@@ -419,6 +421,7 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  computerUseProviders?: string[];
   transcriptSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
@@ -433,6 +436,15 @@ export type PluginManifestContracts = {
 };
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
+
+export type PluginManifestComputerUsePermission = "accessibility" | "screen-recording";
+
+export type PluginManifestComputerUseProviderMetadata = {
+  platform?: "darwin";
+  hostProtocol?: string;
+  permissions?: PluginManifestComputerUsePermission[];
+  mcpServerName?: string;
+};
 
 export type PluginManifestMediaUnderstandingProviderMetadata = {
   capabilities?: PluginManifestMediaUnderstandingCapability[];
@@ -841,6 +853,52 @@ function normalizePluginToolMetadata(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeComputerUsePermissions(
+  value: unknown,
+): PluginManifestComputerUsePermission[] | undefined {
+  const permissions = normalizeTrimmedStringList(value).filter(
+    (entry): entry is PluginManifestComputerUsePermission =>
+      entry === "accessibility" || entry === "screen-recording",
+  );
+  return permissions.length > 0 ? permissions : undefined;
+}
+
+function normalizeComputerUseProviderMetadataEntry(
+  rawMetadata: Record<string, unknown>,
+): PluginManifestComputerUseProviderMetadata | undefined {
+  const platform = rawMetadata.platform === "darwin" ? "darwin" : undefined;
+  const hostProtocol = normalizeOptionalString(rawMetadata.hostProtocol);
+  const permissions = normalizeComputerUsePermissions(rawMetadata.permissions);
+  const mcpServerName = normalizeOptionalString(rawMetadata.mcpServerName);
+  const metadata = {
+    ...(platform ? { platform } : {}),
+    ...(hostProtocol ? { hostProtocol } : {}),
+    ...(permissions ? { permissions } : {}),
+    ...(mcpServerName ? { mcpServerName } : {}),
+  } satisfies PluginManifestComputerUseProviderMetadata;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function normalizeComputerUseProviderMetadata(
+  value: unknown,
+): Record<string, PluginManifestComputerUseProviderMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestComputerUseProviderMetadata> = Object.create(null);
+  for (const [rawProviderId, rawMetadata] of Object.entries(value)) {
+    const providerId = normalizeOptionalString(rawProviderId) ?? "";
+    if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const metadata = normalizeComputerUseProviderMetadataEntry(rawMetadata);
+    if (metadata) {
+      normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -858,6 +916,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const computerUseProviders = normalizeTrimmedStringList(value.computerUseProviders);
   const transcriptSourceProviders = normalizeTrimmedStringList(value.transcriptSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
@@ -880,6 +939,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(computerUseProviders.length > 0 ? { computerUseProviders } : {}),
     ...(transcriptSourceProviders.length > 0 ? { transcriptSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
@@ -1804,6 +1864,9 @@ export function loadPluginManifest(
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
     raw.mediaUnderstandingProviderMetadata,
   );
+  const computerUseProviderMetadata = normalizeComputerUseProviderMetadata(
+    raw.computerUseProviderMetadata,
+  );
   const imageGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
     raw.imageGenerationProviderMetadata,
   );
@@ -1864,6 +1927,7 @@ export function loadPluginManifest(
       uiHints,
       contracts,
       mediaUnderstandingProviderMetadata,
+      computerUseProviderMetadata,
       imageGenerationProviderMetadata,
       videoGenerationProviderMetadata,
       musicGenerationProviderMetadata,
