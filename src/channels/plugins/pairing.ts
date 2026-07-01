@@ -9,16 +9,26 @@ import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelPairingAdapter } from "./pairing.types.js";
 import { getChannelPlugin, listChannelPlugins } from "./registry.js";
 
+function readPairingAdapter(plugin: {
+  pairing?: ChannelPairingAdapter;
+}): ChannelPairingAdapter | null {
+  try {
+    return plugin.pairing ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function listPairingChannels(): ChannelId[] {
   // Channel docking: pairing support is declared via plugin.pairing.
   return listChannelPlugins()
-    .filter((plugin) => plugin.pairing)
+    .filter((plugin) => readPairingAdapter(plugin))
     .map((plugin) => plugin.id);
 }
 
 export function getPairingAdapter(channelId: ChannelId): ChannelPairingAdapter | null {
   const plugin = getChannelPlugin(channelId);
-  return plugin?.pairing ?? null;
+  return plugin ? readPairingAdapter(plugin) : null;
 }
 
 export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
