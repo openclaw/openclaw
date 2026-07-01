@@ -25,6 +25,7 @@ describe("exec inline eval detection", () => {
     { argv: ["php", "-B", "system('id');"], expected: "php -B" },
     { argv: ["php", "-E", "system('id');"], expected: "php -E" },
     { argv: ["php", "-R", "system('id');"], expected: "php -R" },
+    { argv: ["php8.3", "-B", "system('id');"], expected: "php8.3 -B" },
     { argv: ["Rscript", "-e", "system('id')"], expected: "rscript -e" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
     { argv: ["awk", "BEGIN { print 1 }"], expected: "awk inline program" },
@@ -89,6 +90,7 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/python3.13")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("python3.*")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("pypy3.10")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("php8.3")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/node")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("Rscript")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("r2")).toBe(false);

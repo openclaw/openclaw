@@ -369,6 +369,8 @@ describe("processGatewayAllowlist", () => {
     security: "full" | "allowlist";
     askFallback: "full" | "allowlist";
     approvedByAsk: boolean;
+    command?: string;
+    inlineEvalHit?: typeof INLINE_EVAL_HIT;
   }) {
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
@@ -377,7 +379,7 @@ describe("processGatewayAllowlist", () => {
       hostAsk: "always",
       askFallback: params.askFallback,
     });
-    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
+    detectInterpreterInlineEvalArgvMock.mockReturnValue(params.inlineEvalHit ?? INLINE_EVAL_HIT);
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: true },
@@ -390,7 +392,7 @@ describe("processGatewayAllowlist", () => {
     });
 
     return runGatewayAllowlist({
-      command: "python3 -c 'print(1)'",
+      command: params.command ?? "python3 -c 'print(1)'",
       security: params.security,
       ask: "always",
       strictInlineEval: true,
@@ -1671,6 +1673,74 @@ EOF`,
       );
     });
     expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      command: "python3.13 -c 'print(1)'",
+      executable: "python3.13",
+      normalizedExecutable: "python3.13",
+      flag: "-c",
+      argv: ["python3.13", "-c", "print(1)"],
+    },
+    {
+      command: "/usr/bin/pypy3.10 -c 'print(1)'",
+      executable: "/usr/bin/pypy3.10",
+      normalizedExecutable: "pypy3.10",
+      flag: "-c",
+      argv: ["/usr/bin/pypy3.10", "-c", "print(1)"],
+    },
+    {
+      command: "php -B 'system(\"id\")'",
+      executable: "php",
+      normalizedExecutable: "php",
+      flag: "-B",
+      argv: ["php", "-B", 'system("id")'],
+    },
+    {
+      command: "php -E 'system(\"id\")'",
+      executable: "php",
+      normalizedExecutable: "php",
+      flag: "-E",
+      argv: ["php", "-E", 'system("id")'],
+    },
+    {
+      command: "Rscript -e 'system(\"id\")'",
+      executable: "Rscript",
+      normalizedExecutable: "rscript",
+      flag: "-e",
+      argv: ["Rscript", "-e", 'system("id")'],
+    },
+  ])("denies timed-out inline-eval requests before execution for $command", async (carrier) => {
+    const result = await runTimedOutStrictInlineEval({
+      security: "allowlist",
+      askFallback: "allowlist",
+      approvedByAsk: false,
+      command: carrier.command,
+      inlineEvalHit: {
+        executable: carrier.executable,
+        normalizedExecutable: carrier.normalizedExecutable,
+        flag: carrier.flag,
+        argv: carrier.argv,
+      },
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(enforceStrictInlineEvalApprovalBoundaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresInlineEvalApproval: true }),
+    );
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalId: "req-1",
+          sessionKey: "agent:main:main",
+          turnSourceChannel: undefined,
+          direct: false,
+        }),
+        `Exec denied (gateway id=req-1, approval-timeout): ${carrier.command}`,
+      );
+    });
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
