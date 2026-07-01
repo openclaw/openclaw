@@ -1328,6 +1328,141 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(calls).toEqual(["ensure", "resolve"]);
   });
 
+  it("soft-fails when context engine returns a spend-backoff reason, leaves session intact", async () => {
+    const sessionKey = "agent:main:cli";
+    const sessionId = "session-cli-backoff";
+    const sessionFile = path.join(tmpDir, "session-backoff.jsonl");
+    const storePath = path.join(tmpDir, "sessions-backoff.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls: [] }),
+        async compact() {
+          return {
+            ok: false,
+            compacted: false,
+            reason:
+              "summary spend backoff open for compaction:agent:main:cli until 2099-01-01T00:00:00.000Z",
+          };
+        },
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: vi.fn(),
+      recordCliCompactionInStore,
+    });
+
+    const result = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(result).toBe(sessionEntry);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+  });
+
+  it("soft-fails when context engine throws LcmSummarySpendLimitError, leaves session intact", async () => {
+    const sessionKey = "agent:main:cli";
+    const sessionId = "session-cli-backoff-throw";
+    const sessionFile = path.join(tmpDir, "session-backoff-throw.jsonl");
+    const storePath = path.join(tmpDir, "sessions-backoff-throw.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls: [] }),
+        async compact() {
+          const err = new Error(
+            "summary spend backoff open for compaction:agent:main:cli until 2099-01-01T00:00:00.000Z",
+          );
+          err.name = "LcmSummarySpendLimitError";
+          throw err;
+        },
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: vi.fn(),
+      recordCliCompactionInStore,
+    });
+
+    const result = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(result).toBe(sessionEntry);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+  });
+
   it("bounds a hung CLI context-engine compaction and leaves resume state intact", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-timeout";
