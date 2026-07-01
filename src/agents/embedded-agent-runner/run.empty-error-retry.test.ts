@@ -6,6 +6,7 @@ import {
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedLog,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -81,6 +82,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
+    // Proof: [empty-error-retry] log fires in the real runner path
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
   });
 
   it("retries when stopReason=error emitted only thinking blocks and output tokens", async () => {
@@ -136,11 +139,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -153,7 +153,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "LLM request timed out.",
       ),
     );
 
@@ -161,10 +161,32 @@ describe("runEmbeddedAgent silent-error retry", () => {
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-timeout",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries server_error when the attempt is otherwise silent and side-effect-free", async () => {
+    // Real provider 5xx produces server_error. #97877 fix ensures
+    // server_error enters the retry gate; shouldRetrySilentErrorAssistantTurn
+    // then checks content/tools/side-effects before allowing retry.
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("anthropic", "claude-opus-4-8", 0, [], "Internal server error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-server-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
@@ -275,8 +297,9 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {
-    // Resubmission would duplicate side effects when replay metadata cannot
-    // prove the failed turn is safe to replay.
+    // Legacy fallback: no currentAttemptReplayMetadata → falls back to
+    // cumulative replayMetadata (which is dirty from toolMetas).
+    // Conservatively blocks retry when any metadata signal is dirty.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -288,10 +311,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        replayMetadata: {
-          hadPotentialSideEffects: true,
-          replaySafe: false,
-        },
+        toolMetas: [{ toolName: "browser", replaySafe: false }],
       }),
     );
 
@@ -304,6 +324,124 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
+    // Proof: no retry log when dirty cumulative metadata blocks retry
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
+  });
+
+  it("does not retry when currentAttemptReplayMetadata records same-attempt tool side effects", async () => {
+    // Same-attempt unsafe tool detected via buildAttemptReplayMetadata
+    // with actual toolMetasNormalized (independent of cumulative state).
+    // Even if cumulative replayMetadata is clean, the current-attempt
+    // signal must block retry to prevent duplicate tool execution.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        currentAttemptReplayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-skip-same-attempt-tools",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
+  });
+
+  it("does not retry when prior state is dirty AND same-attempt tool also ran", async () => {
+    // Session already had side effects from earlier turns, AND the current
+    // attempt ran a replay-unsafe tool.  currentAttemptReplayMetadata is
+    // dirty (independent of prior cumulative) so retry must stay blocked.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        // Cumulative: dirty from prior turns
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        // Per-attempt: also dirty (tool ran this attempt)
+        currentAttemptReplayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-prior-dirty-same-attempt-tool",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
+  });
+
+  it("retries when prior turns had side effects but current 5xx attempt ran no tools", async () => {
+    // Regression for #97877: cumulative replayMetadata from prior-turn tool
+    // activity must not block retry of a later turn whose model call itself
+    // produced no tools. attempt.ts emits currentAttemptReplayMetadata from
+    // observedReplayMetadata before accumulation — clean per-attempt + dirty
+    // cumulative → retry allowed.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        // Simulate cumulative prior-turn side effects — hadPotentialSideEffects
+        // is true from session accumulation even though this attempt was clean.
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        // Per-attempt: emitted by attempt.ts from observedReplayMetadata before
+        // accumulation.  This is clean — no tools ran in this attempt.
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-prior-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+    // Proof: [empty-error-retry] fires in the real runner, even with
+    // cumulative replayMetadata dirty from prior-turn tool activity
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
+  });
+
+  it("does not retry when cumulative replayMetadata is dirty and currentAttemptReplayMetadata is absent", async () => {
+    // Legacy harnesses that do not emit currentAttemptReplayMetadata
+    // must stay conservative: dirty cumulative → no retry.
+    // normalizeEmbeddedRunAttemptResult passes through raw.currentAttemptReplayMetadata
+    // as undefined; shouldRetrySilentErrorAssistantTurn falls back to cumulative.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        // Cumulative dirty from prior turns
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        // Legacy harness: no currentAttemptReplayMetadata
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-legacy-absent",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    // Proof: no retry log — legacy harness stays conservative
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(expect.stringContaining("[empty-error-retry]"));
   });
 
   it.each([

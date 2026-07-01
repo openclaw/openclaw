@@ -419,6 +419,11 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    // Per-attempt metadata: only populated when the attempt producer (attempt.ts)
+    // explicitly sets it from observedReplayMetadata before accumulation.
+    // Legacy harnesses that do not emit this field trigger the ?? fallback in
+    // shouldRetrySilentErrorAssistantTurn, keeping the conservative behavior.
+    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
   };
 }
 
@@ -3171,7 +3176,7 @@ async function runEmbeddedAgentInternal(
               promptFailoverReason === "timeout" &&
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
-              attempt.replayMetadata.replaySafe;
+              resolveAttemptReplayMetadata(attempt).replaySafe;
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -3361,7 +3366,8 @@ async function runEmbeddedAgentInternal(
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||
-            assistantFailoverReason === "unknown";
+            assistantFailoverReason === "unknown" ||
+            assistantFailoverReason === "server_error";
           // Retry replay-safe non-visible provider errors before assistant
           // failover surfaces them as terminal provider failures.
           if (
