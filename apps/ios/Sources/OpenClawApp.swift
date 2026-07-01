@@ -630,6 +630,10 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
+            // Reruns must exercise onboarding instead of saved pairing state.
+            GatewayOnboardingReset.reset(appModel: appModel, instanceId: GatewaySettingsStore.currentInstanceID())
+        }
         if Self.screenshotModeEnabled {
             UIView.setAnimationsEnabled(false)
             UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")

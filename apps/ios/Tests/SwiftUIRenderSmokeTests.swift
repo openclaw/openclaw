@@ -42,6 +42,17 @@ import UIKit
         }
     }
 
+    @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
+        for typeSize in [DynamicTypeSize.large, .accessibility5] {
+            let root = HostedPushRelayDisclosureSheet(
+                message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
+                onContinue: {})
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 402, height: 450))
+        }
+    }
+
     @Test @MainActor func rootTabsBuildsDeviceOrientationShellMatrix() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()

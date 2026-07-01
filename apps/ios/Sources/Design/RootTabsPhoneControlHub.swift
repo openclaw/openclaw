@@ -21,7 +21,6 @@ struct RootTabsPhoneControlHub: View {
                         ForEach(self.groups) { group in
                             self.groupSection(group)
                         }
-                        self.versionFooter
                     }
                     .padding(.vertical, self.isCompactHeight ? 10 : 16)
                 }
@@ -51,7 +50,7 @@ struct RootTabsPhoneControlHub: View {
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         Text(self.gatewayDisplayLabel)
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -71,7 +70,7 @@ struct RootTabsPhoneControlHub: View {
                                 .font(.headline)
                                 .lineLimit(1)
                             Text(self.gatewayDisplayLabel)
-                                .font(.caption)
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -98,14 +97,14 @@ struct RootTabsPhoneControlHub: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(self.gatewayDisplayLabel)
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 Text(self.gatewayActionTitle)
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(OpenClawBrand.accent)
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.bold))
@@ -157,13 +156,13 @@ struct RootTabsPhoneControlHub: View {
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: self.color(for: destination))
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(destination.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text(destination.subtitle)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -175,20 +174,6 @@ struct RootTabsPhoneControlHub: View {
         .padding(.vertical, self.isCompactHeight ? 8 : 10)
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
-    }
-
-    private var versionFooter: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
-            HStack {
-                Spacer()
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     @ViewBuilder
@@ -348,19 +333,6 @@ struct RootTabsPhoneControlHub: View {
 
     static func bottomScrollInset(verticalSizeClass: UserInterfaceSizeClass?) -> CGFloat {
         verticalSizeClass == .compact ? 72 : 112
-    }
-
-    private func color(for destination: RootTabs.SidebarDestination) -> Color {
-        switch destination {
-        case .chat, .talk, .overview, .gateway:
-            OpenClawBrand.accent
-        case .instances:
-            Color.secondary
-        case .activity, .usage, .docs:
-            OpenClawBrand.accentHot
-        case .agents, .workboard, .skillWorkshop, .sessions, .dreaming, .cron, .settings:
-            OpenClawBrand.ok
-        }
     }
 
     private func resolveDefaultAgentID() -> String {
