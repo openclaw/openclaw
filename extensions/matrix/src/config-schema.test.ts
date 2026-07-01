@@ -126,3 +126,59 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("MatrixConfigSchema execApprovals", () => {
+  it("accepts execApprovals.enabled=true", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled: true, approvers: ["@admin:example.org"] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts execApprovals.enabled=false", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled: false, approvers: ["@admin:example.org"] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts execApprovals.enabled="auto"', () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled: "auto", approvers: ["@admin:example.org"] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects execApprovals.enabled with other string values", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled: "on" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts execApprovals with no enabled (undefined)", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { approvers: ["@admin:example.org"] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([true, false, "auto"] as const)("accepts execApprovals.enabled=%s", (enabled) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled, approvers: ["@admin:example.org"] },
+    });
+    expect(result.success).toBe(true);
+  });
+});
