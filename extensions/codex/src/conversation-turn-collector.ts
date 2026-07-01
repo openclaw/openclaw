@@ -43,15 +43,30 @@ export function createCodexConversationTurnCollector(threadId: string) {
     resolveCompletion = undefined;
     rejectCompletion = undefined;
   };
+  // Codex marks a turn "failed" whenever any turn-affecting error fired during it
+  // (sandbox/stream/usage errors) and never clears that flag on recovery — see
+  // ../codex app-server bespoke_event_handling.rs (handle_turn_complete derives
+  // status from the sticky turn_summary.last_error). So a recovered turn can
+  // complete failed while still carrying a final assistant message. Surface that
+  // recovered answer instead of leaking the stale internal failure as a Slack
+  // banner; only reject when no answer was produced (a true unrecovered failure).
+  const terminalOutcome = (): { ok: true; replyText: string } | { ok: false; error: string } => {
+    const replyText = collectReplyText();
+    if (failedError && !replyText) {
+      return { ok: false, error: failedError };
+    }
+    return { ok: true, replyText };
+  };
   const finish = () => {
     if (completed) {
       return;
     }
     completed = true;
-    if (failedError) {
-      rejectCompletion?.(new Error(failedError));
+    const outcome = terminalOutcome();
+    if (outcome.ok) {
+      resolveCompletion?.({ replyText: outcome.replyText });
     } else {
-      resolveCompletion?.({ replyText: collectReplyText() });
+      rejectCompletion?.(new Error(outcome.error));
     }
     clearWaitState();
   };
@@ -132,9 +147,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
     handleNotification,
     wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
       if (completed) {
-        return failedError
-          ? Promise.reject(new Error(failedError))
-          : Promise.resolve({ replyText: collectReplyText() });
+        const outcome = terminalOutcome();
+        return outcome.ok
+          ? Promise.resolve({ replyText: outcome.replyText })
+          : Promise.reject(new Error(outcome.error));
       }
       return new Promise<{ replyText: string }>((resolve, reject) => {
         resolveCompletion = resolve;

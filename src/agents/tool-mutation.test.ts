@@ -45,12 +45,16 @@ describe("tool mutation helpers", () => {
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
     ["exec", "rg -n tool-mutation src/agents"],
+    ["exec", "ps -o pid,ppid,etime,pcpu,pmem,cmd -p 3865740,3865741,3865756"],
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
+    ["exec", "gh pr checks 94223 --repo openclaw/openclaw"],
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([
