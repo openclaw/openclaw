@@ -138,6 +138,14 @@ function setOwnSchemaProperty(target: Record<string, unknown>, key: string, valu
   });
 }
 
+function readSchemaEntries(value: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  try {
+    return Object.entries(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
   key: TopLevelConditionalKey,
@@ -407,13 +415,19 @@ function extendSchemaDefs(
         definitions: new Map<string, unknown>(),
       };
   if (defsEntry) {
-    for (const [key, value] of Object.entries(defsEntry)) {
-      next.$defs.set(key, value);
+    const entries = readSchemaEntries(defsEntry);
+    if (entries) {
+      for (const [key, value] of entries) {
+        next.$defs.set(key, value);
+      }
     }
   }
   if (legacyDefsEntry) {
-    for (const [key, value] of Object.entries(legacyDefsEntry)) {
-      next.definitions.set(key, value);
+    const entries = readSchemaEntries(legacyDefsEntry);
+    if (entries) {
+      for (const [key, value] of entries) {
+        next.definitions.set(key, value);
+      }
     }
   }
   return next;
@@ -547,7 +561,11 @@ function inlineLocalSchemaRefsWithDefs(
   }
 
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
+  const entries = readSchemaEntries(obj);
+  if (!entries) {
+    return {};
+  }
+  for (const [key, value] of entries) {
     if (key === "$defs" || key === "definitions" || key === "components") {
       continue;
     }
@@ -560,7 +578,7 @@ function inlineLocalSchemaRefsWithDefs(
         result,
         key,
         Object.fromEntries(
-          Object.entries(value).map(([entryKey, entryValue]) => [
+          (readSchemaEntries(value) ?? []).map(([entryKey, entryValue]) => [
             entryKey,
             inlineLocalSchemaRefsWithDefs(entryValue, nextDefs, refStack, state, rootDocument),
           ]),
