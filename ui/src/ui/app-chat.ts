@@ -42,7 +42,6 @@ import {
   scheduleControlUiAfterPaint,
 } from "./control-ui-performance.ts";
 import {
-  abortChatRun,
   appendUserChatMessage,
   loadChatHistory,
   requestChatSend,
@@ -148,6 +147,12 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 type ChatMetadataApplyResult = {
   commands: boolean;
   models: boolean;
+};
+
+type ChatAbortTarget = {
+  runId?: string | null;
+  sessionKey: string;
+  agentId?: string;
 };
 
 function setChatError(host: ChatHost, error: string | null) {
@@ -259,6 +264,45 @@ export function hasAbortableSessionRun(host: {
       (session) => session.key === host.sessionKey && isSessionRunActive(session),
     ),
   );
+}
+
+function resolveAbortTarget(host: ChatHost): ChatAbortTarget {
+  const selectedActiveSession = host.sessionsResult?.sessions.find(
+    (session) =>
+      areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+  );
+  const targetSession = selectedActiveSession;
+  const sessionKey = targetSession?.key ?? host.sessionKey;
+  return {
+    runId: host.chatRunId,
+    sessionKey,
+    ...scopedAgentParamsForSession(host, sessionKey),
+  };
+}
+
+async function requestAbortTarget(host: ChatHost, target: ChatAbortTarget): Promise<boolean> {
+  if (!host.client || !host.connected) {
+    return false;
+  }
+  try {
+    await host.client.request(
+      "chat.abort",
+      target.runId
+        ? {
+            sessionKey: target.sessionKey,
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+            runId: target.runId,
+          }
+        : {
+            sessionKey: target.sessionKey,
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+          },
+    );
+    return true;
+  } catch (err) {
+    setChatError(host, formatConnectError(err));
+    return false;
+  }
 }
 
 export function isChatStopCommand(text: string) {
@@ -382,7 +426,7 @@ export function scopedAgentListParamsForRefreshTarget(
 }
 
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
-  const activeRunId = host.chatRunId;
+  const abortTarget = resolveAbortTarget(host);
   const clearDraft = () => {
     if (opts?.preserveDraft) {
       return;
@@ -393,18 +437,14 @@ export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   // If disconnected but this session is abortable, queue the abort for when we reconnect.
   if (!host.connected && hasAbortableSessionRun(host)) {
     clearDraft();
-    host.pendingAbort = {
-      runId: activeRunId,
-      sessionKey: host.sessionKey,
-      ...scopedAgentParamsForSession(host, host.sessionKey),
-    };
+    host.pendingAbort = abortTarget;
     return;
   }
   if (!host.connected) {
     return;
   }
   clearDraft();
-  await abortChatRun(host as unknown as ChatState);
+  await requestAbortTarget(host, abortTarget);
 }
 
 function enqueueChatMessage(

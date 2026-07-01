@@ -173,7 +173,7 @@ export type ChatProps = {
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
+  onSend: (messageOverride?: string) => void;
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -1758,6 +1758,18 @@ function selectSlashArg(
   }
 }
 
+function isComposerStopCommand(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "/stop" ||
+    normalized === "stop" ||
+    normalized === "esc" ||
+    normalized === "abort" ||
+    normalized === "wait" ||
+    normalized === "exit"
+  );
+}
+
 function slashOptionIdSegment(value: string): string {
   return (
     value
@@ -2497,6 +2509,23 @@ export function renderChat(props: ChatProps) {
     // prevent them or commit the in-progress composition as a host draft.
     if (vs.composerComposing || e.isComposing || e.keyCode === 229) {
       return;
+    }
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      const target = e.target as HTMLTextAreaElement;
+      if (isComposerStopCommand(target.value)) {
+        if (!props.connected) {
+          return;
+        }
+        e.preventDefault();
+        closeSlashMenuIfNeeded(requestUpdate);
+        if (canCompose) {
+          commitComposerDraft(props, target.value);
+          props.onSend(target.value);
+          syncComposerDraftAfterSend(target);
+        }
+        return;
+      }
     }
 
     // Slash menu navigation — arg mode
