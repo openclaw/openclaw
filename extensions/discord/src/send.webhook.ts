@@ -1,7 +1,10 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
@@ -121,10 +124,13 @@ export async function sendWebhookMessageDiscord(
     await throwWebhookResponseError(response);
   }
 
-  const payload = (await response.json().catch(() => ({}))) as {
-    id?: string;
-    channel_id?: string;
-  };
+  const payload =
+    response.status === 204
+      ? ({} as { id?: string; channel_id?: string })
+      : await readProviderJsonResponse<{
+          id?: string;
+          channel_id?: string;
+        }>(response, "Discord webhook send");
   try {
     recordChannelActivity({
       channel: "discord",
