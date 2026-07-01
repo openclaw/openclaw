@@ -93,6 +93,9 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+const OPENAI_REALTIME_ALLOW_UNVALIDATED_KEY_ENV = "OPENCLAW_OPENAI_REALTIME_ALLOW_UNVALIDATED_KEY";
+const OPENAI_REALTIME_DIRECT_AUTH_MESSAGE =
+  "OpenAI Realtime voice provider 'openai' requires a direct OpenAI Platform API key for sessions against api.openai.com. Azure AI Foundry / Azure OpenAI model credentials and OpenAI-compatible proxy keys are not valid for direct OpenAI Realtime sessions. Configure the surface-specific provider apiKey (for example talk.realtime.providers.openai.apiKey, plugins.entries.voice-call.config.realtime.providers.openai.apiKey, or the channel voice.realtime provider config) or OPENAI_API_KEY with a direct OpenAI Platform key. For Azure Realtime, use an Azure deployment with azureEndpoint + azureDeployment where supported.";
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -240,6 +243,7 @@ function asUnitInterval(value: unknown): number | undefined {
 
 type OpenAIRealtimeApiKeyResolution =
   | { status: "available"; value: string }
+  | { status: "invalid-api-key" }
   | { status: "missing" };
 
 const OPENAI_REALTIME_PLATFORM_API_KEY_REQUIRED =
@@ -345,7 +349,10 @@ async function resolveOpenAIRealtimePlatformApiKey(params: {
     configured.status === "available" ||
     hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)
   ) {
-    return configured;
+    return configured.status === "available" &&
+      isObviouslyNotDirectOpenAIRealtimeApiKey(configured.value)
+      ? { status: "invalid-api-key" }
+      : configured;
   }
 
   const profileApiKey = await resolveProviderAuthProfileApiKey({
@@ -354,10 +361,15 @@ async function resolveOpenAIRealtimePlatformApiKey(params: {
     profileTypes: ["api_key"],
   });
   if (profileApiKey) {
-    return { status: "available", value: profileApiKey };
+    return isObviouslyNotDirectOpenAIRealtimeApiKey(profileApiKey)
+      ? { status: "invalid-api-key" }
+      : { status: "available", value: profileApiKey };
   }
 
-  return resolveOpenAIRealtimeEnvApiKey();
+  const env = resolveOpenAIRealtimeEnvApiKey();
+  return env.status === "available" && isObviouslyNotDirectOpenAIRealtimeApiKey(env.value)
+    ? { status: "invalid-api-key" }
+    : env;
 }
 
 async function requireOpenAIRealtimePlatformApiKey(params: {
@@ -367,6 +379,9 @@ async function requireOpenAIRealtimePlatformApiKey(params: {
   const resolved = await resolveOpenAIRealtimePlatformApiKey(params);
   if (resolved.status === "available") {
     return resolved.value;
+  }
+  if (resolved.status === "invalid-api-key") {
+    throw openAIRealtimeDirectAuthError();
   }
   throw new Error(OPENAI_REALTIME_PLATFORM_API_KEY_REQUIRED);
 }
@@ -396,6 +411,81 @@ function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
     normalized.includes("session") &&
     normalized.includes(OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT)
   );
+}
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
+}
+
+function isObviouslyNotDirectOpenAIRealtimeApiKey(value: string): boolean {
+  if (isTruthyEnvFlag(process.env[OPENAI_REALTIME_ALLOW_UNVALIDATED_KEY_ENV])) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (/^[a-f0-9]{32}$/i.test(normalized)) {
+    return true;
+  }
+  if (!normalized.startsWith("sk-")) {
+    return true;
+  }
+  return (
+    normalized.startsWith("sk-or-") ||
+    normalized.startsWith("sk-openrouter-") ||
+    normalized.startsWith("sk-litellm") ||
+    normalized.startsWith("sk-litel") ||
+    normalized.includes("litellm")
+  );
+}
+
+function openAIRealtimeDirectAuthError(): Error {
+  return new Error(OPENAI_REALTIME_DIRECT_AUTH_MESSAGE);
+}
+
+function isOpenAIRealtimeAuthFailure(error: unknown): boolean {
+  const record =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : undefined;
+  const status = record?.status ?? record?.statusCode;
+  const rawCode = record?.code ?? record?.errorCode;
+  const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const hasInvalidApiKeyDetail =
+    code === "invalid_api_key" ||
+    message.includes("invalid_api_key") ||
+    message.includes("incorrect api key provided");
+  return (
+    status === 401 || hasInvalidApiKeyDetail || message.includes("unexpected server response: 401")
+  );
+}
+
+function isDirectOpenAIRealtimeWebSocketUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "api.openai.com";
+  } catch {
+    return value.startsWith("wss://api.openai.com/");
+  }
+}
+
+function isDirectOpenAIRealtimeStartupAuthFailure(url: string, error: unknown): boolean {
+  return isDirectOpenAIRealtimeWebSocketUrl(url) && isOpenAIRealtimeAuthFailure(error);
+}
+
+async function createOpenAIRealtimeClientSecretWithAuthHint(params: {
+  authToken: string;
+  auditContext: string;
+  session: Record<string, unknown>;
+}) {
+  try {
+    return await createOpenAIRealtimeClientSecret(params);
+  } catch (error) {
+    if (isOpenAIRealtimeAuthFailure(error)) {
+      throw openAIRealtimeDirectAuthError();
+    }
+    throw error;
+  }
 }
 
 function base64ToBuffer(b64: string): Buffer {
@@ -614,7 +704,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           try {
             const event = JSON.parse(data.toString()) as RealtimeEvent;
             if (event.type === "error" && !this.sessionConfigured) {
-              rejectStartup(new Error(readRealtimeErrorDetail(event.error)));
+              const startupError = new Error(readRealtimeErrorDetail(event.error));
+              rejectStartup(
+                isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
+                  ? openAIRealtimeDirectAuthError()
+                  : startupError,
+              );
               return;
             }
             this.handleEvent(event);
@@ -639,7 +734,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             },
           });
           if (!this.sessionConfigured) {
-            rejectStartup(error instanceof Error ? error : new Error(String(error)));
+            const startupError = error instanceof Error ? error : new Error(String(error));
+            rejectStartup(
+              isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
+                ? openAIRealtimeDirectAuthError()
+                : startupError,
+            );
             return;
           }
           this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -717,15 +817,21 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     if (hasOpenAIRealtimeConfiguredApiKeyInput(cfg.apiKey)) {
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
-      if (directApiKey.status === "missing") {
+      if (directApiKey.status !== "available") {
         throw new Error(OPENAI_REALTIME_PLATFORM_API_KEY_REQUIRED);
+      }
+      if (cfg.azureEndpoint) {
+        return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      }
+      if (isObviouslyNotDirectOpenAIRealtimeApiKey(directApiKey.value)) {
+        return this.resolveDefaultConnectionParams(model);
       }
       return this.resolveApiKeyConnectionParams(directApiKey.value, model);
     }
 
     if (cfg.azureEndpoint) {
       const directApiKey = resolveOpenAIRealtimeEnvApiKey();
-      if (directApiKey.status === "missing") {
+      if (directApiKey.status !== "available") {
         throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
       return this.resolveApiKeyConnectionParams(directApiKey.value, model);
@@ -1342,7 +1448,7 @@ async function createOpenAIRealtimeBrowserSession(
     session.reasoning = { effort: reasoningEffort };
   }
 
-  const clientSecret = await createOpenAIRealtimeClientSecret({
+  const clientSecret = await createOpenAIRealtimeClientSecretWithAuthHint({
     authToken,
     auditContext: "openai-realtime-browser-session",
     session,
