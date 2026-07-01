@@ -61,20 +61,10 @@
     },
     "suppressions": [
       {
-        "provider": "qwen",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+        "modelId": "qwen3.6-plus",
+        "reason": "qwen3.6-plus is live-verified on CN Coding Plan (coding.dashscope.aliyuncs.com); suppress only on Global Coding Plan (coding-intl).",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
-        }
-      },
-      {
-        "provider": "modelstudio",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-        "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "baseUrlHosts": ["coding-intl.dashscope.aliyuncs.com"],
           "providerConfigApiIn": ["qwen", "modelstudio"]
         }
       }

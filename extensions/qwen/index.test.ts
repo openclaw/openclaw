@@ -6,7 +6,6 @@ import {
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
-import { QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./api.js";
 import qwenPlugin from "./index.js";
 import { wrapQwenProviderStream } from "./stream.js";
 
@@ -27,18 +26,12 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
-  it("keeps qwen3.6-plus out of Coding Plan normalized catalogs", async () => {
+  it("does not filter qwen3.6-plus from Coding Plan configs", async () => {
     const provider = await registerQwenProvider();
 
-    const normalized = provider.normalizeConfig?.({
-      provider: "qwen",
-      providerConfig: {
-        baseUrl: QWEN_BASE_URL,
-        models: [{ id: "qwen3.5-plus" }, { id: QWEN_36_PLUS_MODEL_ID }],
-      },
-    } as never);
-
-    expect(normalized?.models?.map((model) => model.id)).toEqual(["qwen3.5-plus"]);
+    // normalizeConfig is no longer defined: qwen3.6-plus is available on all
+    // Qwen endpoints including Coding Plan CN (coding.dashscope.aliyuncs.com).
+    expect(provider.normalizeConfig).toBeUndefined();
   });
 
   it("does not expose runtime model suppression hooks", async () => {
