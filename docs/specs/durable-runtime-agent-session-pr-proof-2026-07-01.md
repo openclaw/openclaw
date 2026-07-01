@@ -60,6 +60,16 @@ Observed results:
   - verifies `taskHash` is stored and raw `task` is not stored on child run or
     parent link metadata.
 
+Review follow-up validation after restoring the pairing QR sensitive-display
+path:
+
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat.directive-tags.test.ts -t "broadcasts sensitive pairing QR display without persisting QR content"`
+  - 2 files, 2 tests passed, 260 skipped.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat.directive-tags.test.ts`
+  - 2 files, 262 tests passed.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/fan-in.test.ts src/durable/subagent.test.ts src/durable/agent-turn.test.ts`
+  - 3 files, 14 tests passed.
+
 ## Typecheck and Schema Proof
 
 Additional validation run on the stacked PR3 branch:
