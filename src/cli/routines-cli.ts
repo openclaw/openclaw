@@ -46,10 +46,6 @@ type RoutineView = {
   };
 };
 
-function printRoutineJson(value: unknown) {
-  printCronJson(value);
-}
-
 function formatMaybeTime(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
     ? formatTimestamp(new Date(value), { style: "short" })
@@ -238,7 +234,7 @@ async function createRoutineFromCli(
   }
   const res = await callGatewayFromCli("routines.create", opts, params);
   if (opts.json) {
-    printRoutineJson(res);
+    printCronJson(res);
   } else {
     const created = (res as { created?: boolean; idempotent?: boolean })?.created;
     const routine = (res as { routine?: RoutineView })?.routine;
@@ -271,7 +267,7 @@ function registerRoutinesListCommand(routines: Command) {
           };
           const res = await callGatewayFromCli("routines.list", opts, params);
           if (opts.json) {
-            printRoutineJson(res);
+            printCronJson(res);
             return;
           }
           printRoutineList((res as { routines?: RoutineView[] })?.routines ?? []);
@@ -293,7 +289,7 @@ function registerRoutinesGetCommand(routines: Command) {
       .action(async (id: string, opts: RoutineCliOpts) => {
         try {
           const res = await callGatewayFromCli("routines.get", opts, { id });
-          printRoutineJson(res);
+          printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
         }
@@ -365,7 +361,7 @@ function registerRoutinesToggleCommand(
         try {
           const res = await callGatewayFromCli(method, opts, { id });
           if (opts.json) {
-            printRoutineJson(res);
+            printCronJson(res);
           } else {
             defaultRuntime.log(`${name === "enable" ? "Enabled" : "Disabled"} routine ${id}`);
           }
@@ -388,7 +384,7 @@ function registerRoutinesDeleteCommand(routines: Command) {
         try {
           const res = await callGatewayFromCli("routines.delete", opts, { id });
           if (opts.json) {
-            printRoutineJson(res);
+            printCronJson(res);
           } else {
             const deleted = (res as { deleted?: boolean })?.deleted;
             defaultRuntime.log(`${deleted ? "Deleted" : "No existing"} routine ${id}`);

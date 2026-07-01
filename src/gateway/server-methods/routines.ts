@@ -24,10 +24,6 @@ import {
 import { assertValidCronCreateDelivery } from "./cron.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-type RoutineCreateParamsWithTarget = RoutineCreateInput & {
-  target?: RoutineCreateInput["target"] & { delivery?: unknown };
-};
-
 function respondInvalid(respond: RespondFn, method: string, message: string): void {
   respond(
     false,
@@ -51,14 +47,6 @@ function validateRoutineSchedule(respond: RespondFn, method: string, params: Rou
     return false;
   }
   return true;
-}
-
-function assertRoutineDeliveryInput(params: RoutineCreateParamsWithTarget) {
-  assertCronDeliveryInputNonBlankFields(params.target?.delivery);
-}
-
-function asRoutineCreateInput(params: unknown): RoutineCreateInput {
-  return params as RoutineCreateInput;
 }
 
 export const routinesHandlers: GatewayRequestHandlers = {
@@ -89,9 +77,9 @@ export const routinesHandlers: GatewayRequestHandlers = {
       respondValidationFailure(respond, "routines.create", validateRoutinesCreateParams.errors);
       return;
     }
-    const input = asRoutineCreateInput(params);
+    const input = params as RoutineCreateInput & { target?: { delivery?: unknown } };
     try {
-      assertRoutineDeliveryInput(input);
+      assertCronDeliveryInputNonBlankFields(input.target?.delivery);
     } catch (err) {
       respondInvalid(respond, "routines.create", formatErrorMessage(err));
       return;

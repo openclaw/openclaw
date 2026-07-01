@@ -427,13 +427,11 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function createRoutineIntentRecord(normalized: NormalizedRoutineCreate): RoutineRecord {
+function routineIntentSignatureFromNormalized(normalized: NormalizedRoutineCreate): string {
   const cronInput = normalized.cronInput;
-  return {
-    id: normalized.id,
+  return stableStringify({
     name: normalized.name,
-    ...(normalized.description ? { description: normalized.description } : {}),
-    enabled: normalized.enabled,
+    description: normalized.description,
     owner: {
       ...(cronInput.agentId ? { agentId: cronInput.agentId } : {}),
       ...(cronInput.sessionKey ? { sessionKey: cronInput.sessionKey } : {}),
@@ -442,11 +440,40 @@ function createRoutineIntentRecord(normalized: NormalizedRoutineCreate): Routine
     trigger: {
       kind: "schedule",
       schedule: cronInput.schedule,
-      cronJobId: cronInput.id ?? createRoutineCronJobId(normalized.id),
     },
     action: cronInput.payload,
-    createdAtMs: 0,
-    updatedAtMs: 0,
+  });
+}
+
+function createRoutineRecordFromCron(params: {
+  normalized: NormalizedRoutineCreate;
+  enabled: boolean;
+  cronJobId: string;
+  action: CronPayload;
+  createdAtMs: number;
+  updatedAtMs: number;
+  cronStorePath?: string;
+}): RoutineRecord {
+  const { cronInput, id, name, description, target } = params.normalized;
+  return {
+    id,
+    name,
+    ...(description ? { description } : {}),
+    enabled: params.enabled,
+    owner: {
+      ...(cronInput.agentId ? { agentId: cronInput.agentId } : {}),
+      ...(cronInput.sessionKey ? { sessionKey: cronInput.sessionKey } : {}),
+    },
+    target,
+    trigger: {
+      kind: "schedule",
+      schedule: cronInput.schedule,
+      cronJobId: params.cronJobId,
+      ...(params.cronStorePath ? { cronStoreKey: cronStoreKey(params.cronStorePath) } : {}),
+    },
+    action: params.action,
+    createdAtMs: params.createdAtMs,
+    updatedAtMs: params.updatedAtMs,
   };
 }
 
@@ -455,27 +482,16 @@ function createRoutinePendingRecord(params: {
   nowMs: number;
   cronStorePath?: string;
 }): RoutineRecord {
-  const { cronInput, id, name, description, target } = params.normalized;
-  return {
-    id,
-    name,
-    ...(description ? { description } : {}),
+  const cronInput = params.normalized.cronInput;
+  return createRoutineRecordFromCron({
+    normalized: params.normalized,
     enabled: params.normalized.enabled,
-    owner: {
-      ...(cronInput.agentId ? { agentId: cronInput.agentId } : {}),
-      ...(cronInput.sessionKey ? { sessionKey: cronInput.sessionKey } : {}),
-    },
-    target,
-    trigger: {
-      kind: "schedule",
-      schedule: cronInput.schedule,
-      cronJobId: cronInput.id ?? createRoutineCronJobId(id),
-      ...(params.cronStorePath ? { cronStoreKey: cronStoreKey(params.cronStorePath) } : {}),
-    },
+    cronJobId: cronInput.id ?? createRoutineCronJobId(params.normalized.id),
     action: cronInput.payload,
     createdAtMs: params.nowMs,
     updatedAtMs: params.nowMs,
-  };
+    cronStorePath: params.cronStorePath,
+  });
 }
 
 function createRoutineRecord(params: {
@@ -484,28 +500,15 @@ function createRoutineRecord(params: {
   cronStorePath?: string;
   createdAtMs?: number;
 }): RoutineRecord {
-  const { cronInput, id, name, description, target } = params.normalized;
-  const { cronJob } = params;
-  return {
-    id,
-    name,
-    ...(description ? { description } : {}),
-    enabled: cronJob.enabled,
-    owner: {
-      ...(cronInput.agentId ? { agentId: cronInput.agentId } : {}),
-      ...(cronInput.sessionKey ? { sessionKey: cronInput.sessionKey } : {}),
-    },
-    target,
-    trigger: {
-      kind: "schedule",
-      schedule: cronInput.schedule,
-      cronJobId: cronJob.id,
-      ...(params.cronStorePath ? { cronStoreKey: cronStoreKey(params.cronStorePath) } : {}),
-    },
-    action: cronJob.payload,
-    createdAtMs: params.createdAtMs ?? cronJob.createdAtMs,
-    updatedAtMs: cronJob.updatedAtMs,
-  };
+  return createRoutineRecordFromCron({
+    normalized: params.normalized,
+    enabled: params.cronJob.enabled,
+    cronJobId: params.cronJob.id,
+    action: params.cronJob.payload,
+    createdAtMs: params.createdAtMs ?? params.cronJob.createdAtMs,
+    updatedAtMs: params.cronJob.updatedAtMs,
+    cronStorePath: params.cronStorePath,
+  });
 }
 
 function cronJobMap(jobs: readonly CronJob[]): Map<string, CronJob> {
@@ -634,8 +637,7 @@ export async function createRoutine(
   return await withRoutineMutationLock(normalized.id, async () => {
     const existing = getRoutineRecordFromSqlite(normalized.id);
     if (existing) {
-      const comparable = createRoutineIntentRecord(normalized);
-      if (routineIntentSignature(existing) !== routineIntentSignature(comparable)) {
+      if (routineIntentSignature(existing) !== routineIntentSignatureFromNormalized(normalized)) {
         throw new Error(`routine id already exists with different intent: ${normalized.id}`);
       }
       const cronJob = await ensureRoutineBackingCronJob({ record: existing, normalized, context });
