@@ -1,5 +1,5 @@
 // Telegram plugin module implements delivery.send behavior.
-import { type Bot, GrammyError } from "grammy";
+import type { Bot } from "grammy";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -10,6 +10,7 @@ import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-err
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
+  isTelegramQuoteParamError,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import {
@@ -28,17 +29,6 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
-const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
-const GrammyErrorCtor: typeof GrammyError | undefined =
-  typeof GrammyError === "function" ? GrammyError : undefined;
-
-function isTelegramQuoteParamError(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return QUOTE_PARAM_RE.test(err.description);
-  }
-  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
-}
-
 function createTelegramDeliverySendRetry() {
   return createTelegramRetryRunner({
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),

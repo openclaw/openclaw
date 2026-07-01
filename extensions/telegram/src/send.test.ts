@@ -298,6 +298,12 @@ function createHtmlParseError(operation = "sendMessage"): Error {
   );
 }
 
+function createQuoteNotFoundError(operation = "sendMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote not found)`,
+  );
+}
+
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
     mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
@@ -3524,6 +3530,43 @@ describe("shared send behaviors", () => {
         quote: " quoted text\n",
         allow_sending_without_reply: true,
       },
+    });
+  });
+
+  it("retries durable text sends with legacy reply id when native quotes are rejected", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 57,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 100,
+      quoteText: "model paraphrase",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: "model paraphrase",
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_to_message_id: 100,
+      allow_sending_without_reply: true,
     });
   });
 

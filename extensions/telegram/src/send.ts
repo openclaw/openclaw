@@ -43,11 +43,15 @@ import { recordOutboundMessageForPromptContext } from "./outbound-message-contex
 import { makeProxyFetch } from "./proxy.js";
 import {
   buildTelegramThreadReplyParams,
+  getTelegramNativeQuoteReplyMessageId,
+  isTelegramQuoteParamError,
+  removeTelegramNativeQuoteParam,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
 import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
+  removeTelegramRichNativeQuoteParam,
   splitTelegramRichMessageTextChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
@@ -326,6 +330,32 @@ function resolveAcceptedReplyToMessageId(
   return params.reply_parameters?.message_id;
 }
 
+function toAcceptedThreadScopedParams(
+  params: Record<string, unknown> | undefined,
+): TelegramThreadScopedParams | undefined {
+  if (!params) {
+    return undefined;
+  }
+  const scoped: TelegramThreadScopedParams = {};
+  if (typeof params.message_thread_id === "number" && Number.isFinite(params.message_thread_id)) {
+    scoped.message_thread_id = params.message_thread_id;
+  }
+  if (
+    typeof params.reply_to_message_id === "number" &&
+    Number.isFinite(params.reply_to_message_id)
+  ) {
+    scoped.reply_to_message_id = params.reply_to_message_id;
+  }
+  const replyParameters = params.reply_parameters;
+  if (replyParameters && typeof replyParameters === "object") {
+    const messageId = (replyParameters as { message_id?: unknown }).message_id;
+    if (typeof messageId === "number" && Number.isFinite(messageId)) {
+      scoped.reply_parameters = { message_id: messageId };
+    }
+  }
+  return Object.keys(scoped).length > 0 ? scoped : undefined;
+}
+
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
@@ -553,6 +583,41 @@ async function withTelegramHtmlParseFallback<T>(params: {
   }
 }
 
+async function withTelegramNativeQuoteFallback<T>(params: {
+  label: string;
+  requestParams: Record<string, unknown>;
+  request: (requestParams: Record<string, unknown>, label: string) => Promise<T>;
+  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
+}): Promise<{ result: T; acceptedParams: Record<string, unknown> }> {
+  try {
+    return {
+      result: await params.request(params.requestParams, params.label),
+      acceptedParams: params.requestParams,
+    };
+  } catch (err) {
+    if (
+      getTelegramNativeQuoteReplyMessageId(params.requestParams) == null ||
+      !isTelegramQuoteParamError(err)
+    ) {
+      throw err;
+    }
+    // Mirror delivery.send.ts legacy-reply retry: model quotes can drift from
+    // the source text, but final replies should keep the message reply target.
+    sendLogger.warn(
+      `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+    const acceptedParams = (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
+      params.requestParams,
+    );
+    return {
+      result: await params.request(acceptedParams, `${params.label}-legacy-reply`),
+      acceptedParams,
+    };
+  }
+}
+
 type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
@@ -772,32 +837,41 @@ export async function sendMessageTelegram(
       ...baseParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
     };
-    const hasPlainParams = Object.keys(plainParams).length > 0;
-    const requestPlain = (label: string) =>
-      requestWithChatNotFound(
-        () =>
-          hasPlainParams
-            ? api.sendMessage(chatId, chunk.plainText, plainParams)
-            : api.sendMessage(chatId, chunk.plainText),
+    const requestSendMessage = (
+      label: string,
+      messageText: string,
+      requestParams: Record<string, unknown>,
+    ) =>
+      withTelegramNativeQuoteFallback({
         label,
-      );
+        requestParams,
+        request: (effectiveParams, retryLabel) =>
+          requestWithChatNotFound(
+            () =>
+              Object.keys(effectiveParams).length > 0
+                ? api.sendMessage(chatId, messageText, effectiveParams)
+                : api.sendMessage(chatId, messageText),
+            retryLabel,
+          ),
+      });
+    const requestPlain = (label: string) =>
+      requestSendMessage(label, chunk.plainText, plainParams ?? {});
     const result = !chunk.htmlText
       ? await requestPlain("message")
       : await withTelegramHtmlParseFallback({
           label: "message",
           verbose: opts.verbose,
           requestHtml: (label) =>
-            requestWithChatNotFound(
-              () =>
-                api.sendMessage(chatId, chunk.htmlText ?? chunk.plainText, {
-                  parse_mode: "HTML" as const,
-                  ...plainParams,
-                }),
-              label,
-            ),
+            requestSendMessage(label, chunk.htmlText ?? chunk.plainText, {
+              parse_mode: "HTML" as const,
+              ...plainParams,
+            }),
           requestPlain,
         });
-    return { result, acceptedParams: params };
+    return {
+      result: result.result,
+      acceptedParams: toAcceptedThreadScopedParams(result.acceptedParams),
+    };
   };
 
   const shouldIncludeReplyForChunk = (
@@ -997,19 +1071,27 @@ export async function sendMessageTelegram(
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
       try {
-        result = await requestWithChatNotFound(
-          () =>
-            richRawApi.sendRichMessage({
-              chat_id: chatId,
-              rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
-                skipEntityDetection: account.config.linkPreview === false,
-                tableMode,
-              }),
-              ...acceptedParams,
-              ...(opts.silent === true ? { disable_notification: true } : {}),
-            }),
-          "richMessage",
-        );
+        const richResult = await withTelegramNativeQuoteFallback<TelegramMessageLike>({
+          label: "richMessage",
+          requestParams: acceptedParams ?? {},
+          removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+          request: (effectiveParams, retryLabel) =>
+            requestWithChatNotFound(
+              () =>
+                richRawApi.sendRichMessage({
+                  chat_id: chatId,
+                  rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
+                    skipEntityDetection: account.config.linkPreview === false,
+                    tableMode,
+                  }),
+                  ...effectiveParams,
+                  ...(opts.silent === true ? { disable_notification: true } : {}),
+                }),
+              retryLabel,
+            ),
+        });
+        result = richResult.result;
+        recordedParams = toTelegramRichMessageContextParams(richResult.acceptedParams);
       } catch (err) {
         if (!isTelegramRichEntityInvalidError(err)) {
           throw err;
