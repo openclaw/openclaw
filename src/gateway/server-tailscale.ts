@@ -28,6 +28,10 @@ export async function startGatewayTailscaleExposure(params: {
 
   try {
     if (params.tailscaleMode === "serve") {
+      // Reset existing serve entries to prevent redundant accumulations
+      // from previous gateway runs (tailscale serve is append-only).
+      await disableTailscaleServe(undefined, params.serviceName?.trim() || undefined).catch(() => {});
+
       if (params.preserveFunnel === true) {
         const funnelCovers = await hasTailscaleFunnelRouteForPort(params.port);
         if (funnelCovers) {
