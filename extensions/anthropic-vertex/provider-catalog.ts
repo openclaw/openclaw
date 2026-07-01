@@ -23,6 +23,7 @@ function buildAnthropicVertexModel(params: {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   maxTokens: number;
+  mediaInput?: ModelDefinitionConfig["mediaInput"];
   thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
 }): ModelDefinitionConfig {
   return {
@@ -33,6 +34,7 @@ function buildAnthropicVertexModel(params: {
     cost: params.cost,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
     maxTokens: params.maxTokens,
+    ...(params.mediaInput ? { mediaInput: params.mediaInput } : {}),
     ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   };
 }
@@ -47,6 +49,18 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       maxTokens: ANTHROPIC_VERTEX_FABLE_MAX_TOKENS,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    }),
+    buildAnthropicVertexModel({
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      maxTokens: 128000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     }),
     buildAnthropicVertexModel({
       id: "claude-opus-4-8",

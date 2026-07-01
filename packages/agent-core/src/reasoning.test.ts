@@ -27,8 +27,23 @@ describe("resolveAgentReasoningOption", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "off")).toBe("low");
   });
 
-  it.each([undefined, null, "none"])("disables reasoning when off maps to %s", (offFallback) => {
-    expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBeUndefined();
+  it.each([undefined, null, "none"])(
+    "omits generic reasoning when off maps to %s",
+    (offFallback) => {
+      expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBeUndefined();
+    },
+  );
+
+  it("preserves explicit off for canonical Sonnet 5 aliases", () => {
+    expect(
+      resolveAgentReasoningOption(
+        makeModel(undefined, {
+          id: "production-deployment",
+          params: { canonicalModelId: "claude-sonnet-5" },
+        }),
+        "off",
+      ),
+    ).toBe("off");
   });
 
   it("preserves enabled thinking levels", () => {

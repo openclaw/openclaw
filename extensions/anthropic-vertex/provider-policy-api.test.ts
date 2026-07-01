@@ -43,6 +43,25 @@ describe("anthropic-vertex provider-policy-api", () => {
     expect(profile?.levels.map((level) => level.id)).toContain("max");
   });
 
+  it("defaults Claude Sonnet 5 to adaptive high effort", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic-vertex",
+      modelId: "claude-sonnet-5",
+    });
+
+    expect(profile?.defaultLevel).toBe("high");
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+  });
+
   it("resolves deployment aliases from canonical model metadata", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic-vertex",

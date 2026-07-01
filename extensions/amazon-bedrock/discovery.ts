@@ -21,6 +21,7 @@ import type {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -164,6 +165,11 @@ function isKnownClaudeMythosPreviewModelId(modelId: string): boolean {
   );
 }
 
+function isUnsupportedClaudeSonnet5ModelId(modelId: string): boolean {
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  return resolveClaudeSonnet5ModelIdentity({ id: stripped }) !== undefined;
+}
+
 function resolveKnownThinkingLevelMap(
   modelId: string,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
@@ -172,6 +178,10 @@ function resolveKnownThinkingLevelMap(
 
 function resolveKnownMaxTokens(modelId: string): number | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ? 128_000 : undefined;
+}
+
+function resolveKnownInput(modelId: string): ModelDefinitionConfig["input"] | undefined {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) ? ["text", "image"] : undefined;
 }
 
 const DEFAULT_COST = {
@@ -332,6 +342,9 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   if (isKnownClaudeMythosPreviewModelId(summary.modelId)) {
     return false;
   }
+  if (isUnsupportedClaudeSonnet5ModelId(summary.modelId)) {
+    return false;
+  }
   if (!includesTextModalities(summary.outputModalities)) {
     return false;
   }
@@ -464,7 +477,11 @@ function resolveInferenceProfiles(
 
     // Look up the underlying foundation model to inherit its capabilities.
     const baseModelId = resolveBaseModelId(profile);
-    if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
+    const contractModelId = baseModelId ?? profile.inferenceProfileId;
+    if (
+      isKnownClaudeMythosPreviewModelId(contractModelId) ||
+      isUnsupportedClaudeSonnet5ModelId(contractModelId)
+    ) {
       continue;
     }
     const baseModel = baseModelId
@@ -473,6 +490,8 @@ function resolveInferenceProfiles(
     const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
+    const input = baseModel?.input ??
+      resolveKnownInput(baseModelId ?? profile.inferenceProfileId) ?? ["text"];
     const canonicalClaudeId = resolveClaudeModelIdentity({ id: baseModelId });
 
     discovered.push({
@@ -481,7 +500,7 @@ function resolveInferenceProfiles(
       reasoning:
         baseModel?.reasoning ??
         supportsClaudeAdaptiveThinking({ id: baseModelId ?? profile.inferenceProfileId }),
-      input: baseModel?.input ?? ["text"],
+      input,
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
         baseModel?.contextWindow ??

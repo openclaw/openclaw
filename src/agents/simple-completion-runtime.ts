@@ -3,6 +3,10 @@
  *
  * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
  */
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "@openclaw/llm-core";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,7 +14,7 @@ import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
   Model,
-  ThinkingLevel as SimpleCompletionThinkingLevel,
+  ModelThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
@@ -346,7 +350,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 }): Promise<AssistantMessage> {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);
+  const reasoning = normalizeSimpleCompletionReasoning(params.model, rawReasoning);
   return await completeSimple(completionModel, params.context, {
     ...options,
     ...(reasoning ? { reasoning } : {}),
@@ -355,16 +359,38 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 }
 
 function normalizeSimpleCompletionReasoning(
+  model: Model,
   reasoning: SimpleCompletionModelOptions["reasoning"],
 ): SimpleCompletionThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
-    case "off":
       return undefined;
+    case "off": {
+      const fallback = model.thinkingLevelMap?.off;
+      if (
+        fallback === "minimal" ||
+        fallback === "low" ||
+        fallback === "medium" ||
+        fallback === "high" ||
+        fallback === "xhigh" ||
+        fallback === "max"
+      ) {
+        return fallback;
+      }
+      if (
+        (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+        resolveClaudeFable5ModelIdentity(model)
+      ) {
+        return "low";
+      }
+      return model.api === "anthropic-messages" && resolveClaudeSonnet5ModelIdentity(model)
+        ? "off"
+        : undefined;
+    }
     case "adaptive":
       return "medium";
     case "max":
-      return "xhigh";
+      return "max";
     default:
       return reasoning;
   }

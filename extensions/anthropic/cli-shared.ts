@@ -33,7 +33,9 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_DISABLE_THINKING",
   "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EFFORT_LEVEL",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
   "CLAUDE_CODE_OAUTH_SCOPES",
   "CLAUDE_CODE_OAUTH_TOKEN",
@@ -45,6 +47,7 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_VERTEX",
+  "MAX_THINKING_TOKENS",
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_HEADERS",
   "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
@@ -338,6 +341,13 @@ export function resolveClaudeCliExecutionArgs(
     return [...context.baseArgs];
   }
   return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
+}
+
+/** Force Claude CLI thinking off for the current run only. */
+export function prepareClaudeCliExecution(thinkingLevel?: string | null) {
+  return normalizeOptionalLowercaseString(thinkingLevel) === "off"
+    ? { env: { MAX_THINKING_TOKENS: "0" } }
+    : undefined;
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

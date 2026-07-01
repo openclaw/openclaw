@@ -343,6 +343,16 @@ describe("Bedrock Fable contract", () => {
     });
   });
 
+  it("maps explicit Fable off to mandatory adaptive low effort", () => {
+    const options = testing.resolveSimpleBedrockOptions(fableModel(), { reasoning: "off" });
+
+    expect(options.reasoning).toBe("low");
+    expect(testing.buildAdditionalModelRequestFields(fableModel(), options)).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "low" },
+    });
+  });
+
   it("sends always-adaptive high effort without unsupported request controls", async () => {
     const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },

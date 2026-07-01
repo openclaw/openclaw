@@ -225,6 +225,38 @@ describe("bedrock discovery", () => {
     expect(models).toEqual([]);
   });
 
+  it("skips Sonnet 5 foundation models and profiles because Mantle owns that route", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            ...baseActiveAnthropicSummary,
+            modelId: "anthropic.claude-sonnet-5",
+            modelName: "Claude Sonnet 5",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-sonnet-5",
+            inferenceProfileName: "US Claude Sonnet 5",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+              },
+            ],
+          },
+        ],
+      });
+
+    await expect(discoverBedrockModels({ region: "us-east-1", clientFactory })).resolves.toEqual(
+      [],
+    );
+  });
+
   it("normalizes region-prefixed versioned model ids when resolving context windows", async () => {
     sendMock
       .mockResolvedValueOnce({

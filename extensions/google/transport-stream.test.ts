@@ -1992,6 +1992,19 @@ describe("google transport stream", () => {
     },
   );
 
+  it("preserves explicit reasoning off as a disabled Gemini thinking config", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash-preview" }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      { reasoning: "off" },
+    );
+
+    const generationConfig = requireGenerationConfig(params);
+    expect(requireThinkingConfig(generationConfig)).toEqual({ thinkingLevel: "MINIMAL" });
+  });
+
   it("maps explicit Gemini 3 thinking budgets to thinkingLevel", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel({ id: "gemini-3-flash-preview" }),

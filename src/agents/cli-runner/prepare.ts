@@ -187,7 +187,8 @@ const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
   "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
+  "sonnet-5": "claude-sonnet-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
 };
@@ -477,6 +478,7 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     authProfileId: effectiveAuthProfileId,
+    thinkingLevel: params.thinkLevel,
     executionMode,
     env: preparedBackend.env,
   } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];

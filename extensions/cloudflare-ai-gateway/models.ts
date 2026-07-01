@@ -19,6 +19,7 @@ const CLOUDFLARE_AI_GATEWAY_DEFAULT_COST = {
   cacheRead: 0.3,
   cacheWrite: 3.75,
 };
+const CLOUDFLARE_AI_GATEWAY_SONNET_5_MODEL_ID = "claude-sonnet-5";
 
 /**
  * Builds a provider model definition, allowing tests/catalog code to override
@@ -29,6 +30,9 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   name?: string;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
+  contextWindow?: number;
+  maxTokens?: number;
+  mediaInput?: ModelDefinitionConfig["mediaInput"];
 }): ModelDefinitionConfig {
   const id = params?.id?.trim() || CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID;
   return {
@@ -37,9 +41,26 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
     reasoning: params?.reasoning ?? true,
     input: params?.input ?? ["text", "image"],
     cost: CLOUDFLARE_AI_GATEWAY_DEFAULT_COST,
-    contextWindow: CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+    contextWindow: params?.contextWindow ?? CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: params?.maxTokens ?? CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+    ...(params?.mediaInput ? { mediaInput: params.mediaInput } : {}),
   };
+}
+
+/** Build the current catalog without changing the shipped onboarding default. */
+export function buildCloudflareAiGatewayModelDefinitions(): ModelDefinitionConfig[] {
+  return [
+    buildCloudflareAiGatewayModelDefinition(),
+    buildCloudflareAiGatewayModelDefinition({
+      id: CLOUDFLARE_AI_GATEWAY_SONNET_5_MODEL_ID,
+      name: "Claude Sonnet 5",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+    }),
+  ];
 }
 
 /**

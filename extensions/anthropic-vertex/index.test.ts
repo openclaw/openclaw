@@ -79,6 +79,7 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.headers).toEqual({ "x-test-header": "1" });
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
+      "claude-sonnet-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
@@ -89,8 +90,16 @@ describe("anthropic-vertex provider plugin", () => {
       xhigh: "xhigh",
       max: "max",
     });
-    expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[1]?.mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
+    expect(result.provider.models[1]).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
     expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
   it("owns Anthropic-style replay policy", async () => {

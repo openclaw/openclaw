@@ -749,6 +749,15 @@ describe("capability cli", () => {
     expect(call?.context).not.toHaveProperty("systemPrompt");
   });
 
+  it("preserves explicit thinking off for local model probes", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--thinking", "off", "--json"],
+    });
+
+    expect(firstCompletionCall()?.options?.reasoning).toBe("off");
+  });
+
   it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
     await runModelRunWithModel("mistral/mistral-medium-3-5", "local");
 

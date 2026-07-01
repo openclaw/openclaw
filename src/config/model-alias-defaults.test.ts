@@ -2,8 +2,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { buildModelAliasIndex } from "../agents/model-selection.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults } from "./defaults.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -109,6 +111,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-8": {},
+            "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
           },
         },
@@ -117,6 +120,7 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -134,6 +138,29 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
+  });
+
+  it("preserves an authored alias when a newer default model is backfilled", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = materializeRuntimeConfig(cfg, "load");
+    const aliases = buildModelAliasIndex({ cfg: next, defaultProvider: "anthropic" });
+
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+    expect(aliases.byAlias.get("sonnet")?.ref).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   it("respects explicit empty alias disables", () => {

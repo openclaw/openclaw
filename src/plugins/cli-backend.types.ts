@@ -27,6 +27,7 @@ export type CliBackendPrepareExecutionContext = {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  thinkingLevel?: CliBackendThinkingLevel;
   executionMode?: CliBackendExecutionMode;
 };
 

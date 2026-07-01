@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import { resolveTransportAwareSimpleApi } from "./provider-transport-stream.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
 // under test imports auth, model resolution, and transport helpers at module load.
@@ -645,7 +646,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
+  it("preserves max effort for provider-owned simple completion clamping", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",
@@ -680,13 +681,13 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
-        reasoning: "xhigh",
+        reasoning: "max",
         apiKey: "sk-test",
       },
     );
   });
 
-  it("omits reasoning for local simple completion when thinking is off", async () => {
+  it("omits explicit off for generic local simple completion providers", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",
@@ -723,6 +724,83 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       {
         apiKey: "sk-test",
       },
+    );
+  });
+
+  it("preserves explicit off for Claude Sonnet 5 local simple completion", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    } satisfies Model<"anthropic-messages">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: { reasoning: "off" },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("preserves Sonnet 5 off after transport preparation rewrites the API", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    } satisfies Model<"anthropic-messages">;
+    const transportApi = resolveTransportAwareSimpleApi(model.api);
+    if (!transportApi) {
+      throw new Error("Expected Anthropic transport API alias");
+    }
+    const preparedModel: Model = { ...model, api: transportApi };
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: { messages: [{ role: "user", content: "pong", timestamp: 1 }] },
+      options: { reasoning: "off" },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      { messages: [{ role: "user", content: "pong", timestamp: 1 }] },
+      { reasoning: "off", apiKey: "sk-test" },
     );
   });
 });

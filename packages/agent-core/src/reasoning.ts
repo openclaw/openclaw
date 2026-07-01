@@ -1,5 +1,6 @@
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   type Model,
   type SimpleStreamOptions,
 } from "../../llm-core/src/index.js";
@@ -33,5 +34,10 @@ export function resolveAgentReasoningOption(
     resolveClaudeFable5ModelIdentity(model)
       ? "low"
       : undefined);
-  return isEnabledThinkingLevel(offFallback) ? offFallback : undefined;
+  if (isEnabledThinkingLevel(offFallback)) {
+    return offFallback;
+  }
+  return model.api === "anthropic-messages" && resolveClaudeSonnet5ModelIdentity(model)
+    ? "off"
+    : undefined;
 }

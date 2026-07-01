@@ -138,6 +138,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.8": "claude-opus-4-8",
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const anthropicPrefix = "anthropic/";
@@ -150,6 +152,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;

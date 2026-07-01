@@ -16,6 +16,7 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
     models: {
       "claude-opus-4-6": "opus46",
       "claude-opus-4-8": "opus48",
+      "claude-sonnet-5": "sonnet5",
       "claude-sonnet-4-6": "sonnet46",
       "claude-haiku-4-5": "haiku45",
       "gpt-5.5": "gpt5.5",

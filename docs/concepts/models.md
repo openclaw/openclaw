@@ -169,10 +169,10 @@ Example allowlist config:
 {
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-sonnet-4-6" },
+      model: { primary: "anthropic/claude-sonnet-5" },
       models: {
-        "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+        "anthropic/claude-opus-4-8": { alias: "Opus" },
       },
     },
   },

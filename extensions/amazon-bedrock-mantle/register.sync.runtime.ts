@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeThinkingProfile,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
@@ -65,6 +69,10 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
         apiKey,
         env,
       }),
+    resolveThinkingProfile: ({ modelId, params }) =>
+      resolveClaudeSonnet5ModelIdentity({ id: modelId, params })
+        ? resolveClaudeThinkingProfile(modelId, params)
+        : undefined,
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

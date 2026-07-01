@@ -21,17 +21,21 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { prepareClaudeSonnet5RequestContext } from "../shared/anthropic-assistant-prefill.js";
 import {
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "../shared/anthropic-auth-headers.js";
 import {
+  defaultsClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
+  usesClaudeStreamingRefusalContract,
 } from "../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -159,11 +163,11 @@ type MutableAssistantOutput = {
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
 function normalizeAnthropicToolChoice(
-  model: AnthropicTransportModel,
+  thinkingEnabled: boolean,
   toolChoice: NonNullable<AnthropicTransportOptions["toolChoice"]>,
 ): AnthropicProjectedToolChoice {
   if (
-    requiresClaudeAdaptiveThinking(model) &&
+    thinkingEnabled &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
   ) {
     return { type: "auto" as const };
@@ -225,13 +229,18 @@ function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
 function resolveAnthropicMessagesMaxTokens(params: {
   modelMaxTokens: number | undefined;
   requestedMaxTokens: number | undefined;
+  useModelDefault?: boolean;
 }): number | undefined {
   const requested = resolvePositiveAnthropicMaxTokens(params.requestedMaxTokens);
   if (requested !== undefined) {
     return requested;
   }
   const modelMax = resolvePositiveAnthropicMaxTokens(params.modelMaxTokens);
-  return modelMax !== undefined ? Math.min(modelMax, 32_000) : undefined;
+  return modelMax !== undefined
+    ? params.useModelDefault
+      ? modelMax
+      : Math.min(modelMax, 32_000)
+    : undefined;
 }
 
 function adjustMaxTokensForThinking(params: {
@@ -1020,7 +1029,10 @@ function buildAnthropicParams(
     params.metadata = { user_id: options.metadata.user_id };
   }
   if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      replayThinkingEnabled,
+      options.toolChoice,
+    );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;
@@ -1040,6 +1052,7 @@ function resolveAnthropicTransportOptions(
   const baseMaxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
+    useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -1048,6 +1061,14 @@ function resolveAnthropicTransportOptions(
   }
   const reasoningModelMaxTokens =
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const fable5 = usesClaudeFable5MessagesContract(model);
+  const reasoning =
+    options?.reasoning === "off" && mandatoryAdaptiveThinking
+      ? fable5
+        ? "low"
+        : "high"
+      : options?.reasoning;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
     stop: options?.stop,
@@ -1063,10 +1084,14 @@ function resolveAnthropicTransportOptions(
     interleavedThinking: options?.interleavedThinking,
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
-    reasoning: options?.reasoning,
+    reasoning,
   };
-  if (!options?.reasoning) {
-    resolved.thinkingEnabled = requiresClaudeAdaptiveThinking(model);
+  if (reasoning === "off") {
+    resolved.thinkingEnabled = false;
+    return resolved;
+  }
+  if (!reasoning) {
+    resolved.thinkingEnabled = defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
       resolved.effort = "high";
     }
@@ -1074,7 +1099,7 @@ function resolveAnthropicTransportOptions(
   }
   if (supportsAdaptiveThinking(model)) {
     resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model) as NonNullable<
+    resolved.effort = mapThinkingLevelToEffort(reasoning, model) as NonNullable<
       AnthropicOptions["effort"]
     >;
     return resolved;
@@ -1082,8 +1107,8 @@ function resolveAnthropicTransportOptions(
   const adjusted = adjustMaxTokensForThinking({
     baseMaxTokens,
     modelMaxTokens: reasoningModelMaxTokens,
-    reasoningLevel: options.reasoning,
-    customBudgets: options.thinkingBudgets,
+    reasoningLevel: reasoning,
+    customBudgets: options?.thinkingBudgets,
   });
   resolved.maxTokens = adjusted.maxTokens;
   resolved.thinkingEnabled = true;
@@ -1108,9 +1133,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
-      // Fable classifiers can refuse after partial generation, so no event is
-      // safe to expose until the terminal stop reason is known.
-      const refusalBuffer = usesClaudeFable5MessagesContract(model)
+      // Classifier refusals can invalidate partial output, so no event is safe
+      // to expose until the terminal stop reason is known.
+      const refusalBuffer = usesClaudeStreamingRefusalContract(model)
         ? createDeferredEventBuffer<unknown>(stream, () =>
             notifyLlmRequestActivity(options?.signal),
           )
@@ -1122,13 +1147,19 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
+        const requestContext = prepareClaudeSonnet5RequestContext(model, context);
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
-          context,
+          context: requestContext,
           apiKey,
           options: transportOptions,
         });
-        const builtParams = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        const builtParams = buildAnthropicParams(
+          model,
+          requestContext,
+          isOAuthToken,
+          transportOptions,
+        );
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
         const nextParams = await transportOptions.onPayload?.(params, model);

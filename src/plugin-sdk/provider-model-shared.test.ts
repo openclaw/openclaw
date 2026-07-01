@@ -9,6 +9,7 @@ import {
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -45,6 +46,18 @@ describe("Claude model contracts", () => {
     );
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-6@20260301" })).toBe(true);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
+  });
+
+  it("recognizes Claude Sonnet 5 as a modern adaptive-thinking model", () => {
+    expect(resolveClaudeSonnet5ModelIdentity({ id: "global.anthropic.claude-sonnet-5-v1:0" })).toBe(
+      "claude-sonnet-5-v1:0",
+    );
+    expect(supportsClaudeAdaptiveThinking({ id: "anthropic/claude-sonnet-5" })).toBe(true);
+    expect(supportsClaudeNativeMaxEffort({ id: "claude-sonnet-5" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-sonnet-5" })).toBe(true);
+    const profile = resolveClaudeThinkingProfile("claude-sonnet-5");
+    expectFields(profile, { defaultLevel: "high" });
+    expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
   });
 
   it("does not classify later numeric model versions as supported aliases", () => {

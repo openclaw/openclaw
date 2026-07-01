@@ -166,6 +166,8 @@ inter-session user turns that only have provenance metadata.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
 - Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
   payloads when thinking is enabled, including Cloudflare AI Gateway routes.
+- Claude Sonnet 5 does not support assistant prefilling, so its trailing
+  assistant prefill turns are stripped even when thinking is disabled.
 - Pre-compaction assistant thinking signatures are stripped before provider
   replay when a session has been compacted. Thinking signatures are
   cryptographically bound to the conversation prefix at generation time; after

@@ -286,7 +286,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
     - `opus` → `anthropic/claude-opus-4-8`
-    - `sonnet` → `anthropic/claude-sonnet-4-6`
+    - `sonnet` → `anthropic/claude-sonnet-5`
     - `gpt` → `openai/gpt-5.4`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
@@ -305,10 +305,10 @@ troubleshooting, see the main [FAQ](/help/faq).
     {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
+          model: { primary: "anthropic/claude-opus-4-8" },
           models: {
-            "anthropic/claude-opus-4-6": { alias: "opus" },
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "anthropic/claude-opus-4-8": { alias: "opus" },
+            "anthropic/claude-sonnet-5": { alias: "sonnet" },
           },
         },
       },

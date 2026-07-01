@@ -2,12 +2,14 @@
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 export {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -52,6 +54,21 @@ export function usesClaudeFable5MessagesContract(model: {
   );
 }
 
+/** Return whether streamed output must wait for the terminal refusal decision. */
+export function usesClaudeStreamingRefusalContract(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
+  if (normalizeApi(model.api) !== "anthropic-messages") {
+    return false;
+  }
+  return (
+    resolveClaudeFable5ModelIdentity(model) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined
+  );
+}
+
 export function requiresClaudeAdaptiveThinking(model: {
   id?: string;
   params?: Record<string, unknown>;
@@ -64,6 +81,19 @@ export function requiresClaudeAdaptiveThinking(model: {
   return (
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
+  );
+}
+
+/** Return whether omitted thinking should default to adaptive/high. */
+export function defaultsClaudeAdaptiveThinking(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
+  return (
+    requiresClaudeAdaptiveThinking(model) ||
+    (normalizeApi(model.api) === "anthropic-messages" &&
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined)
   );
 }
 

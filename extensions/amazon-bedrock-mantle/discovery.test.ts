@@ -477,7 +477,20 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(3);
+    expect(provider?.models).toHaveLength(4);
+    const sonnet = provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5");
+    expect(sonnet).toMatchObject({
+      api: "anthropic-messages",
+      reasoning: true,
+      params: { canonicalModelId: "claude-sonnet-5" },
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    expect(sonnet?.mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
     const opus = provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7");
     expect(opus?.api).toBe("anthropic-messages");
     expect(opus?.reasoning).toBe(false);
@@ -596,12 +609,46 @@ describe("bedrock mantle discovery", () => {
     const provider = await resolveImplicitMantleProvider({
       env: {
         AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
-        AWS_REGION: "af-south-1",
+        AWS_REGION: "us-gov-east-1",
       } as NodeJS.ProcessEnv,
     });
 
     expect(provider).toBeNull();
   });
+
+  it.each(["ap-southeast-2", "us-gov-west-1"])(
+    "resolves Sonnet 5 in the documented Mantle region %s",
+    async (region) => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ id: "anthropic.claude-sonnet-5", object: "model" }] }),
+      });
+
+      const provider = await resolveImplicitMantleProvider({
+        env: {
+          AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+          AWS_REGION: region,
+        } as NodeJS.ProcessEnv,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(provider?.baseUrl).toBe(`https://bedrock-mantle.${region}.api.aws/v1`);
+      const sonnetModels = provider?.models?.filter(
+        (model) => model.id === "anthropic.claude-sonnet-5",
+      );
+      expect(sonnetModels).toEqual([
+        expect.objectContaining({
+          input: ["text", "image"],
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+        }),
+      ]);
+      expect(stringArgAt(mockFetch, 0, 0)).toBe(
+        `https://bedrock-mantle.${region}.api.aws/v1/models`,
+      );
+    },
+  );
 
   it("defaults to us-east-1 when no region is set", async () => {
     const mockFetch = vi.fn().mockResolvedValue({

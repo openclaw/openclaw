@@ -6,6 +6,7 @@ import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
 } from "./google-shared.js";
 
@@ -56,6 +57,12 @@ function createOutput(): AssistantMessage {
 async function* chunks(items: GenerateContentResponse[]) {
   yield* items;
 }
+
+describe("buildGoogleSimpleThinking", () => {
+  it("preserves explicit off as disabled thinking", () => {
+    expect(buildGoogleSimpleThinking(model, { reasoning: "off" })).toEqual({ enabled: false });
+  });
+});
 
 describe("consumeGoogleGenerateContentStream", () => {
   it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {

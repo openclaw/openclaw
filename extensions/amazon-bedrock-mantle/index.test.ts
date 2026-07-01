@@ -62,6 +62,27 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     );
   });
 
+  it("publishes the Sonnet 5 adaptive-high thinking profile", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "amazon-bedrock-mantle",
+      modelId: "anthropic.claude-sonnet-5",
+      params: { canonicalModelId: "claude-sonnet-5" },
+    } as never);
+
+    expect(profile?.defaultLevel).toBe("high");
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+  });
+
   it("provides a custom stream only for Mantle Anthropic models", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
 

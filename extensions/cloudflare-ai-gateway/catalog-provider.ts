@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildCloudflareAiGatewayModelDefinition,
+  buildCloudflareAiGatewayModelDefinitions,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
 
@@ -76,6 +76,6 @@ export function buildCloudflareAiGatewayCatalogProvider(params: {
     baseUrl,
     api: "anthropic-messages" as const,
     apiKey,
-    models: [buildCloudflareAiGatewayModelDefinition()],
+    models: buildCloudflareAiGatewayModelDefinitions(),
   };
 }

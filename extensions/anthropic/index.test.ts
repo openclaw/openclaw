@@ -223,7 +223,7 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
-  it("backfills Sonnet into API-key agent model allowlists", async () => {
+  it("backfills current Sonnet models into API-key agent model allowlists", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     const next = provider.applyConfigDefaults?.({
@@ -248,6 +248,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
+    expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
 
@@ -624,6 +625,65 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-fable-5",
       }),
     ).toBe(false);
+  });
+
+  it("resolves Claude Sonnet 5 with its exact API contract", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+    expect(requireRecord(resolved, "Sonnet 5 model").mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
+
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+    } as never);
+    expect(levelIds(profile)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(requireRecord(profile, "Sonnet 5 thinking profile").defaultLevel).toBe("high");
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      model: {
+        ...(resolved as ProviderRuntimeModel),
+        reasoning: false,
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+    expectFields(normalized, {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("resolves dated modern Claude refs without discovery templates", async () => {
