@@ -731,9 +731,14 @@ export function renderTelegramHtmlText(
 }
 
 export function sanitizeTelegramRichHtml(html: string): string {
+  // Strip standalone tool-call parameter wrappers that survive upstream
+  // filtering.  Full <function>…</function> blocks are removed earlier,
+  // but a bare <parameter name="…">…</parameter> inside rich content
+  // would otherwise be HTML-escaped and appear as visible markup.
+  const withoutParameterTags = html.replace(/<\/?parameter\b[^>]*>/gi, "");
   return isolateTelegramRichMediaBlocks(
     normalizeWideTelegramRichHtmlTables(
-      escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+      escapeUnsupportedTelegramHtml(withoutParameterTags, TELEGRAM_RICH_HTML_TAG_SUPPORT),
     ),
   );
 }
