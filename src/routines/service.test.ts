@@ -164,11 +164,13 @@ describe("routine service", () => {
       expect(cron.add.mock.calls[0]?.[0]).toMatchObject({
         id: cronJobId,
         name: "Daily ops",
+        enabled: false,
         agentId: "ops",
         sessionTarget: "isolated",
         deleteAfterRun: false,
         payload: { kind: "agentTurn", message: "Summarize open work" },
       });
+      expect(cron.update).toHaveBeenCalledWith(cronJobId, { enabled: true });
 
       const context = { cron, cronStorePath: "/tmp/cron.sqlite" };
       const listed = await listRoutines({ includeDisabled: true }, context);
@@ -535,6 +537,66 @@ describe("routine service", () => {
     });
   });
 
+  it("arms an adopted staged backing cron job only after the registry row exists", async () => {
+    await withOpenClawTestState({ prefix: "routine-adopt-staged-orphan-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput();
+      const created = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+      const cronJobId = created.routine.trigger.cronJobId;
+      const cronJob = cron.jobs.get(cronJobId);
+      if (!cronJob) {
+        throw new Error("expected backing cron job");
+      }
+      cron.jobs.set(cronJobId, {
+        ...cronJob,
+        enabled: false,
+        state: { ...cronJob.state, nextRunAtMs: undefined },
+      });
+      openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
+      cron.update.mockClear();
+
+      const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.status.status).toBe("enabled");
+      expect(cron.update).toHaveBeenCalledWith(cronJobId, { enabled: true });
+      await expect(
+        inspectRoutine("daily-ops", { cron, cronStorePath: "/tmp/cron.sqlite" }),
+      ).resolves.toMatchObject({
+        id: "daily-ops",
+        enabled: true,
+        status: { backing: "linked", enabled: true },
+      });
+    });
+  });
+
+  it("completes a persisted staged routine whose backing cron job was not armed", async () => {
+    await withOpenClawTestState({ prefix: "routine-complete-staged-enable-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput();
+      const created = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+      const cronJobId = created.routine.trigger.cronJobId;
+      const cronJob = cron.jobs.get(cronJobId);
+      if (!cronJob) {
+        throw new Error("expected backing cron job");
+      }
+      cron.jobs.set(cronJobId, {
+        ...cronJob,
+        enabled: false,
+        state: { ...cronJob.state, nextRunAtMs: undefined },
+      });
+      cron.update.mockClear();
+
+      const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.status.status).toBe("enabled");
+      expect(cron.update).toHaveBeenCalledWith(cronJobId, { enabled: true });
+    });
+  });
+
   it("adopts generated-id backing cron jobs when the registry row is missing", async () => {
     await withOpenClawTestState({ prefix: "routine-adopt-generated-orphan-" }, async () => {
       const cron = createFakeCronService();
@@ -863,6 +925,7 @@ describe("routine service", () => {
     await withOpenClawTestState({ prefix: "routine-delete-" }, async () => {
       const cron = createFakeCronService();
       const created = await createRoutine(createRoutineInput(), { cron });
+      cron.update.mockClear();
 
       const disabled = await setRoutineEnabled(` ${created.routine.id} `, false, { cron });
       const disabledAgain = await setRoutineEnabled(` ${created.routine.id} `, false, { cron });
@@ -883,6 +946,22 @@ describe("routine service", () => {
       expect(deletedAgain).toEqual({ id: "daily-ops", deleted: false });
       expect(cron.remove).toHaveBeenCalledTimes(1);
       expect(cron.jobs.size).toBe(0);
+    });
+  });
+
+  it("does not re-arm an explicitly disabled routine on create replay", async () => {
+    await withOpenClawTestState({ prefix: "routine-replay-disabled-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(createRoutineInput(), { cron });
+      await setRoutineEnabled(created.routine.id, false, { cron });
+      cron.update.mockClear();
+
+      const replay = await createRoutine(createRoutineInput(), { cron });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.status.status).toBe("disabled");
+      expect(cron.update).not.toHaveBeenCalled();
     });
   });
 
@@ -908,6 +987,7 @@ describe("routine service", () => {
           if (!cronJob) {
             throw new Error("expected backing cron job");
           }
+          cron.update.mockClear();
           const previousState = {
             ...cronJob.state,
             lastRunAtMs: 1_700_000_123_000,
@@ -1108,6 +1188,7 @@ describe("routine service", () => {
       if (!job) {
         throw new Error("expected backing cron job");
       }
+      cron.update.mockClear();
       cron.jobs.set(job.id, {
         ...job,
         enabled: false,
@@ -1140,6 +1221,7 @@ describe("routine service", () => {
       if (!job) {
         throw new Error("expected backing cron job");
       }
+      cron.update.mockClear();
       cron.jobs.set(job.id, {
         ...job,
         enabled: true,

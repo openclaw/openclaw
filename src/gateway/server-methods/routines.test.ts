@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import type { CronJob, CronJobCreate } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { routinesHandlers } from "./routines.js";
@@ -25,6 +25,20 @@ function createRoutineContext() {
       const job = createCronJob(input, Date.now());
       jobs.set(job.id, job);
       return job;
+    }),
+    update: vi.fn(async (id: string, patch: CronJobPatch) => {
+      const current = jobs.get(id);
+      if (!current) {
+        throw new Error(`missing cron job: ${id}`);
+      }
+      const updated = {
+        ...current,
+        ...patch,
+        state: { ...current.state, ...patch.state },
+        updatedAtMs: Date.now(),
+      };
+      jobs.set(id, updated);
+      return updated;
     }),
     readJob: vi.fn(async (id: string) => jobs.get(id)),
     getDefaultAgentId: vi.fn(() => "main"),

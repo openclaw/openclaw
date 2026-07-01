@@ -908,6 +908,9 @@ async function createRoutineBackingCronJob(params: {
   const added = await params.context.cron.add({
     ...params.normalized.cronInput,
     id: params.record.trigger.cronJobId,
+    // The routine registry is the product owner for this job. Keep new backing
+    // jobs inert until the registry row is durable, then arm them after commit.
+    enabled: false,
   });
   try {
     assertRoutineBackingCronJobMatches(params.record, params.normalized, added);
@@ -926,16 +929,47 @@ async function createRoutineBackingCronJob(params: {
   return added;
 }
 
-function persistAdoptedRoutineRecord(params: {
+function createRoutineRecordForCronJob(params: {
+  base: RoutineRecord;
+  normalized: NormalizedRoutineCreate;
+  cronJob: CronJob;
+  enabled: boolean;
+  cronStorePath?: string;
+}): RoutineRecord {
+  return createRoutineRecord({
+    normalized: params.normalized,
+    enabled: params.enabled,
+    cronJobId: params.cronJob.id,
+    action: params.cronJob.payload,
+    cronStorePath: params.cronStorePath,
+    createdAtMs: params.base.createdAtMs,
+    updatedAtMs: params.cronJob.updatedAtMs,
+  });
+}
+
+async function maybeEnableRoutineBackingCronJob(params: {
+  record: RoutineRecord;
+  cronJob: CronJob;
+  context: RoutineCronContext;
+}): Promise<CronJob> {
+  if (!params.record.enabled || params.cronJob.enabled) {
+    return params.cronJob;
+  }
+  assertRoutineCanBeEnabled(params.cronJob);
+  return await params.context.cron.update(params.cronJob.id, { enabled: true });
+}
+
+async function persistAdoptedRoutineRecord(params: {
   draft: RoutineRecord;
   normalized: NormalizedRoutineCreate;
   cronJob: CronJob;
+  context: RoutineCronContext;
   cronStorePath?: string;
-}): RoutineRecord {
+}): Promise<{ record: RoutineRecord; cronJob: CronJob }> {
   assertRoutineBackingCronJobMatches(params.draft, params.normalized, params.cronJob);
   const record = createRoutineRecord({
     normalized: params.normalized,
-    enabled: params.cronJob.enabled,
+    enabled: params.normalized.enabled,
     cronJobId: params.cronJob.id,
     action: params.cronJob.payload,
     cronStorePath: params.cronStorePath,
@@ -947,7 +981,14 @@ function persistAdoptedRoutineRecord(params: {
   } catch (err) {
     throw new Error(`failed to persist routine: ${formatErrorMessage(err)}`, { cause: err });
   }
-  return record;
+  return {
+    record,
+    cronJob: await maybeEnableRoutineBackingCronJob({
+      record,
+      cronJob: params.cronJob,
+      context: params.context,
+    }),
+  };
 }
 
 async function removeCreatedRoutineBackingCronJob(params: {
@@ -1100,18 +1141,21 @@ export async function createRoutine(
             idempotent: true,
           };
         }
-        const record = createRoutineRecord({
+        const enabledCronJob = await maybeEnableRoutineBackingCronJob({
+          record: existing,
+          cronJob: existingCronJob,
+          context,
+        });
+        const record = createRoutineRecordForCronJob({
+          base: existing,
           normalized,
-          enabled: existingCronJob.enabled,
-          cronJobId: existingCronJob.id,
-          action: existingCronJob.payload,
+          cronJob: enabledCronJob,
+          enabled: enabledCronJob.enabled,
           cronStorePath: context.cronStorePath,
-          createdAtMs: existing.createdAtMs,
-          updatedAtMs: existingCronJob.updatedAtMs,
         });
         upsertRoutineRecordToSqlite(record);
         return {
-          routine: toRoutineView(record, existingCronJob),
+          routine: toRoutineView(record, enabledCronJob),
           created: false,
           idempotent: true,
         };
@@ -1129,14 +1173,15 @@ export async function createRoutine(
       });
       const existingBackingCronJob = await context.cron.readJob(draft.trigger.cronJobId);
       if (existingBackingCronJob) {
-        const record = persistAdoptedRoutineRecord({
+        const adopted = await persistAdoptedRoutineRecord({
           draft,
           normalized,
           cronJob: existingBackingCronJob,
+          context,
           cronStorePath: context.cronStorePath,
         });
         return {
-          routine: toRoutineView(record, existingBackingCronJob),
+          routine: toRoutineView(adopted.record, adopted.cronJob),
           created: false,
           idempotent: true,
         };
@@ -1144,7 +1189,7 @@ export async function createRoutine(
       const cronJob = await createRoutineBackingCronJob({ record: draft, normalized, context });
       const record = createRoutineRecord({
         normalized,
-        enabled: cronJob.enabled,
+        enabled: normalized.enabled,
         cronJobId: cronJob.id,
         action: cronJob.payload,
         cronStorePath: context.cronStorePath,
@@ -1160,8 +1205,13 @@ export async function createRoutine(
           cause: err,
         });
       }
+      const enabledCronJob = await maybeEnableRoutineBackingCronJob({
+        record,
+        cronJob,
+        context,
+      });
       return {
-        routine: toRoutineView(record, cronJob),
+        routine: toRoutineView(record, enabledCronJob),
         created: true,
         idempotent: false,
       };
