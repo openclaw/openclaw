@@ -2586,6 +2586,41 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
+  it("defaults missing maxTokens to a per-request output cap in configured fallback (#98295)", () => {
+    // Reproduces the reporter's scenario: a custom Xiaomi MiMo row without
+    // maxTokens, no matching static catalog row, and no provider-level
+    // maxTokens. Without the fix, resolveConfiguredFallbackModel fell through
+    // to DEFAULT_CONTEXT_TOKENS (200_000), producing an oversized
+    // max_completion_tokens that Xiaomi rejects with HTTP 400.
+    const cfg = {
+      models: {
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomi.com/v1",
+            models: [
+              {
+                id: "mimo-v2.5-pro",
+                name: "mimo-v2.5-pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                // intentionally no maxTokens
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi", "mimo-v2.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    // Per-request output cap stays at the agent default, not the context window.
+    expect(result.model?.maxTokens).toBe(8192);
+    expect(result.model?.contextWindow).toBe(128_000);
+  });
+
   it("propagates image input when configured model ids include the provider prefix", () => {
     const cfg = {
       models: {

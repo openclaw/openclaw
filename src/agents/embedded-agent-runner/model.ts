@@ -21,7 +21,7 @@ import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL_MAX_TOKENS } from "../defaults.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -1370,7 +1370,7 @@ function resolveConfiguredFallbackModel(params: {
             providerConfig?.maxTokens ??
             providerConfig?.models?.[0]?.maxTokens ??
             staticCatalogModel?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+            DEFAULT_MODEL_MAX_TOKENS,
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
