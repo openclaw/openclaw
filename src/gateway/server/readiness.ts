@@ -9,6 +9,7 @@ import {
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
+import type { StorageReadinessChecker } from "./storage-readiness.js";
 
 /** Snapshot returned by the gateway readiness probe. */
 export type ReadinessResult = {
@@ -44,6 +45,7 @@ export function createReadinessChecker(deps: {
   getStartupPendingReason?: () => string | undefined;
   getGatewayDraining?: () => boolean;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getStorageReadiness?: StorageReadinessChecker;
   shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
@@ -65,6 +67,13 @@ export function createReadinessChecker(deps: {
     if (deps.getGatewayDraining?.()) {
       return withEventLoopHealth(
         { ready: false, failing: ["gateway-draining"], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    const storageReadiness = deps.getStorageReadiness?.();
+    if (storageReadiness && !storageReadiness.ready) {
+      return withEventLoopHealth(
+        { ready: false, failing: storageReadiness.failing, uptimeMs },
         deps.getEventLoopHealth,
       );
     }

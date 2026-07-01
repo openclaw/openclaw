@@ -70,6 +70,7 @@ function createReadinessHarness(params: {
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  getStorageReadiness?: Parameters<typeof createReadinessChecker>[0]["getStorageReadiness"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -86,6 +87,7 @@ function createReadinessHarness(params: {
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
+      getStorageReadiness: params.getStorageReadiness,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -206,6 +208,36 @@ describe("createReadinessChecker", () => {
       gatewayDraining = false;
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports not ready when critical storage is not writable", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        getStorageReadiness: () => ({
+          ready: false,
+          failing: ["workspace-storage-unwritable"],
+        }),
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["workspace-storage-unwritable"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not let skipped channel readiness mask storage failures", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        getStorageReadiness: () => ({
+          ready: false,
+          failing: ["workspace-storage-unwritable"],
+        }),
+        shouldSkipChannelReadiness: () => true,
+      });
+
+      expect(readiness()).toEqual(failingSnapshot(["workspace-storage-unwritable"]));
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     });
   });
 
