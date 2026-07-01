@@ -1206,36 +1206,59 @@ private fun resolveGatewayConfig(
 }
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-private fun recoveryGatewayDetail(
+internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
   nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
-  remoteAddress
-    ?.takeIf { it.isNotBlank() }
-    ?: if (ready) {
-      "Ready for chat and voice"
-    } else if (
+  if (ready) {
+    remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
+  } else if (
       nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
     ) {
       "Gateway paired. Waiting for node capability approval."
-    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-      "Gateway paired. Checking node capability approval."
     } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
         ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
+    } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
+      "Gateway approval is in progress. OpenClaw will retry automatically."
+    } else if (gatewayConnectionProblem != null) {
+      recoveryGatewayAuthDetail(gatewayConnectionProblem)
+    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+      "Gateway paired. Checking node capability approval."
     } else if (statusText.contains("operator offline", ignoreCase = true)) {
       "Gateway paired. Waiting for operator access."
     } else if (gatewayStatusLooksLikePairing(statusText)) {
       "Gateway approval is in progress. OpenClaw will retry automatically."
     } else {
-      "Gateway unreachable"
+      remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
     }
+
+internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
+  when (gatewayConnectionProblem.code) {
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired. Scan a fresh setup QR."
+    "AUTH_DEVICE_TOKEN_MISMATCH",
+    "AUTH_TOKEN_MISMATCH",
+    -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+    "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
+    "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
+    "AUTH_TOKEN_MISSING" -> "Gateway token is required. Enter it again or edit this connection."
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> "Gateway requires this device identity. Re-authenticate or reset this gateway connection."
+    else ->
+      when (gatewayConnectionProblem.recommendedNextStep) {
+        "update_auth_credentials" -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+        "update_auth_configuration" -> "Gateway authentication is not configured. Edit this connection and try again."
+        "review_auth_configuration" -> "Gateway authentication needs review. Check gateway settings, then retry."
+        else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
+      }
+  }
 
 private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConnectionProblem?): String? {
   if (gatewayConnectionProblem?.isPairingRequired != true || gatewayConnectionProblem.canAutoRetry) return null
