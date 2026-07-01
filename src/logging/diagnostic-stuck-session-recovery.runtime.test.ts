@@ -281,7 +281,11 @@ describe("stuck session recovery", () => {
       allowActiveAbort: true,
     });
 
-    expect(outcome).toMatchObject({ status: "aborted", aborted: true, released: 0 });
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      aborted: true,
+      released: 0,
+    });
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
@@ -313,7 +317,10 @@ describe("stuck session recovery", () => {
       fs.writeFileSync(
         path.join(tempDir, "agents", "clawblocker", "sessions", "run-456.jsonl"),
         JSON.stringify({
-          message: { role: "assistant", content: "There are 40 cached mentions." },
+          message: {
+            role: "assistant",
+            content: "There are 40 cached mentions.",
+          },
         }) + "\n",
       );
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
@@ -544,6 +551,77 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
+    ]);
+  });
+
+  it("sweeps an orphaned session lane that starves a queued turn past the stale threshold", async () => {
+    // Regression: a session lane holding an active slot with no backing embedded-run
+    // handle (e.g. wedged before the run registers) must be reset once the stall ages
+    // past the stale-progress threshold and a queued topic turn is waiting behind it,
+    // instead of repeatedly returning keep_lane and starving the next turn until it
+    // aborts on its own deadline (~29m lane wait + AbortError in production).
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    // Same active id seen before and after recovery proves no fresh turn pumped in.
+    mocks.getCommandLaneActiveTaskIds.mockReturnValue([42]);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "orphaned-lane-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      released: 1,
+      lane: "session:agent:main:main",
+    });
+  });
+
+  it("keeps an unbacked session lane while the stall is below the stale threshold", async () => {
+    // The conservative inverse of the sweep: a freshly active lane task whose handle
+    // may not be registered yet must not be reset before it ages past the threshold.
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneActiveTaskIds.mockReturnValue([42]);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "fresh-lane-session",
+      sessionKey: "agent:main:main",
+      ageMs: 30_000,
+      queueDepth: 1,
+      staleActiveProgressAbortMs: 300_000,
+    });
+
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=fresh-lane-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
     ]);
   });
 
