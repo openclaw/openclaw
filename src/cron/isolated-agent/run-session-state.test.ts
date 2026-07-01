@@ -150,7 +150,10 @@ describe("createPersistCronSessionEntry", () => {
       async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
         const store: Record<string, SessionEntry> = {};
         update(store);
-        expect(store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
+        expect(store["agent:main:cron:job"]).toEqual({
+          updatedAt: 1000,
+          systemSent: true,
+        });
       },
     );
 
@@ -163,7 +166,10 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]).toEqual({
+      updatedAt: 1000,
+      systemSent: true,
+    });
   });
 
   it("adopts rotated run transcript metadata before persisting session-bound cron state", async () => {
