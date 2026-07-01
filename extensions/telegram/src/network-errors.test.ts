@@ -155,6 +155,23 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
   });
 
+  it("treats 4xx ingress-worker malformed-JSON errors as non-recoverable (client error)", () => {
+    // 4xx client errors (bad token, apiRoot misconfig, etc.) must NOT match
+    // the "malformed json" snippet — polling should surface them as fatal
+    // rather than retrying indefinitely.
+    const clientErr = Object.assign(
+      new Error("Telegram getUpdates returned unparseable body (HTTP 401)"),
+      { statusCode: 401 },
+    );
+    expect(isRecoverableTelegramNetworkError(clientErr, { context: "polling" })).toBe(false);
+    // 5xx still treat as recoverable (regression guard for the non-4xx branch)
+    const serverErr = Object.assign(
+      new Error("Telegram getUpdates returned malformed JSON (HTTP 503)"),
+      { statusCode: 503 },
+    );
+    expect(isRecoverableTelegramNetworkError(serverErr, { context: "polling" })).toBe(true);
+  });
+
   it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
     const undiciSnippetErr = new Error("Undici: socket failure");
     // delete, react, edit, and action are idempotent or non-message operations;
