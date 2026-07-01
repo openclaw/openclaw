@@ -1163,7 +1163,7 @@ describe("redactSecrets", () => {
       invalidRequestStatus: { status: { code: "INVALID_REQUEST" } },
       details: { error: { code: "SYSTEM_RUN_DENIED" } },
       nodeError: { code: "NOT_PAIRED" },
-      policyError: { code: "POLICY_DENIED" },
+      policyError: { error: { code: "POLICY_DENIED" } },
       invalidRequestDetails: { error: { code: "INVALID_REQUEST" } },
       error: { code: "ERR_ROOTOPAQUECODE1234567890" },
       diagnostic: { error: { code: "ERR_DIAGNOSTIC_TEST" } },
@@ -1171,7 +1171,7 @@ describe("redactSecrets", () => {
       trajectoryExport: { error: { code: "ERR_TRAJECTORY_TEST" } },
       oauth: { code: "oauth-code-value-1234567890" },
       oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
-      provider: { code: "PROVIDER_STATUS_CODE" },
+      provider: { code: "provider-code-value-1234567890" },
       providerAuth: { code: "provider-auth-code-value-1234567890" },
       providerDetails: { error: { code: "SYSTEM_RUN_DENIED" } },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
@@ -1188,7 +1188,7 @@ describe("redactSecrets", () => {
     expect(output.invalidRequestStatus.status.code).toBe("INVALID_REQUEST");
     expect(output.details.error.code).toBe("SYSTEM_RUN_DENIED");
     expect(output.nodeError.code).toBe("NOT_PAIRED");
-    expect(output.policyError.code).toBe("POLICY_DENIED");
+    expect(output.policyError.error.code).toBe("POLICY_DENIED");
     expect(output.invalidRequestDetails.error.code).toBe("INVALID_REQUEST");
     expect(output.error.code).toBe("ERR_ROOTOPAQUECODE1234567890");
     expect(output.diagnostic.error.code).toBe("ERR_DIAGNOSTIC_TEST");
@@ -1196,7 +1196,7 @@ describe("redactSecrets", () => {
     expect(output.trajectoryExport.error.code).toBe("ERR_TRAJECTORY_TEST");
     expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
     expect(output.oauthNestedError.error.code).toBe("ERR_OPAQUEOAUTHCODE1234567890");
-    expect(output.provider.code).toBe("PROVIDER_STATUS_CODE");
+    expect(output.provider.code).not.toBe("provider-code-value-1234567890");
     expect(output.providerAuth.code).not.toBe("provider-auth-code-value-1234567890");
     expect(output.providerDetails.error.code).toBe("SYSTEM_RUN_DENIED");
     expect(output.providerNestedError.error.code).toBe("ERR_PROVIDEROPAQUECODE1234567890");

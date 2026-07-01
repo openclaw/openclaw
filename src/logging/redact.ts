@@ -1112,11 +1112,15 @@ function shouldRedactStructuredAuthorizationCode(
     return false;
   }
   const normalizedPath = path.map((part) => part.toLowerCase());
-  if (pathEndsWith(normalizedPath, ["error", "code"])) {
+  if (
+    pathEndsWith(normalizedPath, ["error", "code"]) ||
+    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
+    pathEndsWith(normalizedPath, ["status", "code"]) ||
+    pathEndsWith(normalizedPath, ["warnings", "code"])
+  ) {
     return false;
   }
-  const parent = normalizedPath.at(-2) ?? "";
-  return parent.includes("oauth") || parent.includes("auth");
+  return true;
 }
 
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {

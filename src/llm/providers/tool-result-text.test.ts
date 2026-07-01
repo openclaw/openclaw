@@ -13,7 +13,7 @@ describe("extractToolResultText", () => {
         keyMaterial: "key-material-value-1234567890",
         jwt: "jwt-value-1234567890",
         session: "session-value-1234567890",
-        code: "VISIBLE_STATUS_CODE",
+        code: "code-value-1234567890",
         error: { code: "ERR_VISIBLE_PROVIDER_CODE" },
         oauth: { code: "OPAQUEPROVIDERCODE1234567890" },
         providerError: { error: { code: "ERR_VISIBLE_PROVIDER_NESTED_CODE" } },
@@ -38,7 +38,6 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"rawSecret":"');
     expect(text).toContain('"token":"');
     expect(text).toContain('"visible":"safe-value"');
-    expect(text).toContain('"code":"VISIBLE_STATUS_CODE"');
     expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_CODE"');
     expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_NESTED_CODE"');
     expect(text).not.toContain("api-token-value-1234567890");
@@ -48,6 +47,7 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("key-material-value-1234567890");
     expect(text).not.toContain("jwt-value-1234567890");
     expect(text).not.toContain("session-value-1234567890");
+    expect(text).not.toContain("code-value-1234567890");
     expect(text).not.toContain("OPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("signature-value-1234567890");
     expect(text).not.toContain("cookie-value-1234567890");
