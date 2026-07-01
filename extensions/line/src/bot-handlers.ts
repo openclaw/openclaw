@@ -77,9 +77,13 @@ interface LineHandlerContext {
   historyLimit?: number;
 }
 
+const LINE_WEBHOOK_REPLAY_PLUGIN_ID = "line";
+const LINE_WEBHOOK_REPLAY_NAMESPACE_PREFIX = "line.webhook-replay";
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-type LineWebhookReplayCache = ClaimableDedupe;
+// Bounds persisted rows per namespace (SQLite growth cap); TTL is the primary fence.
+const LINE_WEBHOOK_REPLAY_STATE_MAX_ENTRIES = 10_000;
+export type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
@@ -92,10 +96,17 @@ export class LineRetryableWebhookError extends Error {
   }
 }
 
+// Persisted so a committed webhook key still dedupes after a gateway restart:
+// LINE redelivers webhooks (stable webhookEventId/message id) and a memory-only
+// cache would re-process them. claim = in-memory ownership; commit = persisted;
+// release = reclaimable.
 export function createLineWebhookReplayCache(): LineWebhookReplayCache {
   return createClaimableDedupe({
+    pluginId: LINE_WEBHOOK_REPLAY_PLUGIN_ID,
+    namespacePrefix: LINE_WEBHOOK_REPLAY_NAMESPACE_PREFIX,
     ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
     memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
+    stateMaxEntries: LINE_WEBHOOK_REPLAY_STATE_MAX_ENTRIES,
   });
 }
 
