@@ -51,7 +51,6 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
-  readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -85,8 +84,6 @@ import {
 } from "../../media/local-roots.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { renderQrPngDataUrl } from "../../media/qr-image.js";
-import { renderQrTerminal } from "../../media/qr-terminal.js";
 import {
   deleteMediaBuffer,
   MEDIA_MAX_BYTES,
@@ -148,6 +145,12 @@ import {
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import {
+  appendContextRefsToMsgContext,
+  normalizeGatewayContextRefs,
+  recordDurableChatSendFrontdoorIntake,
+  recordDurableChatSendTerminal,
+} from "../context-refs.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   attachManagedOutgoingImagesToMessage,
@@ -860,34 +863,11 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
-    (payload) =>
-      payload.sensitiveMedia === true &&
-      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
+    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
   );
 }
 
 type AssistantDisplayContentBlock = Record<string, unknown>;
-
-async function buildPairingQrAssistantContentBlock(
-  payload: ReplyPayload,
-): Promise<AssistantDisplayContentBlock | undefined> {
-  const qr = readPairingQrReplyChannelData(payload);
-  if (!qr) {
-    return undefined;
-  }
-  const [imageUrl, terminalText] = await Promise.all([
-    renderQrPngDataUrl(qr.setupCode),
-    renderQrTerminal(qr.setupCode, { small: true }),
-  ]);
-  return {
-    type: "openclaw_pairing_qr",
-    image_url: imageUrl,
-    terminalText,
-    alt: "OpenClaw pairing QR code",
-    expiresAtMs: qr.expiresAtMs,
-    sensitive: true,
-  };
-}
 
 function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
   if (!value) {
@@ -922,10 +902,8 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   payloads: ReplyPayload[];
   managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
-  includeSensitiveDisplay?: boolean;
   onLocalAudioAccessDenied?: (message: string) => void;
   onManagedImagePrepareError?: (message: string) => void;
-  onSensitiveDisplayPrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) =>
@@ -946,16 +924,6 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       content.push({ type: "text", text });
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
-    }
-    if (params.includeSensitiveDisplay === true) {
-      try {
-        const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
-        if (pairingQrBlock) {
-          content.push(pairingQrBlock);
-        }
-      } catch (err) {
-        params.onSensitiveDisplayPrepareError?.(formatForLog(err));
-      }
     }
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
@@ -1687,8 +1655,6 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       : {};
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
-  const metadataIdempotencyKey =
-    typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   return {
     role,
     timestamp,
@@ -1696,7 +1662,6 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
-      ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -3419,9 +3384,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      contextRefs?: unknown;
       suppressCommandInterpretation?: boolean;
       idempotencyKey: string;
     };
+    const contextRefsResult = normalizeGatewayContextRefs(p.contextRefs);
+    if (!contextRefsResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, contextRefsResult.error));
+      return;
+    }
+    const contextRefs = contextRefsResult.refs;
     const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
       originatingChannel: p.originatingChannel,
@@ -3648,6 +3620,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       model: resolvedSessionModel.model,
       hasAttachments: normalizedAttachments.length > 0,
       hasExplicitOrigin: explicitOriginResult.value !== undefined,
+      hasContextRefs: contextRefs.length > 0,
       hasConnectedClient: client?.connect !== undefined,
     };
     const originatingRoute = resolveChatSendOriginatingRoute({
@@ -3714,6 +3687,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         payload: { runId: clientRunId },
       });
     }
+    recordDurableChatSendFrontdoorIntake({
+      runId: clientRunId,
+      sessionKey,
+      agentId: selectedAgent.agentId ?? agentId,
+      message: rawMessage,
+      attachmentCount: normalizedAttachments.length,
+      contextRefs,
+      log: context.logGateway,
+      now,
+    });
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
@@ -3789,6 +3772,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+        recordDurableChatSendTerminal({
+          runId: clientRunId,
+          sessionKey,
+          agentId: selectedAgent.agentId ?? agentId,
+          status: "failed",
+          summary: String(err),
+          log: context.logGateway,
+        });
         respond(
           false,
           undefined,
@@ -3807,6 +3798,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         stopReason,
         endedAt,
+      });
+      recordDurableChatSendTerminal({
+        runId: clientRunId,
+        sessionKey,
+        agentId: selectedAgent.agentId ?? agentId,
+        status: "cancelled",
+        summary: stopReason,
+        log: context.logGateway,
+        now: endedAt,
       });
       clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
       setGatewayDedupeEntry({
@@ -3887,6 +3887,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         idempotencyKey: `${clientRunId}:user`,
         ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
         ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
+        ...(contextRefs.length > 0 ? { contextRefs } : {}),
       };
       const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
         ...baseUserTurnInput,
@@ -3969,6 +3970,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
       };
+      appendContextRefsToMsgContext(ctx, contextRefs);
       const isInternalTextSlashCommandTurn =
         ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
       if (mediaPathOffloadPaths.length > 0) {
@@ -4682,7 +4684,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                     payloads: finalPayloads,
                     managedImageLocalRoots: mediaLocalRoots,
                     includeSensitiveMedia: false,
-                    includeSensitiveDisplay: true,
                     onLocalAudioAccessDenied: (message) => {
                       context.logGateway.warn(
                         `webchat audio embedding denied local path: ${message}`,
@@ -4691,11 +4692,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                     onManagedImagePrepareError: (message) => {
                       context.logGateway.warn(
                         `webchat image embedding skipped attachment: ${message}`,
-                      );
-                    },
-                    onSensitiveDisplayPrepareError: (message) => {
-                      context.logGateway.warn(
-                        `webchat sensitive display skipped attachment: ${message}`,
                       );
                     },
                   });
@@ -5210,6 +5206,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                   },
                 });
               }
+              recordDurableChatSendTerminal({
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+                status: shouldBroadcastAgentError ? "failed" : "succeeded",
+                summary: shouldBroadcastAgentError
+                  ? (returnedAgentErrorMessage ?? "agent returned an error payload")
+                  : "dispatch completed",
+                log: context.logGateway,
+              });
             },
             {
               phase: "agent-turn",
@@ -5269,6 +5275,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionKey,
             agentId,
             errorMessage,
+          });
+          recordDurableChatSendTerminal({
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            status: "failed",
+            summary: errorMessage,
+            log: context.logGateway,
           });
         })
         .finally(() => {
@@ -5335,6 +5349,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "error" as const,
         summary: String(err),
       };
+      recordDurableChatSendTerminal({
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        status: "failed",
+        summary: String(err),
+        log: context.logGateway,
+      });
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
