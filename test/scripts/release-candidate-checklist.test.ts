@@ -1,6 +1,10 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildFullValidationDispatchFields,
+  buildMacosValidationHandoff,
+  buildNpmPreflightDispatchFields,
   buildPublishCommand,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -8,7 +12,9 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  requireExactRunArtifact,
   requireRunIdFromDispatchOutput,
+  requireSingleVerifierArtifactFile,
   validateFullManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -31,7 +37,499 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
   }
 }
 
+const MACOS_RELEASE_SHA = "b".repeat(40);
+const MACOS_SOURCE_SHA = "c".repeat(40);
+
+function tagPreflightPayload(): Record<string, any> {
+  return {
+    schemaVersion: 1,
+    ok: true,
+    operation: "tag-preflight",
+    releaseVersion: "2026.7.1-beta.2",
+    releaseClass: "beta",
+    releaseSelector: "beta",
+    policyMode: "strict",
+    policySource: {
+      sha: "d".repeat(40),
+      blobs: {
+        releaseVersionPolicySha256: "e".repeat(64),
+        stableReleaseLinesModuleSha256: "f".repeat(64),
+        verifyReleaseOperationSha256: "a".repeat(64),
+        stableLinesSha256: null,
+      },
+    },
+    execution: {
+      event: "workflow_dispatch",
+      workflowPath: ".github/workflows/openclaw-npm-release.yml",
+      executionRef: "refs/heads/release/2026.7.1",
+      runHeadSha: MACOS_SOURCE_SHA,
+      runId: "123",
+      runAttempt: "2",
+    },
+    target: {
+      targetRef: "refs/tags/v2026.7.1-beta.2",
+      targetSha: MACOS_RELEASE_SHA,
+      releaseTag: "v2026.7.1-beta.2",
+      authorizedSourceRef: "refs/heads/release/2026.7.1",
+      authorizedSourceTipSha: MACOS_SOURCE_SHA,
+      targetReachableFromAuthorizedSource: true,
+    },
+  };
+}
+
+function npmPreflightRun() {
+  return {
+    databaseId: 123,
+    runAttempt: 2,
+    path: ".github/workflows/openclaw-npm-release.yml",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    headBranch: "release/2026.7.1",
+    headSha: MACOS_SOURCE_SHA,
+  };
+}
+
+function buildMacosHandoff(payload = tagPreflightPayload(), run = npmPreflightRun()) {
+  return buildMacosValidationHandoff({
+    repo: "openclaw/openclaw",
+    tag: "v2026.7.1-beta.2",
+    targetSha: MACOS_RELEASE_SHA,
+    npmPreflightRunId: "123",
+    npmPreflightRun: run,
+    verifierPayloadBytes: Buffer.from(`${JSON.stringify(payload)}\n`),
+  });
+}
+
 describe("release candidate checklist", () => {
+  it("emits the complete authenticated public macOS validation handoff", () => {
+    const handoff = buildMacosHandoff();
+
+    expect(handoff).toMatchObject({
+      releaseSha: MACOS_RELEASE_SHA,
+      publicReleaseBranch: "release/2026.7.1",
+      verifierRunId: "123",
+      verifierRunAttempt: "2",
+      verifierArtifactName: "release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2",
+    });
+    expect(handoff.verifierPayloadSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(handoff.command).toContain(
+      "'workflow' 'run' 'macos-release.yml' '--repo' 'openclaw/openclaw' '--ref' 'main'",
+    );
+    for (const field of [
+      "tag=v2026.7.1-beta.2",
+      "preflight_only=true",
+      "public_release_branch=release/2026.7.1",
+      `release_sha=${MACOS_RELEASE_SHA}`,
+      "verifier_run_id=123",
+      "verifier_run_attempt=2",
+      "verifier_artifact_name=release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2",
+      `verifier_payload_sha256=${handoff.verifierPayloadSha256}`,
+    ]) {
+      expect(handoff.command).toContain(`'-f' '${field}'`);
+    }
+  });
+
+  it("rejects malformed or mismatched npm tag-preflight handoff evidence", () => {
+    const cases: Array<[string, (payload: Record<string, any>) => void, RegExp]> = [
+      ["unknown payload field", (payload) => void (payload.extra = true), /unknown field/u],
+      [
+        "wrong operation",
+        (payload) => void (payload.operation = "postpublish"),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong producer attempt",
+        (payload) => void (payload.execution.runAttempt = "3"),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong target SHA",
+        (payload) => void (payload.target.targetSha = "9".repeat(40)),
+        /provenance does not match/u,
+      ],
+      [
+        "wrong target ref",
+        (payload) => void (payload.target.targetRef = "refs/tags/v2026.7.1-beta.3"),
+        /provenance does not match/u,
+      ],
+      [
+        "inconsistent selector",
+        (payload) => void (payload.releaseSelector = "daily"),
+        /release policy is inconsistent/u,
+      ],
+      [
+        "unsupported source branch",
+        (payload) => {
+          payload.execution.executionRef = "refs/heads/feature/untrusted";
+          payload.target.authorizedSourceRef = "refs/heads/feature/untrusted";
+        },
+        /live producer branch does not match verifier source/u,
+      ],
+    ];
+
+    for (const [label, mutate, expected] of cases) {
+      const payload = tagPreflightPayload();
+      mutate(payload);
+      expect(() => buildMacosHandoff(payload), label).toThrow(expected);
+    }
+    expect(() =>
+      buildMacosValidationHandoff({
+        repo: "openclaw/openclaw",
+        tag: "v2026.7.1-beta.2",
+        targetSha: MACOS_RELEASE_SHA,
+        npmPreflightRunId: "123",
+        verifierPayloadBytes: Buffer.from("not json"),
+        npmPreflightRun: npmPreflightRun(),
+      }),
+    ).toThrow("npm tag-preflight verifier payload must be valid JSON");
+  });
+
+  it("binds the handoff to live npm producer metadata", () => {
+    const cases: Array<[string, (run: ReturnType<typeof npmPreflightRun>) => void]> = [
+      ["run id", (run) => void (run.databaseId = 124)],
+      ["run attempt", (run) => void (run.runAttempt = 3)],
+      ["workflow path", (run) => void (run.path = ".github/workflows/other.yml")],
+      ["event", (run) => void (run.event = "push")],
+      ["head SHA", (run) => void (run.headSha = "9".repeat(40))],
+    ];
+    for (const [label, mutate] of cases) {
+      const run = npmPreflightRun();
+      mutate(run);
+      expect(() => buildMacosHandoff(tagPreflightPayload(), run), label).toThrow(
+        /live producer run identity is invalid|provenance does not match/u,
+      );
+    }
+  });
+
+  it("accepts the exact canonical strict alpha branch", () => {
+    const payload = tagPreflightPayload();
+    payload.releaseVersion = "2026.7.1-alpha.2";
+    payload.releaseClass = "alpha";
+    payload.releaseSelector = "alpha";
+    payload.execution.executionRef = "refs/heads/tideclaw/alpha/2026-06-21-1945Z";
+    payload.target.targetRef = "refs/tags/v2026.7.1-alpha.2";
+    payload.target.releaseTag = "v2026.7.1-alpha.2";
+    payload.target.authorizedSourceRef = "refs/heads/tideclaw/alpha/2026-06-21-1945Z";
+    const run = npmPreflightRun();
+    run.headBranch = "tideclaw/alpha/2026-06-21-1945Z";
+    const handoff = buildMacosValidationHandoff({
+      repo: "openclaw/openclaw",
+      tag: "v2026.7.1-alpha.2",
+      targetSha: MACOS_RELEASE_SHA,
+      npmPreflightRunId: "123",
+      npmPreflightRun: run,
+      verifierPayloadBytes: Buffer.from(`${JSON.stringify(payload)}\n`),
+    });
+
+    expect(handoff.publicReleaseBranch).toBe("tideclaw/alpha/2026-06-21-1945Z");
+    expect(handoff.command).toContain(
+      "'-f' 'public_release_branch=tideclaw/alpha/2026-06-21-1945Z'",
+    );
+  });
+
+  it("rejects an unsupported source even when live producer identity matches it", () => {
+    const payload = tagPreflightPayload();
+    payload.execution.executionRef = "refs/heads/feature/untrusted";
+    payload.target.authorizedSourceRef = "refs/heads/feature/untrusted";
+    const run = npmPreflightRun();
+    run.headBranch = "feature/untrusted";
+
+    expect(() => buildMacosHandoff(payload, run)).toThrow("is not supported by macOS validation");
+  });
+
+  it("requires a closed single-file npm tag-preflight verifier artifact", () => {
+    const expected = "/tmp/verifier/release-operation-verifier-v1.json";
+    expect(requireSingleVerifierArtifactFile([expected], expected)).toBe(expected);
+    expect(() => requireSingleVerifierArtifactFile([], expected)).toThrow(
+      "must contain exactly one release-operation-verifier-v1.json",
+    );
+    expect(() =>
+      requireSingleVerifierArtifactFile([expected, "/tmp/verifier/extra.json"], expected),
+    ).toThrow("must contain exactly one release-operation-verifier-v1.json");
+    expect(() =>
+      requireSingleVerifierArtifactFile(
+        ["/tmp/verifier/nested/release-operation-verifier-v1.json"],
+        expected,
+      ),
+    ).toThrow("must contain exactly one release-operation-verifier-v1.json");
+  });
+
+  it("preserves legacy defaults and keeps release validation depth independent", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--release-profile",
+      "full",
+    ]);
+
+    expect(options).toMatchObject({
+      policyMode: "legacy",
+      releaseSelector: null,
+      releaseClass: "daily",
+      releaseProfile: "full",
+      npmDistTag: "beta",
+      publishEligible: true,
+    });
+  });
+
+  it("normalizes only supported legacy npm tags and preserves corrections", () => {
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.7.34-2",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--npm-dist-tag",
+        " latest ",
+      ]),
+    ).toMatchObject({
+      releaseClass: "historical-correction",
+      npmDistTag: "latest",
+      publishEligible: true,
+    });
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--npm-dist-tag", "stable"])).toThrow(
+      "--npm-dist-tag must be alpha, beta, or latest",
+    );
+  });
+
+  it("enforces closed policy modes and selector mode constraints", () => {
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--policy-mode", "required"])).toThrow(
+      "--policy-mode must be legacy or strict",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--release-selector", "preview"])).toThrow(
+      "--release-selector must be alpha, beta, daily, or stable",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", "--release-selector", "beta"])).toThrow(
+      "--release-selector must be omitted in legacy policy mode",
+    );
+  });
+
+  it.each(["--policy-mode", "--release-selector", "--npm-dist-tag"])(
+    "does not consume another option as the %s value",
+    (flag) => {
+      expect(() => parseArgs(["--tag", "v2026.7.1-beta.1", flag, "--skip-parallels"])).toThrow(
+        `${flag} requires a value`,
+      );
+    },
+  );
+
+  it("rejects new stable finals but preserves correction publication in legacy mode", () => {
+    expect(() => parseArgs(["--tag", "v2026.7.33", "--windows-node-tag", "v0.6.3"])).toThrow(
+      "legacy policy mode cannot publish stable release class stable-base",
+    );
+    expect(() => parseArgs(["--tag", "v2026.7.34", "--windows-node-tag", "v0.6.3"])).toThrow(
+      "legacy policy mode cannot publish stable release class stable-patch",
+    );
+    expect(parseArgs(["--tag", "v2026.7.34-2", "--windows-node-tag", "v0.6.3"]).releaseClass).toBe(
+      "historical-correction",
+    );
+  });
+
+  it.each([
+    ["v2026.7.1-alpha.2", "alpha", "alpha", "alpha"],
+    ["v2026.7.1-beta.2", "beta", "beta", "beta"],
+    ["v2026.7.32", "daily", "latest", "daily"],
+  ] as const)(
+    "accepts strict %s with matching selector and downstream tag",
+    (tag, releaseSelector, npmDistTag, releaseClass) => {
+      expect(
+        parseArgs([
+          "--tag",
+          tag,
+          "--policy-mode",
+          "strict",
+          "--release-selector",
+          releaseSelector,
+          "--npm-dist-tag",
+          npmDistTag,
+          "--release-profile",
+          "full",
+        ]),
+      ).toMatchObject({
+        policyMode: "strict",
+        releaseSelector,
+        releaseClass,
+        releaseProfile: "full",
+        npmDistTag,
+        publishEligible: true,
+      });
+    },
+  );
+
+  it("requires strict selectors and exact downstream tags", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.7.1-beta.2", "--policy-mode", "strict", "--npm-dist-tag", "beta"]),
+    ).toThrow("--release-selector is required in strict policy mode");
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.1-beta.2",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "beta",
+      ]),
+    ).toThrow('Release selector "daily" does not match release class "beta"');
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.32",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "beta",
+      ]),
+    ).toThrow("strict daily publication requires --npm-dist-tag latest");
+  });
+
+  it("rejects numeric corrections at strict candidate ingress", () => {
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.34-2",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "stable",
+      ]),
+    ).toThrow("Strict publication rejects numeric correction");
+  });
+
+  it("models strict stable as a nonpublishable policy-only preflight", () => {
+    for (const npmDistTagArgs of [[], ["--npm-dist-tag", ""]]) {
+      expect(
+        parseArgs([
+          "--tag",
+          "v2026.7.33",
+          "--windows-node-tag",
+          "v0.6.3",
+          "--policy-mode",
+          "strict",
+          "--release-selector",
+          "stable",
+          ...npmDistTagArgs,
+        ]),
+      ).toMatchObject({
+        releaseClass: "stable-base",
+        npmDistTag: null,
+        publishEligible: false,
+      });
+    }
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.33",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "stable",
+        "--npm-dist-tag",
+        "latest",
+      ]),
+    ).toThrow("strict stable policy preflight requires --npm-dist-tag to be omitted or empty");
+  });
+
+  it("propagates policy inputs unchanged into dispatch and publish fields", () => {
+    const externalContractRevision = "a".repeat(40);
+    const strictDaily = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "daily",
+      "--npm-dist-tag",
+      "latest",
+      "--external-contract-revision",
+      externalContractRevision,
+    ]);
+
+    expect(buildFullValidationDispatchFields(strictDaily)).toMatchObject({
+      policy_mode: "strict",
+      release_selector: "daily",
+      external_contract_revision: externalContractRevision,
+    });
+    expect(buildNpmPreflightDispatchFields(strictDaily)).toMatchObject({
+      policy_mode: "strict",
+      release_selector: "daily",
+      npm_dist_tag: "latest",
+    });
+    expect(buildPublishCommand({ ...strictDaily, workflowRef: "main" })).toContain(
+      "'policy_mode=strict' '-f' 'release_selector=daily' '-f' 'npm_dist_tag=latest'",
+    );
+
+    const strictStable = parseArgs([
+      "--tag",
+      "v2026.7.33",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "stable",
+    ]);
+    expect(buildNpmPreflightDispatchFields(strictStable)).toEqual({
+      tag: "v2026.7.33",
+      preflight_only: "true",
+      policy_mode: "strict",
+      release_selector: "stable",
+    });
+    expect(() => buildPublishCommand({ ...strictStable, workflowRef: "main" })).toThrow(
+      "strict stable policy preflight is nonpublishable",
+    );
+  });
+
+  it("requires an exact external workflow revision before strict Full Validation dispatch", () => {
+    const strictDaily = parseArgs([
+      "--tag",
+      "v2026.7.32",
+      "--policy-mode",
+      "strict",
+      "--release-selector",
+      "daily",
+      "--npm-dist-tag",
+      "latest",
+    ]);
+    expect(() => buildFullValidationDispatchFields(strictDaily)).toThrow(
+      "strict Full Release Validation requires --external-contract-revision",
+    );
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.7.32",
+        "--policy-mode",
+        "strict",
+        "--release-selector",
+        "daily",
+        "--npm-dist-tag",
+        "latest",
+        "--external-contract-revision",
+        "ABC",
+      ]),
+    ).toThrow("--external-contract-revision must be 40 lowercase hexadecimal characters");
+  });
+
+  it("finishes policy-only stable candidates without deriving publish artifacts", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain(
+      "const publishCommand = options.publishEligible ? buildPublishCommand(options) : null",
+    );
+    expect(source).toContain("tarball: none (policy-only stable preflight)");
+    expect(source).toContain(
+      "policy-only stable preflight artifact must contain exactly three files",
+    );
+    expect(source).toContain("policy-only stable preflight complete; no publish command emitted");
+  });
+
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
     expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
@@ -103,6 +601,8 @@ describe("release candidate checklist", () => {
       duplicateOption("--provider", "blacksmith-testbox", "crabbox"),
       duplicateOption("--mode", "fresh", "upgrade"),
       duplicateOption("--release-profile", "beta", "stable"),
+      duplicateOption("--policy-mode", "legacy", "strict"),
+      duplicateOption("--release-selector", "daily", "stable"),
       duplicateOption("--npm-dist-tag", "beta", "latest"),
       duplicateOption("--plugin-publish-scope", "all-publishable", "selected"),
       duplicateOption("--plugins", "telegram", "discord"),
@@ -408,6 +908,32 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("requires exactly one unexpired attempt-qualified verifier artifact", () => {
+    const name = "release-operation-verifier-v1-tag-preflight-2026.7.1-beta.2-123-2";
+    expect(requireExactRunArtifact([{ name, expired: false }], name)).toBe(name);
+    expect(() => requireExactRunArtifact([{ name, expired: true }], name)).toThrow(
+      "expected exactly one unexpired artifact",
+    );
+    expect(() => requireExactRunArtifact([{ name }], name)).toThrow(
+      "expected exactly one unexpired artifact",
+    );
+    expect(() =>
+      requireExactRunArtifact(
+        [
+          { name, expired: false },
+          { name, expired: false },
+        ],
+        name,
+      ),
+    ).toThrow("found 2");
+    expect(() =>
+      requireExactRunArtifact(
+        [{ name: "release-operation-verifier-v1-tag-preflight-other", expired: false }],
+        name,
+      ),
+    ).toThrow("found 0");
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {
