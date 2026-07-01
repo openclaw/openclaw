@@ -8,7 +8,7 @@ private func chatTextMessage(role: String, text: String, timestamp: Double, cont
     if let contentId {
         content["id"] = contentId
     }
-    AnyCodable([
+    return AnyCodable([
         "role": role,
         "content": [content],
         "timestamp": timestamp,
@@ -937,16 +937,11 @@ struct ChatViewModelTests {
     @Test func `later identical session reply does not adopt prior turn provisional final`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
-        let finalRefreshGate = SessionSubscribeGate()
-        let historyCount = AsyncCounter()
         let history = historyPayload(sessionId: sessionId)
         let (transport, vm) = await makeViewModel(
             historyResponses: [history, history],
-            requestHistoryHook: { _ in
-                let count = await historyCount.increment()
-                if count == 2 {
-                    await finalRefreshGate.wait()
-                }
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
@@ -989,8 +984,6 @@ struct ChatViewModelTests {
                 return okReplies.count == 2 && vm.messages.last?.timestamp == now + 4
             }
         }
-
-        await finalRefreshGate.release()
     }
 
     @Test func `completion wait refreshes history and clears pending run`() async throws {
@@ -1649,7 +1642,11 @@ struct ChatViewModelTests {
     }
 
     @Test func `dedupes gateway echo of local user message`() async throws {
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
