@@ -103,6 +103,36 @@ const SESSION_TABLE_HEADERS = [
 ];
 
 describe("sessions view", () => {
+  it("filters rows by generated derived title", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "session-generated",
+              kind: "direct",
+              updatedAt: 2,
+              derivedTitle: "Nebula Banana Notebook",
+            },
+            {
+              key: "session-other",
+              kind: "direct",
+              updatedAt: 1,
+              derivedTitle: "Different Project",
+            },
+          ]),
+        ),
+        searchQuery: "nebula",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("session-generated");
+    expect(container.textContent).not.toContain("session-other");
+  });
+
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
     const onFiltersChange = vi.fn();

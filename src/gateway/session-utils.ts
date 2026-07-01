@@ -156,6 +156,11 @@ export type {
 
 const DERIVED_TITLE_MAX_LEN = 60;
 
+type SessionTitleEntry = Pick<SessionEntry, "displayName" | "subject" | "autoTitle"> & {
+  sessionId?: string | null;
+  updatedAt?: number | null;
+};
+
 function tryResolveExistingPath(value: string): string | null {
   try {
     return fs.realpathSync(value);
@@ -237,7 +242,7 @@ function truncateTitle(text: string, maxLen: number): string {
 }
 
 export function deriveSessionTitle(
-  entry: SessionEntry | undefined,
+  entry: SessionTitleEntry | undefined,
   firstUserMessage?: string | null,
 ): string | undefined {
   if (!entry) {
@@ -250,6 +255,10 @@ export function deriveSessionTitle(
 
   if (normalizeOptionalString(entry.subject)) {
     return normalizeOptionalString(entry.subject);
+  }
+
+  if (normalizeOptionalString(entry.autoTitle)) {
+    return truncateTitle(normalizeOptionalString(entry.autoTitle)!, DERIVED_TITLE_MAX_LEN);
   }
 
   if (firstUserMessage?.trim()) {
@@ -2153,6 +2162,7 @@ export function buildGatewaySessionRow(params: {
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
+    autoTitle: normalizeOptionalString(entry?.autoTitle),
     derivedTitle,
     lastMessagePreview,
     channel,
@@ -2573,6 +2583,7 @@ function filterSessionEntries(params: {
         resolveSessionListSearchDisplayName(key, entry),
         entry?.label,
         entry?.subject,
+        entry?.autoTitle,
         entry?.sessionId,
         key,
       ];

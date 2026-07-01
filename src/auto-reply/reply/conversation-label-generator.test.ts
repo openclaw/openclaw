@@ -98,11 +98,31 @@ describe("generateConversationLabel", () => {
     expect(getRuntimeAuthForModel).toHaveBeenCalledWith({
       model: { provider: "openai" },
       cfg: {},
+      agentDir: "/tmp/agents/billing/agent",
       workspaceDir: "/tmp/agents/billing/agent",
     });
     expect(prepareModelForSimpleCompletion).toHaveBeenCalledWith({
       model: { provider: "openai" },
       cfg: {},
+    });
+  });
+
+  it("passes session auth profile to runtime auth lookup", async () => {
+    await generateConversationLabel({
+      userMessage: "Need help with invoices",
+      prompt: "prompt",
+      cfg: {},
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+    });
+
+    expect(getRuntimeAuthForModel).toHaveBeenCalledWith({
+      model: { provider: "openai" },
+      cfg: {},
+      agentDir: undefined,
+      workspaceDir: undefined,
+      profileId: "openai:work",
+      lockedProfile: true,
     });
   });
 

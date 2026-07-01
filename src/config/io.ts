@@ -1349,6 +1349,30 @@ export type BestEffortConfigSnapshot = {
   sourceConfig: OpenClawConfig;
 };
 
+export type ConfigIO = {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  loadConfig: () => OpenClawConfig;
+  readBestEffortConfig: () => Promise<OpenClawConfig>;
+  readBestEffortConfigSnapshot: () => Promise<BestEffortConfigSnapshot>;
+  readSourceConfigBestEffort: () => Promise<OpenClawConfig>;
+  readConfigFileSnapshot: (options?: ConfigSnapshotReadOptions) => Promise<ConfigFileSnapshot>;
+  readConfigFileSnapshotWithPluginMetadata: (
+    options?: ConfigSnapshotReadOptions,
+  ) => Promise<ReadConfigFileSnapshotWithPluginMetadataResult>;
+  readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
+  promoteConfigSnapshotToLastKnownGood: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  recoverConfigFromLastKnownGood: (params: {
+    snapshot: ConfigFileSnapshot;
+    reason: string;
+  }) => Promise<boolean>;
+  recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: ConfigWriteOptions,
+  ) => Promise<ConfigWriteResult>;
+};
+
 function createConfigFileSnapshot(params: {
   path: string;
   exists: boolean;
@@ -1412,7 +1436,7 @@ export function createConfigIO(
     preservedLegacyRootKeys?: readonly string[];
     shellEnvFallback?: "load" | "defer";
   } = {},
-) {
+): ConfigIO {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
 
@@ -2886,7 +2910,7 @@ export async function writeConfigFile(
     : await io.readConfigFileSnapshotWithPluginMetadata();
   const baseSnapshot = baseSnapshotRead.snapshot;
   let runtimePreflightResult: unknown;
-  const writeResult = await io.writeConfigFile(nextCfg, {
+  const writeResult = (await io.writeConfigFile(nextCfg, {
     baseSnapshot,
     basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
     assertConfigPathForWrite: options.assertConfigPathForWrite,
@@ -2920,7 +2944,7 @@ export async function writeConfigFile(
           ),
       });
     },
-  });
+  })) as InternalConfigWriteResult;
   if (
     options.skipRuntimeSnapshotRefresh &&
     !hadRuntimeSnapshot &&

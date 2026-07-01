@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -400,6 +397,8 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
+  /** AI-generated session title. Set after enough turns have passed. */
+  autoTitle?: string;
   channel?: string;
   groupId?: string;
   subject?: string;

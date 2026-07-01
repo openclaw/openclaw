@@ -363,6 +363,7 @@ export function createSessionsListTool(opts?: {
               displayName: row.displayName,
               label: row.label,
               subject: readStringValue((entry as { subject?: unknown }).subject),
+              autoTitle: readStringValue((entry as { autoTitle?: unknown }).autoTitle),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionEntry: {

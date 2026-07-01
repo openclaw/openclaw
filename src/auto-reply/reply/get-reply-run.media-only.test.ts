@@ -37,6 +37,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
+const maybeGenerateSessionTitle = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
@@ -124,6 +125,10 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./session-title-generator.js", () => ({
+  maybeGenerateSessionTitle,
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -325,6 +330,43 @@ describe("runPreparedReply media-only handling", () => {
       defaultLevel: "on",
       fullAccessAvailable: true,
     });
+  });
+
+  it("forwards generated title metadata changes after a successful reply", async () => {
+    const onSessionMetadataChanges = vi.fn();
+    vi.mocked(maybeGenerateSessionTitle).mockImplementationOnce((params: unknown) => {
+      (params as { onTitleGenerated?: (change: unknown) => void }).onTitleGenerated?.({
+        sessionKey: "agent:main:title-session",
+        agentId: "main",
+        reason: "session-title",
+      });
+    });
+
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          sessionTitle: { enabled: true },
+        },
+        agentId: "main",
+        sessionKey: "agent:main:title-session",
+        sessionEntry: { sessionId: "title-session" } as SessionEntry,
+        storePath: "/tmp/sessions.json",
+        opts: { onSessionMetadataChanges },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+        {
+          sessionKey: "agent:main:title-session",
+          agentId: "main",
+          reason: "session-title",
+        },
+      ]),
+    );
   });
 
   it("propagates non-visible assistant silence for group runs", async () => {

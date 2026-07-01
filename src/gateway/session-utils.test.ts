@@ -231,6 +231,55 @@ describe("gateway session utils", () => {
     expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
   });
 
+  test("session list search includes generated auto titles", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      "session-generated": {
+        sessionId: "session-generated",
+        updatedAt: 2,
+        autoTitle: "Nebula Banana Notebook",
+      } satisfies SessionEntry,
+      "session-other": {
+        sessionId: "session-other",
+        updatedAt: 1,
+        autoTitle: "Different Project",
+      } satisfies SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { includeDerivedTitles: true, search: "nebula" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-generated"]);
+    expect(listed.sessions[0]?.derivedTitle).toBe("Nebula Banana Notebook");
+  });
+
+  test("lightweight session list rows preserve generated auto titles", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      "session-generated": {
+        sessionId: "session-generated",
+        updatedAt: 2,
+        autoTitle: "Nebula Banana Notebook",
+      } satisfies SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { includeDerivedTitles: false, search: "nebula" },
+    });
+
+    expect((listed.sessions[0] as { autoTitle?: string } | undefined)?.autoTitle).toBe(
+      "Nebula Banana Notebook",
+    );
+    expect(listed.sessions[0]?.derivedTitle).toBeUndefined();
+  });
+
   test("session lists mark the final offset page without hasMore", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -2443,6 +2492,16 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
   });
 
+  test("prefers subject over autoTitle", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Dev Team Chat",
+      autoTitle: "AI Generated Title",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
+  });
+
   test("uses first user message when displayName and subject missing", () => {
     const entry = {
       sessionId: "abc123",
@@ -2509,6 +2568,36 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+
+  test("prefers autoTitle over firstUserMessage", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      autoTitle: "AI Generated Title",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("AI Generated Title");
+  });
+
+  test("prefers displayName over autoTitle", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "Custom Name",
+      autoTitle: "AI Generated Title",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Custom Name");
+  });
+
+  test("truncates long autoTitle to DERIVED_TITLE_MAX_LEN", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      autoTitle: "This is an AI generated title that is definitely way too long to display as is",
+    } as SessionEntry;
+    const result = deriveSessionTitle(entry);
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(60);
   });
 });
 

@@ -65,6 +65,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -128,6 +129,7 @@ type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
    */
   queuedFollowupAbortSignal?: AbortSignal;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   extractedFileImages?: ExtractedFileImage[];
 };
 
@@ -1450,7 +1452,7 @@ export async function runPreparedReply(
         }
       : undefined;
 
-  return runReplyAgent({
+  const reply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
     followupRun,
@@ -1491,4 +1493,26 @@ export async function runPreparedReply(
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   });
+
+  // Trigger async AI title generation after a successful reply.
+  const titleSessionEntry = preparedSessionState.sessionEntry;
+  if (!isHeartbeat && reply && titleSessionEntry && storePath) {
+    import("./session-title-generator.js")
+      .then(({ maybeGenerateSessionTitle }) =>
+        maybeGenerateSessionTitle({
+          cfg,
+          sessionKey,
+          sessionEntry: titleSessionEntry,
+          storePath,
+          agentId,
+          agentDir,
+          authProfileId,
+          authProfileIdSource,
+          onTitleGenerated: (change) => opts?.onSessionMetadataChanges?.([change]),
+        }),
+      )
+      .catch(() => undefined);
+  }
+
+  return reply;
 }

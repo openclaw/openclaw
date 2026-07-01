@@ -30,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -3673,6 +3673,50 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.resetTriggered).toBe(false);
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("clears generated titles while preserving manual display names on /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-auto-title-");
+    const sessionKey = "agent:main:telegram:dm:user-reset-auto-title";
+    const existingSessionId = "existing-session-reset-auto-title";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        autoTitle: "Old generated title",
+        displayName: "Manual display name",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.autoTitle).toBeUndefined();
+    expect(result.sessionEntry.displayName).toBe("Manual display name");
+
+    const persisted = readSessionStoreForTest(storePath);
+    expect(persisted[sessionKey]?.autoTitle).toBeUndefined();
+    expect(persisted[sessionKey]?.displayName).toBe("Manual display name");
   });
 
   it("archives the old session store entry on /new", async () => {

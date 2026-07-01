@@ -1610,6 +1610,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Codex-native spelling for the same per-server MCP tool approval mode. Prefer defaultToolsApprovalMode in OpenClaw config.",
   "mcp.sessionIdleTtlMs":
     "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+  sessionTitle:
+    "AI-powered session title summarization after a configurable number of user turns. Set enabled=true to allow background title generation and the associated model calls.",
+  "sessionTitle.enabled":
+    "Enable AI-generated session titles from conversation content. Default: false. Enable only when background model calls for summarization are acceptable.",
+  "sessionTitle.turnsBeforeTitle":
+    "Number of user-assistant exchanges before the first automatic title is generated. Default: 3. Increase for more context before summarization; decrease for earlier titles.",
+  "sessionTitle.maxChars":
+    "Maximum length of generated session titles in characters. Default: 50. Range: 10-60.",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":

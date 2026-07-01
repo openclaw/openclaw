@@ -5,7 +5,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 export type CommandSessionMetadataChange = {
   sessionKey: string;
   agentId?: string;
-  reason: "command-metadata";
+  reason: "command-metadata" | "session-title";
 };
 
 const commandSessionMetadataChanges = new WeakMap<object, CommandSessionMetadataChange[]>();

@@ -335,6 +335,7 @@ describe("createSessionAndRefresh", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -398,6 +399,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -430,6 +432,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -525,6 +528,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual(["key-a"]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -549,6 +553,7 @@ describe("patchSession", () => {
       fastMode: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -800,6 +805,7 @@ describe("loadSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       limit: 50,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -830,6 +836,7 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       activeMinutes: 120,
       limit: 50,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -858,6 +865,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -887,6 +895,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -917,6 +926,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -957,6 +967,7 @@ describe("loadSessions", () => {
       limit: 1,
       offset: 2,
       search: "telegram",
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1057,11 +1068,13 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       activeMinutes: 30,
       limit: 10,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1145,6 +1158,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1205,6 +1219,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1216,6 +1231,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(4, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1261,6 +1277,42 @@ describe("applySessionsChangedEvent", () => {
       effectiveFastMode: false,
       effectiveFastModeSource: "session",
       fastAutoOnSeconds: 30,
+    });
+  });
+
+  it("applies generated title metadata from session change events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            sessionId: "sess-main",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "session-title",
+      ts: 2,
+      kind: "direct",
+      sessionId: "sess-main",
+      updatedAt: 2,
+      autoTitle: "Nebula Banana Notebook",
+      derivedTitle: "Nebula Banana Notebook",
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      autoTitle: "Nebula Banana Notebook",
+      derivedTitle: "Nebula Banana Notebook",
     });
   });
 

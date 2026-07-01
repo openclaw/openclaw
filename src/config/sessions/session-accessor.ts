@@ -1680,6 +1680,7 @@ export async function persistSessionRolloverLifecycle(params: {
       store[params.sessionKey] = {
         ...store[params.sessionKey],
         ...params.sessionEntry,
+        autoTitle: params.sessionEntry.autoTitle,
       };
       if (params.retiredEntry) {
         store[params.retiredEntry.key] = params.retiredEntry.entry;

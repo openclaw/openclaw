@@ -555,6 +555,42 @@ describe("sessions tools", () => {
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
   });
 
+  it("sessions_list preserves generated titles from searched lightweight rows", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        expect(request.params?.includeDerivedTitles).toBe(false);
+        expect(request.params?.search).toBe("nebula");
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "session-generated",
+              kind: "direct",
+              sessionId: "session-generated",
+              updatedAt: 20,
+              autoTitle: "Nebula Banana Notebook",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    if (!tool) {
+      throw new Error("missing sessions_list tool");
+    }
+
+    const result = await tool.execute("call-generated-title", {
+      search: "nebula",
+      includeDerivedTitles: true,
+    });
+    const details = result.details as { sessions?: Array<{ derivedTitle?: string }> };
+
+    expect(details.sessions?.[0]?.derivedTitle).toBe("Nebula Banana Notebook");
+  });
+
   it("derives mailbox previews only after agent visibility filtering", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
